@@ -1,0 +1,455 @@
+"""
+Prompt template loader and renderer.
+
+Provides utilities for loading prompt templates from the /prompts directory
+and rendering them with variable substitution and validation.
+
+PROMPT WIRING DOCUMENTATION:
+============================
+
+Each prompt file and its required placeholders:
+
+1. extractor_system.txt
+   - Placeholders: NONE (pure system prompt)
+   - Used by: All extraction functions as system prompt
+
+2. profile_extract.txt
+   - Placeholders: {selected_name}, {provider}, {external_id}, {wikipedia_url}, {sources_json_array}
+   - Used by: run_profile_extraction() in ingestion
+
+3. achievements_extract.txt
+   - Placeholders: {idol_name}, {sources_json_array}
+   - Used by: run_achievements_extraction() in ingestion
+
+4. timeline_normalize.txt
+   - Placeholders: {idol_birth_date}, {candidates_json}
+   - Used by: run_timeline_normalization() in ingestion
+
+5. milestones_by_age.txt
+   - Placeholders: {target_age}, {mode}, {timeline_json}
+   - Used by: run_milestones_by_age() in extraction
+
+6. plan_generate.txt
+   - Placeholders: {idol_name}, {idol_profile_json}, {idol_persona_json}, {idol_milestones_json}, 
+                   {user_profile_json}, {target_age}, {gaps_json}, {readiness_by_gap_json}, {allowed_resources_json}
+   - Used by: generate_plan() in planning
+
+7. chat_system.txt
+   - Placeholders: {idol_name}, {voice_style}, {principles}, {dos}, {donts},
+                   {signature_phrases}, {topics_of_strength}, {grounding_facts_json},
+                   {user_context_json}, {disclaimer}
+   - Used by: generate_reply() in chat
+
+8. chat_reply.txt
+   - Placeholders: {user_profile_json}, {idol_profile_json}, {idol_persona_json},
+                   {target_age}, {comparison_json}, {milestones_json}, 
+                   {evidence_snippets_json}, {conversation_history_json}, {user_message}
+   - Used by: generate_reply() in chat
+
+9. idol_discover.txt
+   - Placeholders: {interests_json_array}, {user_age}, {limit}
+   - Used by: suggest_idols() in idols API
+
+10. persona_pack.txt
+    - Placeholders: (injected via f-string with profile and sources)
+    - Used by: run_persona_pack() in ingestion
+"""
+import json
+import logging
+import re
+from functools import lru_cache
+from pathlib import Path
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+# Path to prompts directory (at project root)
+PROMPTS_DIR = Path(__file__).parent.parent.parent.parent.parent / "prompts"
+
+# Track loaded prompts for debugging
+_loaded_prompts: set[str] = set()
+
+
+# =============================================================================
+# Prompt Placeholder Registry
+# =============================================================================
+# Documents required placeholders for each prompt file
+
+PROMPT_PLACEHOLDERS = {
+    "extractor_system.txt": [],  # No placeholders - pure system prompt
+    
+    "profile_extract.txt": [
+        "selected_name",
+        "provider",
+        "external_id", 
+        "wikipedia_url",
+        "sources_json_array",
+    ],
+    
+    "achievements_extract.txt": [
+        "idol_name",
+        "sources_json_array",
+    ],
+    
+    "timeline_normalize.txt": [
+        "idol_birth_date",
+        "candidates_json",
+    ],
+    
+    "milestones_by_age.txt": [
+        "target_age",
+        "mode",
+        "timeline_json",
+    ],
+    
+    "plan_generate.txt": [
+        "idol_name",
+        "idol_profile_json",
+        "idol_persona_json",
+        "idol_milestones_json",
+        "user_profile_json",
+        "target_age",
+        "gaps_json",
+        "readiness_by_gap_json",
+        "allowed_resources_json",
+    ],
+    
+    "chat_system.txt": [
+        "idol_name",
+        "voice_style",
+        "principles",
+        "dos",
+        "donts",
+        "signature_phrases",
+        "topics_of_strength",
+        "grounding_facts_json",
+        "idol_persona_json",
+        "user_context_json",
+        "disclaimer",
+    ],
+    
+    "chat_reply.txt": [
+        "user_profile_json",
+        "idol_profile_json",
+        "idol_persona_json",
+        "idol_name",
+        "target_age",
+        "comparison_json",
+        "milestones_json",
+        "evidence_snippets_json",
+        "conversation_history_json",
+        "user_message",
+    ],
+    
+    "idol_discover.txt": [
+        "interests_json_array",
+        "user_age",
+        "limit",
+    ],
+    
+    "persona_pack.txt": [],  # Uses f-string injection, not render_prompt
+    
+    "intake_questions_generate.txt": [
+        "idol_name",
+        "idol_persona_json",
+        "idol_profile_json",
+        "milestones_json",
+        "user_profile_json",
+        "target_age",
+        "limit",
+    ],
+    
+    "intake_answers_normalize.txt": [
+        "idol_name",
+        "idol_persona_json",
+        "idol_profile_json",
+        "milestones_json",
+        "user_profile_json",
+        "questions_json",
+        "answers_json",
+    ],
+    
+    "plan_item_details.txt": [
+        "idol_name",
+        "idol_persona_json",
+        "user_profile_json",
+        "plan_item_json",
+        "readiness_by_gap_json",
+        "allowed_resources_json",
+    ],
+    
+    "thinking_narrate.txt": [
+        "interests",
+    ],
+    
+    "thinking_plan.txt": [
+        "idol_name",
+    ],
+    
+    "thinking_task.txt": [
+        "task_title",
+        "idol_name",
+    ],
+}
+
+
+class PromptRenderError(Exception):
+    """Raised when prompt rendering fails due to missing placeholders."""
+    
+    def __init__(self, prompt_name: str, missing_keys: list[str]):
+        self.prompt_name = prompt_name
+        self.missing_keys = missing_keys
+        super().__init__(
+            f"PROMPT_PARAMS_MISSING: Prompt '{prompt_name}' missing required params: {missing_keys}"
+        )
+
+
+def get_prompts_dir() -> Path:
+    """Get the prompts directory path."""
+    return PROMPTS_DIR
+
+
+def list_available_prompts() -> list[str]:
+    """List all available prompt template files."""
+    if not PROMPTS_DIR.exists():
+        return []
+    return sorted([f.name for f in PROMPTS_DIR.glob("*.txt")])
+
+
+def get_loaded_prompts() -> list[str]:
+    """Get list of prompts that have been loaded during this session."""
+    return sorted(_loaded_prompts)
+
+
+def get_required_placeholders(prompt_name: str) -> list[str]:
+    """
+    Get the required placeholders for a prompt file.
+    
+    Args:
+        prompt_name: Name of the prompt file (with or without .txt)
+        
+    Returns:
+        List of required placeholder names
+    """
+    if not prompt_name.endswith(".txt"):
+        prompt_name = f"{prompt_name}.txt"
+    return PROMPT_PLACEHOLDERS.get(prompt_name, [])
+
+
+def extract_placeholders(template: str) -> list[str]:
+    """
+    Extract all placeholders from a template string.
+    
+    Args:
+        template: Template string with {placeholder} patterns
+        
+    Returns:
+        List of unique placeholder names found
+    """
+    # Match {placeholder_name} patterns, excluding JSON-like content
+    pattern = r'\{([a-zA-Z_][a-zA-Z0-9_]*)\}'
+    matches = re.findall(pattern, template)
+    # Filter out common JSON schema tokens
+    json_tokens = {'string', 'null', 'true', 'false', 'object', 'array', 'number', 'integer'}
+    return list(set(m for m in matches if m not in json_tokens))
+
+
+@lru_cache(maxsize=32)
+def load_prompt(name: str) -> str:
+    """
+    Load a prompt template from the prompts directory.
+    
+    Args:
+        name: Name of the prompt file (with or without .txt extension)
+        
+    Returns:
+        The prompt template content
+        
+    Raises:
+        FileNotFoundError: If the prompt file doesn't exist
+    """
+    # Add .txt extension if not present
+    if not name.endswith(".txt"):
+        name = f"{name}.txt"
+    
+    prompt_path = PROMPTS_DIR / name
+    
+    if not prompt_path.exists():
+        raise FileNotFoundError(f"Prompt template not found: {prompt_path}")
+    
+    content = prompt_path.read_text(encoding="utf-8")
+    
+    # Track loaded prompts
+    _loaded_prompts.add(name)
+    
+    logger.debug(f"[PROMPT] Loaded template: {name} ({len(content)} chars)")
+    return content
+
+
+def render_prompt(
+    template: str, 
+    variables: dict[str, Any],
+    prompt_name: str | None = None,
+    strict: bool = True,
+) -> str:
+    """
+    Render a prompt template with variable substitution.
+    
+    Uses {variable_name} syntax for placeholders.
+    
+    Args:
+        template: The prompt template string
+        variables: Dictionary of variable names to values
+        prompt_name: Optional name for validation against registry
+        strict: If True, raises error on missing required params
+        
+    Returns:
+        The rendered prompt with variables substituted
+        
+    Raises:
+        PromptRenderError: If strict=True and required placeholders are missing
+        
+    Example:
+        >>> template = "Hello {name}, you are {age} years old."
+        >>> render_prompt(template, {"name": "Alice", "age": "30"})
+        'Hello Alice, you are 30 years old.'
+    """
+    # Log prompt name and keys (not values for privacy)
+    if prompt_name:
+        logger.info(f"[PROMPT] Rendering {prompt_name} with keys: {sorted(variables.keys())}")
+    else:
+        logger.debug(f"[PROMPT] Rendering unnamed prompt with keys: {sorted(variables.keys())}")
+    
+    # Validate against registry if prompt_name provided
+    if prompt_name and strict:
+        required = get_required_placeholders(prompt_name)
+        missing = [k for k in required if k not in variables]
+        if missing:
+            logger.error(f"PROMPT_PARAMS_MISSING: {prompt_name} missing: {missing}")
+            raise PromptRenderError(prompt_name, missing)
+    
+    # Convert all values to strings, handling None and JSON
+    str_variables = {}
+    for key, value in variables.items():
+        if value is None:
+            str_variables[key] = "null"
+        elif isinstance(value, (dict, list)):
+            str_variables[key] = json.dumps(value, indent=2)
+        else:
+            str_variables[key] = str(value)
+    
+    result = template
+    
+    # Track used and unused variables
+    used_keys = set()
+    
+    for key, value in str_variables.items():
+        placeholder = "{" + key + "}"
+        if placeholder in result:
+            result = result.replace(placeholder, value)
+            used_keys.add(key)
+    
+    # Warn about unused variables
+    unused = set(str_variables.keys()) - used_keys
+    if unused:
+        logger.debug(f"Unused variables in prompt render: {unused}")
+    
+    return result
+
+
+def load_and_render(
+    name: str, 
+    variables: dict[str, Any] | None = None,
+    strict: bool = True,
+) -> str:
+    """
+    Load a prompt template and render it with variables in one step.
+    
+    Args:
+        name: Name of the prompt file
+        variables: Optional dictionary of variables to substitute
+        strict: If True, validates all required placeholders are provided
+        
+    Returns:
+        The rendered prompt
+    """
+    template = load_prompt(name)
+    
+    # Normalize name for registry lookup
+    prompt_name = name if name.endswith(".txt") else f"{name}.txt"
+    
+    if variables:
+        return render_prompt(template, variables, prompt_name=prompt_name, strict=strict)
+    
+    logger.info(f"[PROMPT] Loaded {prompt_name} (no variables)")
+    return template
+
+
+def validate_prompt_params(prompt_name: str, params: dict[str, Any]) -> list[str]:
+    """
+    Validate that all required parameters are provided for a prompt.
+    
+    Args:
+        prompt_name: Name of the prompt file
+        params: Dictionary of parameters being passed
+        
+    Returns:
+        List of missing parameter names (empty if all present)
+    """
+    if not prompt_name.endswith(".txt"):
+        prompt_name = f"{prompt_name}.txt"
+    
+    required = PROMPT_PLACEHOLDERS.get(prompt_name, [])
+    return [k for k in required if k not in params]
+
+
+# =============================================================================
+# Prompt Template Registry (Service -> Prompts mapping)
+# =============================================================================
+
+PROMPT_REGISTRY = {
+    # Ingestion pipeline
+    "ingestion": {
+        "profile_extraction": ["extractor_system.txt", "profile_extract.txt"],
+        "achievements_extraction": ["extractor_system.txt", "achievements_extract.txt"],
+        "timeline_normalization": ["extractor_system.txt", "timeline_normalize.txt"],
+        "persona_generation": ["extractor_system.txt", "persona_pack.txt"],
+    },
+    # Plan generation
+    "planning": {
+        "generate_plan": ["extractor_system.txt", "plan_generate.txt"],
+        "generate_item_details": ["extractor_system.txt", "plan_item_details.txt"],
+    },
+    # Chat
+    "chat": {
+        "generate_reply": ["chat_system.txt", "chat_reply.txt"],
+    },
+    # Milestones query
+    "milestones": {
+        "by_age": ["extractor_system.txt", "milestones_by_age.txt"],
+    },
+    # Idol discovery/suggestion
+    "idols": {
+        "suggest": ["idol_discover.txt"],
+    },
+    # Intake questionnaire
+    "intake": {
+        "generate_questions": ["extractor_system.txt", "intake_questions_generate.txt"],
+        "normalize_answers": ["extractor_system.txt", "intake_answers_normalize.txt"],
+    },
+}
+
+
+def get_prompts_for_service(service: str, operation: str) -> list[str]:
+    """
+    Get the list of prompt files used by a service operation.
+    
+    Args:
+        service: Service name (e.g., "ingestion", "planning", "chat")
+        operation: Operation name (e.g., "profile_extraction", "generate_plan")
+        
+    Returns:
+        List of prompt file names used by the operation
+    """
+    service_ops = PROMPT_REGISTRY.get(service, {})
+    return service_ops.get(operation, [])

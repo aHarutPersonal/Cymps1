@@ -1,0 +1,198 @@
+Extract ACTIONABLE ACHIEVEMENTS and MILESTONES from sources for the specified idol.
+
+IDOL: {idol_name}
+
+CRITICAL: What to EXCLUDE (NOT achievements):
+- Birth events ("was born on...", "born in...")
+- Death events ("died on...", "passed away...")
+- Physical descriptions or biographical background
+- Family relationships (unless they led to a specific achievement)
+- General personality traits
+- Where they lived/moved (unless relocation was strategic)
+
+CRITICAL: What to INCLUDE (real achievements):
+- Business decisions: founded companies, acquisitions, investments, exits
+- Career milestones: promotions, significant roles, partnerships formed
+- Financial achievements: first investment, revenue milestones, wealth creation events
+- Learning achievements: degrees earned, skills acquired, mentors sought
+- Impact achievements: philanthropy started, people hired/mentored, products launched
+- Recognition: awards, rankings, notable publications/speeches
+- Mindset shifts: key decisions that changed trajectory, pivots
+
+SOURCES (chunked; each has source_id, source_url, chunk_index, text):
+{sources_json_array}
+
+Return JSON EXACTLY matching this schema:
+
+{
+  "candidates": [
+    {
+      "title": "string (short action-oriented title, e.g., 'Founded Partnership', 'First Stock Purchase')",
+      "description": "string (1-2 sentences explaining WHAT they did and WHY it mattered)",
+      "date": "YYYY-MM-DD|null",
+      "date_precision": "day|month|year|unknown",
+      "age_at_event": null,
+      "category": "career|learning|finance|impact|mindset|other",
+      "importance_hint": "high|medium|low",
+      "confidence": 0.0,
+      "evidence": [
+        {
+          "source_id": "string",
+          "chunk_index": 0,
+          "source_url": "string",
+          "snippet": "string (verbatim from source, max 240 chars)",
+          "confidence": 0.0
+        }
+      ]
+    }
+  ]
+}
+
+Category guidelines:
+- career: jobs, companies founded, roles held, business partnerships
+- learning: education, skills acquired, books that influenced them, mentorship
+- finance: investments, financial decisions, wealth milestones
+- impact: philanthropy, people mentored, products that changed things
+- mindset: key pivots, philosophy changes, important decisions
+- other: anything else notable
+
+Importance hints:
+- high (0.8-1.0): Defining moments that shaped their trajectory
+- medium (0.5-0.79): Important but not trajectory-defining
+- low (0.2-0.49): Minor achievements or less impactful
+
+Extraction rules:
+1. Extract 10-25 achievements if sources are rich, minimum 5.
+2. Focus on WHAT THEY DID, not who they were.
+3. Prefer specific, dated events over vague achievements.
+4. Each achievement must be actionable/reproducible in some form.
+5. Evidence snippets must be verbatim from sources (exact substring).
+6. Do NOT include birth or death - these are NOT achievements.
+7. If age at event is mentioned in text, you may note it but set age_at_event=null (computed later).
+Extract ACTIONABLE ACHIEVEMENTS and MILESTONES from the provided sources for the specified idol.
+
+IDOL:
+- idol_name: "{idol_name}"
+
+INPUT SOURCES (chunked; each has source_id, source_url, chunk_index, text):
+{sources_json_array}
+
+GOAL:
+Return a high-signal list of milestones that can be used for:
+1) building an idol timeline,
+2) comparing user vs idol at the same age,
+3) deriving "replicable" behaviors for plan generation.
+
+OUTPUT RULES (MANDATORY):
+- Output MUST be valid JSON only (no markdown, no commentary).
+- Output MUST match the schema exactly.
+- Every candidate MUST include at least 1 evidence item.
+- evidence.snippet MUST be an exact substring from the referenced chunk text (verbatim).
+- Do NOT invent facts. If it's not in sources, omit it.
+
+QUALITY FILTER: include only "achievement-grade" items
+An item qualifies if it is one of:
+- A concrete decision/action: founded, acquired, invested, launched, published, patented, led, hired, partnered, exited, built, restructured, expanded, won, introduced, created, pivoted.
+- A measurable milestone: role appointment, deal completion, major publication, award/honor, key education/credential, notable product/company event, major philanthropic action.
+- A clearly stated principle/strategy that is explicitly connected to actions (not generic traits).
+
+EXCLUDE (NOT achievements):
+- Birth/death events or basic biographical facts (born/died/grew up).
+- Family/relationships unless explicitly tied to a concrete achievement (e.g., "co-founded with spouse" still needs the co-founding action).
+- Pure personality descriptors (e.g., "known for being disciplined").
+- Moves/relocations unless explicitly strategic and tied to a milestone.
+- Rumors, speculation, "reportedly", or unverifiable claims.
+- General claims without an action (e.g., "was influential").
+
+ACTIONABILITY REQUIREMENT (CMPYS-specific):
+Each candidate must be written so a user can "learn from it".
+Therefore:
+- title must be action-oriented ("Founded X", "Joined Y as Z", "Published A", "Pivoted strategy to B").
+- description must contain:
+  (a) WHAT they did (concrete action),
+  (b) WHY it mattered (impact/trajectory),
+  (c) a short "replicable angle" stated as a generalizable lesson, but WITHOUT inventing details.
+
+Example structure (do NOT literally label it):
+"Buffett formed Buffett Partnership Ltd. in 1956, creating a vehicle to apply value investing systematically. Replicable angle: start with a small, focused vehicle to compound results and iterate."
+
+DATE RULES:
+- If exact day is stated -> date="YYYY-MM-DD", date_precision="day"
+- If only month+year -> date=null, date_precision="month"
+- If only year -> date=null, date_precision="year"
+- If no date -> date=null, date_precision="unknown"
+Never guess missing dates or months/days.
+
+IMPORTANT:
+- age_at_event MUST remain null for all candidates (computed later).
+- If the source explicitly states an age (e.g., "at 19"), you may mention it in description, but keep age_at_event null.
+
+DE-DUPING (lightweight at extraction time):
+- Avoid producing near-identical duplicates from the same source passage.
+- If the same milestone appears multiple times, keep the clearest version and strongest evidence.
+
+COUNT TARGET:
+- Extract 10–25 items if sources are rich.
+- If sources are thin, output at least 5 items, but never invent.
+
+CATEGORY RULES:
+Pick exactly one:
+- career: role appointments, leadership positions, company founding/management, partnerships, major career shifts
+- learning: education, apprenticeships/mentors explicitly stated, key training/credential
+- finance: investment actions, fund/partnership creation, acquisitions/sales, capital allocation milestones
+- impact: philanthropy, institutions founded, policies influenced, large-scale societal contributions explicitly stated
+- mindset: explicitly stated strategy/philosophy ONLY if linked to actions or decisions (not generic traits)
+- other: notable items that don't fit above
+
+IMPORTANCE HINT RULES (use conservatively):
+- high: defining, trajectory-shaping milestone that appears central in sources
+- medium: meaningful milestone with clear impact
+- low: minor milestone or supporting detail (still must be real/actionable)
+
+CONFIDENCE (0.0–1.0):
+Set based on:
+- evidence clarity (explicit vs implied),
+- uniqueness (unambiguous vs ambiguous),
+- date precision (day > month > year > unknown),
+- source authority (Wikipedia lead/infobox vs vague mention).
+Guidance:
+- 0.90–1.00: explicit statement + clear milestone + strong evidence
+- 0.70–0.89: clear but date coarse or phrasing indirect
+- 0.40–0.69: partially supported or mildly ambiguous (use sparingly)
+- <0.40: do not output
+
+Return JSON EXACTLY matching this schema:
+
+{
+  "candidates": [
+    {
+      "title": "string",
+      "description": "string",
+      "date": "YYYY-MM-DD|null",
+      "date_precision": "day|month|year|unknown",
+      "age_at_event": null,
+      "category": "career|learning|finance|impact|mindset|other",
+      "importance_hint": "high|medium|low",
+      "confidence": 0.0,
+      "evidence": [
+        {
+          "source_id": "string",
+          "chunk_index": 0,
+          "source_url": "string",
+          "snippet": "string",
+          "confidence": 0.0
+        }
+      ]
+    }
+  ]
+}
+
+EVIDENCE RULES:
+- Provide 1–3 evidence items per candidate (prefer 1 strong, add more if corroborated).
+- snippet must be <= 240 chars and copied verbatim from the referenced chunk.
+- evidence.confidence should reflect how directly the snippet supports the candidate (often same as candidate confidence or slightly higher/lower).
+
+FINAL CHECK BEFORE OUTPUT:
+- Remove any item that is not a concrete action/milestone.
+- Remove any item without strong evidence snippet.
+- Ensure JSON is valid and matches schema exactly.

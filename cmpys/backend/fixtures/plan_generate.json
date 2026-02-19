@@ -1,0 +1,84 @@
+{
+  "plan": {
+    "duration_weeks": 12,
+    "weekly_hours": 10,
+    "focus": ["value_investing", "financial_analysis", "business_evaluation"],
+    "items": [
+      {
+        "title": "Learn Fundamental Analysis Basics",
+        "type": "reading",
+        "description": "Study the basics of reading financial statements and understanding key metrics",
+        "week_start": 1,
+        "week_end": 3,
+        "success_metric": "Can analyze a company's balance sheet, income statement, and cash flow",
+        "estimated_hours": 20,
+        "resource": {
+          "kind": "none",
+          "title": null,
+          "url": null
+        },
+        "confidence": 0.85
+      },
+      {
+        "title": "Practice Stock Screening",
+        "type": "practice",
+        "description": "Use free stock screening tools to find undervalued companies",
+        "week_start": 4,
+        "week_end": 6,
+        "success_metric": "Build a watchlist of 10 potentially undervalued stocks with analysis notes",
+        "estimated_hours": 15,
+        "resource": {
+          "kind": "none",
+          "title": null,
+          "url": null
+        },
+        "confidence": 0.8
+      },
+      {
+        "title": "Study Berkshire Annual Letters",
+        "type": "reading",
+        "description": "Read and analyze Buffett's annual letters to shareholders",
+        "week_start": 4,
+        "week_end": 8,
+        "success_metric": "Summarize key investing principles from 5 annual letters",
+        "estimated_hours": 20,
+        "resource": {
+          "kind": "none",
+          "title": null,
+          "url": null
+        },
+        "confidence": 0.9
+      },
+      {
+        "title": "Build Paper Portfolio",
+        "type": "project",
+        "description": "Create a mock portfolio with detailed investment theses",
+        "week_start": 7,
+        "week_end": 10,
+        "success_metric": "Document 5 investment theses with buy/sell criteria",
+        "estimated_hours": 25,
+        "resource": {
+          "kind": "none",
+          "title": null,
+          "url": null
+        },
+        "confidence": 0.85
+      },
+      {
+        "title": "Weekly Reflection Habit",
+        "type": "habit",
+        "description": "Write weekly reflection on investment learnings and market observations",
+        "week_start": 1,
+        "week_end": 12,
+        "success_metric": "12 weekly reflection entries completed",
+        "estimated_hours": 6,
+        "resource": {
+          "kind": "none",
+          "title": null,
+          "url": null
+        },
+        "confidence": 0.95
+      }
+    ]
+  }
+}

@@ -1,0 +1,99 @@
+{
+  "candidates": [
+    {
+      "title": "First Stock Purchase",
+      "description": "Purchased first stock at age 11, buying Cities Service Preferred shares",
+      "date": "1942-01-01",
+      "date_precision": "year",
+      "age_at_event": null,
+      "category": "finance",
+      "importance_hint": "high",
+      "confidence": 0.85,
+      "evidence": [
+        {
+          "source_id": "src_001",
+          "chunk_index": 1,
+          "source_url": "https://en.wikipedia.org/wiki/Warren_Buffett",
+          "snippet": "Buffett bought his first stock at age 11",
+          "confidence": 0.85
+        }
+      ]
+    },
+    {
+      "title": "Founded Buffett Partnership Ltd",
+      "description": "Established investment partnership in Omaha, Nebraska",
+      "date": "1956-01-01",
+      "date_precision": "year",
+      "age_at_event": null,
+      "category": "career",
+      "importance_hint": "high",
+      "confidence": 0.9,
+      "evidence": [
+        {
+          "source_id": "src_001",
+          "chunk_index": 2,
+          "source_url": "https://en.wikipedia.org/wiki/Warren_Buffett",
+          "snippet": "In 1956, Buffett founded Buffett Partnership Ltd",
+          "confidence": 0.9
+        }
+      ]
+    },
+    {
+      "title": "Acquired Berkshire Hathaway",
+      "description": "Began acquiring shares of Berkshire Hathaway textile company",
+      "date": "1962-01-01",
+      "date_precision": "year",
+      "age_at_event": null,
+      "category": "finance",
+      "importance_hint": "high",
+      "confidence": 0.92,
+      "evidence": [
+        {
+          "source_id": "src_001",
+          "chunk_index": 3,
+          "source_url": "https://en.wikipedia.org/wiki/Warren_Buffett",
+          "snippet": "Buffett began buying shares of Berkshire Hathaway in 1962",
+          "confidence": 0.92
+        }
+      ]
+    },
+    {
+      "title": "Became Billionaire",
+      "description": "Net worth exceeded $1 billion, entering Forbes 400 list",
+      "date": "1990-01-01",
+      "date_precision": "year",
+      "age_at_event": null,
+      "category": "finance",
+      "importance_hint": "high",
+      "confidence": 0.88,
+      "evidence": [
+        {
+          "source_id": "src_001",
+          "chunk_index": 4,
+          "source_url": "https://en.wikipedia.org/wiki/Warren_Buffett",
+          "snippet": "became a billionaire when Berkshire Hathaway began selling class A shares",
+          "confidence": 0.88
+        }
+      ]
+    },
+    {
+      "title": "The Giving Pledge",
+      "description": "Pledged to give away 99% of fortune to philanthropic causes",
+      "date": "2006-06-25",
+      "date_precision": "day",
+      "age_at_event": null,
+      "category": "impact",
+      "importance_hint": "high",
+      "confidence": 0.95,
+      "evidence": [
+        {
+          "source_id": "src_001",
+          "chunk_index": 5,
+          "source_url": "https://en.wikipedia.org/wiki/Warren_Buffett",
+          "snippet": "announced intention to give away 99% of his wealth to charity",
+          "confidence": 0.95
+        }
+      ]
+    }
+  ]
+}

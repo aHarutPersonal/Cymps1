@@ -1,0 +1,106 @@
+Select the most relevant milestones for a target age from the normalized idol timeline.
+
+PURPOSE (CMPYS-specific):
+This output powers the “Idol at my age” screen and comparison scoring.
+The selection must be:
+- age-correct,
+- high-signal,
+- evidence-backed,
+- stable across runs.
+
+INPUT:
+- target_age: {target_age}
+- mode: "{mode}"   // "exact" or "up_to"
+- timeline:
+{timeline_json}
+
+OUTPUT RULES (MANDATORY):
+- Output MUST be valid JSON only.
+- Output MUST match the schema exactly.
+- Do NOT invent new facts, dates, or evidence.
+- Every returned milestone must include evidence (at least 1 item).
+- Keep title/description faithful; only minor wording cleanup allowed.
+
+Return JSON EXACTLY matching this schema:
+
+{
+  "target_age": 0,
+  "mode": "exact|up_to",
+  "milestones": [
+    {
+      "title": "string",
+      "description": "string",
+      "age_at_event": 0,
+      "category": "career|learning|finance|impact|mindset|other",
+      "importance_score": 0.0,
+      "confidence": 0.0,
+      "evidence": [
+        {
+          "source_id": "string",
+          "chunk_index": 0,
+          "source_url": "string",
+          "snippet": "string",
+          "confidence": 0.0
+        }
+      ]
+    }
+  ],
+  "completeness_estimate": 0.0
+}
+
+SELECTION RULES:
+1) Eligibility:
+- Exclude timeline items where age_at_event is null.
+- Exclude items with confidence < 0.40 (too unreliable for comparison).
+
+2) Mode:
+- exact: include only items where age_at_event == target_age
+- up_to: include items where age_at_event <= target_age
+
+3) Signal > quantity:
+- If exact mode yields 0 items, milestones should be [] (do not invent, do not fallback).
+- For up_to mode, prefer a compact set of meaningful milestones.
+
+4) Ranking (deterministic):
+Sort eligible items by:
+- importance_score DESC
+- confidence DESC
+- age_at_event ASC (earlier first if otherwise equal)
+Pick top items with a cap of 25.
+
+5) Diversity within the list (soft constraint):
+If you have many milestones, avoid a list dominated by one category.
+Target: no more than 12 milestones from a single category unless the timeline is extremely skewed.
+If there is a tie, prefer the underrepresented category.
+
+6) Output formatting:
+- title should mirror canonical_title (minimal changes).
+- description should mirror canonical_description (minor cleanup allowed).
+- evidence should carry over unchanged; keep 1–3 evidence items from the timeline item.
+- age_at_event must be the same integer as in timeline item.
+
+COMPLETENESS ESTIMATE (0.0–1.0):
+This is NOT “confidence”. It measures coverage of the idol timeline for age-based comparison.
+
+Compute conservatively using these signals:
+- eligible_count = number of timeline items with age_at_event not null
+- returned_count = number of selected milestones
+- coverage_span = max_age_with_data - min_age_with_data (if available)
+
+Guidelines:
+- If eligible_count < 6 -> completeness_estimate in [0.20, 0.40]
+- If eligible_count 6–15 -> completeness_estimate in [0.40, 0.65]
+- If eligible_count > 15 -> completeness_estimate in [0.60, 0.80]
+- Only use >0.80 when:
+  - eligible_count is high (e.g., 25+),
+  - evidence is consistently strong (most items confidence >=0.75),
+  - and ages cover a broad span (e.g., 15+ years of life stages).
+- If exact mode and returned_count == 0, reduce completeness_estimate by 0.10–0.20 (because we have no age-specific milestones).
+
+Make sure completeness_estimate is a single float clamped to [0.0, 1.0].
+
+FINAL SANITY CHECK (MANDATORY):
+- Ensure no milestone violates mode rules.
+- Ensure all milestones have evidence length >=1.
+- Ensure JSON output matches schema exactly.
+- If you cannot compute something, omit the milestone rather than guessing.

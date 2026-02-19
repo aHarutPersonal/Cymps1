@@ -1,0 +1,66 @@
+from datetime import date
+from typing import TYPE_CHECKING
+
+from sqlalchemy import Date, String
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.models.base import Base, UUIDMixin, TimestampMixin
+
+if TYPE_CHECKING:
+    from app.models.idol_alias import IdolAlias
+    from app.models.idol_achievement import IdolAchievement
+    from app.models.idol_external_id import IdolExternalId
+    from app.models.idol_job import IdolImportJob
+    from app.models.idol_persona import IdolPersona
+    from app.models.idol_profile import IdolProfile
+    from app.models.idol_source import IdolSource
+    from app.models.idol_tag_link import IdolTagLink
+    from app.models.idol_timeline import IdolTimelineEvent
+    from app.models.intake import IntakeSession
+
+
+class Idol(Base, UUIDMixin, TimestampMixin):
+    __tablename__ = "idols"
+
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    birth_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    domain: Mapped[str] = mapped_column(String(255), nullable=False)
+    image_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+
+    # Relationships
+    aliases: Mapped[list["IdolAlias"]] = relationship(
+        "IdolAlias", back_populates="idol", cascade="all, delete-orphan"
+    )
+    achievements: Mapped[list["IdolAchievement"]] = relationship(
+        "IdolAchievement", back_populates="idol", cascade="all, delete-orphan"
+    )
+    import_jobs: Mapped[list["IdolImportJob"]] = relationship(
+        "IdolImportJob", back_populates="idol"
+    )
+    tag_links: Mapped[list["IdolTagLink"]] = relationship(
+        "IdolTagLink", back_populates="idol", cascade="all, delete-orphan"
+    )
+    external_ids: Mapped[list["IdolExternalId"]] = relationship(
+        "IdolExternalId", back_populates="idol", cascade="all, delete-orphan"
+    )
+    sources: Mapped[list["IdolSource"]] = relationship(
+        "IdolSource", back_populates="idol", cascade="all, delete-orphan"
+    )
+    
+    # One-to-one relationships
+    profile: Mapped["IdolProfile | None"] = relationship(
+        "IdolProfile", back_populates="idol", uselist=False, cascade="all, delete-orphan"
+    )
+    persona: Mapped["IdolPersona | None"] = relationship(
+        "IdolPersona", back_populates="idol", uselist=False, cascade="all, delete-orphan"
+    )
+    
+    # Timeline events
+    timeline_events: Mapped[list["IdolTimelineEvent"]] = relationship(
+        "IdolTimelineEvent", back_populates="idol", cascade="all, delete-orphan"
+    )
+    
+    # Intake sessions
+    intake_sessions: Mapped[list["IntakeSession"]] = relationship(
+        "IntakeSession", back_populates="idol", cascade="all, delete-orphan"
+    )

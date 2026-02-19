@@ -1,0 +1,80 @@
+Extract a canonical idol profile from the provided sources.
+
+IDOL INPUT:
+- selected_name: "{selected_name}"
+- provider: "{provider}"                  // e.g., "wikidata"
+- external_id: "{external_id}"            // e.g., "Q12345"
+- wikipedia_url_hint: "{wikipedia_url}"   // may be null
+
+SOURCES (chunked; each has source_id, source_url, chunk_index, text):
+{sources_json_array}
+
+GOAL (CMPYS-specific):
+Produce a clean “Idol Profile” used for:
+- showing who the idol is (short, factual),
+- enabling age-based comparison (birth_date is critical),
+- powering onboarding suggestions (domains/roles),
+- grounding chat persona generation later.
+
+IMPORTANT RULES:
+- Do NOT output birth/death as “achievements” — but DO extract birth_date/death_date into profile.
+- Be conservative: if a field is not explicitly supported, set it to null or [].
+- Prefer concise, stable values (avoid long paragraphs).
+
+Return JSON EXACTLY matching this schema:
+
+{
+  "profile": {
+    "display_name": "string",
+    "short_description": "string|null",
+    "birth_date": "YYYY-MM-DD|null",
+    "death_date": "YYYY-MM-DD|null",
+    "nationality": ["string"],
+    "domains": ["string"],
+    "primary_roles": ["string"],
+    "era_tags": ["string"],
+    "notable_themes": ["string"],
+    "wikipedia_url": "string|null",
+    "confidence": 0.0,
+    "evidence": [
+      {
+        "source_id": "string",
+        "chunk_index": 0,
+        "source_url": "string",
+        "snippet": "string",
+        "confidence": 0.0
+      }
+    ]
+  }
+}
+
+FIELD GUIDANCE:
+- display_name: the most common canonical name used in sources.
+- short_description: 1 sentence describing who they are (e.g., “American investor and philanthropist.”). Must be supported by evidence.
+- birth_date / death_date: only if explicit with day precision; otherwise set null (do NOT guess).
+- nationality: include only explicit nationalities (e.g., “American”, “Armenian”, “British”). If not explicit, [].
+- domains: choose 2–6 broad buckets from:
+  ["investing","entrepreneurship","business","technology","science","engineering","arts","sports","politics","public_service","philanthropy","writing","leadership","other"]
+  Only include domains clearly supported by roles/themes in sources.
+- primary_roles: concrete roles (2–6) like ["investor","entrepreneur","scientist","engineer","writer","politician","athlete","philanthropist"].
+- era_tags: short time/era labels derived from dates and context (examples: ["gilded_age","early_20th_century","mid_20th_century","late_20th_century","modern_era"]). If unclear, [].
+- notable_themes: 3–8 short phrases describing what the idol is known for (e.g., “value investing”, “railroad expansion”, “founding major institutions”). Must be supportable by evidence overall.
+
+EVIDENCE REQUIREMENTS:
+- Provide 2–5 evidence items total, prioritizing:
+  1) who they are (role/description),
+  2) birth date if present,
+  3) one strong theme/domain indicator.
+- evidence.snippet must be verbatim from the referenced chunk.
+- evidence.source_url must match one of the provided sources.
+
+CONFIDENCE:
+- Start at 0.85 if birth_date and role are explicitly supported.
+- Subtract 0.10 if birth_date missing or not day-precision.
+- Subtract 0.05–0.15 if key fields are weakly supported.
+- Clamp to [0.0, 1.0].
+
+FINAL CHECK:
+- JSON only, schema exact.
+- No invented facts.
+- Evidence snippets are verbatim substrings (<=240 chars).

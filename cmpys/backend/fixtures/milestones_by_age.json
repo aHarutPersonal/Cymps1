@@ -1,0 +1,41 @@
+{
+  "target_age": 30,
+  "mode": "up_to",
+  "milestones": [
+    {
+      "title": "First Stock Purchase at Age 11",
+      "description": "Purchased first stock (Cities Service Preferred), demonstrating early interest in investing",
+      "age_at_event": 11,
+      "category": "finance",
+      "importance_score": 0.8,
+      "confidence": 0.85,
+      "evidence": [
+        {
+          "source_id": "src_001",
+          "chunk_index": 1,
+          "source_url": "https://en.wikipedia.org/wiki/Warren_Buffett",
+          "snippet": "Buffett bought his first stock at age 11",
+          "confidence": 0.85
+        }
+      ]
+    },
+    {
+      "title": "Founded Buffett Partnership Ltd",
+      "description": "Established his first investment partnership in Omaha, Nebraska",
+      "age_at_event": 25,
+      "category": "career",
+      "importance_score": 0.9,
+      "confidence": 0.9,
+      "evidence": [
+        {
+          "source_id": "src_001",
+          "chunk_index": 2,
+          "source_url": "https://en.wikipedia.org/wiki/Warren_Buffett",
+          "snippet": "In 1956, Buffett founded Buffett Partnership Ltd",
+          "confidence": 0.9
+        }
+      ]
+    }
+  ],
+  "completeness_estimate": 0.7
+}

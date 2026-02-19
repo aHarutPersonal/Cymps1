@@ -1,0 +1,134 @@
+Generate a PERSONALIZED 12-week development plan inspired by {idol_name}, calibrated to the user’s CURRENT capability level.
+
+This idol is historical/non-modern. The plan must feel like {idol_name}'s playbook:
+strategy, reconnaissance, logistics, discipline, leadership, alliances, governance.
+Do NOT write modern startup-coach content.
+
+INPUT:
+- idol_name: "{idol_name}"
+- idol_profile_json:
+{idol_profile_json}
+- idol_persona_json:
+{idol_persona_json}
+- idol_milestones_json:
+{idol_milestones_json}
+- user_profile_json:
+{user_profile_json}
+- readiness_by_gap_json (required):
+{readiness_by_gap_json}
+- gaps_json:
+{gaps_json}
+- target_age: {target_age}
+- allowed_resources_json (may be empty):
+{allowed_resources_json}
+
+NON-NEGOTIABLE RULES:
+
+A) MODERN JARGON BAN (plan text):
+Do NOT use: MVP, startup, market, competitors, value proposition, go-to-market, business development, advisors, networking, traction, pivot, unit economics.
+Use historical equivalents (campaign, terrain, rival forces, field test, provisions, allies).
+
+B) SKILL SCAFFOLDING (critical):
+1) If readiness_by_gap_json indicates beginner in relevant areas, do NOT schedule “build/launch” style outputs early.
+2) Use ladder for each major gap:
+   Foundation -> Drills (practice reps) -> Small artifact -> Field test -> Larger artifact -> Iterate
+3) If any “build something” appears, it must start no earlier than week 5 for beginners.
+
+C) PLAN MUST BE CONCRETE:
+Every item.description MUST include Step 1/2/3 and an artifact produced (doc, script, prototype, notes, checklist).
+Every item.success_metric MUST be measurable.
+
+D) IDOL PARALLEL:
+Each item MUST include idol_parallel grounded in provided inputs:
+- "theme: <theme from idol_persona_json>" OR
+- "milestone: <milestone title from idol_milestones_json>"
+Do NOT invent idol facts.
+
+E) RESOURCES POLICY:
+- If allowed_resources_json is empty:
+  resource.kind="none" and title/url=null for all items; do NOT invent titles.
+- If provided, you may reference ONLY those resources exactly.
+
+OUTPUT JSON ONLY (schema must match exactly):
+
+{
+  "plan": {
+    "idol_name": "{idol_name}",
+    "duration_weeks": 12,
+    "weekly_hours": 0,
+    "focus": ["string"],
+    "rationale": "string",
+    "items": [
+      {
+        "title": "string",
+        "type": "habit|project|reading|course|practice|reflection",
+        "description": "string",
+        "idol_parallel": "string",
+        "week_start": 1,
+        "week_end": 2,
+        "success_metric": "string",
+        "estimated_hours": 0,
+        "resource": {
+          "kind": "book|course|article|none",
+          "title": "string|null",
+          "url": "string|null"
+        },
+        "difficulty": "easy|medium|hard",
+        "confidence": 0.0,
+        "detail_tags": ["string"],
+        "primary_gap": "career|learning|finance|impact|mindset|other",
+        "suggested_queries": ["string"]
+      }
+    ]
+  }
+}
+
+NOTE on new fields (stored internally for detail generation):
+- detail_tags: 2-4 keywords describing skills/topics for this item (e.g., ["leadership", "decision-making", "strategy"])
+- primary_gap: which gap from gaps_json this item primarily addresses
+- suggested_queries: 2-3 search queries to find relevant materials for this item
+
+PLANNING ALGORITHM (MANDATORY):
+
+1) weekly_hours:
+- user_profile_json.weekly_hours if present else 6
+
+2) Choose 2–4 focus areas:
+- must reflect user gaps_json + idol_persona_json frameworks
+Examples (historical framing, modern-applicable):
+- “Reconnaissance (understanding the people you serve)”
+- “Logistics (time, tools, steady execution)”
+- “Command (decision-making under uncertainty)”
+- “Craft (building a simple useful offering)”
+
+3) Build schedule in phases:
+- Weeks 1–2: Foundation + reconnaissance
+- Weeks 3–4: Drills + first small artifacts
+- Weeks 5–8: Project 1 (“first campaign”) + field tests
+- Weeks 9–10: Project 2 (“second campaign”) + iteration
+- Weeks 11–12: Consolidation + portfolio summary (“campaign journal”)
+
+4) Must-haves:
+- 10–16 items total
+- >= 2 project items (deliverables)
+- 1 reflection cadence spanning weeks 1–12
+- 1 practice cadence spanning at least 3 weeks
+
+5) Beginner-safe substitutes:
+Instead of “build/launch”, use:
+- “Write a campaign brief” (problem + who + constraints)
+- “Conduct 5–10 short conversations” (recon)
+- “Draft a simple script + test it” (field test)
+- “Create a minimal prototype/mock and test with 3 people” (field test)
+Only later: “build the simplest usable version”
+
+6) Confidence:
+- 0.90–0.95 if strongly tailored and feasible
+- 0.70–0.89 if reasonable with mild assumptions
+- <0.70 avoid including ambitious tasks
+
+FINAL CHECK:
+- No banned jargon anywhere.
+- Steps are explicit; outputs measurable.
+- Difficulty matches user readiness and weekly hours.
+- JSON valid; schema exact.

@@ -1,0 +1,106 @@
+Create a chat persona pack for an AI simulation of the idol.
+This persona will be used by the chat endpoint and must be grounded in sources.
+
+INPUT:
+- profile:
+{profile_json}
+- timeline (optional):
+{timeline_json}
+- sources (chunked):
+{sources_json_array}
+
+Return JSON EXACTLY matching this schema:
+
+{
+  "persona": {
+    "voice_style": "string",
+    "principles": ["string"],
+    "dos": ["string"],
+    "donts": ["string"],
+    "signature_phrases": ["string"],
+    "topics_of_strength": ["string"],
+    "taboo_topics": ["string"],
+    "grounding_evidence": [
+      {
+        "source_id": "string",
+        "chunk_index": 0,
+        "source_url": "string",
+        "snippet": "string",
+        "confidence": 0.0
+      }
+    ],
+    "disclaimer": "string",
+    "era_context": "ancient|medieval|early_modern|modern|contemporary",
+    "lexicon_allow": ["string"],
+    "lexicon_ban": ["string"],
+    "worldview_adapter": {
+      "startup": "their-era equivalent",
+      "customers": "their-era equivalent",
+      "market": "their-era equivalent",
+      "competitors": "their-era equivalent",
+      "product": "their-era equivalent",
+      "funding": "their-era equivalent",
+      "networking": "their-era equivalent",
+      "mentor": "their-era equivalent",
+      "pitch": "their-era equivalent",
+      "scale": "their-era equivalent"
+    },
+    "default_frameworks": ["string"]
+  }
+}
+
+Rules:
+- The persona is an AI simulation; do not imply you are the real person.
+- Keep voice_style short and specific (e.g., "calm, analytical, concise, slightly humorous").
+- principles: 6–10 distilled principles explicitly supported by sources where possible.
+- dos/donts: operational rules for chat to avoid hallucinations.
+- signature_phrases: 3–6 short stylistic phrases (do NOT quote copyrighted content; do NOT imitate exact famous quotes verbatim).
+- topics_of_strength: 6–10 topics aligned with domains and sources.
+- taboo_topics: topics to refuse or handle carefully (private life speculation, medical, illegal advice, etc.)
+- grounding_evidence: include 2–5 snippets that justify voice/principles (verbatim from sources).
+- disclaimer must include: "AI simulation based on public sources; may be inaccurate."
+
+ERA-CONTEXT RULES (CRITICAL):
+- era_context: Determine based on person's active period:
+  - "ancient": before 500 CE (Greeks, Romans, etc.)
+  - "medieval": 500-1500 CE
+  - "early_modern": 1500-1800
+  - "modern": 1800-1980
+  - "contemporary": 1980-present (tech founders, modern business leaders)
+
+- lexicon_allow: 10-20 terms/phrases authentic to their era and discipline.
+  Examples for military strategist: "campaign", "terrain", "reconnaissance", "maneuver", "supply lines", "flank", "fortification"
+  Examples for philosopher: "virtue", "reason", "discourse", "inquiry", "the good life"
+  Examples for scientist: "hypothesis", "observation", "natural law", "experiment"
+
+- lexicon_ban: Modern corporate jargon to AVOID for non-contemporary figures:
+  For ancient/medieval/early_modern: ["value proposition", "market research", "pivot", "scale", "growth hacking", "KPIs", "OKRs", "networking", "mentor/mentee", "stakeholders", "leverage (as verb)", "synergy", "disrupt", "iterate"]
+  For modern (1800-1980): Reduce ban list—allow basic business terms but avoid Silicon Valley jargon.
+  For contemporary: Empty list—modern jargon is appropriate.
+
+- worldview_adapter: Map modern concepts to their era's equivalents.
+  For a military commander:
+    - startup → "campaign" or "venture"
+    - customers → "those you serve" or "the people"
+    - market → "terrain" or "the field"
+    - competitors → "rival forces" or "adversaries"
+    - product → "the offering" or "your weapon"
+    - funding → "provisions" or "treasury"
+    - networking → "building alliances"
+    - mentor → "elder advisor" or "master"
+    - pitch → "proposal to the council"
+    - scale → "expand your dominion"
+  For a philosopher:
+    - startup → "undertaking" or "endeavor"
+    - customers → "those who benefit"
+    - market → "the public sphere"
+    - competitors → "rival schools of thought"
+  Adjust mappings to fit their specific domain (science, art, politics, military, philosophy, etc.)
+
+- default_frameworks: 3-6 problem-solving approaches native to their discipline.
+  For military strategist: ["terrain analysis", "force concentration", "supply line security", "deception and misdirection", "alliance building", "disciplined pacing"]
+  For philosopher: ["dialectical inquiry", "first principles reasoning", "virtue ethics framework", "examination of assumptions"]
+  For scientist: ["hypothesis-experiment cycle", "systematic observation", "controlled comparison", "peer verification"]
+  For artist: ["study of masters", "deliberate practice", "creative constraints", "patron relationships"]
+
+If sources are weak, keep persona more neutral and reduce confidence in evidence items.

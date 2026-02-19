@@ -1,0 +1,66 @@
+Normalize the user’s intake answers into a structured profile patch and readiness signals for plan generation.
+
+INPUT:
+- idol_name: "{idol_name}"
+- idol_persona_json:
+{idol_persona_json}
+- idol_profile_json:
+{idol_profile_json}
+- milestones_json (optional):
+{milestones_json}
+- user_profile_json (current):
+{user_profile_json}
+- questions_json:
+{questions_json}
+- answers_json:
+{answers_json}
+
+OUTPUT RULES:
+- JSON only. No markdown.
+- Do not invent achievements; only structure what the user wrote.
+- Be conservative: if unclear, set fields null/empty.
+
+RETURN JSON EXACTLY:
+
+{
+  "user_profile_patch": {
+    "weekly_hours": 0,
+    "goals": ["string"],
+    "interests": ["string"],
+    "domains": ["string"],
+    "constraints": ["string"],
+    "learning_preferences": ["string"],
+    "skills": [
+      { "name": "string", "level": "beginner|intermediate|advanced", "evidence": "string" }
+    ],
+    "achievements_raw": "string|null"
+  },
+  "structured_achievements": [
+    {
+      "title": "string",
+      "description": "string",
+      "category": "career|learning|finance|impact|mindset|other",
+      "date": "YYYY-MM-DD|null",
+      "date_precision": "day|month|year|unknown",
+      "confidence": 0.0
+    }
+  ],
+  "readiness_by_gap": {
+    "career": "beginner|intermediate|advanced",
+    "learning": "beginner|intermediate|advanced",
+    "finance": "beginner|intermediate|advanced",
+    "impact": "beginner|intermediate|advanced",
+    "mindset": "beginner|intermediate|advanced",
+    "other": "beginner|intermediate|advanced"
+  }
+}
+
+READINESS LOGIC (MANDATORY):
+- beginner: no concrete evidence in answers/achievements
+- intermediate: at least 1 concrete project/experience
+- advanced: multiple concrete projects with measurable outcomes
+If uncertain, prefer beginner.
+
+CONFIDENCE:
+- 0.9+ only if user wrote very clear facts
+- otherwise 0.6–0.85

@@ -1,0 +1,519 @@
+import asyncio
+import logging
+from typing import Any
+
+from sqlalchemy import and_, select
+from sqlalchemy.orm import selectinload
+
+from app.core.celery import celery_app
+from app.core.db import async_session_maker
+from app.models.idol import Idol
+from app.models.idol_persona import IdolPersona
+from app.models.idol_profile import IdolProfile
+from app.models.idol_timeline import IdolTimelineEvent
+from app.models.plan import Plan, PlanItem
+from app.models.plan_job import PlanGenerationJob
+from app.models.user_achievement import UserAchievement
+from app.services.planning.generator import generate_plan
+
+logger = logging.getLogger(__name__)
+
+@celery_app.task(bind=True)
+def run_plan_generation(self, job_id: str) -> dict:
+    """
+    Run the plan generation pipeline as a background task.
+    """
+    logger.info(f"[PLANNING] Starting plan generation for job_id={job_id}")
+    try:
+        result = asyncio.get_event_loop().run_until_complete(_run_plan_generation_async(job_id))
+        logger.info(f"[PLANNING] Completed job_id={job_id}, result={result}")
+        return result
+    except Exception as e:
+        logger.exception(f"[PLANNING] Fatal error in job_id={job_id}: {e}")
+        raise
+
+async def _run_plan_generation_async(job_id: str) -> dict:
+    """Async implementation of the plan generation pipeline."""
+    async with async_session_maker() as db:
+        # Fetch job with idol
+        stmt = (
+            select(PlanGenerationJob)
+            .options(selectinload(PlanGenerationJob.idol))
+            .where(PlanGenerationJob.id == job_id)
+        )
+        result = await db.execute(stmt)
+        job = result.scalar_one_or_none()
+
+        if not job:
+            return {"error": "Job not found"}
+
+        idol = job.idol
+        if not idol:
+            await _update_job(db, job, status="failed", step="error", error_message="Idol not found")
+            return {"error": "Idol not found"}
+
+        try:
+            # Step 1: Analyzing gaps (0-30%)
+            await _update_job(db, job, status="running", step="analyzing_gaps", progress=10)
+            
+            # Load idol profile
+            profile_stmt = select(IdolProfile).where(IdolProfile.idol_id == job.idol_id)
+            profile_result = await db.execute(profile_stmt)
+            idol_profile = profile_result.scalar_one_or_none()
+            
+            # Load idol persona
+            persona_stmt = select(IdolPersona).where(IdolPersona.idol_id == job.idol_id)
+            persona_result = await db.execute(persona_stmt)
+            idol_persona = persona_result.scalar_one_or_none()
+            
+            # Load idol milestones up to target age
+            milestone_stmt = select(IdolTimelineEvent).where(
+                and_(
+                    IdolTimelineEvent.idol_id == job.idol_id,
+                    IdolTimelineEvent.age_at_event <= job.target_age,
+                )
+            )
+            milestone_result = await db.execute(milestone_stmt)
+            idol_milestones = list(milestone_result.scalars().all())
+            
+            # Load user achievements
+            ach_stmt = select(UserAchievement).where(
+                UserAchievement.user_id == job.user_id
+            )
+            ach_result = await db.execute(ach_stmt)
+            user_achievements = list(ach_result.scalars().all())
+            
+            # Gap analysis
+            user_cats = {a.category.value for a in user_achievements}
+            idol_cats = {m.category for m in idol_milestones}
+            gaps = list(idol_cats - user_cats)
+            if not gaps:
+                gaps = ["learning", "career", "mindset"]
+            
+            await _update_job(db, job, progress=30)
+
+            # Step 2: Structuring curriculum (30-60%)
+            await _update_job(db, job, step="structuring_curriculum", progress=40)
+            
+            # Prepare data for LLM
+            milestones_for_llm = [
+                {
+                    "title": m.canonical_title,
+                    "description": m.canonical_description,
+                    "age": m.age_at_event,
+                    "category": m.category,
+                    "importance": m.importance_score,
+                }
+                for m in idol_milestones
+                if m.age_at_event is not None
+            ]
+            
+            profile_for_llm = {
+                "name": idol.name,
+                "domain": idol.domain,
+            }
+            if idol_profile:
+                profile_for_llm.update({
+                    "display_name": idol_profile.display_name,
+                    "short_description": idol_profile.short_description,
+                    "domains": idol_profile.domains,
+                    "primary_roles": idol_profile.primary_roles,
+                    "notable_themes": idol_profile.notable_themes,
+                })
+            
+            persona_for_llm = {}
+            if idol_persona:
+                persona_for_llm = {
+                    "voice_style": idol_persona.voice_style,
+                    "principles": idol_persona.principles,
+                    "topics_of_strength": idol_persona.topics_of_strength,
+                    "era_context": idol_persona.era_context or "contemporary",
+                }
+            
+            await _update_job(db, job, progress=50)
+
+            # Step 3: Balancing workload (60-85%)
+            await _update_job(db, job, step="balancing_workload", progress=65)
+            
+            # Generate human-readable thinking first (streamed)
+            try:
+                import openai
+                from app.core.config import settings as app_settings
+                from app.services.llm.prompt_loader import load_prompt, render_prompt
+                
+                thinking_template = load_prompt("thinking_plan")
+                thinking_prompt = render_prompt(thinking_template, {
+                    "idol_name": idol.name,
+                }, prompt_name="thinking_plan.txt")
+                
+                thinking_system = "You are an inspiring AI coach who thinks out loud while crafting personalized development plans. Be warm and insightful."
+                
+                openai_client = openai.AsyncOpenAI(api_key=app_settings.openai_api_key)
+                thinking_text = ""
+                buffer = ""
+                last_update_time = asyncio.get_event_loop().time()
+                
+                stream = await openai_client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": thinking_system},
+                        {"role": "user", "content": thinking_prompt},
+                    ],
+                    stream=True,
+                    max_tokens=200,
+                    temperature=0.7,
+                )
+                
+                async for chunk in stream:
+                    delta = chunk.choices[0].delta
+                    if delta.content:
+                        content_piece = delta.content
+                        thinking_text += content_piece
+                        buffer += content_piece
+                        
+                        current_time = asyncio.get_event_loop().time()
+                        
+                        # Buffer updates to avoid slamming the DB (every 20 chars or 200ms)
+                        if len(buffer) >= 20 or (current_time - last_update_time) > 0.2:
+                            job.thinking_text = thinking_text
+                            await db.commit()
+                            buffer = ""
+                            last_update_time = current_time
+                            
+                # Final flush
+                if buffer:
+                    job.thinking_text = thinking_text
+                    await db.commit()
+                
+                logger.info(f"[PLANNING] Thinking generated: {len(thinking_text)} chars")
+            except Exception as e:
+                logger.warning(f"[PLANNING] Thinking generation failed: {e}")
+                job.thinking_text = f"Let me analyze {idol.name}'s journey and craft a personalized plan for you..."
+                await db.commit()
+            
+            await _update_job(db, job, progress=70)
+            
+            plan_items_data = await generate_plan(
+                gaps=gaps,
+                duration_weeks=job.duration_weeks,
+                weekly_hours=job.weekly_hours,
+                target_age=job.target_age,
+                idol_profile=profile_for_llm,
+                idol_name=idol.name,
+                idol_milestones=milestones_for_llm,
+                idol_persona=persona_for_llm,
+            )
+            
+            await _update_job(db, job, progress=85)
+
+            # Step 4: Finalizing plan (85-100%)
+            # Clear thinking text so frontend switches to simulated narratives or static text
+            job.thinking_text = None
+            await _update_job(db, job, step="finalizing_plan", progress=90)
+            
+            # Create plan
+            plan = Plan(
+                user_id=job.user_id,
+                idol_id=job.idol_id,
+                target_age=job.target_age,
+                duration_weeks=job.duration_weeks,
+                weekly_hours=job.weekly_hours,
+            )
+            db.add(plan)
+            await db.flush()
+            
+            # Create plan items
+            for item_data in plan_items_data:
+                item = PlanItem(
+                    plan_id=plan.id,
+                    title=item_data.title,
+                    type=item_data.type,
+                    description=item_data.description,
+                    week_start=item_data.week_start,
+                    week_end=item_data.week_end,
+                    success_metric=item_data.success_metric,
+                    estimated_hours=item_data.estimated_hours,
+                    resource_title=item_data.resource_title,
+                    resource_url=item_data.resource_url,
+                    meta_json=item_data.meta_json,
+                )
+                db.add(item)
+            
+            await db.flush()
+            
+            # Update job with results
+            job.plan_id = plan.id
+            await _update_job(db, job, status="completed", step="done", progress=100)
+            
+            # Pre-generate details for Week 1
+            await _enqueue_week1_details_generation_async(db, plan, job.user_id)
+            
+            return {"status": "completed", "plan_id": str(plan.id)}
+
+        except Exception as e:
+            logger.exception(f"Plan generation failed for job {job_id}")
+            await _update_job(
+                db, job,
+                status="failed",
+                step="error",
+                error_message=str(e)
+            )
+            return {"error": str(e)}
+
+    await db.commit()
+
+
+@celery_app.task(bind=True)
+def regenerate_plan_item_details(self, job_id: str) -> dict:
+    """
+    Regenerate details (steps + materials) for a plan item using LLM.
+    """
+    logger.info(f"[PLAN_DETAILS] Starting regeneration for job_id={job_id}")
+    try:
+        result = asyncio.get_event_loop().run_until_complete(
+            _regenerate_plan_item_details_async(job_id)
+        )
+        logger.info(f"[PLAN_DETAILS] Completed job_id={job_id}")
+        return result
+    except Exception as e:
+        logger.exception(f"[PLAN_DETAILS] Error regenerating job_id={job_id}: {e}")
+        raise
+
+
+async def _regenerate_plan_item_details_async(job_id: str) -> dict:
+    """Async implementation of plan item details regeneration."""
+    from datetime import datetime, timezone
+    from app.models.item_detail_job import PlanItemDetailJob
+    from app.models.plan import Plan, PlanItem
+    from app.models.idol_profile import IdolProfile
+    from app.models.idol_persona import IdolPersona
+    from app.models.user_profile import UserProfile
+    from app.services.llm.client import get_llm_client
+    from app.services.llm.prompt_loader import load_and_render
+    
+    async with async_session_maker() as db:
+        # Load job
+        stmt = (
+            select(PlanItemDetailJob)
+            .options(
+                selectinload(PlanItemDetailJob.plan_item).selectinload(PlanItem.plan).selectinload(Plan.idol),
+            )
+            .where(PlanItemDetailJob.id == job_id)
+        )
+        result = await db.execute(stmt)
+        job = result.scalar_one_or_none()
+        
+        if not job:
+            return {"status": "failed", "error": "Job not found"}
+        
+        item = job.plan_item
+        user_id = job.user_id
+        
+        # Step 1: Loading context
+        await _update_job(db, job, status="running", step="loading_context", progress=10)
+        
+        plan = item.plan
+        idol = plan.idol if plan else None
+        idol_name = idol.name if idol else "this person"
+        
+        # Load idol persona for context
+        idol_persona_dict = {}
+        if idol:
+            persona_stmt = select(IdolPersona).where(IdolPersona.idol_id == idol.id)
+            persona_result = await db.execute(persona_stmt)
+            persona = persona_result.scalar_one_or_none()
+            if persona:
+                idol_persona_dict = {
+                    "voice_style": persona.voice_style,
+                    "principles": persona.principles,
+                    "era_context": persona.era_context,
+                    "topics_of_strength": persona.topics_of_strength,
+                    "lexicon_allow": persona.lexicon_allow or [],
+                    "lexicon_ban": persona.lexicon_ban or [],
+                }
+        
+        await _update_job(db, job, progress=25)
+
+        # Load user profile
+        user_profile_dict = {}
+        user_profile_stmt = select(UserProfile).where(UserProfile.user_id == user_id)
+        user_profile_result = await db.execute(user_profile_stmt)
+        user_profile = user_profile_result.scalar_one_or_none()
+        if user_profile:
+            user_profile_dict = {
+                "goals": user_profile.goals or [],
+                "interests": user_profile.interests or [],
+                "skills": user_profile.skills or {},
+                "weekly_hours": user_profile.weekly_hours,
+                "learning_preferences": user_profile.learning_preferences or [],
+            }
+        
+        # Step 2: Generating curriculum
+        await _update_job(db, job, step="generating_curriculum", progress=40)
+        
+        # Generate human-readable thinking first (streamed)
+        try:
+            import openai
+            from app.core.config import settings as app_settings
+            from app.services.llm.prompt_loader import load_prompt, render_prompt
+            
+            thinking_template = load_prompt("thinking_task")
+            thinking_prompt = render_prompt(thinking_template, {
+                "task_title": item.title,
+                "idol_name": idol_name,
+            }, prompt_name="thinking_task.txt")
+            
+            thinking_system = "You are a helpful AI coach who thinks out loud while creating detailed learning steps. Be practical and encouraging."
+            
+            openai_client = openai.AsyncOpenAI(api_key=app_settings.openai_api_key)
+            thinking_text = ""
+            
+            stream = await openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": thinking_system},
+                    {"role": "user", "content": thinking_prompt},
+                ],
+                stream=True,
+                max_tokens=150,
+                temperature=0.7,
+            )
+            
+            async for chunk in stream:
+                delta = chunk.choices[0].delta
+                if delta.content:
+                    thinking_text += delta.content
+                    job.thinking_text = thinking_text
+                    await db.commit()
+            
+            logger.info(f"[PLAN_DETAILS] Thinking generated: {len(thinking_text)} chars")
+        except Exception as e:
+            logger.warning(f"[PLAN_DETAILS] Thinking generation failed: {e}")
+            job.thinking_text = f"Let me break down '{item.title}' into actionable steps..."
+            await db.commit()
+        
+        await _update_job(db, job, progress=50)
+        
+        # Build plan_item_json
+        plan_item_dict = {
+            "title": item.title,
+            "type": item.type.value if hasattr(item.type, 'value') else str(item.type),
+            "description": item.description,
+            "success_metric": item.success_metric,
+            "estimated_hours": item.estimated_hours,
+            "week_start": item.week_start,
+            "week_end": item.week_end,
+            "resource_title": item.resource_title,
+            "resource_url": item.resource_url,
+        }
+        
+        if item.meta_json:
+            plan_item_dict["detail_tags"] = item.meta_json.get("detail_tags", [])
+            plan_item_dict["primary_gap"] = item.meta_json.get("primary_gap")
+            plan_item_dict["suggested_queries"] = item.meta_json.get("suggested_queries", [])
+            plan_item_dict["idol_parallel"] = item.meta_json.get("idol_parallel")
+            plan_item_dict["difficulty"] = item.meta_json.get("difficulty")
+        
+        readiness_by_gap = user_profile.readiness_by_gap if user_profile and user_profile.readiness_by_gap else {}
+        
+        # Render prompt
+        prompt = load_and_render(
+            "plan_item_details.txt",
+            {
+                "idol_name": idol_name,
+                "idol_persona_json": idol_persona_dict,
+                "user_profile_json": user_profile_dict,
+                "plan_item_json": plan_item_dict,
+                "readiness_by_gap_json": readiness_by_gap,
+                "allowed_resources_json": [],
+            },
+            strict=True,
+        )
+
+        await _update_job(db, job, progress=60)
+        
+        try:
+            system_prompt = load_and_render("extractor_system.txt", {}, strict=False)
+            client = get_llm_client()
+            llm_response = await client.generate_json(
+                system_prompt=system_prompt,
+                user_prompt=prompt,
+            )
+            
+            if llm_response.error:
+                await _update_job(db, job, status="failed", step="error", error_message=llm_response.error)
+                return {"status": "failed", "error": llm_response.error}
+            
+            details = llm_response.data
+            
+            # Step 3: Finalizing steps
+            await _update_job(db, job, step="finalizing_steps", progress=85)
+            
+            # Import normalization here to avoid circular dependencies
+            from app.tasks.ingestion import _normalize_plan_item_details
+            details = _normalize_plan_item_details(details)
+            
+            details["generated_at"] = datetime.now(timezone.utc).isoformat()
+            
+            from app.tasks.ingestion import sanitize_for_postgres
+            item.details_json = sanitize_for_postgres(details)
+            
+            # Finalize
+            await _update_job(db, job, status="completed", step="done", progress=100)
+            
+            return {
+                "status": "completed",
+                "steps_count": len(details.get("steps", [])),
+                "materials_count": len(details.get("materials", [])),
+            }
+            
+        except Exception as e:
+            logger.error(f"[PLAN_DETAILS] LLM error for job {job_id}: {e}")
+            await _update_job(db, job, status="failed", step="error", error_message=str(e))
+            return {"status": "failed", "error": str(e)}
+
+async def _update_job(db, job, progress=None, status=None, step=None, error_message=None):
+    """Helper to update job status in DB."""
+    if progress is not None:
+        job.progress_percent = progress
+    if status is not None:
+        job.status = status
+    if step is not None:
+        job.step = step
+    if error_message is not None:
+        job.error_message = error_message
+    
+    db.add(job)
+    await db.commit()
+
+async def _enqueue_week1_details_generation_async(db, plan, user_id):
+    """Enqueue detail generation for all items in Week 1."""
+    from app.models.item_detail_job import PlanItemDetailJob
+    
+    # Explicitly load items to avoid lazy loading (greenlet_spawn error)
+    items_stmt = (
+        select(PlanItem)
+        .where(
+            and_(
+                PlanItem.plan_id == plan.id,
+                PlanItem.week_start == 1,
+            )
+        )
+    )
+    items_result = await db.execute(items_stmt)
+    items = list(items_result.scalars().all())
+    
+    for item in items:
+        # Create job
+        job = PlanItemDetailJob(
+            user_id=user_id,
+            plan_item_id=item.id,
+            status="pending"
+        )
+        db.add(job)
+        await db.flush()
+        
+        # Enqueue task
+        regenerate_plan_item_details.delay(job.id)
+    
+    logger.info(f"[PLANNING] Enqueued {len(items)} items for detail generation (Week 1)")

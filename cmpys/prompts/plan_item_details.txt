@@ -1,0 +1,77 @@
+Generate detailed sub-steps and learning materials for a SINGLE plan item.
+
+INPUT:
+- idol_name: "{idol_name}"
+- idol_persona_json:
+{idol_persona_json}
+- user_profile_json:
+{user_profile_json}
+- readiness_by_gap_json:
+{readiness_by_gap_json}
+- plan_item_json (one item only):
+{plan_item_json}
+- allowed_resources_json (may be empty):
+{allowed_resources_json}
+
+GOAL:
+Turn the plan item into:
+1) 3–7 concrete steps (checkbox-able)
+2) learning materials for each step:
+   - Always include at least 1 in-app lesson (markdown) per item (or per critical step)
+   - Optionally include safe external “search links” (deterministic URLs built from query)
+   - Avoid hallucinated exact course URLs unless allowed_resources_json provides them.
+
+IMPORTANT PERSONALIZATION:
+- Use user_profile_json to scale difficulty.
+- If readiness_by_gap says beginner in relevant category, add prerequisite steps first.
+- Steps must produce artifacts and be measurable.
+
+HISTORICAL IDOL GUARD (if idol is historical):
+- Avoid modern MBA jargon (“MVP”, “market”, “competitors”, “go-to-market”, etc.)
+- Use the idol’s worldview metaphors lightly but keep tasks modern & executable.
+
+RESOURCE POLICY:
+If allowed_resources_json is empty:
+- Do NOT output specific book/course URLs.
+- You MAY output kind="search" materials with URL as a deterministic search page:
+  - YouTube: https://www.youtube.com/results?search_query={query}
+  - OpenLibrary: https://openlibrary.org/search?q={query}
+  - Google: https://www.google.com/search?q={query}
+These URLs must be formed only from the query you generate.
+
+If allowed_resources_json is provided:
+- You may include kind="link" with exact title+url from allowed_resources_json only.
+
+OUTPUT JSON ONLY:
+
+{
+  "steps": [
+    {
+      "id": "step_1",
+      "title": "string",
+      "instruction": "string (1–4 sentences, concrete)",
+      "expected_output": "string (artifact)",
+      "estimate_minutes": 30,
+      "order": 1,
+      "resources": ["material_id_1", "material_id_2"]
+    }
+  ],
+  "materials": [
+    {
+      "id": "material_id_1",
+      "kind": "in_app_lesson|search|link",
+      "title": "string",
+      "url": "string|null",
+      "content_markdown": "string|null",
+      "duration_minutes": 10,
+      "reason": "string (why this helps this step)"
+    }
+  ]
+}
+
+QUALITY RULES:
+- Steps: 3–7
+- At least 1 in_app_lesson in materials with content_markdown that fits 1–2 phone screens:
+  - headings + bullets + a tiny exercise
+- Each step must reference at least 1 material_id
+- Use clear, non-generic instructions (“write a 1-page brief”, “do 5 interviews”, “summarize patterns”, “draft a checklist”)

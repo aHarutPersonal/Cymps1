@@ -1,0 +1,143 @@
+Normalize, deduplicate, and compute ages for achievement candidates.
+
+PURPOSE (CMPYS-specific):
+Transform raw achievement candidates into a canonical idol timeline suitable for:
+- age-based comparison (idol at age X),
+- progress scoring,
+- grounded chat context,
+- plan generation.
+
+INPUT:
+- idol_birth_date: "{idol_birth_date}"  // may be null; format "YYYY-MM-DD" if present
+- candidates:
+{candidates_json}
+
+OUTPUT RULES (MANDATORY):
+- Output MUST be valid JSON only (no markdown, no commentary).
+- Output MUST match the schema exactly.
+- Never invent missing dates, ages, or facts.
+- Preserve evidence integrity: do not alter evidence snippets.
+- Each output timeline item must have at least 1 evidence item.
+
+Return JSON EXACTLY matching this schema:
+
+{
+  "timeline": [
+    {
+      "canonical_title": "string",
+      "canonical_description": "string",
+      "date": "YYYY-MM-DD|null",
+      "date_precision": "day|month|year|unknown",
+      "age_at_event": 0,
+      "category": "career|learning|finance|impact|mindset|other",
+      "importance_score": 0.0,
+      "confidence": 0.0,
+      "evidence": [
+        {
+          "source_id": "string",
+          "chunk_index": 0,
+          "source_url": "string",
+          "snippet": "string",
+          "confidence": 0.0
+        }
+      ]
+    }
+  ],
+  "dedupe_notes": [
+    {
+      "merged_titles": ["string"],
+      "reason": "string"
+    }
+  ]
+}
+
+CANONICALIZATION RULES:
+- canonical_title: short, action-oriented, unique (e.g., “Founded X”, “Joined Y as Z”, “Acquired Z”, “Published A”).
+- canonical_description: 1–2 sentences:
+  (1) WHAT happened (concrete),
+  (2) WHY it mattered (trajectory/impact).
+- Do NOT add new details that are not supported by candidate descriptions/evidence.
+- Keep category consistent with the most appropriate candidate category.
+
+DEDUPE RULES (strict but safe):
+Goal: merge true duplicates without accidentally merging distinct events.
+
+You MAY merge candidates if ALL are true:
+1) Same action type (founded/joined/acquired/published/launched/etc.) AND
+2) Same entity or clearly same event (same company/org/book/role) AND
+3) Dates do not conflict (same year OR one is unknown and the other known) AND
+4) Descriptions/evidence clearly refer to the same milestone.
+
+You MUST NOT merge if:
+- entities differ (different companies/books/roles),
+- the action type differs,
+- the dates conflict (e.g., 1956 vs 1965),
+- or the event could be distinct (e.g., “joined company” vs “became CEO”).
+
+When merging:
+- choose the best canonical_title (most specific and widely supported).
+- merge evidence: keep up to 3 strongest evidence items across candidates.
+- confidence becomes the MAX of merged candidates, then adjusted by rules below.
+- add a dedupe_notes entry listing merged_titles and the reason.
+
+AGE COMPUTATION RULES (deterministic):
+- age_at_event MUST be null if idol_birth_date is null.
+- age_at_event MUST be null if date_precision == "unknown" or date is null and date_precision != "day".
+- If date_precision == "day" and date != null:
+  Compute exact age:
+  age = event_year - birth_year
+  If (event_month, event_day) is before (birth_month, birth_day), then age = age - 1
+- If date_precision == "month":
+  You cannot compute exact age. Set age_at_event to:
+  age = event_year - birth_year
+  (No month/day adjustment; this is approximate. Apply confidence penalty below.)
+- If date_precision == "year":
+  Set age_at_event to:
+  age = event_year - birth_year
+  (Approximate. Apply confidence penalty below.)
+- age_at_event must never be negative. If computed negative, set to null and lower confidence.
+
+DATE NORMALIZATION RULES:
+- Keep date values only when candidate date is fully specified day precision.
+- For month/year-only information, date should remain null and date_precision should remain "month" or "year".
+- Never guess month/day to create a date.
+
+IMPORTANCE SCORE RULES (0.0–1.0):
+Assign importance_score based on contribution to the idol’s trajectory and usefulness for CMPYS comparison:
+- 0.85–1.00: defining milestones (major founding, CEO appointment, flagship product, landmark publication, widely recognized award, major philanthropic foundation)
+- 0.60–0.84: significant milestones (major promotion, key partnership, important acquisition, meaningful shift in strategy with documented outcomes)
+- 0.30–0.59: supporting milestones (education completion, early roles, smaller launches)
+- 0.10–0.29: minor milestones (only if still concrete and evidenced)
+Do not inflate importance just because the person is famous.
+
+CONFIDENCE ADJUSTMENT RULES:
+Start from the chosen/merged candidate confidence, then adjust:
+- If date_precision == "day": no penalty.
+- If date_precision == "month": subtract 0.05 (approximate age).
+- If date_precision == "year": subtract 0.10 (approximate age).
+- If merged candidates were clearly duplicates: add +0.03 (more corroboration).
+- If merged candidates were borderline/ambiguous: subtract 0.07.
+- If evidence is weakly phrased (“may have”, “reportedly”): cap confidence at 0.69.
+Clamp final confidence to [0.0, 1.0].
+
+EVIDENCE RULES:
+- Keep evidence snippets verbatim exactly as provided.
+- For merged items, prefer evidence that directly supports:
+  (a) the action, and (b) the timing.
+- evidence.confidence should reflect directness (often ~candidate confidence).
+- Keep 1–3 evidence items; never exceed 3.
+
+SORTING RULES:
+Sort timeline items by:
+1) Items with known ages first (age_at_event not null), ascending age_at_event
+2) For same age or unknown ages: items with date_precision day > month > year > unknown
+3) Then importance_score descending
+Do NOT fabricate dates to sort.
+
+FINAL SANITY CHECK (MANDATORY):
+Before outputting:
+- Remove items that are not concrete actions/milestones.
+- Remove duplicates not merged.
+- Ensure each item has category in allowed set and evidence length >= 1.
+- Ensure JSON schema is respected.
+- If age_at_event cannot be computed, set it to null (even though schema example shows 0).
