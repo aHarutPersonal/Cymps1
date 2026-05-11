@@ -85,24 +85,25 @@ class IdolsRepository {
     if (description != null) data['description'] = description;
     if (birthDate != null) data['birthDate'] = birthDate;
     if (wikipediaUrl != null) data['wikipediaUrl'] = wikipediaUrl;
-    if (occupations != null && occupations.isNotEmpty) data['occupations'] = occupations;
+    if (occupations != null && occupations.isNotEmpty) {
+      data['occupations'] = occupations;
+    }
 
     // ignore: avoid_print
-    print('🎭 Import request: provider=$provider, externalId=$externalId, name=$name');
+    print(
+      '🎭 Import request: provider=$provider, externalId=$externalId, name=$name',
+    );
     // ignore: avoid_print
     print('🎭 Import JSON: $data');
 
     try {
-      final response = await _dioClient.post(
-        '/idols/import',
-        data: data,
-      );
+      final response = await _dioClient.post('/idols/import', data: data);
 
       // ignore: avoid_print
       print('🎭 Import response: ${response.data}');
 
       final responseData = response.data as Map<String, dynamic>;
-      
+
       // Check for error response with detail
       if (responseData.containsKey('detail')) {
         throw Exception(responseData['detail'].toString());
@@ -147,11 +148,13 @@ class IdolsRepository {
 
     // ignore: avoid_print
     print('📅 Timeline response: ${response.data}');
-    
+
     final parsed = TimelineResponse.fromJson(response.data);
     // ignore: avoid_print
-    print('📅 Parsed timeline: events=${parsed.events.length}, timeline=${parsed.timeline.length}, milestones=${parsed.milestones.length}, items=${parsed.items.length}');
-    
+    print(
+      '📅 Parsed timeline: events=${parsed.events.length}, timeline=${parsed.timeline.length}, milestones=${parsed.milestones.length}, items=${parsed.items.length}',
+    );
+
     return parsed;
   }
 
@@ -170,7 +173,7 @@ class IdolsRepository {
   }
 
   /// Generate AI avatar for an idol.
-  /// 
+  ///
   /// [idolId] - Idol ID.
   /// [age] - Optional age to depict (defaults to current age or 30).
   /// Returns the image URL.
@@ -185,10 +188,10 @@ class IdolsRepository {
         receiveTimeout: const Duration(minutes: 2), // DALL-E can be slow
       ),
     );
-    
+
     // ignore: avoid_print
     print('🎨 Generate avatar response: ${response.data}');
-    
+
     final data = response.data as Map<String, dynamic>;
     return (data['imageUrl'] ?? data['image_url']).toString();
   }

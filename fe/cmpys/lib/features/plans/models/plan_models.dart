@@ -25,6 +25,10 @@ class PlanItem with _$PlanItem {
     DateTime? completedAt,
     DateTime? createdAt,
     DateTime? updatedAt,
+    // New: from meta_json
+    String? predictedFriction,
+    String? frictionSolution,
+    String? primaryMission,
   }) = _PlanItem;
 
   factory PlanItem.fromJson(Map<String, dynamic> json) {
@@ -36,16 +40,29 @@ class PlanItem with _$PlanItem {
       weekStart: (json['weekStart'] ?? json['week_start'] as num?)?.toInt(),
       weekEnd: (json['weekEnd'] ?? json['week_end'] as num?)?.toInt(),
       status: (json['status'] ?? 'pending').toString(),
-      progressPercent: (json['progressPercent'] ?? json['progress_percent'] as num?)?.toInt() ?? 0,
-      resourceTitle: (json['resourceTitle'] ?? json['resource_title'])?.toString(),
+      progressPercent:
+          (json['progressPercent'] ?? json['progress_percent'] as num?)
+              ?.toInt() ??
+          0,
+      resourceTitle: (json['resourceTitle'] ?? json['resource_title'])
+          ?.toString(),
       resourceUrl: (json['resourceUrl'] ?? json['resource_url'])?.toString(),
       category: json['category']?.toString(),
-      estimatedHours: (json['estimatedHours'] ?? json['estimated_hours'] as num?)?.toDouble(),
-      successMetric: (json['successMetric'] ?? json['success_metric'])?.toString(),
+      estimatedHours:
+          (json['estimatedHours'] ?? json['estimated_hours'] as num?)
+              ?.toDouble(),
+      successMetric: (json['successMetric'] ?? json['success_metric'])
+          ?.toString(),
       dueDate: _parseDate(json['dueDate'] ?? json['due_date']),
       completedAt: _parseDate(json['completedAt'] ?? json['completed_at']),
       createdAt: _parseDate(json['createdAt'] ?? json['created_at']),
       updatedAt: _parseDate(json['updatedAt'] ?? json['updated_at']),
+      predictedFriction:
+          (json['predictedFriction'] ?? json['predicted_friction'])?.toString(),
+      frictionSolution: (json['frictionSolution'] ?? json['friction_solution'])
+          ?.toString(),
+      primaryMission: (json['primaryMission'] ?? json['primary_mission'])
+          ?.toString(),
     );
   }
 
@@ -63,7 +80,8 @@ class PlanItem with _$PlanItem {
   bool get isInProgress => status == 'in_progress' || status == 'active';
 
   /// Check if item is pending.
-  bool get isPending => status == 'pending' || status == 'not_started' || status == 'todo';
+  bool get isPending =>
+      status == 'pending' || status == 'not_started' || status == 'todo';
 }
 
 /// A user's improvement plan.
@@ -88,13 +106,20 @@ class Plan with _$Plan {
     int? totalItems,
     int? completedItems,
     double? overallProgress,
+    // New: from plan_generate.txt prompt output
+    String? roadmapThesis,
+    @Default([]) List<String> antiGoals,
   }) = _Plan;
 
   factory Plan.fromJson(Map<String, dynamic> json) {
     return Plan(
       id: (json['id'] ?? '').toString(),
-      durationWeeks: (json['durationWeeks'] ?? json['duration_weeks'] as num?)?.toInt() ?? 12,
-      weeklyHours: (json['weeklyHours'] ?? json['weekly_hours'] as num?)?.toDouble() ?? 10.0,
+      durationWeeks:
+          (json['durationWeeks'] ?? json['duration_weeks'] as num?)?.toInt() ??
+          12,
+      weeklyHours:
+          (json['weeklyHours'] ?? json['weekly_hours'] as num?)?.toDouble() ??
+          10.0,
       focus: json['focus']?.toString(),
       items: _parseItems(json['items']) ?? [],
       idolId: (json['idolId'] ?? json['idol_id'])?.toString(),
@@ -106,8 +131,15 @@ class Plan with _$Plan {
       createdAt: _parseDate(json['createdAt'] ?? json['created_at']),
       updatedAt: _parseDate(json['updatedAt'] ?? json['updated_at']),
       totalItems: (json['totalItems'] ?? json['total_items'] as num?)?.toInt(),
-      completedItems: (json['completedItems'] ?? json['completed_items'] as num?)?.toInt(),
-      overallProgress: (json['overallProgress'] ?? json['overall_progress'] as num?)?.toDouble(),
+      completedItems:
+          (json['completedItems'] ?? json['completed_items'] as num?)?.toInt(),
+      overallProgress:
+          (json['overallProgress'] ?? json['overall_progress'] as num?)
+              ?.toDouble(),
+      roadmapThesis: (json['roadmapThesis'] ?? json['roadmap_thesis'])
+          ?.toString(),
+      antiGoals:
+          _parseStringListStatic(json['antiGoals'] ?? json['anti_goals']) ?? [],
     );
   }
 
@@ -124,6 +156,12 @@ class Plan with _$Plan {
     return value
         .map((e) => PlanItem.fromJson(e as Map<String, dynamic>))
         .toList();
+  }
+
+  static List<String>? _parseStringListStatic(dynamic value) {
+    if (value == null) return null;
+    if (value is! List) return null;
+    return value.map((e) => e.toString()).toList();
   }
 
   /// Get current week number (1-indexed).
@@ -169,8 +207,12 @@ class CreatePlanRequest with _$CreatePlanRequest {
 
   factory CreatePlanRequest.fromJson(Map<String, dynamic> json) {
     return CreatePlanRequest(
-      durationWeeks: (json['durationWeeks'] ?? json['duration_weeks'] as num?)?.toInt() ?? 12,
-      weeklyHours: (json['weeklyHours'] ?? json['weekly_hours'] as num?)?.toDouble() ?? 10.0,
+      durationWeeks:
+          (json['durationWeeks'] ?? json['duration_weeks'] as num?)?.toInt() ??
+          12,
+      weeklyHours:
+          (json['weeklyHours'] ?? json['weekly_hours'] as num?)?.toDouble() ??
+          10.0,
       focus: json['focus']?.toString(),
       idolId: (json['idolId'] ?? json['idol_id'])?.toString(),
       targetAge: (json['targetAge'] ?? json['target_age'] as num?)?.toInt(),
@@ -208,7 +250,9 @@ class UpdatePlanItemRequest with _$UpdatePlanItemRequest {
   factory UpdatePlanItemRequest.fromJson(Map<String, dynamic> json) {
     return UpdatePlanItemRequest(
       status: json['status']?.toString(),
-      progressPercent: (json['progressPercent'] ?? json['progress_percent'] as num?)?.toInt(),
+      progressPercent:
+          (json['progressPercent'] ?? json['progress_percent'] as num?)
+              ?.toInt(),
       notes: json['notes']?.toString(),
     );
   }
@@ -257,8 +301,12 @@ class ProgressInfo with _$ProgressInfo {
 
   factory ProgressInfo.fromJson(Map<String, dynamic> json) {
     return ProgressInfo(
-      completedSteps: (json['completed_steps'] ?? json['completedSteps'] as num?)?.toInt() ?? 0,
-      totalSteps: (json['total_steps'] ?? json['totalSteps'] as num?)?.toInt() ?? 0,
+      completedSteps:
+          (json['completed_steps'] ?? json['completedSteps'] as num?)
+              ?.toInt() ??
+          0,
+      totalSteps:
+          (json['total_steps'] ?? json['totalSteps'] as num?)?.toInt() ?? 0,
       percent: (json['percent'] as num?)?.toDouble() ?? 0.0,
     );
   }
@@ -336,9 +384,11 @@ class PlanStep with _$PlanStep {
     String? description,
     String? instruction,
     String? expectedOutput,
+    String? lessonContent,
     int? estimateMinutes,
     @Default(0) int order,
     @Default([]) List<String> resources,
+    @Default([]) List<String> substeps,
     @Default(false) bool completed,
   }) = _PlanStep;
 
@@ -348,10 +398,16 @@ class PlanStep with _$PlanStep {
       title: (json['title'] ?? '').toString(),
       description: json['description']?.toString(),
       instruction: json['instruction']?.toString(),
-      expectedOutput: (json['expectedOutput'] ?? json['expected_output'])?.toString(),
-      estimateMinutes: (json['estimateMinutes'] ?? json['estimate_minutes'] as num?)?.toInt(),
+      expectedOutput: (json['expectedOutput'] ?? json['expected_output'])
+          ?.toString(),
+      lessonContent: (json['lessonContent'] ?? json['lesson_content'])
+          ?.toString(),
+      estimateMinutes:
+          (json['estimateMinutes'] ?? json['estimate_minutes'] as num?)
+              ?.toInt(),
       order: (json['order'] as num?)?.toInt() ?? 0,
       resources: _parseStringList(json['resources']) ?? [],
+      substeps: _parseStringList(json['substeps']) ?? [],
       completed: json['completed'] == true,
     );
   }
@@ -362,9 +418,11 @@ class PlanStep with _$PlanStep {
     if (description != null) 'description': description,
     if (instruction != null) 'instruction': instruction,
     if (expectedOutput != null) 'expectedOutput': expectedOutput,
+    if (lessonContent != null) 'lesson_content': lessonContent,
     if (estimateMinutes != null) 'estimateMinutes': estimateMinutes,
     'order': order,
     'resources': resources,
+    'substeps': substeps,
     'completed': completed,
   };
 
@@ -391,17 +449,26 @@ class PlanMaterial with _$PlanMaterial {
     String? contentMarkdown,
     int? durationMinutes,
     String? reason,
+    @Default([]) List<BookIdea> ideas,
   }) = _PlanMaterial;
 
   factory PlanMaterial.fromJson(Map<String, dynamic> json) {
     return PlanMaterial(
-      id: json['id']?.toString(),
+      id:
+          (json['id'] ??
+                  json['contentResourceId'] ??
+                  json['content_resource_id'])
+              ?.toString(),
       type: PlanMaterialType.fromString(json['type']?.toString()),
       title: (json['title'] ?? '').toString(),
       url: json['url']?.toString(),
-      contentMarkdown: (json['contentMarkdown'] ?? json['content_markdown'])?.toString(),
-      durationMinutes: (json['durationMinutes'] ?? json['duration_minutes'] as num?)?.toInt(),
+      contentMarkdown: (json['contentMarkdown'] ?? json['content_markdown'])
+          ?.toString(),
+      durationMinutes:
+          (json['durationMinutes'] ?? json['duration_minutes'] as num?)
+              ?.toInt(),
       reason: json['reason']?.toString(),
+      ideas: _parseIdeas(json['ideas']) ?? [],
     );
   }
 
@@ -413,22 +480,101 @@ class PlanMaterial with _$PlanMaterial {
     if (contentMarkdown != null) 'contentMarkdown': contentMarkdown,
     if (durationMinutes != null) 'durationMinutes': durationMinutes,
     if (reason != null) 'reason': reason,
+    if (ideas.isNotEmpty) 'ideas': ideas.map((i) => i.toJson()).toList(),
   };
+
+  static List<BookIdea>? _parseIdeas(dynamic value) {
+    if (value == null) return null;
+    if (value is! List) return null;
+    return value
+        .map((e) => BookIdea.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
 
   /// Check if this is an in-app lesson.
   bool get isInAppLesson => type == PlanMaterialType.inAppLesson;
+
+  /// Check if this has prototype-style ideas.
+  bool get hasIdeas => ideas.isNotEmpty;
 
   /// Check if this is a search result.
   bool get isSearch => type == PlanMaterialType.search;
 
   /// Check if this is an external link.
-  bool get isLink => type == PlanMaterialType.link || (url != null && type != PlanMaterialType.inAppLesson);
+  bool get isLink =>
+      type == PlanMaterialType.link ||
+      (url != null && type != PlanMaterialType.inAppLesson);
 
   /// Check if this is a book.
   bool get isBook => type == PlanMaterialType.book;
 
   /// Check if this is a video.
   bool get isVideo => type == PlanMaterialType.video;
+
+  String get kindLabel {
+    switch (type) {
+      case PlanMaterialType.book:
+        return 'Book';
+      case PlanMaterialType.article:
+        return 'Article';
+      case PlanMaterialType.video:
+        return 'Video';
+      case PlanMaterialType.course:
+        return 'Course';
+      case PlanMaterialType.inAppLesson:
+        return 'Lesson';
+      case PlanMaterialType.search:
+        return 'Search';
+      case PlanMaterialType.link:
+        return 'Link';
+      case PlanMaterialType.other:
+        return 'Resource';
+    }
+  }
+
+  String get metaLabel {
+    final parts = <String>[
+      if (durationMinutes != null) '$durationMinutes min',
+      if (url?.trim().isNotEmpty == true && durationMinutes == null) 'External',
+      if (contentMarkdown?.trim().isNotEmpty == true) 'In app',
+    ];
+    return parts.join(' • ');
+  }
+
+  String get displaySubtitle {
+    final text = reason?.trim();
+    if (text != null && text.isNotEmpty) return text;
+    if (metaLabel.isNotEmpty) return metaLabel;
+    if (url?.trim().isNotEmpty == true) return url!.trim();
+    return 'Open inside CMPYS';
+  }
+}
+
+/// A single prototype-style idea card from a book.
+class BookIdea {
+  const BookIdea({
+    required this.title,
+    required this.content,
+    required this.category,
+  });
+
+  final String title;
+  final String content;
+  final String category;
+
+  factory BookIdea.fromJson(Map<String, dynamic> json) {
+    return BookIdea(
+      title: (json['title'] ?? '').toString(),
+      content: (json['content'] ?? '').toString(),
+      category: (json['category'] ?? 'Mindset').toString(),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'title': title,
+    'content': content,
+    'category': category,
+  };
 }
 
 /// Detailed information for a plan item.
@@ -511,8 +657,11 @@ class PlanItemDetailsResponse with _$PlanItemDetailsResponse {
           ? ProgressInfo.fromJson(json['progress'] as Map<String, dynamic>)
           : null,
       completed: json['completed'] == true,
-      detailsStatus: json['detailsStatus'] != null || json['details_status'] != null
-          ? DetailsStatus.fromString((json['detailsStatus'] ?? json['details_status'])?.toString())
+      detailsStatus:
+          json['detailsStatus'] != null || json['details_status'] != null
+          ? DetailsStatus.fromString(
+              (json['detailsStatus'] ?? json['details_status'])?.toString(),
+            )
           : null,
       jobId: (json['jobId'] ?? json['job_id'])?.toString(),
     );
@@ -535,7 +684,8 @@ class PlanItemDetailsResponse with _$PlanItemDetailsResponse {
   };
 
   /// Check if details are ready to display.
-  bool get hasDetails => details != null && detailsStatus == DetailsStatus.available;
+  bool get hasDetails =>
+      details != null && detailsStatus == DetailsStatus.available;
 
   /// Check if details are being generated.
   bool get isGenerating => detailsStatus == DetailsStatus.generating;
@@ -568,14 +718,21 @@ class WeekSummary with _$WeekSummary {
   factory WeekSummary.fromJson(Map<String, dynamic> json) {
     return WeekSummary(
       week: (json['week'] as num?)?.toInt() ?? 1,
-      totalItems: (json['total_items'] ?? json['totalItems'] as num?)?.toInt() ?? 0,
-      completedItems: (json['completed_items'] ?? json['completedItems'] as num?)?.toInt() ?? 0,
+      totalItems:
+          (json['total_items'] ?? json['totalItems'] as num?)?.toInt() ?? 0,
+      completedItems:
+          (json['completed_items'] ?? json['completedItems'] as num?)
+              ?.toInt() ??
+          0,
       percent: (json['percent'] as num?)?.toDouble() ?? 0.0,
       items: _parseItems(json['items']) ?? [],
       theme: json['theme']?.toString(),
       summary: json['summary']?.toString(),
-      totalMinutes: (json['total_minutes'] ?? json['totalMinutes'] as num?)?.toInt(),
-      completedMinutes: (json['completed_minutes'] ?? json['completedMinutes'] as num?)?.toInt(),
+      totalMinutes: (json['total_minutes'] ?? json['totalMinutes'] as num?)
+          ?.toInt(),
+      completedMinutes:
+          (json['completed_minutes'] ?? json['completedMinutes'] as num?)
+              ?.toInt(),
     );
   }
 
@@ -584,13 +741,17 @@ class WeekSummary with _$WeekSummary {
     'total_items': totalItems,
     'completed_items': completedItems,
     'percent': percent,
-    'items': items.map((i) => {
-      'id': i.id,
-      'title': i.title,
-      'type': i.type,
-      'status': i.status,
-      'progressPercent': i.progressPercent,
-    }).toList(),
+    'items': items
+        .map(
+          (i) => {
+            'id': i.id,
+            'title': i.title,
+            'type': i.type,
+            'status': i.status,
+            'progressPercent': i.progressPercent,
+          },
+        )
+        .toList(),
     if (theme != null) 'theme': theme,
     if (summary != null) 'summary': summary,
     if (totalMinutes != null) 'total_minutes': totalMinutes,
@@ -662,7 +823,8 @@ class ToggleStepResponse with _$ToggleStepResponse {
       progress: json['progress'] != null
           ? ProgressInfo.fromJson(json['progress'] as Map<String, dynamic>)
           : null,
-      itemCompleted: json['item_completed'] == true || json['itemCompleted'] == true,
+      itemCompleted:
+          json['item_completed'] == true || json['itemCompleted'] == true,
     );
   }
 
@@ -676,9 +838,8 @@ class ToggleStepResponse with _$ToggleStepResponse {
 class RegenerateDetailsResponse with _$RegenerateDetailsResponse {
   const RegenerateDetailsResponse._();
 
-  const factory RegenerateDetailsResponse({
-    required String jobId,
-  }) = _RegenerateDetailsResponse;
+  const factory RegenerateDetailsResponse({required String jobId}) =
+      _RegenerateDetailsResponse;
 
   factory RegenerateDetailsResponse.fromJson(Map<String, dynamic> json) {
     return RegenerateDetailsResponse(

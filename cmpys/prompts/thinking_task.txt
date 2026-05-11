@@ -6,11 +6,10 @@ This is inspired by {idol_name}'s approach.
 Think out loud about how you're breaking down this task into actionable steps. Your output should be conversational - like a mentor explaining their approach.
 
 **Instructions:**
-- Write in first person ("I'm thinking about...", "The key here is...", "What would really help is...")
-- Be practical and encouraging
-- Reference the specific task naturally
-- Mention what kind of resources or steps might help
-- Keep it concise - aim for 3-4 sentences
-- Use natural language, not bullet points
+- Write in first person, mentor style.
+- BE EXTREMELY BRIEF: 1-2 punchy sentences max.
+- Reference the task and {idol_name}'s vibe specifically if possible.
+- No generalities about "finding reputable sources" unless strictly relevant.
+- Aim for: "Let's break down this {idol_name}-style mission. First, we need to..."
 
 **Output your thinking as plain text (no JSON):**

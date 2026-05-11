@@ -488,27 +488,21 @@ async def send_message_stream(
     user_msg_id = user_msg.id
     
     async def generate_stream():
-        """Generator for SSE stream."""
-        import asyncio
-        
+        """Generator for SSE stream with intent-based model routing."""
         try:
             if not settings.llm_configured:
                 yield f"data: {json_lib.dumps({'type': 'error', 'error': 'LLM not configured'})}\n\n"
                 return
             
-            # Format user context
+            # Build shared context
             user_context_str = f"User Age: {user_age or 'Unknown'}\n"
-            
             if user_profile:
                 if user_profile.goals:
                     user_context_str += f"Goals: {', '.join(user_profile.goals)}\n"
                 if user_profile.interests:
                     user_context_str += f"Interests: {', '.join(user_profile.interests)}\n"
-            
             if achievements:
-                ach_list = [a.title for a in achievements[:5]]
-                user_context_str += f"Recent Achievements: {', '.join(ach_list)}\n"
-            
+                user_context_str += f"Recent Achievements: {', '.join(a.title for a in achievements[:5])}\n"
             if active_plan:
                 total_items = len(active_plan.items)
                 avg_progress = int(sum(i.progress_percent for i in active_plan.items) / total_items) if total_items > 0 else 0
@@ -517,10 +511,9 @@ async def send_message_stream(
                 if pending:
                     user_context_str += f"Focus items: {', '.join(pending)}\n"
 
-            # Build prompts
             voice_style = persona.voice_style if persona else "Thoughtful and informative"
             principles = "\n".join(persona.principles) if persona and persona.principles else "Be helpful and honest."
-            
+
             system_prompt = f"""You are {idol_name}, a simulated AI persona based on public information.
 
 Voice Style: {voice_style}
@@ -540,39 +533,80 @@ Instructions:
 - DO NOT include disclaimers or meta-commentary about being an AI
 - To suggest a concrete action for their plan, add: [SUGGESTION: Action Title] at the end."""
 
-            # Simple user prompt for streaming
             conversation_history = ""
-            for msg in list(thread.messages)[-10:]:  # Last 10 messages for context
+            for msg in list(thread.messages)[-10:]:
                 role = "User" if msg.role.value == "user" else idol_name
                 conversation_history += f"{role}: {msg.content}\n"
-            
-            user_prompt = f"""Previous conversation:
+
+            # --- Intent-based model routing ---
+            accumulated_content = ""
+            gemini_available = bool(settings.gemini_api_key)
+
+            if gemini_available:
+                from app.services.gemini import detect_intent, stream_with_grounding, stream_learnlm
+                intent = detect_intent(data.content)
+                logger.info(f"[CHAT_ROUTE] intent={intent}, gemini_available={gemini_available}")
+            else:
+                intent = "general"
+                logger.info("[CHAT_ROUTE] Gemini not configured, using OpenAI for all messages")
+
+            if intent == "tutor" and gemini_available:
+                # --- LearnLM: Socratic tutoring for study/comprehension questions ---
+                logger.info("[CHAT_ROUTE] → LearnLM (tutoring)")
+                idol_persona_context = f"Voice: {voice_style}\nPrinciples: {principles}\nUser: {user_context_str}"
+                try:
+                    async for chunk in stream_learnlm(
+                        idol_name=idol_name,
+                        idol_persona_context=idol_persona_context,
+                        user_message=data.content,
+                        conversation_history=conversation_history,
+                    ):
+                        accumulated_content += chunk
+                        yield f"data: {json_lib.dumps({'type': 'chunk', 'content': chunk})}\n\n"
+                except Exception as learnlm_err:
+                    logger.warning(f"[CHAT_ROUTE] LearnLM failed, falling back to OpenAI: {learnlm_err}")
+                    intent = "general"  # fall through to OpenAI below
+
+            if intent == "resource" and gemini_available:
+                # --- Gemini + Google Search Grounding: real URLs for resource questions ---
+                logger.info("[CHAT_ROUTE] → Gemini Search Grounding (resources)")
+                try:
+                    async for chunk in stream_with_grounding(
+                        system_prompt=system_prompt,
+                        user_message=data.content,
+                        conversation_history=conversation_history,
+                    ):
+                        accumulated_content += chunk
+                        yield f"data: {json_lib.dumps({'type': 'chunk', 'content': chunk})}\n\n"
+                except Exception as grounding_err:
+                    logger.warning(f"[CHAT_ROUTE] Grounding failed, falling back to OpenAI: {grounding_err}")
+                    intent = "general"  # fall through to OpenAI below
+
+            if intent == "general" or not accumulated_content:
+                # --- OpenAI: default for general questions ---
+                logger.info("[CHAT_ROUTE] → OpenAI GPT (general)")
+                user_prompt = f"""Previous conversation:
 {conversation_history}
 
 User: {data.content}
 
 Respond as {idol_name}:"""
-            
-            # Stream from OpenAI
-            openai_client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
-            
-            accumulated_content = ""
-            stream = await openai_client.chat.completions.create(
-                model=settings.openai_model or "gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                stream=True,
-                temperature=0.7,
-            )
-            
-            async for chunk in stream:
-                delta = chunk.choices[0].delta
-                if delta.content:
-                    accumulated_content += delta.content
-                    yield f"data: {json_lib.dumps({'type': 'chunk', 'content': delta.content})}\n\n"
-            
+                openai_client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
+                stream = await openai_client.chat.completions.create(
+                    model=settings.openai_model or "gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    stream=True,
+                    temperature=0.7,
+                )
+                async for chunk in stream:
+                    delta = chunk.choices[0].delta
+                    if delta.content:
+                        accumulated_content += delta.content
+                        yield f"data: {json_lib.dumps({'type': 'chunk', 'content': delta.content})}\n\n"
+
             # Store complete assistant message
             async with async_session_maker() as save_db:
                 assistant_msg = ChatMessage(
@@ -583,7 +617,6 @@ Respond as {idol_name}:"""
                 save_db.add(assistant_msg)
                 await save_db.commit()
                 await save_db.refresh(assistant_msg)
-                
                 yield f"data: {json_lib.dumps({'type': 'done', 'messageId': str(assistant_msg.id), 'userMessageId': str(user_msg_id)})}\n\n"
                 
         except Exception as e:

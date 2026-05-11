@@ -11,7 +11,8 @@ final achievementsRepositoryProvider = Provider<AchievementsRepository>((ref) {
 /// Repository for achievements operations.
 /// API Reference: /achievements endpoints
 class AchievementsRepository {
-  AchievementsRepository({required DioClient dioClient}) : _dioClient = dioClient;
+  AchievementsRepository({required DioClient dioClient})
+    : _dioClient = dioClient;
 
   final DioClient _dioClient;
 
@@ -68,8 +69,12 @@ class AchievementsRepository {
     final queryParams = <String, dynamic>{};
     if (category != null) queryParams['category'] = category.toJson();
     if (query != null && query.isNotEmpty) queryParams['q'] = query;
-    if (fromDate != null) queryParams['fromDate'] = fromDate.toIso8601String().split('T')[0];
-    if (toDate != null) queryParams['toDate'] = toDate.toIso8601String().split('T')[0];
+    if (fromDate != null) {
+      queryParams['fromDate'] = fromDate.toIso8601String().split('T')[0];
+    }
+    if (toDate != null) {
+      queryParams['toDate'] = toDate.toIso8601String().split('T')[0];
+    }
     if (limit != null) queryParams['limit'] = limit;
     if (offset != null) queryParams['offset'] = offset;
 
@@ -146,7 +151,9 @@ class AchievementsRepository {
   }
 
   /// Get achievements by category.
-  Future<List<Achievement>> getAchievementsByCategory(AchievementCategory category) async {
+  Future<List<Achievement>> getAchievementsByCategory(
+    AchievementCategory category,
+  ) async {
     final response = await listAchievements(category: category);
     return response.achievements;
   }

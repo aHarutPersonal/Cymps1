@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_svg/flutter_svg.dart';
+
 import 'package:go_router/go_router.dart';
 
 import '../../../app/assets.dart';
 import '../../../app/design_tokens.dart';
 import '../../../app/router.dart';
 import '../../../core/ui/cmpys_button.dart';
-import '../../../core/ui/cmpys_card.dart';
+
 import '../../../core/ui/cmpys_chip.dart';
 import '../../../core/ui/list_tile_card.dart';
 import '../../../core/ui/loading_state.dart';
@@ -15,6 +15,71 @@ import '../../../core/ui/progress_ring.dart';
 import '../../auth/controllers/auth_controller.dart';
 import '../../auth/controllers/session_controller.dart';
 import '../../comparison/controllers/comparison_controller.dart';
+
+abstract final class _ProfilePalette {
+  static const canvas = AppColors.bg;
+  static const paper = Color(0xFFFFFFFF);
+  static const ink = AppColors.textPrimary;
+  static const muted = AppColors.textSecondary;
+  static const line = AppColors.border;
+  static const coralDark = AppColors.brandAccentDark;
+}
+
+void _showProfileConsoleSheet(
+  BuildContext context, {
+  required String title,
+  required String message,
+  String actionLabel = 'Got it',
+}) {
+  showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: Colors.transparent,
+    builder: (context) {
+      return Container(
+        margin: const EdgeInsets.all(AppSpacing.s16),
+        padding: const EdgeInsets.all(AppSpacing.s20),
+        decoration: BoxDecoration(
+          color: _ProfilePalette.paper,
+          borderRadius: AppRadii.br24,
+          border: Border.all(color: _ProfilePalette.line),
+          boxShadow: AppShadows.lg,
+        ),
+        child: SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 42,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: _ProfilePalette.line,
+                  borderRadius: AppRadii.brFull,
+                ),
+              ),
+              const SizedBox(height: AppSpacing.s20),
+              Text(title, style: AppTypography.h3),
+              const SizedBox(height: AppSpacing.s8),
+              Text(
+                message,
+                style: AppTypography.body.copyWith(
+                  color: _ProfilePalette.muted,
+                ),
+              ),
+              const SizedBox(height: AppSpacing.s20),
+              CmpysButton(
+                label: actionLabel,
+                size: CmpysButtonSize.medium,
+                onPressed: () => Navigator.pop(context),
+              ),
+            ],
+          ),
+        ),
+      );
+    },
+  );
+}
 
 class ProfileScreen extends ConsumerStatefulWidget {
   const ProfileScreen({super.key});
@@ -28,7 +93,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      // Load comparison data for progress
       ref.read(comparisonControllerProvider.notifier).load();
     });
   }
@@ -40,15 +104,11 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     final comparisonState = ref.watch(comparisonControllerProvider);
 
     if (currentUser == null) {
-      return const Scaffold(
-        body: LoadingState(message: 'Loading profile...'),
-      );
+      return const Scaffold(body: LoadingState(message: 'Loading profile...'));
     }
 
-    // Calculate user age
     final userAge = sessionController.userAge ?? 0;
-    
-    // Get comparison progress
+
     double progress = 0;
     String? idolName;
     if (comparisonState is ComparisonLoaded) {
@@ -57,159 +117,219 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     }
 
     return Scaffold(
-      backgroundColor: AppColors.bg,
-      body: SafeArea(
-        bottom: false,
-        child: SingleChildScrollView(
-          padding: EdgeInsets.only(bottom: AppSpacing.s100),
-          child: Column(
-            children: [
-              // Header
-              Padding(
-                padding: AppSpacing.screenH,
-                child: Column(
-                  children: [
-                    const SizedBox(height: AppSpacing.s8),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text('Profile', style: AppTypography.h1),
-                        CmpysIconButton(
-                          icon: AppAssets.iconSettings,
-                          onPressed: () => _showSettings(context),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: AppSpacing.s24),
-              // Profile card
-              Padding(
-                padding: AppSpacing.screenH,
-                child: CmpysCard(
-                  padding: AppSpacing.p20,
+      backgroundColor: _ProfilePalette.canvas,
+      body: DecoratedBox(
+        decoration: const BoxDecoration(
+          color: _ProfilePalette.canvas,
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              AppColors.surfaceHighlight,
+              _ProfilePalette.canvas,
+              AppColors.bg,
+            ],
+            stops: [0, 0.52, 1],
+          ),
+        ),
+        child: SafeArea(
+          bottom: false,
+          child: SingleChildScrollView(
+            padding: EdgeInsets.only(bottom: AppSpacing.s100),
+            child: Column(
+              children: [
+                // Header
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
                   child: Column(
                     children: [
-                      GradientAvatar(
-                        initials: _getInitials(currentUser.fullName ?? currentUser.email),
-                        size: 72,
-                      ),
-                      const SizedBox(height: AppSpacing.s16),
-                      Text(
-                        currentUser.fullName ?? 'User',
-                        style: AppTypography.h2,
-                      ),
-                      const SizedBox(height: AppSpacing.s4),
-                      Text(
-                        currentUser.email,
-                        style: AppTypography.body.copyWith(
-                          color: AppColors.textSecondary,
-                        ),
-                      ),
-                      const SizedBox(height: AppSpacing.s16),
+                      const SizedBox(height: AppSpacing.s8),
                       Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          _StatItem(
-                            value: '$userAge',
-                            label: 'Age',
+                          Text(
+                            'Profile',
+                            style: AppTypography.h2.copyWith(
+                              color: _ProfilePalette.ink,
+                              fontWeight: FontWeight.w900,
+                            ),
                           ),
-                          Container(
-                            width: 1,
-                            height: 32,
-                            margin: const EdgeInsets.symmetric(horizontal: AppSpacing.s20),
-                            color: AppColors.border,
-                          ),
-                          _StatItem(
-                            value: '${currentUser.interests.length}',
-                            label: 'Interests',
+                          GestureDetector(
+                            onTap: () => _showSettings(context),
+                            child: Container(
+                              width: 40,
+                              height: 40,
+                              decoration: BoxDecoration(
+                                color: _ProfilePalette.paper,
+                                shape: BoxShape.circle,
+                                border: Border.all(color: _ProfilePalette.line),
+                              ),
+                              child: const Center(
+                                child: Icon(
+                                  Icons.settings_outlined,
+                                  size: 20,
+                                  color: _ProfilePalette.ink,
+                                ),
+                              ),
+                            ),
                           ),
                         ],
-                      ),
-                      const SizedBox(height: AppSpacing.s16),
-                      CmpysButton(
-                        label: 'Edit Profile',
-                        variant: CmpysButtonVariant.secondary,
-                        size: CmpysButtonSize.medium,
-                        icon: AppAssets.iconEdit,
-                        onPressed: () {},
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: AppSpacing.s24),
-              // Interests
-              if (currentUser.interests.isNotEmpty) ...[
-                Padding(
-                  padding: AppSpacing.screenH,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Interests', style: AppTypography.h4),
-                      const SizedBox(height: AppSpacing.s12),
-                      Wrap(
-                        spacing: AppSpacing.s8,
-                        runSpacing: AppSpacing.s8,
-                        children: currentUser.interests
-                            .map((interest) => CmpysTag(label: interest))
-                            .toList(),
                       ),
                     ],
                   ),
                 ),
                 const SizedBox(height: AppSpacing.s24),
-              ],
-              // Progress overview
-              Padding(
-                padding: AppSpacing.screenH,
-                child: CmpysCard(
-                  padding: AppSpacing.p16,
-                  onTap: () => context.go(AppRoutes.comparison),
-                  child: Row(
-                    children: [
-                      ProgressRing(
-                        progress: progress,
-                        size: 64,
-                        strokeWidth: 6,
-                      ),
-                      const SizedBox(width: AppSpacing.s16),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                // Profile card
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: Container(
+                    padding: const EdgeInsets.all(24),
+                    decoration: BoxDecoration(
+                      color: _ProfilePalette.paper,
+                      borderRadius: AppRadii.br24,
+                      boxShadow: AppShadows.sm,
+                      border: Border.all(color: _ProfilePalette.line),
+                    ),
+                    child: Column(
+                      children: [
+                        GradientAvatar(
+                          initials: _getInitials(
+                            currentUser.fullName ?? currentUser.email,
+                          ),
+                          size: 72,
+                        ),
+                        const SizedBox(height: AppSpacing.s16),
+                        Text(
+                          currentUser.fullName ?? 'User',
+                          style: AppTypography.h3.copyWith(
+                            color: _ProfilePalette.ink,
+                          ),
+                        ),
+                        const SizedBox(height: AppSpacing.s4),
+                        Text(
+                          currentUser.email,
+                          style: AppTypography.caption.copyWith(
+                            color: _ProfilePalette.muted,
+                          ),
+                        ),
+                        const SizedBox(height: AppSpacing.s16),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Text(
-                              'Overall Progress',
-                              style: AppTypography.bodyMedium,
-                            ),
-                            const SizedBox(height: AppSpacing.s4),
-                            Text(
-                              idolName != null
-                                  ? 'Comparing with $idolName'
-                                  : 'Select an idol to compare',
-                              style: AppTypography.caption.copyWith(
-                                color: AppColors.textSecondary,
+                            _StatItem(value: '$userAge', label: 'Age'),
+                            Container(
+                              width: 1,
+                              height: 32,
+                              margin: const EdgeInsets.symmetric(
+                                horizontal: AppSpacing.s20,
                               ),
+                              color: _ProfilePalette.line,
+                            ),
+                            _StatItem(
+                              value: '${currentUser.interests.length}',
+                              label: 'Interests',
                             ),
                           ],
                         ),
-                      ),
-                      SvgPicture.asset(
-                        AppAssets.iconChevronRight,
-                        width: 20,
-                        height: 20,
-                        colorFilter: const ColorFilter.mode(
-                          AppColors.textTertiary,
-                          BlendMode.srcIn,
+                        const SizedBox(height: AppSpacing.s16),
+                        CmpysButton(
+                          label: 'Edit Profile',
+                          variant: CmpysButtonVariant.secondary,
+                          size: CmpysButtonSize.medium,
+                          icon: AppAssets.iconEdit,
+                          onPressed: () => _showProfileConsoleSheet(
+                            context,
+                            title: 'Edit profile',
+                            message:
+                                'Profile editing will use the same onboarding console so identity, interests, and age stay in sync.',
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(height: AppSpacing.s32),
-            ],
+                const SizedBox(height: AppSpacing.s24),
+                // Interests
+                if (currentUser.interests.isNotEmpty) ...[
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Interests',
+                          style: AppTypography.h4.copyWith(
+                            color: _ProfilePalette.ink,
+                          ),
+                        ),
+                        const SizedBox(height: AppSpacing.s12),
+                        Wrap(
+                          spacing: AppSpacing.s8,
+                          runSpacing: AppSpacing.s8,
+                          children: currentUser.interests
+                              .map((interest) => CmpysTag(label: interest))
+                              .toList(),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.s24),
+                ],
+                // Progress overview
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: GestureDetector(
+                    onTap: () => context.go(AppRoutes.comparison),
+                    child: Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: _ProfilePalette.paper,
+                        borderRadius: AppRadii.br20,
+                        boxShadow: AppShadows.sm,
+                        border: Border.all(color: _ProfilePalette.line),
+                      ),
+                      child: Row(
+                        children: [
+                          ProgressRing(
+                            progress: progress,
+                            size: 64,
+                            strokeWidth: 6,
+                          ),
+                          const SizedBox(width: AppSpacing.s16),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Overall Progress',
+                                  style: AppTypography.bodyMedium.copyWith(
+                                    color: _ProfilePalette.ink,
+                                  ),
+                                ),
+                                const SizedBox(height: AppSpacing.s4),
+                                Text(
+                                  idolName != null
+                                      ? 'Comparing with $idolName'
+                                      : 'Select an idol to compare',
+                                  style: AppTypography.caption.copyWith(
+                                    color: _ProfilePalette.muted,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const Icon(
+                            Icons.chevron_right,
+                            color: _ProfilePalette.muted,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.s32),
+              ],
+            ),
           ),
         ),
       ),
@@ -228,19 +348,14 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   }
 
   void _showSettings(BuildContext context) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (context) => const SettingsScreen(),
-      ),
-    );
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (context) => const SettingsScreen()));
   }
 }
 
 class _StatItem extends StatelessWidget {
-  const _StatItem({
-    required this.value,
-    required this.label,
-  });
+  const _StatItem({required this.value, required this.label});
 
   final String value;
   final String label;
@@ -249,12 +364,13 @@ class _StatItem extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        Text(value, style: AppTypography.h3),
+        Text(
+          value,
+          style: AppTypography.h3.copyWith(color: _ProfilePalette.ink),
+        ),
         Text(
           label,
-          style: AppTypography.caption.copyWith(
-            color: AppColors.textSecondary,
-          ),
+          style: AppTypography.caption.copyWith(color: _ProfilePalette.muted),
         ),
       ],
     );
@@ -268,141 +384,186 @@ class SettingsScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return Scaffold(
+      backgroundColor: _ProfilePalette.canvas,
       appBar: AppBar(
-        backgroundColor: AppColors.bg,
+        backgroundColor: _ProfilePalette.canvas,
+        surfaceTintColor: Colors.transparent,
+        scrolledUnderElevation: 0,
         leading: IconButton(
           onPressed: () => Navigator.pop(context),
-          icon: SvgPicture.asset(
-            AppAssets.iconChevronLeft,
-            width: 24,
-            height: 24,
-            colorFilter: const ColorFilter.mode(
-              AppColors.textPrimary,
-              BlendMode.srcIn,
-            ),
+          icon: const Icon(Icons.arrow_back, color: _ProfilePalette.ink),
+        ),
+        title: Text(
+          'Settings',
+          style: AppTypography.h3.copyWith(color: _ProfilePalette.ink),
+        ),
+      ),
+      body: DecoratedBox(
+        decoration: const BoxDecoration(
+          color: _ProfilePalette.canvas,
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              AppColors.surfaceHighlight,
+              _ProfilePalette.canvas,
+              AppColors.bg,
+            ],
+            stops: [0, 0.52, 1],
           ),
         ),
-        title: Text('Settings', style: AppTypography.h3),
-      ),
-      body: SafeArea(
         child: SingleChildScrollView(
-          padding: AppSpacing.screenH,
+          padding: const EdgeInsets.symmetric(horizontal: 24),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const SizedBox(height: AppSpacing.s16),
               Text(
-                'Account',
-                style: AppTypography.caption.copyWith(
-                  color: AppColors.textSecondary,
+                'ACCOUNT',
+                style: AppTypography.captionUpper.copyWith(
+                  color: _ProfilePalette.coralDark,
                 ),
               ),
               const SizedBox(height: AppSpacing.s12),
-              CmpysCard(
-                padding: EdgeInsets.zero,
-                child: Column(
-                  children: [
-                    SettingsTile(
-                      title: 'Edit Profile',
-                      icon: AppAssets.iconUser,
-                      onTap: () {},
+              _SettingsGroup(
+                children: [
+                  SettingsTile(
+                    title: 'CMPYS Pro',
+                    icon: AppAssets.iconSparkles,
+                    subtitle: 'Blueprint, Mirror, Studio, Vault',
+                    iconColor: AppColors.peach,
+                    onTap: () => context.push(AppRoutes.premium),
+                  ),
+                  SettingsTile(
+                    title: 'Edit Profile',
+                    icon: AppAssets.iconUser,
+                    onTap: () => _showProfileConsoleSheet(
+                      context,
+                      title: 'Edit profile',
+                      message:
+                          'Profile editing will use the same onboarding console so identity, interests, and age stay in sync.',
                     ),
-                    SettingsTile(
-                      title: 'Change Idol',
-                      icon: AppAssets.iconUsers,
-                      onTap: () => context.push(AppRoutes.idolSuggest),
+                  ),
+                  SettingsTile(
+                    title: 'Change Idol',
+                    icon: AppAssets.iconUsers,
+                    onTap: () => context.push(AppRoutes.idolSuggest),
+                  ),
+                  SettingsTile(
+                    title: 'Notifications',
+                    icon: AppAssets.iconBell,
+                    onTap: () => _showProfileConsoleSheet(
+                      context,
+                      title: 'Notification logic',
+                      message:
+                          'Reminder controls are staged here for daily directives, path tasks, and reading sessions.',
                     ),
-                    SettingsTile(
-                      title: 'Notifications',
-                      icon: AppAssets.iconBell,
-                      onTap: () {},
-                      showDivider: false,
-                    ),
-                  ],
-                ),
+                    showDivider: false,
+                  ),
+                ],
               ),
               const SizedBox(height: AppSpacing.s24),
               Text(
-                'Preferences',
-                style: AppTypography.caption.copyWith(
-                  color: AppColors.textSecondary,
+                'PREFERENCES',
+                style: AppTypography.captionUpper.copyWith(
+                  color: _ProfilePalette.coralDark,
                 ),
               ),
               const SizedBox(height: AppSpacing.s12),
-              CmpysCard(
-                padding: EdgeInsets.zero,
-                child: Column(
-                  children: [
-                    SettingsTile(
+              _SettingsGroup(
+                children: [
+                  SettingsTile(
+                    title: 'Appearance',
+                    icon: AppAssets.iconEye,
+                    subtitle: 'Light',
+                    onTap: () => _showProfileConsoleSheet(
+                      context,
                       title: 'Appearance',
-                      icon: AppAssets.iconEye,
-                      subtitle: 'Dark',
-                      onTap: () {},
+                      message:
+                          'The redesigned app is currently locked to the light paper system.',
                     ),
-                    SettingsTile(
+                  ),
+                  SettingsTile(
+                    title: 'Language',
+                    icon: AppAssets.iconMessageCircle,
+                    subtitle: 'English',
+                    onTap: () => _showProfileConsoleSheet(
+                      context,
                       title: 'Language',
-                      icon: AppAssets.iconMessageCircle,
-                      subtitle: 'English',
-                      onTap: () {},
-                      showDivider: false,
+                      message:
+                          'English is active for this prototype. Localized mentor prompts can be added later.',
                     ),
-                  ],
-                ),
+                    showDivider: false,
+                  ),
+                ],
               ),
               const SizedBox(height: AppSpacing.s24),
               Text(
-                'Support',
-                style: AppTypography.caption.copyWith(
-                  color: AppColors.textSecondary,
+                'SUPPORT',
+                style: AppTypography.captionUpper.copyWith(
+                  color: _ProfilePalette.coralDark,
                 ),
               ),
               const SizedBox(height: AppSpacing.s12),
-              CmpysCard(
-                padding: EdgeInsets.zero,
-                child: Column(
-                  children: [
-                    SettingsTile(
-                      title: 'Help Center',
-                      icon: AppAssets.iconCircleHelp,
-                      onTap: () {},
+              _SettingsGroup(
+                children: [
+                  SettingsTile(
+                    title: 'Help Center',
+                    icon: AppAssets.iconCircleHelp,
+                    onTap: () => _showProfileConsoleSheet(
+                      context,
+                      title: 'Help center',
+                      message:
+                          'Support articles will live here with account, billing, and learning-resource guidance.',
                     ),
-                    SettingsTile(
-                      title: 'Privacy Policy',
-                      icon: AppAssets.iconFileText,
-                      onTap: () {},
+                  ),
+                  SettingsTile(
+                    title: 'Privacy Policy',
+                    icon: AppAssets.iconFileText,
+                    onTap: () => _showProfileConsoleSheet(
+                      context,
+                      title: 'Privacy policy',
+                      message:
+                          'Privacy policy content will be attached before production release.',
                     ),
-                    SettingsTile(
-                      title: 'Terms of Service',
-                      icon: AppAssets.iconFileText,
-                      onTap: () {},
-                      showDivider: false,
+                  ),
+                  SettingsTile(
+                    title: 'Terms of Service',
+                    icon: AppAssets.iconFileText,
+                    onTap: () => _showProfileConsoleSheet(
+                      context,
+                      title: 'Terms of service',
+                      message:
+                          'Terms content will be attached before production release.',
                     ),
-                  ],
-                ),
+                    showDivider: false,
+                  ),
+                ],
               ),
               const SizedBox(height: AppSpacing.s24),
-              CmpysCard(
-                padding: EdgeInsets.zero,
-                child: SettingsTile(
-                  title: 'Sign Out',
-                  icon: AppAssets.iconArrowLeft,
-                  iconColor: AppColors.error,
-                  onTap: () async {
-                    await ref.read(authControllerProvider.notifier).logout();
-                    if (context.mounted) {
-                      context.go(AppRoutes.auth);
-                    }
-                  },
-                  showDivider: false,
-                  trailing: const SizedBox.shrink(),
-                ),
+              _SettingsGroup(
+                children: [
+                  SettingsTile(
+                    title: 'Sign Out',
+                    icon: AppAssets.iconArrowLeft,
+                    iconColor: AppColors.error,
+                    onTap: () async {
+                      await ref.read(authControllerProvider.notifier).logout();
+                      if (context.mounted) {
+                        context.go(AppRoutes.auth);
+                      }
+                    },
+                    showDivider: false,
+                    trailing: const SizedBox.shrink(),
+                  ),
+                ],
               ),
               const SizedBox(height: AppSpacing.s32),
               Center(
                 child: Text(
                   'CMPYS v1.0.0',
                   style: AppTypography.caption.copyWith(
-                    color: AppColors.textTertiary,
+                    color: _ProfilePalette.muted,
                   ),
                 ),
               ),
@@ -411,6 +572,25 @@ class SettingsScreen extends ConsumerWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Settings card group.
+class _SettingsGroup extends StatelessWidget {
+  const _SettingsGroup({required this.children});
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: _ProfilePalette.paper,
+        borderRadius: AppRadii.br20,
+        boxShadow: AppShadows.sm,
+        border: Border.all(color: _ProfilePalette.line),
+      ),
+      child: Column(children: children),
     );
   }
 }

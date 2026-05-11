@@ -20,11 +20,7 @@ class NotesLoading extends NotesState {
 }
 
 class NotesLoaded extends NotesState {
-  const NotesLoaded({
-    required this.notes,
-    this.query = '',
-    this.totalCount,
-  });
+  const NotesLoaded({required this.notes, this.query = '', this.totalCount});
   final List<Note> notes;
   final String query;
   final int? totalCount;
@@ -38,17 +34,16 @@ class NotesError extends NotesState {
 /// Notes controller provider.
 final notesControllerProvider =
     StateNotifierProvider<NotesController, NotesState>((ref) {
-  return NotesController(
-    notesRepository: ref.watch(notesRepositoryProvider),
-  );
-});
+      return NotesController(
+        notesRepository: ref.watch(notesRepositoryProvider),
+      );
+    });
 
 /// Controller for notes list.
 class NotesController extends StateNotifier<NotesState> {
-  NotesController({
-    required NotesRepository notesRepository,
-  })  : _notesRepository = notesRepository,
-        super(const NotesInitial());
+  NotesController({required NotesRepository notesRepository})
+    : _notesRepository = notesRepository,
+      super(const NotesInitial());
 
   final NotesRepository _notesRepository;
   Timer? _searchDebounce;
@@ -101,10 +96,10 @@ class NotesController extends StateNotifier<NotesState> {
 
   /// Refresh notes.
   Future<void> refresh() async {
-    final currentQuery = state is NotesLoaded 
-        ? (state as NotesLoaded).query 
+    final currentQuery = state is NotesLoaded
+        ? (state as NotesLoaded).query
         : '';
-    
+
     if (currentQuery.isNotEmpty) {
       await _performSearch(currentQuery);
     } else {
@@ -124,13 +119,13 @@ class NotesController extends StateNotifier<NotesState> {
         content: content,
         attachments: attachments,
       );
-      
+
       // Refresh the list
       await refresh();
-      
+
       return note;
-    } on ApiError catch (e) {
-      throw e;
+    } on ApiError {
+      rethrow;
     }
   }
 
@@ -148,13 +143,13 @@ class NotesController extends StateNotifier<NotesState> {
         content: content,
         attachments: attachments,
       );
-      
+
       // Refresh the list
       await refresh();
-      
+
       return note;
-    } on ApiError catch (e) {
-      throw e;
+    } on ApiError {
+      rethrow;
     }
   }
 
@@ -162,13 +157,13 @@ class NotesController extends StateNotifier<NotesState> {
   Future<bool> deleteNote(String noteId) async {
     try {
       await _notesRepository.deleteNote(noteId);
-      
+
       // Refresh the list
       await refresh();
-      
+
       return true;
-    } on ApiError catch (e) {
-      throw e;
+    } on ApiError {
+      rethrow;
     }
   }
 
@@ -180,7 +175,10 @@ class NotesController extends StateNotifier<NotesState> {
 }
 
 /// Provider for a single note (for detail screen).
-final noteDetailProvider = FutureProvider.family<Note, String>((ref, noteId) async {
+final noteDetailProvider = FutureProvider.family<Note, String>((
+  ref,
+  noteId,
+) async {
   final repository = ref.watch(notesRepositoryProvider);
   return repository.getNote(noteId);
 });

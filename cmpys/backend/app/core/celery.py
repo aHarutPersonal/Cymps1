@@ -18,4 +18,9 @@ celery_app.conf.update(
     task_track_started=True,
     task_time_limit=600,  # 10 minutes max
     worker_prefetch_multiplier=1,
+    task_default_queue="default",
+    task_routes={
+        "app.tasks.idols.run_idol_suggestions": {"queue": "high_priority"},
+        "app.tasks.ingestion.run_generate_idea_cards": {"queue": "low_priority"},
+    },
 )

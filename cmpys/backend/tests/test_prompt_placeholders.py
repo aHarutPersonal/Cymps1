@@ -25,15 +25,10 @@ class TestPlanGeneratePlaceholders:
         required = get_required_placeholders("plan_generate.txt")
         
         expected = [
+            "user_goal",
             "idol_name",
-            "idol_profile_json",
-            "idol_persona_json",
-            "idol_milestones_json",
-            "user_profile_json",
-            "target_age",
-            "gaps_json",
-            "readiness_by_gap_json",
-            "allowed_resources_json",
+            "hours_per_week",
+            "user_context",
         ]
         
         for placeholder in expected:
@@ -42,39 +37,34 @@ class TestPlanGeneratePlaceholders:
     def test_plan_generate_render_succeeds_with_all_params(self):
         """Render plan_generate.txt successfully when all params provided."""
         params = {
+            "user_goal": "learn finance",
             "idol_name": "Warren Buffett",
-            "idol_profile_json": {"domains": ["finance", "investing"]},
-            "idol_persona_json": {"voice_style": "folksy", "era_context": "contemporary"},
-            "idol_milestones_json": [{"title": "First stock purchase", "age": 11}],
-            "user_profile_json": {"weekly_hours": 10, "goals": ["learn investing"]},
-            "target_age": "25",
-            "gaps_json": ["finance", "mindset"],
-            "readiness_by_gap_json": {"finance": "beginner", "mindset": "intermediate"},
-            "allowed_resources_json": [],
+            "hours_per_week": "10",
+            "user_context": "beginner in investing",
         }
         
         # Should not raise
         rendered = load_and_render("plan_generate", params, strict=True)
         
         # Verify key content is in the rendered prompt
+        assert "learn finance" in rendered
         assert "Warren Buffett" in rendered
-        assert "finance" in rendered
-        assert "investing" in rendered
+        assert "beginner in investing" in rendered
 
     def test_plan_generate_render_fails_without_required_params(self):
         """Fail when required placeholders are missing."""
         incomplete_params = {
             "idol_name": "Warren Buffett",
-            "idol_profile_json": {},
-            # Missing: idol_persona_json, idol_milestones_json, user_profile_json, etc.
+            "user_goal": "learn finance",
+            # Missing: hours_per_week, user_context
         }
         
         with pytest.raises(PromptRenderError) as exc_info:
             load_and_render("plan_generate", incomplete_params, strict=True)
         
         # Check the error mentions missing params
-        assert "idol_persona_json" in exc_info.value.missing_keys or \
-               "idol_milestones_json" in exc_info.value.missing_keys
+        assert "hours_per_week" in exc_info.value.missing_keys or \
+               "user_context" in exc_info.value.missing_keys
 
     def test_plan_generate_placeholder_names_match_template(self):
         """Ensure registry placeholders match what's actually in the template."""
@@ -97,25 +87,19 @@ class TestValidatePromptParams:
 
     def test_validate_returns_missing_params(self):
         """Returns list of missing parameters."""
-        params = {"idol_name": "Test", "target_age": "25"}
+        params = {"idol_name": "Test", "user_goal": "Win"}
         missing = validate_prompt_params("plan_generate", params)
         
-        assert "idol_profile_json" in missing
-        assert "user_profile_json" in missing
-        assert "gaps_json" in missing
+        assert "hours_per_week" in missing
+        assert "user_context" in missing
 
     def test_validate_returns_empty_when_all_present(self):
         """Returns empty list when all params provided."""
         params = {
+            "user_goal": "Win",
             "idol_name": "Test",
-            "idol_profile_json": {},
-            "idol_persona_json": {},
-            "idol_milestones_json": [],
-            "user_profile_json": {},
-            "target_age": "25",
-            "gaps_json": [],
-            "readiness_by_gap_json": {},
-            "allowed_resources_json": [],
+            "hours_per_week": "10",
+            "user_context": "",
         }
         missing = validate_prompt_params("plan_generate", params)
         
@@ -145,6 +129,11 @@ class TestPromptPlaceholderRegistry:
             "achievements_extract.txt",
             "intake_questions_generate.txt",
             "intake_answers_normalize.txt",
+            "interview_system.xml",
+            "interview_question.txt",
+            "comparison_generate.txt",
+            "blueprint_generate.txt",
+            "idol_suggest.txt",
         ]
         
         for prompt in key_prompts:

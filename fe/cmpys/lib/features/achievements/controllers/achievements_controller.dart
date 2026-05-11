@@ -18,11 +18,8 @@ class AchievementsLoading extends AchievementsState {
 }
 
 class AchievementsLoaded extends AchievementsState {
-  const AchievementsLoaded({
-    required this.achievements,
-    this.total = 0,
-  });
-  
+  const AchievementsLoaded({required this.achievements, this.total = 0});
+
   final List<Achievement> achievements;
   final int total;
 }
@@ -35,25 +32,21 @@ class AchievementsError extends AchievementsState {
 /// Achievements controller provider.
 final achievementsControllerProvider =
     StateNotifierProvider<AchievementsController, AchievementsState>((ref) {
-  return AchievementsController(
-    repository: ref.watch(achievementsRepositoryProvider),
-  );
-});
+      return AchievementsController(
+        repository: ref.watch(achievementsRepositoryProvider),
+      );
+    });
 
 /// Controller for managing achievements.
 class AchievementsController extends StateNotifier<AchievementsState> {
-  AchievementsController({
-    required AchievementsRepository repository,
-  })  : _repository = repository,
-        super(const AchievementsInitial());
+  AchievementsController({required AchievementsRepository repository})
+    : _repository = repository,
+      super(const AchievementsInitial());
 
   final AchievementsRepository _repository;
 
   /// Load all achievements.
-  Future<void> load({
-    AchievementCategory? category,
-    String? query,
-  }) async {
+  Future<void> load({AchievementCategory? category, String? query}) async {
     state = const AchievementsLoading();
 
     try {
@@ -61,7 +54,7 @@ class AchievementsController extends StateNotifier<AchievementsState> {
         category: category,
         query: query,
       );
-      
+
       state = AchievementsLoaded(
         achievements: response.achievements,
         total: response.total,
@@ -151,7 +144,9 @@ class AchievementsController extends StateNotifier<AchievementsState> {
       if (state is AchievementsLoaded) {
         final current = state as AchievementsLoaded;
         state = AchievementsLoaded(
-          achievements: current.achievements.where((a) => a.id != achievementId).toList(),
+          achievements: current.achievements
+              .where((a) => a.id != achievementId)
+              .toList(),
           total: current.total - 1,
         );
       }

@@ -119,7 +119,8 @@ class _TypewriterTextState extends State<TypewriterText>
   @override
   Widget build(BuildContext context) {
     final showCursor = widget.cursor && !_isComplete;
-    final textColor = widget.style?.color ?? Theme.of(context).textTheme.bodyMedium?.color;
+    final textColor =
+        widget.style?.color ?? Theme.of(context).textTheme.bodyMedium?.color;
     final cursorColor = widget.cursorColor ?? textColor;
 
     return Row(
@@ -129,11 +130,15 @@ class _TypewriterTextState extends State<TypewriterText>
         Flexible(
           child: MarkdownBody(
             data: _displayedText,
-            styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
-              p: widget.style,
-              strong: widget.style?.copyWith(fontWeight: FontWeight.bold, color: AppColors.accent),
-              // Ensure markdown uses the passed style for normal text
-            ),
+            styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context))
+                .copyWith(
+                  p: widget.style,
+                  strong: widget.style?.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.accent,
+                  ),
+                  // Ensure markdown uses the passed style for normal text
+                ),
           ),
         ),
         if (showCursor)
@@ -144,7 +149,8 @@ class _TypewriterTextState extends State<TypewriterText>
                 opacity: _cursorController.value,
                 child: Text(
                   '▊',
-                  style: widget.style?.copyWith(color: cursorColor) ??
+                  style:
+                      widget.style?.copyWith(color: cursorColor) ??
                       TextStyle(color: cursorColor),
                 ),
               );

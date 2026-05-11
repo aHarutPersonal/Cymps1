@@ -139,6 +139,17 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
 | `/api/v1/chat/threads/{id}` | GET | Get thread |
 | `/api/v1/chat/threads/{id}/messages` | POST | Send message (LLM required) |
 
+### Agentic Sessions
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/sessions` | POST | Create session (Phase 1) |
+| `/api/v1/sessions/current` | GET | Get active session |
+| `/api/v1/sessions/{id}` | GET | Get session state |
+| `/api/v1/sessions/{id}/suggest-idols` | POST | Get idol suggestions (Phase 2) |
+| `/api/v1/sessions/{id}/select-idol` | POST | Select an idol (Phase 2->3) |
+| `/api/v1/sessions/{id}/interview` | POST | Live Interview SSE stream (Phase 3) |
+| `/api/v1/sessions/{id}/generate-results` | POST | Comparison & Blueprint SSE stream (Phase 4->5) |
+
 ### Debug
 | Endpoint | Method | Description |
 |----------|--------|-------------|

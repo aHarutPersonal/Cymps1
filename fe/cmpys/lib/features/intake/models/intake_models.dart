@@ -46,13 +46,13 @@ class IntakeValidation with _$IntakeValidation {
   }
 
   Map<String, dynamic> toJson() => {
-        if (minLength != null) 'minLength': minLength,
-        if (maxLength != null) 'maxLength': maxLength,
-        if (min != null) 'min': min,
-        if (max != null) 'max': max,
-        if (pattern != null) 'pattern': pattern,
-        if (errorMessage != null) 'errorMessage': errorMessage,
-      };
+    if (minLength != null) 'minLength': minLength,
+    if (maxLength != null) 'maxLength': maxLength,
+    if (min != null) 'min': min,
+    if (max != null) 'max': max,
+    if (pattern != null) 'pattern': pattern,
+    if (errorMessage != null) 'errorMessage': errorMessage,
+  };
 
   static int? _parseInt(dynamic value) {
     if (value == null) return null;
@@ -85,11 +85,11 @@ class IntakeOption with _$IntakeOption {
   }
 
   Map<String, dynamic> toJson() => {
-        'value': value,
-        'label': label,
-        if (description != null) 'description': description,
-        if (icon != null) 'icon': icon,
-      };
+    'value': value,
+    'label': label,
+    if (description != null) 'description': description,
+    if (icon != null) 'icon': icon,
+  };
 }
 
 /// A single intake question.
@@ -100,22 +100,31 @@ class IntakeQuestion with _$IntakeQuestion {
   const factory IntakeQuestion({
     /// Unique question identifier.
     required String id,
+
     /// Short title for the question.
     required String title,
+
     /// The full prompt/question text to display.
     required String prompt,
+
     /// Question type (text, number, select, etc.).
     required String type,
+
     /// Whether an answer is required.
     @Default(true) bool isRequired,
+
     /// Options for select/multiselect questions.
     @Default([]) List<IntakeOption> options,
+
     /// Placeholder text for input fields.
     String? placeholder,
+
     /// Validation rules.
     IntakeValidation? validation,
+
     /// Category for grouping questions.
     String? category,
+
     /// Hint for mapping answer to profile field.
     String? mappingHint,
   }) = _IntakeQuestion;
@@ -130,7 +139,9 @@ class IntakeQuestion with _$IntakeQuestion {
       options: _parseOptions(json['options']),
       placeholder: json['placeholder']?.toString(),
       validation: json['validation'] != null
-          ? IntakeValidation.fromJson(json['validation'] as Map<String, dynamic>)
+          ? IntakeValidation.fromJson(
+              json['validation'] as Map<String, dynamic>,
+            )
           : null,
       category: json['category']?.toString(),
       mappingHint: (json['mappingHint'] ?? json['mapping_hint'])?.toString(),
@@ -138,17 +149,17 @@ class IntakeQuestion with _$IntakeQuestion {
   }
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'title': title,
-        'prompt': prompt,
-        'type': type,
-        'required': isRequired,
-        'options': options.map((o) => o.toJson()).toList(),
-        if (placeholder != null) 'placeholder': placeholder,
-        if (validation != null) 'validation': validation!.toJson(),
-        if (category != null) 'category': category,
-        if (mappingHint != null) 'mappingHint': mappingHint,
-      };
+    'id': id,
+    'title': title,
+    'prompt': prompt,
+    'type': type,
+    'required': isRequired,
+    'options': options.map((o) => o.toJson()).toList(),
+    if (placeholder != null) 'placeholder': placeholder,
+    if (validation != null) 'validation': validation!.toJson(),
+    if (category != null) 'category': category,
+    if (mappingHint != null) 'mappingHint': mappingHint,
+  };
 
   /// Get the question type enum.
   IntakeQuestionType get questionType {
@@ -168,6 +179,26 @@ class IntakeQuestion with _$IntakeQuestion {
       default:
         return IntakeQuestionType.text;
     }
+  }
+
+  String get chatEyebrow {
+    final value = category?.trim();
+    if (value == null || value.isEmpty) return 'ACHIEVEMENT CHECK';
+    return value.toUpperCase().replaceAll('_', ' ');
+  }
+
+  String get chatPrompt {
+    final value = prompt.trim();
+    return value.isNotEmpty ? value : title.trim();
+  }
+
+  String get answerHint {
+    final value = placeholder?.trim();
+    if (value != null && value.isNotEmpty) return value;
+    if (type.toLowerCase() == 'multiline') {
+      return 'Share the situation, action, and result...';
+    }
+    return 'Type your answer...';
   }
 
   static bool? _parseBool(dynamic value) {
@@ -196,8 +227,10 @@ class IntakeAnswer with _$IntakeAnswer {
   const factory IntakeAnswer({
     /// Question ID this answer is for.
     required String questionId,
+
     /// The answer value (can be string, number, list, etc.).
     required dynamic answer,
+
     /// When the answer was submitted.
     DateTime? answeredAt,
   }) = _IntakeAnswer;
@@ -211,10 +244,10 @@ class IntakeAnswer with _$IntakeAnswer {
   }
 
   Map<String, dynamic> toJson() => {
-        'questionId': questionId,
-        'answer': answer,
-        if (answeredAt != null) 'answeredAt': answeredAt!.toIso8601String(),
-      };
+    'questionId': questionId,
+    'answer': answer,
+    if (answeredAt != null) 'answeredAt': answeredAt!.toIso8601String(),
+  };
 
   static DateTime? _parseDate(dynamic value) {
     if (value == null) return null;
@@ -232,6 +265,7 @@ class IntakeStartResponse with _$IntakeStartResponse {
   const factory IntakeStartResponse({
     /// Session ID for this intake flow.
     required String sessionId,
+
     /// List of questions to answer.
     required List<IntakeQuestion> questions,
   }) = _IntakeStartResponse;
@@ -244,9 +278,9 @@ class IntakeStartResponse with _$IntakeStartResponse {
   }
 
   Map<String, dynamic> toJson() => {
-        'sessionId': sessionId,
-        'questions': questions.map((q) => q.toJson()).toList(),
-      };
+    'sessionId': sessionId,
+    'questions': questions.map((q) => q.toJson()).toList(),
+  };
 
   static List<IntakeQuestion> _parseQuestions(dynamic value) {
     if (value == null) return [];
@@ -266,6 +300,7 @@ class IntakeAnswerRequest with _$IntakeAnswerRequest {
   const factory IntakeAnswerRequest({
     /// Question ID being answered.
     required String questionId,
+
     /// The answer value.
     required dynamic answer,
   }) = _IntakeAnswerRequest;
@@ -277,10 +312,7 @@ class IntakeAnswerRequest with _$IntakeAnswerRequest {
     );
   }
 
-  Map<String, dynamic> toJson() => {
-        'questionId': questionId,
-        'answer': answer,
-      };
+  Map<String, dynamic> toJson() => {'questionId': questionId, 'answer': answer};
 }
 
 /// Status of an intake session.
@@ -301,18 +333,25 @@ class IntakeSessionResponse with _$IntakeSessionResponse {
   const factory IntakeSessionResponse({
     /// Session ID.
     required String sessionId,
+
     /// Current status of the session.
     required String status,
+
     /// All questions in this intake.
     required List<IntakeQuestion> questions,
+
     /// Answers submitted so far.
     required List<IntakeAnswer> answers,
+
     /// Idol ID if associated.
     String? idolId,
+
     /// Target age if set.
     int? targetAge,
+
     /// When the session was created.
     DateTime? createdAt,
+
     /// When the session was last updated.
     DateTime? updatedAt,
   }) = _IntakeSessionResponse;
@@ -331,15 +370,15 @@ class IntakeSessionResponse with _$IntakeSessionResponse {
   }
 
   Map<String, dynamic> toJson() => {
-        'sessionId': sessionId,
-        'status': status,
-        'questions': questions.map((q) => q.toJson()).toList(),
-        'answers': answers.map((a) => a.toJson()).toList(),
-        if (idolId != null) 'idolId': idolId,
-        if (targetAge != null) 'targetAge': targetAge,
-        if (createdAt != null) 'createdAt': createdAt!.toIso8601String(),
-        if (updatedAt != null) 'updatedAt': updatedAt!.toIso8601String(),
-      };
+    'sessionId': sessionId,
+    'status': status,
+    'questions': questions.map((q) => q.toJson()).toList(),
+    'answers': answers.map((a) => a.toJson()).toList(),
+    if (idolId != null) 'idolId': idolId,
+    if (targetAge != null) 'targetAge': targetAge,
+    if (createdAt != null) 'createdAt': createdAt!.toIso8601String(),
+    if (updatedAt != null) 'updatedAt': updatedAt!.toIso8601String(),
+  };
 
   /// Get session status enum.
   IntakeSessionStatus get sessionStatus {
@@ -419,8 +458,10 @@ class FinishIntakeResponse with _$FinishIntakeResponse {
   const factory FinishIntakeResponse({
     /// Job ID for background processing.
     required String jobId,
+
     /// Optional idol ID if one was created.
     String? idolId,
+
     /// Status message.
     String? message,
   }) = _FinishIntakeResponse;
@@ -434,10 +475,10 @@ class FinishIntakeResponse with _$FinishIntakeResponse {
   }
 
   Map<String, dynamic> toJson() => {
-        'jobId': jobId,
-        if (idolId != null) 'idolId': idolId,
-        if (message != null) 'message': message,
-      };
+    'jobId': jobId,
+    if (idolId != null) 'idolId': idolId,
+    if (message != null) 'message': message,
+  };
 }
 
 /// Response from submitting an answer.
@@ -448,14 +489,19 @@ class SubmitAnswerResponse with _$SubmitAnswerResponse {
   const factory SubmitAnswerResponse({
     /// Whether the submission was successful.
     @Default(true) bool success,
+
     /// The submitted answer.
     IntakeAnswer? answer,
+
     /// Next question if available.
     IntakeQuestion? nextQuestion,
+
     /// Updated session status.
     String? status,
+
     /// Progress percentage.
     double? progress,
+
     /// Error message if failed.
     String? error,
   }) = _SubmitAnswerResponse;
@@ -467,10 +513,14 @@ class SubmitAnswerResponse with _$SubmitAnswerResponse {
           ? IntakeAnswer.fromJson(json['answer'] as Map<String, dynamic>)
           : null,
       nextQuestion: json['nextQuestion'] != null
-          ? IntakeQuestion.fromJson(json['nextQuestion'] as Map<String, dynamic>)
+          ? IntakeQuestion.fromJson(
+              json['nextQuestion'] as Map<String, dynamic>,
+            )
           : (json['next_question'] != null
-              ? IntakeQuestion.fromJson(json['next_question'] as Map<String, dynamic>)
-              : null),
+                ? IntakeQuestion.fromJson(
+                    json['next_question'] as Map<String, dynamic>,
+                  )
+                : null),
       status: json['status']?.toString(),
       progress: _parseDouble(json['progress']),
       error: json['error']?.toString(),
@@ -478,13 +528,13 @@ class SubmitAnswerResponse with _$SubmitAnswerResponse {
   }
 
   Map<String, dynamic> toJson() => {
-        'success': success,
-        if (answer != null) 'answer': answer!.toJson(),
-        if (nextQuestion != null) 'nextQuestion': nextQuestion!.toJson(),
-        if (status != null) 'status': status,
-        if (progress != null) 'progress': progress,
-        if (error != null) 'error': error,
-      };
+    'success': success,
+    if (answer != null) 'answer': answer!.toJson(),
+    if (nextQuestion != null) 'nextQuestion': nextQuestion!.toJson(),
+    if (status != null) 'status': status,
+    if (progress != null) 'progress': progress,
+    if (error != null) 'error': error,
+  };
 
   static double? _parseDouble(dynamic value) {
     if (value == null) return null;

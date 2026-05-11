@@ -246,6 +246,22 @@ class TestHannibalStartupScenario:
         assert "networking" in found_jargon
     
     @pytest.mark.asyncio
+    async def test_comparison_generate_jargon_catch(self):
+        """Test jargon guard catches terms typical in business comparison."""
+        jargon_response = "You lack synergy and need a better value proposition."
+        found_jargon = _contains_banned_jargon(jargon_response, BANNED_MODERN_JARGON)
+        assert "synergy" in found_jargon
+        assert "value proposition" in found_jargon
+
+    @pytest.mark.asyncio
+    async def test_blueprint_generate_jargon_catch(self):
+        """Test jargon guard catches terms typical in career blueprinting."""
+        jargon_response = "Quarter 1: Focus on networking with a mentor."
+        found_jargon = _contains_banned_jargon(jargon_response, BANNED_MODERN_JARGON)
+        assert "networking" in found_jargon
+        assert "mentor" in found_jargon
+    
+    @pytest.mark.asyncio
     async def test_apply_jargon_guard_skips_modern(self):
         """Jargon guard should skip modern/contemporary idols."""
         text_with_jargon = "Your value proposition needs work. Network more."

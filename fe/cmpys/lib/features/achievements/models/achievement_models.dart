@@ -55,7 +55,9 @@ class Achievement with _$Achievement {
       userId: (json['userId'] ?? json['user_id'] ?? '').toString(),
       title: (json['title'] ?? '').toString(),
       category: AchievementCategory.fromString(json['category']?.toString()),
-      achievementDate: _parseDate(json['achievementDate'] ?? json['achievement_date']),
+      achievementDate: _parseDate(
+        json['achievementDate'] ?? json['achievement_date'],
+      ),
       notes: json['notes']?.toString(),
       evidenceLink: (json['evidenceLink'] ?? json['evidence_link'])?.toString(),
       createdAt: _parseDate(json['createdAt'] ?? json['created_at']),
@@ -75,7 +77,8 @@ class Achievement with _$Achievement {
     'userId': userId,
     'title': title,
     'category': category.toJson(),
-    if (achievementDate != null) 'achievementDate': achievementDate!.toIso8601String().split('T')[0],
+    if (achievementDate != null)
+      'achievementDate': achievementDate!.toIso8601String().split('T')[0],
     if (notes != null) 'notes': notes,
     if (evidenceLink != null) 'evidenceLink': evidenceLink,
     if (createdAt != null) 'createdAt': createdAt!.toIso8601String(),
@@ -101,7 +104,9 @@ class CreateAchievementRequest with _$CreateAchievementRequest {
     return CreateAchievementRequest(
       title: (json['title'] ?? '').toString(),
       category: AchievementCategory.fromString(json['category']?.toString()),
-      achievementDate: _parseDate(json['achievementDate'] ?? json['achievement_date']),
+      achievementDate: _parseDate(
+        json['achievementDate'] ?? json['achievement_date'],
+      ),
       notes: json['notes']?.toString(),
       evidenceLink: (json['evidenceLink'] ?? json['evidence_link'])?.toString(),
     );
@@ -110,7 +115,8 @@ class CreateAchievementRequest with _$CreateAchievementRequest {
   Map<String, dynamic> toJson() => {
     'title': title,
     'category': category.toJson(),
-    if (achievementDate != null) 'achievementDate': achievementDate!.toIso8601String().split('T')[0],
+    if (achievementDate != null)
+      'achievementDate': achievementDate!.toIso8601String().split('T')[0],
     if (notes != null) 'notes': notes,
     if (evidenceLink != null) 'evidenceLink': evidenceLink,
   };
@@ -140,10 +146,12 @@ class UpdateAchievementRequest with _$UpdateAchievementRequest {
   factory UpdateAchievementRequest.fromJson(Map<String, dynamic> json) {
     return UpdateAchievementRequest(
       title: json['title']?.toString(),
-      category: json['category'] != null 
+      category: json['category'] != null
           ? AchievementCategory.fromString(json['category']?.toString())
           : null,
-      achievementDate: _parseDate(json['achievementDate'] ?? json['achievement_date']),
+      achievementDate: _parseDate(
+        json['achievementDate'] ?? json['achievement_date'],
+      ),
       notes: json['notes']?.toString(),
       evidenceLink: (json['evidenceLink'] ?? json['evidence_link'])?.toString(),
     );
@@ -153,7 +161,11 @@ class UpdateAchievementRequest with _$UpdateAchievementRequest {
     final Map<String, dynamic> data = {};
     if (title != null) data['title'] = title;
     if (category != null) data['category'] = category!.toJson();
-    if (achievementDate != null) data['achievementDate'] = achievementDate!.toIso8601String().split('T')[0];
+    if (achievementDate != null) {
+      data['achievementDate'] = achievementDate!.toIso8601String().split(
+        'T',
+      )[0];
+    }
     if (notes != null) data['notes'] = notes;
     if (evidenceLink != null) data['evidenceLink'] = evidenceLink;
     return data;

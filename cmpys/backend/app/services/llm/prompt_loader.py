@@ -103,15 +103,10 @@ PROMPT_PLACEHOLDERS = {
     ],
     
     "plan_generate.txt": [
+        "user_goal",
         "idol_name",
-        "idol_profile_json",
-        "idol_persona_json",
-        "idol_milestones_json",
-        "user_profile_json",
-        "target_age",
-        "gaps_json",
-        "readiness_by_gap_json",
-        "allowed_resources_json",
+        "hours_per_week",
+        "user_context",
     ],
     
     "chat_system.txt": [
@@ -169,17 +164,36 @@ PROMPT_PLACEHOLDERS = {
         "answers_json",
     ],
     
-    "plan_item_details.txt": [
+    "achievement_intake_generate.txt": [
         "idol_name",
-        "idol_persona_json",
-        "user_profile_json",
-        "plan_item_json",
-        "readiness_by_gap_json",
-        "allowed_resources_json",
+        "idol_profile_json",
+        "milestones_json",
+        "user_age",
+        "limit",
+    ],
+    
+    "plan_item_details.txt": [
+        "task_title",
+        "user_goal",
+        "learning_preferences",
+    ],
+
+    "book_module_generate.txt": [
+        "book_title",
+        "author",
+        "user_goal",
+        "source_context",
     ],
     
     "thinking_narrate.txt": [
         "interests",
+    ],
+    
+    "discover_feed.txt": [
+        "count",
+        "interests_json",
+        "goals_json",
+        "idol_name",
     ],
     
     "thinking_plan.txt": [
@@ -189,6 +203,71 @@ PROMPT_PLACEHOLDERS = {
     "thinking_task.txt": [
         "task_title",
         "idol_name",
+    ],
+    
+    # =========================================================================
+    # Agentic Workflow Prompts
+    # =========================================================================
+    
+    "interview_system.xml": [
+        "idol_name",
+        "idol_era",
+        "idol_domain",
+        "voice_style",
+        "signature_phrases",
+        "user_age",
+        "user_financial_status",
+        "user_interests_json",
+        "chat_history_json",
+    ],
+    
+    "interview_question.txt": [
+        "idol_name",
+        "user_age",
+        "user_financial_status",
+        "user_interests_json",
+        "chat_history_json",
+        "turn_count",
+        "max_turns",
+        "idol_facts_json",
+        "user_message",
+    ],
+    
+    "comparison_generate.txt": [
+        "idol_name",
+        "user_age",
+        "user_profile_json",
+        "interview_transcript_json",
+        "idol_facts_json",
+    ],
+    
+    "blueprint_generate.txt": [
+        "idol_name",
+        "user_age",
+        "user_profile_json",
+        "interview_transcript_json",
+        "comparison_summary",
+        "idol_facts_json",
+    ],
+    
+    "idol_suggest.txt": [
+        "user_age",
+        "user_financial_status",
+        "user_interests_json",
+    ],
+    
+    "daily_feed_generate.txt": [
+        "count",
+        "idol_name",
+        "user_profile_json",
+    ],
+
+    "idea_cards_generate.txt": [
+        "count",
+        "idol_name",
+        "idol_domain",
+        "persona_context",
+        "user_profile_json",
     ],
 }
 
@@ -210,10 +289,12 @@ def get_prompts_dir() -> Path:
 
 
 def list_available_prompts() -> list[str]:
-    """List all available prompt template files."""
+    """List all available prompt template files (.txt and .xml)."""
     if not PROMPTS_DIR.exists():
         return []
-    return sorted([f.name for f in PROMPTS_DIR.glob("*.txt")])
+    txt_files = list(PROMPTS_DIR.glob("*.txt"))
+    xml_files = list(PROMPTS_DIR.glob("*.xml"))
+    return sorted([f.name for f in txt_files + xml_files])
 
 
 def get_loaded_prompts() -> list[str]:
@@ -226,12 +307,13 @@ def get_required_placeholders(prompt_name: str) -> list[str]:
     Get the required placeholders for a prompt file.
     
     Args:
-        prompt_name: Name of the prompt file (with or without .txt)
+        prompt_name: Name of the prompt file (with or without .txt/.xml)
         
     Returns:
         List of required placeholder names
     """
-    if not prompt_name.endswith(".txt"):
+    # Check if already has a valid extension
+    if not (prompt_name.endswith(".txt") or prompt_name.endswith(".xml")):
         prompt_name = f"{prompt_name}.txt"
     return PROMPT_PLACEHOLDERS.get(prompt_name, [])
 
@@ -260,7 +342,7 @@ def load_prompt(name: str) -> str:
     Load a prompt template from the prompts directory.
     
     Args:
-        name: Name of the prompt file (with or without .txt extension)
+        name: Name of the prompt file (with or without .txt/.xml extension)
         
     Returns:
         The prompt template content
@@ -268,8 +350,8 @@ def load_prompt(name: str) -> str:
     Raises:
         FileNotFoundError: If the prompt file doesn't exist
     """
-    # Add .txt extension if not present
-    if not name.endswith(".txt"):
+    # Add .txt extension if not present and not .xml
+    if not (name.endswith(".txt") or name.endswith(".xml")):
         name = f"{name}.txt"
     
     prompt_path = PROMPTS_DIR / name
@@ -376,7 +458,10 @@ def load_and_render(
     template = load_prompt(name)
     
     # Normalize name for registry lookup
-    prompt_name = name if name.endswith(".txt") else f"{name}.txt"
+    if name.endswith(".txt") or name.endswith(".xml"):
+        prompt_name = name
+    else:
+        prompt_name = f"{name}.txt"
     
     if variables:
         return render_prompt(template, variables, prompt_name=prompt_name, strict=strict)
@@ -396,7 +481,7 @@ def validate_prompt_params(prompt_name: str, params: dict[str, Any]) -> list[str
     Returns:
         List of missing parameter names (empty if all present)
     """
-    if not prompt_name.endswith(".txt"):
+    if not (prompt_name.endswith(".txt") or prompt_name.endswith(".xml")):
         prompt_name = f"{prompt_name}.txt"
     
     required = PROMPT_PLACEHOLDERS.get(prompt_name, [])
@@ -419,6 +504,7 @@ PROMPT_REGISTRY = {
     "planning": {
         "generate_plan": ["extractor_system.txt", "plan_generate.txt"],
         "generate_item_details": ["extractor_system.txt", "plan_item_details.txt"],
+        "generate_book_module": ["extractor_system.txt", "book_module_generate.txt"],
     },
     # Chat
     "chat": {
@@ -431,11 +517,22 @@ PROMPT_REGISTRY = {
     # Idol discovery/suggestion
     "idols": {
         "suggest": ["idol_discover.txt"],
+        "suggest_for_session": ["idol_suggest.txt"],
     },
     # Intake questionnaire
     "intake": {
         "generate_questions": ["extractor_system.txt", "intake_questions_generate.txt"],
         "normalize_answers": ["extractor_system.txt", "intake_answers_normalize.txt"],
+    },
+    # Agentic workflow
+    "agentic": {
+        "interview": ["interview_system.xml", "interview_question.txt"],
+        "comparison": ["comparison_generate.txt"],
+        "blueprint": ["blueprint_generate.txt"],
+    },
+    # Idea cards (Deepstash-style)
+    "idea_cards": {
+        "generate_cards": ["idea_cards_generate.txt"],
     },
 }
 

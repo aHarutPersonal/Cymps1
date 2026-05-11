@@ -1,5 +1,6 @@
 import 'package:freezed_annotation/freezed_annotation.dart';
 
+import '../../../app/env.dart';
 part 'idol_models.freezed.dart';
 
 /// A candidate idol from discovery/suggestion.
@@ -7,14 +8,17 @@ part 'idol_models.freezed.dart';
 @freezed
 class IdolCandidate with _$IdolCandidate {
   const IdolCandidate._();
-  
+
   const factory IdolCandidate({
     /// Source type: "local" (from DB) or "web" (from LLM/Wikidata)
     @Default('web') String source,
+
     /// For local suggestions: the idol's UUID in database
     String? id,
+
     /// For web suggestions: provider name (e.g., "wikidata", "llm")
     @Default('') String provider,
+
     /// For web suggestions: external ID from provider (e.g., "Q317521", "llm:ray_dalio")
     @Default('') String externalId,
     @Default('Unknown') String name,
@@ -22,14 +26,19 @@ class IdolCandidate with _$IdolCandidate {
     DateTime? birthDate,
     String? wikipediaUrl,
     @Default([]) List<String> occupations,
+
     /// For local suggestions: relevance score (0-1)
     double? relevanceScore,
+
     /// For web suggestions: confidence score (0-1)
     double? confidence,
+
     /// Domain/category (for local suggestions)
     String? domain,
+
     /// Aliases list (for local suggestions)
     @Default([]) List<IdolAlias> aliases,
+
     /// Tags list (for local suggestions)
     @Default([]) List<IdolTag> tags,
     String? avatarThumbUrl,
@@ -37,7 +46,7 @@ class IdolCandidate with _$IdolCandidate {
 
   /// Check if this is a local suggestion (from database)
   bool get isLocal => source == 'local';
-  
+
   /// Check if this is a web suggestion (from external provider)
   bool get isWeb => source == 'web';
 
@@ -52,26 +61,37 @@ class IdolCandidate with _$IdolCandidate {
       description: _toString(json['description']),
       birthDate: _parseDate(json['birthDate'] ?? json['birth_date']),
       wikipediaUrl: _toString(json['wikipediaUrl'] ?? json['wikipedia_url']),
-      occupations: (json['occupations'] as List<dynamic>?)
+      occupations:
+          (json['occupations'] as List<dynamic>?)
               ?.map((e) => e.toString())
               .toList() ??
           [],
-      relevanceScore: (json['relevanceScore'] ?? json['relevance_score'] as num?)?.toDouble(),
+      relevanceScore:
+          (json['relevanceScore'] ?? json['relevance_score'] as num?)
+              ?.toDouble(),
       confidence: (json['confidence'] as num?)?.toDouble(),
       domain: _toString(json['domain']),
-      aliases: (json['aliases'] as List<dynamic>?)
+      aliases:
+          (json['aliases'] as List<dynamic>?)
               ?.map((e) => IdolAlias.fromJson(e as Map<String, dynamic>))
               .toList() ??
           [],
-      tags: (json['tags'] as List<dynamic>?)
+      tags:
+          (json['tags'] as List<dynamic>?)
               ?.map((e) => IdolTag.fromJson(e as Map<String, dynamic>))
               .toList() ??
           [],
-      avatarThumbUrl:
-          _toString(json['avatarThumbUrl'] ?? json['avatar_thumb_url']),
+      avatarThumbUrl: _resolveImageUrl(
+        _toString(
+          json['avatarThumbUrl'] ??
+              json['avatar_thumb_url'] ??
+              json['imageUrl'] ??
+              json['image_url'],
+        ),
+      ),
     );
   }
-  
+
   /// Custom toJson for API requests
   Map<String, dynamic> toJson() => {
     'source': source,
@@ -80,20 +100,21 @@ class IdolCandidate with _$IdolCandidate {
     'externalId': externalId,
     'name': name,
     if (description != null) 'description': description,
-    if (birthDate != null) 'birthDate': birthDate!.toIso8601String().split('T')[0],
+    if (birthDate != null)
+      'birthDate': birthDate!.toIso8601String().split('T')[0],
     if (wikipediaUrl != null) 'wikipediaUrl': wikipediaUrl,
     'occupations': occupations,
     if (relevanceScore != null) 'relevanceScore': relevanceScore,
     if (confidence != null) 'confidence': confidence,
     if (domain != null) 'domain': domain,
   };
-  
+
   static String? _toString(dynamic value) {
     if (value == null) return null;
     if (value is String) return value;
     return value.toString();
   }
-  
+
   static DateTime? _parseDate(dynamic value) {
     if (value == null) return null;
     if (value is DateTime) return value;
@@ -105,10 +126,7 @@ class IdolCandidate with _$IdolCandidate {
 /// Idol alias (alternative name).
 @freezed
 class IdolAlias with _$IdolAlias {
-  const factory IdolAlias({
-    String? id,
-    String? aliasText,
-  }) = _IdolAlias;
+  const factory IdolAlias({String? id, String? aliasText}) = _IdolAlias;
 
   factory IdolAlias.fromJson(Map<String, dynamic> json) {
     return IdolAlias(
@@ -121,11 +139,7 @@ class IdolAlias with _$IdolAlias {
 /// Idol tag (category/theme).
 @freezed
 class IdolTag with _$IdolTag {
-  const factory IdolTag({
-    String? id,
-    String? name,
-    String? type,
-  }) = _IdolTag;
+  const factory IdolTag({String? id, String? name, String? type}) = _IdolTag;
 
   factory IdolTag.fromJson(Map<String, dynamic> json) {
     return IdolTag(
@@ -147,7 +161,8 @@ class DiscoverResponse with _$DiscoverResponse {
   factory DiscoverResponse.fromJson(Map<String, dynamic> json) {
     return DiscoverResponse(
       query: (json['query'] ?? '').toString(),
-      candidates: (json['candidates'] as List<dynamic>?)
+      candidates:
+          (json['candidates'] as List<dynamic>?)
               ?.map((e) => IdolCandidate.fromJson(e as Map<String, dynamic>))
               .toList() ??
           [],
@@ -177,7 +192,7 @@ class SourceMix with _$SourceMix {
 @freezed
 class SuggestResponse with _$SuggestResponse {
   const SuggestResponse._();
-  
+
   const factory SuggestResponse({
     @Default([]) List<String> interests,
     SourceMix? sourceMix,
@@ -188,16 +203,18 @@ class SuggestResponse with _$SuggestResponse {
   factory SuggestResponse.fromJson(Map<String, dynamic> json) {
     final candidatesList = json['suggestions'] ?? json['candidates'];
     final sourceMixData = json['sourceMix'] ?? json['source_mix'];
-    
+
     return SuggestResponse(
-      interests: (json['interests'] as List<dynamic>?)
+      interests:
+          (json['interests'] as List<dynamic>?)
               ?.map((e) => e.toString())
               .toList() ??
           [],
-      sourceMix: sourceMixData is Map<String, dynamic> 
+      sourceMix: sourceMixData is Map<String, dynamic>
           ? SourceMix.fromJson(sourceMixData)
           : null,
-      candidates: (candidatesList as List<dynamic>?)
+      candidates:
+          (candidatesList as List<dynamic>?)
               ?.map((e) => IdolCandidate.fromJson(e as Map<String, dynamic>))
               .toList() ??
           [],
@@ -210,16 +227,19 @@ class SuggestResponse with _$SuggestResponse {
 @freezed
 class ImportRequest with _$ImportRequest {
   const ImportRequest._();
-  
+
   const factory ImportRequest({
     required String provider,
     required String externalId,
+
     /// Required for LLM imports
     String? name,
     String? description,
+
     /// Date string in YYYY-MM-DD format
     String? birthDate,
     String? wikipediaUrl,
+
     /// List of occupations/roles
     List<String>? occupations,
   }) = _ImportRequest;
@@ -237,7 +257,7 @@ class ImportRequest with _$ImportRequest {
           .toList(),
     );
   }
-  
+
   /// Custom toJson to send camelCase (as API expects)
   Map<String, dynamic> toJson() {
     final Map<String, dynamic> data = {
@@ -248,7 +268,9 @@ class ImportRequest with _$ImportRequest {
     if (description != null) data['description'] = description;
     if (birthDate != null) data['birthDate'] = birthDate;
     if (wikipediaUrl != null) data['wikipediaUrl'] = wikipediaUrl;
-    if (occupations != null && occupations!.isNotEmpty) data['occupations'] = occupations;
+    if (occupations != null && occupations!.isNotEmpty) {
+      data['occupations'] = occupations;
+    }
     return data;
   }
 }
@@ -304,22 +326,31 @@ class IdolProfile with _$IdolProfile {
       birthDate: _parseDate(json['birthDate'] ?? json['birth_date']),
       deathDate: _parseDate(json['deathDate'] ?? json['death_date']),
       wikipediaUrl: (json['wikipediaUrl'] ?? json['wikipedia_url'])?.toString(),
-      occupations: (json['occupations'] as List<dynamic>?)
+      occupations:
+          (json['occupations'] as List<dynamic>?)
               ?.map((e) => e.toString())
               .toList() ??
           [],
-      avatarUrl: (json['avatarUrl'] ?? json['avatar_url'] ?? json['imageUrl'] ?? json['image_url'])?.toString(),
-      avatarThumbUrl:
-          (json['avatarThumbUrl'] ?? json['avatar_thumb_url'])?.toString(),
+      avatarUrl: _resolveImageUrl(
+        (json['avatarUrl'] ??
+                json['avatar_url'] ??
+                json['imageUrl'] ??
+                json['image_url'])
+            ?.toString(),
+      ),
+      avatarThumbUrl: (json['avatarThumbUrl'] ?? json['avatar_thumb_url'])
+          ?.toString(),
       knownFor: (json['knownFor'] ?? json['known_for'] as List<dynamic>?)
           ?.map((e) => e.toString())
           .toList(),
       nationality: json['nationality']?.toString(),
       birthPlace: (json['birthPlace'] ?? json['birth_place'])?.toString(),
       summary: json['summary']?.toString(),
-      timelineStatus: (json['timelineStatus'] ?? json['timeline_status'])?.toString(),
+      timelineStatus: (json['timelineStatus'] ?? json['timeline_status'])
+          ?.toString(),
       timelineCompleteness:
-          (json['timelineCompleteness'] ?? json['timeline_completeness'] as num?)
+          (json['timelineCompleteness'] ??
+                  json['timeline_completeness'] as num?)
               ?.toDouble(),
       createdAt: _parseDate(json['createdAt'] ?? json['created_at']),
       updatedAt: _parseDate(json['updatedAt'] ?? json['updated_at']),
@@ -332,4 +363,13 @@ class IdolProfile with _$IdolProfile {
     if (value is String) return DateTime.tryParse(value);
     return null;
   }
+}
+
+String? _resolveImageUrl(String? rawUrl) {
+  if (rawUrl == null || rawUrl.isEmpty) return null;
+  if (rawUrl.startsWith('/')) {
+    final base = Env.apiBaseUrl.replaceFirst('/api/v1', '');
+    return '$base$rawUrl';
+  }
+  return rawUrl;
 }

@@ -27,10 +27,7 @@ import 'package:flutter/foundation.dart';
 abstract final class Env {
   /// API base URL from dart-define, or platform-specific default.
   static String get apiBaseUrl {
-    const definedUrl = String.fromEnvironment(
-      'API_BASE_URL',
-      defaultValue: '',
-    );
+    const definedUrl = String.fromEnvironment('API_BASE_URL', defaultValue: '');
 
     if (definedUrl.isNotEmpty) {
       return definedUrl;
@@ -68,10 +65,7 @@ abstract final class Env {
   static const String apiBaseUrlProduction = 'https://api.cmpys.app/api/v1';
 
   /// Whether the app is running in debug mode.
-  static const bool isDebug = bool.fromEnvironment(
-    'DEBUG',
-    defaultValue: true,
-  );
+  static const bool isDebug = bool.fromEnvironment('DEBUG', defaultValue: true);
 
   /// Whether to enable verbose logging.
   static const bool enableLogging = bool.fromEnvironment(

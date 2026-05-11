@@ -13,6 +13,9 @@ if TYPE_CHECKING:
 class IdolImportJob(Base, UUIDMixin, TimestampUpdateMixin):
     __tablename__ = "idol_import_jobs"
 
+    user_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     idol_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False), ForeignKey("idols.id", ondelete="SET NULL"), nullable=True
     )

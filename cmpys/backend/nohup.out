@@ -1,0 +1,330 @@
+INFO:     Will watch for changes in these directories: ['/Users/harutantonyan/work/cmpys/backend']
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [57180] using WatchFiles
+INFO:     Started server process [57226]
+INFO:     Waiting for application startup.
+2026-02-20 00:28:17 | INFO     | cmpys | Logging initialized. Log files: /Users/harutantonyan/work/cmpys/backend/logs
+2026-02-20 00:28:17 | INFO     | cmpys | Log level: INFO
+2026-02-20 00:28:17 | INFO     | cmpys.main | Starting cmpys application
+2026-02-20 00:28:17 | INFO     | cmpys.main | Debug mode: False
+2026-02-20 00:28:17 | INFO     | cmpys.main | LLM provider: openai
+2026-02-20 00:28:17 | INFO     | cmpys.main | LLM configured: True
+INFO:     Application startup complete.
+2026-02-20 00:30:51 | INFO     | app.api.v1.comparison | [AI_COMPARISON] Request: idolId=77f262dd-1566-4904-87ec-fc89196d70ac, age=28, mode=up_to
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/uvicorn/protocols/http/httptools_impl.py", line 416, in run_asgi
+    result = await app(  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/fastapi/applications.py", line 1135, in __call__
+    await super().__call__(scope, receive, send)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/applications.py", line 107, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/middleware/errors.py", line 186, in __call__
+    raise exc
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/middleware/errors.py", line 164, in __call__
+    await self.app(scope, receive, _send)
+  File "/Users/harutantonyan/work/cmpys/backend/app/core/middleware.py", line 198, in __call__
+    await self.app(scope, receive_wrapper, send_wrapper)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/middleware/cors.py", line 85, in __call__
+    await self.app(scope, receive, send)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+    await self.app(scope, receive, send)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/routing.py", line 716, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/routing.py", line 736, in app
+    await route.handle(scope, receive, send)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/routing.py", line 290, in handle
+    await self.app(scope, receive, send)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/fastapi/routing.py", line 115, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/fastapi/routing.py", line 101, in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/fastapi/routing.py", line 355, in app
+    raw_response = await run_endpoint_function(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/fastapi/routing.py", line 243, in run_endpoint_function
+    return await dependant.call(**values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/harutantonyan/work/cmpys/backend/app/api/v1/comparison.py", line 493, in compare_to_idol_ai
+    if current_user.interests:
+       ^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'User' object has no attribute 'interests'
+2026-02-20 00:30:51 | INFO     | app.api.v1.comparison | [COMPARISON] Request: idolId=77f262dd-1566-4904-87ec-fc89196d70ac, age=28, mode=up_to
+2026-02-20 00:30:51 | INFO     | app.api.v1.comparison | [COMPARISON] Idol found: Warren Buffett, birth_date=1930-08-30
+2026-02-20 00:30:51 | INFO     | app.api.v1.comparison | [COMPARISON] Total milestones for idol: 9
+2026-02-20 00:30:51 | INFO     | app.api.v1.comparison | [COMPARISON] Timeline events with age <= 28: 1
+2026-02-20 00:30:51 | INFO     | app.api.v1.comparison | [COMPARISON] Final milestone count: 1
+2026-02-20 00:30:51 | INFO     | cmpys.middleware | GET /api/v1/comparison - 200 (19.5ms)
+2026-02-20 00:33:04 | INFO     | cmpys.middleware | GET /api/v1/me - 200 (37.8ms)
+2026-02-20 00:33:04 | INFO     | cmpys.middleware | GET /api/v1/idols/77f262dd-1566-4904-87ec-fc89196d70ac - 200 (21.9ms)
+2026-02-20 00:33:04 | INFO     | app.api.v1.comparison | [AI_COMPARISON] Request: idolId=77f262dd-1566-4904-87ec-fc89196d70ac, age=28, mode=up_to
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/uvicorn/protocols/http/httptools_impl.py", line 416, in run_asgi
+    result = await app(  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/fastapi/applications.py", line 1135, in __call__
+    await super().__call__(scope, receive, send)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/applications.py", line 107, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/middleware/errors.py", line 186, in __call__
+    raise exc
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/middleware/errors.py", line 164, in __call__
+    await self.app(scope, receive, _send)
+  File "/Users/harutantonyan/work/cmpys/backend/app/core/middleware.py", line 198, in __call__
+    await self.app(scope, receive_wrapper, send_wrapper)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/middleware/cors.py", line 85, in __call__
+    await self.app(scope, receive, send)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+    await self.app(scope, receive, send)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/routing.py", line 716, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/routing.py", line 736, in app
+    await route.handle(scope, receive, send)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/routing.py", line 290, in handle
+    await self.app(scope, receive, send)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/fastapi/routing.py", line 115, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/fastapi/routing.py", line 101, in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/fastapi/routing.py", line 355, in app
+    raw_response = await run_endpoint_function(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/fastapi/routing.py", line 243, in run_endpoint_function
+    return await dependant.call(**values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/harutantonyan/work/cmpys/backend/app/api/v1/comparison.py", line 493, in compare_to_idol_ai
+    if current_user.interests:
+       ^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'User' object has no attribute 'interests'
+2026-02-20 00:33:04 | INFO     | cmpys.middleware | GET /api/v1/idols/77f262dd-1566-4904-87ec-fc89196d70ac/timeline - 200 (29.4ms)
+2026-02-20 00:33:04 | INFO     | app.api.v1.comparison | [COMPARISON] Request: idolId=77f262dd-1566-4904-87ec-fc89196d70ac, age=28, mode=up_to
+2026-02-20 00:33:04 | INFO     | app.api.v1.comparison | [COMPARISON] Idol found: Warren Buffett, birth_date=1930-08-30
+2026-02-20 00:33:04 | INFO     | app.api.v1.comparison | [COMPARISON] Total milestones for idol: 9
+2026-02-20 00:33:04 | INFO     | app.api.v1.comparison | [COMPARISON] Timeline events with age <= 28: 1
+2026-02-20 00:33:04 | INFO     | app.api.v1.comparison | [COMPARISON] Final milestone count: 1
+2026-02-20 00:33:04 | INFO     | cmpys.middleware | GET /api/v1/comparison - 200 (12.6ms)
+2026-02-20 00:54:13 | INFO     | cmpys.middleware | GET /api/v1/plans/current - 401 (5.8ms)
+2026-02-20 00:54:13 | INFO     | cmpys.middleware | POST /api/v1/auth/refresh - 200 (2.1ms)
+2026-02-20 00:54:13 | INFO     | cmpys.middleware | GET /api/v1/plans/current - 200 (21.1ms)
+2026-02-20 00:54:14 | INFO     | cmpys.middleware | POST /api/v1/plans/generate - 201 (168.7ms)
+2026-02-20 00:54:14 | INFO     | cmpys.middleware | GET /api/v1/jobs/3588a273-37c6-482c-8fcb-88d02be3bf5a - 200 (14.6ms)
+2026-02-20 00:54:15 | INFO     | cmpys.middleware | GET /api/v1/jobs/3588a273-37c6-482c-8fcb-88d02be3bf5a - 200 (8.9ms)
+2026-02-20 00:54:16 | INFO     | cmpys.middleware | GET /api/v1/jobs/3588a273-37c6-482c-8fcb-88d02be3bf5a - 200 (11.5ms)
+2026-02-20 00:54:17 | INFO     | cmpys.middleware | GET /api/v1/jobs/3588a273-37c6-482c-8fcb-88d02be3bf5a - 200 (9.1ms)
+2026-02-20 00:54:29 | INFO     | cmpys.middleware | GET /api/v1/chat/threads - 200 (31.7ms)
+2026-02-20 00:54:29 | INFO     | cmpys.middleware | GET /api/v1/chat/threads/d6eb0a39-d152-4be9-a591-98cb506bee80/messages - 200 (30.6ms)
+2026-02-20 00:54:31 | INFO     | cmpys.middleware | GET /api/v1/notes - 200 (26.2ms)
+2026-02-20 00:54:34 | INFO     | app.api.v1.comparison | [AI_COMPARISON] Request: idolId=77f262dd-1566-4904-87ec-fc89196d70ac, age=28, mode=up_to
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/uvicorn/protocols/http/httptools_impl.py", line 416, in run_asgi
+    result = await app(  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/fastapi/applications.py", line 1135, in __call__
+    await super().__call__(scope, receive, send)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/applications.py", line 107, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/middleware/errors.py", line 186, in __call__
+    raise exc
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/middleware/errors.py", line 164, in __call__
+    await self.app(scope, receive, _send)
+  File "/Users/harutantonyan/work/cmpys/backend/app/core/middleware.py", line 198, in __call__
+    await self.app(scope, receive_wrapper, send_wrapper)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/middleware/cors.py", line 85, in __call__
+    await self.app(scope, receive, send)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+    await self.app(scope, receive, send)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/routing.py", line 716, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/routing.py", line 736, in app
+    await route.handle(scope, receive, send)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/routing.py", line 290, in handle
+    await self.app(scope, receive, send)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/fastapi/routing.py", line 115, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/fastapi/routing.py", line 101, in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/fastapi/routing.py", line 355, in app
+    raw_response = await run_endpoint_function(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/harutantonyan/work/cmpys/backend/.venv/lib/python3.11/site-packages/fastapi/routing.py", line 243, in run_endpoint_function
+    return await dependant.call(**values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/harutantonyan/work/cmpys/backend/app/api/v1/comparison.py", line 493, in compare_to_idol_ai
+    if current_user.interests:
+       ^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'User' object has no attribute 'interests'
+2026-02-20 00:54:34 | INFO     | app.api.v1.comparison | [COMPARISON] Request: idolId=77f262dd-1566-4904-87ec-fc89196d70ac, age=28, mode=up_to
+2026-02-20 00:54:34 | INFO     | app.api.v1.comparison | [COMPARISON] Idol found: Warren Buffett, birth_date=1930-08-30
+2026-02-20 00:54:34 | INFO     | app.api.v1.comparison | [COMPARISON] Total milestones for idol: 9
+2026-02-20 00:54:34 | INFO     | app.api.v1.comparison | [COMPARISON] Timeline events with age <= 28: 1
+2026-02-20 00:54:34 | INFO     | app.api.v1.comparison | [COMPARISON] Final milestone count: 1
+2026-02-20 00:54:34 | INFO     | cmpys.middleware | GET /api/v1/comparison - 200 (10.8ms)
+WARNING:  WatchFiles detected changes in 'app/models/intake.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+2026-02-20 19:34:08 | INFO     | cmpys.main | Shutting down cmpys application
+INFO:     Application shutdown complete.
+INFO:     Finished server process [57226]
+Fatal Python error: init_sys_streams: can't initialize sys standard streams
+Python runtime state: core initialized
+OSError: [Errno 9] Bad file descriptor
+
+Current thread 0x00000002021f8840 (most recent call first):
+  <no Python frame>
+WARNING:  WatchFiles detected changes in 'app/services/llm/schemas.py'. Reloading...
+Fatal Python error: init_sys_streams: can't initialize sys standard streams
+Python runtime state: core initialized
+OSError: [Errno 9] Bad file descriptor
+
+Current thread 0x00000002021f8840 (most recent call first):
+  <no Python frame>
+WARNING:  WatchFiles detected changes in 'app/schemas/session.py'. Reloading...
+Fatal Python error: init_sys_streams: can't initialize sys standard streams
+Python runtime state: core initialized
+OSError: [Errno 9] Bad file descriptor
+
+Current thread 0x00000002021f8840 (most recent call first):
+  <no Python frame>
+WARNING:  WatchFiles detected changes in 'app/services/llm/prompt_loader.py'. Reloading...
+Fatal Python error: init_sys_streams: can't initialize sys standard streams
+Python runtime state: core initialized
+OSError: [Errno 9] Bad file descriptor
+
+Current thread 0x00000002021f8840 (most recent call first):
+  <no Python frame>
+WARNING:  WatchFiles detected changes in 'app/services/gemini.py'. Reloading...
+Fatal Python error: init_sys_streams: can't initialize sys standard streams
+Python runtime state: core initialized
+OSError: [Errno 9] Bad file descriptor
+
+Current thread 0x00000002021f8840 (most recent call first):
+  <no Python frame>
+WARNING:  WatchFiles detected changes in 'app/api/v1/sessions.py'. Reloading...
+Fatal Python error: init_sys_streams: can't initialize sys standard streams
+Python runtime state: core initialized
+OSError: [Errno 9] Bad file descriptor
+
+Current thread 0x00000002021f8840 (most recent call first):
+  <no Python frame>
+WARNING:  WatchFiles detected changes in 'app/api/router.py'. Reloading...
+Fatal Python error: init_sys_streams: can't initialize sys standard streams
+Python runtime state: core initialized
+OSError: [Errno 9] Bad file descriptor
+
+Current thread 0x00000002021f8840 (most recent call first):
+  <no Python frame>
+WARNING:  WatchFiles detected changes in 'migrations/versions/5f9760a07a67_add_session_phase_and_agentic_columns.py'. Reloading...
+Fatal Python error: init_sys_streams: can't initialize sys standard streams
+Python runtime state: core initialized
+OSError: [Errno 9] Bad file descriptor
+
+Current thread 0x00000002021f8840 (most recent call first):
+  <no Python frame>
+WARNING:  WatchFiles detected changes in 'migrations/versions/5f9760a07a67_add_session_phase_and_agentic_columns.py'. Reloading...
+Fatal Python error: init_sys_streams: can't initialize sys standard streams
+Python runtime state: core initialized
+OSError: [Errno 9] Bad file descriptor
+
+Current thread 0x00000002021f8840 (most recent call first):
+  <no Python frame>
+WARNING:  WatchFiles detected changes in 'migrations/versions/5f9760a07a67_add_session_phase_and_agentic_columns.py'. Reloading...
+Fatal Python error: init_sys_streams: can't initialize sys standard streams
+Python runtime state: core initialized
+OSError: [Errno 9] Bad file descriptor
+
+Current thread 0x00000002021f8840 (most recent call first):
+  <no Python frame>
+WARNING:  WatchFiles detected changes in 'tests/test_prompt_placeholders.py'. Reloading...
+Fatal Python error: init_sys_streams: can't initialize sys standard streams
+Python runtime state: core initialized
+OSError: [Errno 9] Bad file descriptor
+
+Current thread 0x00000002021f8840 (most recent call first):
+  <no Python frame>
+WARNING:  WatchFiles detected changes in 'tests/test_session_phase.py'. Reloading...
+Fatal Python error: init_sys_streams: can't initialize sys standard streams
+Python runtime state: core initialized
+OSError: [Errno 9] Bad file descriptor
+
+Current thread 0x00000002021f8840 (most recent call first):
+  <no Python frame>
+WARNING:  WatchFiles detected changes in 'tests/test_jargon_guard.py'. Reloading...
+Fatal Python error: init_sys_streams: can't initialize sys standard streams
+Python runtime state: core initialized
+OSError: [Errno 9] Bad file descriptor
+
+Current thread 0x00000002021f8840 (most recent call first):
+  <no Python frame>
+WARNING:  WatchFiles detected changes in 'tests/test_jargon_guard.py'. Reloading...
+Fatal Python error: init_sys_streams: can't initialize sys standard streams
+Python runtime state: core initialized
+OSError: [Errno 9] Bad file descriptor
+
+Current thread 0x00000002021f8840 (most recent call first):
+  <no Python frame>
+WARNING:  WatchFiles detected changes in 'tests/test_session_phase.py'. Reloading...
+Fatal Python error: init_sys_streams: can't initialize sys standard streams
+Python runtime state: core initialized
+OSError: [Errno 9] Bad file descriptor
+
+Current thread 0x00000002021f8840 (most recent call first):
+  <no Python frame>
+WARNING:  WatchFiles detected changes in 'tests/test_prompt_placeholders.py'. Reloading...
+Fatal Python error: init_sys_streams: can't initialize sys standard streams
+Python runtime state: core initialized
+OSError: [Errno 9] Bad file descriptor
+
+Current thread 0x00000002021f8840 (most recent call first):
+  <no Python frame>
+WARNING:  WatchFiles detected changes in 'app/services/llm/prompt_loader.py'. Reloading...
+Fatal Python error: init_sys_streams: can't initialize sys standard streams
+Python runtime state: core initialized
+OSError: [Errno 9] Bad file descriptor
+
+Current thread 0x00000002021f8840 (most recent call first):
+  <no Python frame>

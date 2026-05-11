@@ -14,6 +14,8 @@ from app.models.idol_timeline import IdolTimelineEvent
 from app.models.plan import Plan, PlanItem
 from app.models.plan_job import PlanGenerationJob
 from app.models.user_achievement import UserAchievement
+from app.models.user import User
+from app.models.user_profile import UserProfile
 from app.services.planning.generator import generate_plan
 
 logger = logging.getLogger(__name__)
@@ -135,7 +137,7 @@ async def _run_plan_generation_async(job_id: str) -> dict:
             # Step 3: Balancing workload (60-85%)
             await _update_job(db, job, step="balancing_workload", progress=65)
             
-            # Generate human-readable thinking first (streamed)
+            # Generate human-readable thinking concurrently
             try:
                 import openai
                 from app.core.config import settings as app_settings
@@ -148,61 +150,116 @@ async def _run_plan_generation_async(job_id: str) -> dict:
                 
                 thinking_system = "You are an inspiring AI coach who thinks out loud while crafting personalized development plans. Be warm and insightful."
                 
-                openai_client = openai.AsyncOpenAI(api_key=app_settings.openai_api_key)
-                thinking_text = ""
-                buffer = ""
-                last_update_time = asyncio.get_event_loop().time()
-                
-                stream = await openai_client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[
-                        {"role": "system", "content": thinking_system},
-                        {"role": "user", "content": thinking_prompt},
-                    ],
-                    stream=True,
-                    max_tokens=200,
-                    temperature=0.7,
-                )
-                
-                async for chunk in stream:
-                    delta = chunk.choices[0].delta
-                    if delta.content:
-                        content_piece = delta.content
-                        thinking_text += content_piece
-                        buffer += content_piece
-                        
-                        current_time = asyncio.get_event_loop().time()
-                        
-                        # Buffer updates to avoid slamming the DB (every 20 chars or 200ms)
-                        if len(buffer) >= 20 or (current_time - last_update_time) > 0.2:
-                            job.thinking_text = thinking_text
-                            await db.commit()
-                            buffer = ""
-                            last_update_time = current_time
+                async def _generate_thinking_stream_concurrently():
+                    try:
+                        async with async_session_maker() as stream_db:
+                            stream_stmt = select(PlanGenerationJob).where(PlanGenerationJob.id == job_id)
+                            stream_res = await stream_db.execute(stream_stmt)
+                            stream_job = stream_res.scalar_one_or_none()
                             
-                # Final flush
-                if buffer:
-                    job.thinking_text = thinking_text
-                    await db.commit()
+                            if not stream_job:
+                                return
+                                
+                            openai_client = openai.AsyncOpenAI(api_key=app_settings.openai_api_key)
+                            thinking_text = ""
+                            buffer = ""
+                            last_update_time = asyncio.get_event_loop().time()
+                            
+                            stream = await openai_client.chat.completions.create(
+                                model="gpt-4o-mini",
+                                messages=[
+                                    {"role": "system", "content": thinking_system},
+                                    {"role": "user", "content": thinking_prompt},
+                                ],
+                                stream=True,
+                                max_tokens=80,
+                                temperature=0.7,
+                            )
+                            
+                            async for chunk in stream:
+                                delta = chunk.choices[0].delta
+                                if delta.content:
+                                    content_piece = delta.content
+                                    thinking_text += content_piece
+                                    buffer += content_piece
+                                    
+                                    current_time = asyncio.get_event_loop().time()
+                                    
+                                    # Buffer updates to avoid slamming the DB (every 20 chars or 200ms)
+                                    if len(buffer) >= 20 or (current_time - last_update_time) > 0.2:
+                                        stream_job.thinking_text = thinking_text
+                                        await stream_db.commit()
+                                        buffer = ""
+                                        last_update_time = current_time
+                                        
+                            # Final flush
+                            if buffer:
+                                stream_job.thinking_text = thinking_text
+                                await stream_db.commit()
+                            
+                            logger.info(f"[PLANNING] Thinking generated: {len(thinking_text)} chars")
+                    except Exception as e:
+                        logger.warning(f"[PLANNING] Concurrent thinking stream failed: {e}")
                 
-                logger.info(f"[PLANNING] Thinking generated: {len(thinking_text)} chars")
+                logger.info(f"[PLANNING] Starting concurrent thinking stream...")
+                asyncio.create_task(_generate_thinking_stream_concurrently())
             except Exception as e:
-                logger.warning(f"[PLANNING] Thinking generation failed: {e}")
+                logger.warning(f"[PLANNING] Failed to start thinking stream: {e}")
                 job.thinking_text = f"Let me analyze {idol.name}'s journey and craft a personalized plan for you..."
                 await db.commit()
             
             await _update_job(db, job, progress=70)
             
-            plan_items_data = await generate_plan(
-                gaps=gaps,
-                duration_weeks=job.duration_weeks,
-                weekly_hours=job.weekly_hours,
-                target_age=job.target_age,
-                idol_profile=profile_for_llm,
+            # Load user data for context
+            user_stmt = select(User).where(User.id == job.user_id)
+            user_res = await db.execute(user_stmt)
+            user = user_res.scalar_one_or_none()
+            
+            u_prof_stmt = select(UserProfile).where(UserProfile.user_id == job.user_id)
+            u_prof_res = await db.execute(u_prof_stmt)
+            user_profile = u_prof_res.scalar_one_or_none()
+            
+            u_ach_stmt = select(UserAchievement).where(UserAchievement.user_id == job.user_id).limit(5)
+            u_ach_res = await db.execute(u_ach_stmt)
+            recent_achieves = list(u_ach_res.scalars().all())
+            
+            # Build Context String
+            context_parts = []
+            if user:
+                context_parts.append(f"User Age: {job.target_age if job.target_age else 'Unknown'}")
+            
+            if user_profile:
+                if user_profile.goals:
+                    context_parts.append(f"Stated Goals: {', '.join(user_profile.goals)}")
+                if user_profile.interests:
+                    context_parts.append(f"Interests: {', '.join(user_profile.interests)}")
+                if user_profile.learning_preferences:
+                     context_parts.append(f"Learning Preferences: {', '.join(user_profile.learning_preferences)}")
+            
+            if recent_achieves:
+                ach_txt = ", ".join([a.title for a in recent_achieves])
+                context_parts.append(f"Recent Wins: {ach_txt}")
+                
+            user_context_str = "\n".join(context_parts)
+
+            # Derive user goal from profile or default
+            user_goal = "personal and professional growth"
+            if user_profile and user_profile.goals:
+                 user_goal = user_profile.goals[0]
+            elif idol_profile and idol_profile.notable_themes:
+                user_goal = ", ".join(idol_profile.notable_themes[:3])
+            elif idol.domain and idol.domain != "general":
+                user_goal = f"excellence in {idol.domain}"
+            
+            roadmap = await generate_plan(
                 idol_name=idol.name,
-                idol_milestones=milestones_for_llm,
-                idol_persona=persona_for_llm,
+                user_goal=user_goal,
+                weekly_hours=job.weekly_hours,
+                duration_weeks=job.duration_weeks,
+                user_context=user_context_str,
             )
+            
+            plan_items_data = roadmap.items
             
             await _update_job(db, job, progress=85)
 
@@ -211,13 +268,17 @@ async def _run_plan_generation_async(job_id: str) -> dict:
             job.thinking_text = None
             await _update_job(db, job, step="finalizing_plan", progress=90)
             
-            # Create plan
+            # Create plan with roadmap metadata
             plan = Plan(
                 user_id=job.user_id,
                 idol_id=job.idol_id,
                 target_age=job.target_age,
                 duration_weeks=job.duration_weeks,
                 weekly_hours=job.weekly_hours,
+                roadmap_json={
+                    "roadmap_thesis": roadmap.roadmap_thesis,
+                    "anti_goals": roadmap.anti_goals,
+                },
             )
             db.add(plan)
             await db.flush()
@@ -245,8 +306,8 @@ async def _run_plan_generation_async(job_id: str) -> dict:
             job.plan_id = plan.id
             await _update_job(db, job, status="completed", step="done", progress=100)
             
-            # Pre-generate details for Week 1
-            await _enqueue_week1_details_generation_async(db, plan, job.user_id)
+            # Pre-generate details for all items, starting with Week 1
+            await _enqueue_all_details_generation_async(db, plan, job.user_id)
             
             return {"status": "completed", "plan_id": str(plan.id)}
 
@@ -334,24 +395,21 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
         
         await _update_job(db, job, progress=25)
 
-        # Load user profile
-        user_profile_dict = {}
+        # Load user profile for goal context + learning preferences
+        user_goal = "personal and professional growth"
+        user_learning_pref = "mixed"
         user_profile_stmt = select(UserProfile).where(UserProfile.user_id == user_id)
         user_profile_result = await db.execute(user_profile_stmt)
         user_profile = user_profile_result.scalar_one_or_none()
-        if user_profile:
-            user_profile_dict = {
-                "goals": user_profile.goals or [],
-                "interests": user_profile.interests or [],
-                "skills": user_profile.skills or {},
-                "weekly_hours": user_profile.weekly_hours,
-                "learning_preferences": user_profile.learning_preferences or [],
-            }
+        if user_profile and user_profile.goals:
+            user_goal = ", ".join(user_profile.goals[:3])
+        if user_profile and user_profile.learning_preferences:
+            user_learning_pref = ", ".join(user_profile.learning_preferences[:3])
         
         # Step 2: Generating curriculum
         await _update_job(db, job, step="generating_curriculum", progress=40)
         
-        # Generate human-readable thinking first (streamed)
+        # Generate human-readable thinking concurrently
         try:
             import openai
             from app.core.config import settings as app_settings
@@ -365,67 +423,73 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
             
             thinking_system = "You are a helpful AI coach who thinks out loud while creating detailed learning steps. Be practical and encouraging."
             
-            openai_client = openai.AsyncOpenAI(api_key=app_settings.openai_api_key)
-            thinking_text = ""
+            async def _generate_thinking_stream_concurrently():
+                try:
+                    async with async_session_maker() as stream_db:
+                        stream_stmt = select(PlanItemDetailJob).where(PlanItemDetailJob.id == job_id)
+                        stream_res = await stream_db.execute(stream_stmt)
+                        stream_job = stream_res.scalar_one_or_none()
+                        
+                        if not stream_job:
+                            return
+                            
+                        openai_client = openai.AsyncOpenAI(api_key=app_settings.openai_api_key)
+                        thinking_text = ""
+                        buffer = ""
+                        last_update_time = asyncio.get_event_loop().time()
+                        
+                        stream = await openai_client.chat.completions.create(
+                            model="gpt-4o-mini",
+                            messages=[
+                                {"role": "system", "content": thinking_system},
+                                {"role": "user", "content": thinking_prompt},
+                            ],
+                            stream=True,
+                            max_tokens=80,
+                            temperature=0.7,
+                        )
+                        
+                        async for chunk in stream:
+                            delta = chunk.choices[0].delta
+                            if delta.content:
+                                content_piece = delta.content
+                                thinking_text += content_piece
+                                buffer += content_piece
+                                
+                                current_time = asyncio.get_event_loop().time()
+                                
+                                # Buffer updates
+                                if len(buffer) >= 20 or (current_time - last_update_time) > 0.2:
+                                    stream_job.thinking_text = thinking_text
+                                    await stream_db.commit()
+                                    buffer = ""
+                                    last_update_time = current_time
+                        
+                        # Final flush
+                        if buffer:
+                            stream_job.thinking_text = thinking_text
+                            await stream_db.commit()
+                        
+                        logger.info(f"[PLAN_DETAILS] Thinking generated: {len(thinking_text)} chars")
+                except Exception as e:
+                    logger.warning(f"[PLAN_DETAILS] Concurrent thinking generation failed: {e}")
             
-            stream = await openai_client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": thinking_system},
-                    {"role": "user", "content": thinking_prompt},
-                ],
-                stream=True,
-                max_tokens=150,
-                temperature=0.7,
-            )
-            
-            async for chunk in stream:
-                delta = chunk.choices[0].delta
-                if delta.content:
-                    thinking_text += delta.content
-                    job.thinking_text = thinking_text
-                    await db.commit()
-            
-            logger.info(f"[PLAN_DETAILS] Thinking generated: {len(thinking_text)} chars")
+            logger.info(f"[PLAN_DETAILS] Starting concurrent thinking stream...")
+            asyncio.create_task(_generate_thinking_stream_concurrently())
         except Exception as e:
-            logger.warning(f"[PLAN_DETAILS] Thinking generation failed: {e}")
+            logger.warning(f"[PLAN_DETAILS] Failed to start thinking stream: {e}")
             job.thinking_text = f"Let me break down '{item.title}' into actionable steps..."
             await db.commit()
         
         await _update_job(db, job, progress=50)
         
-        # Build plan_item_json
-        plan_item_dict = {
-            "title": item.title,
-            "type": item.type.value if hasattr(item.type, 'value') else str(item.type),
-            "description": item.description,
-            "success_metric": item.success_metric,
-            "estimated_hours": item.estimated_hours,
-            "week_start": item.week_start,
-            "week_end": item.week_end,
-            "resource_title": item.resource_title,
-            "resource_url": item.resource_url,
-        }
-        
-        if item.meta_json:
-            plan_item_dict["detail_tags"] = item.meta_json.get("detail_tags", [])
-            plan_item_dict["primary_gap"] = item.meta_json.get("primary_gap")
-            plan_item_dict["suggested_queries"] = item.meta_json.get("suggested_queries", [])
-            plan_item_dict["idol_parallel"] = item.meta_json.get("idol_parallel")
-            plan_item_dict["difficulty"] = item.meta_json.get("difficulty")
-        
-        readiness_by_gap = user_profile.readiness_by_gap if user_profile and user_profile.readiness_by_gap else {}
-        
-        # Render prompt
+        # Render prompt with 3-var schema (task, goal, learning preference)
         prompt = load_and_render(
             "plan_item_details.txt",
             {
-                "idol_name": idol_name,
-                "idol_persona_json": idol_persona_dict,
-                "user_profile_json": user_profile_dict,
-                "plan_item_json": plan_item_dict,
-                "readiness_by_gap_json": readiness_by_gap,
-                "allowed_resources_json": [],
+                "task_title": item.title,
+                "user_goal": user_goal,
+                "learning_preferences": user_learning_pref,
             },
             strict=True,
         )
@@ -434,7 +498,7 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
         
         try:
             system_prompt = load_and_render("extractor_system.txt", {}, strict=False)
-            client = get_llm_client()
+            client = get_llm_client(max_tokens=16000)
             llm_response = await client.generate_json(
                 system_prompt=system_prompt,
                 user_prompt=prompt,
@@ -445,14 +509,40 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                 return {"status": "failed", "error": llm_response.error}
             
             details = llm_response.data
-            
-            # Step 3: Finalizing steps
-            await _update_job(db, job, step="finalizing_steps", progress=85)
-            
-            # Import normalization here to avoid circular dependencies
+
+            # Normalize before URL/resource resolution so `kind` aliases become `type`
+            # and book/video resources can be deduplicated reliably.
             from app.tasks.ingestion import _normalize_plan_item_details
             details = _normalize_plan_item_details(details)
             
+            # Step 3: Resolve material URLs via Tavily (real web search)
+            await _update_job(db, job, step="resolving_materials", progress=75)
+            try:
+                from app.services.tavily import resolve_material_urls
+                from app.services.content_resources import (
+                    attach_content_resources_to_materials,
+                    sync_plan_item_content_resource_links,
+                )
+                raw_materials = details.get("materials", [])
+                if raw_materials:
+                    details["materials"] = await resolve_material_urls(raw_materials)
+                    details["materials"] = await attach_content_resources_to_materials(
+                        db,
+                        details["materials"],
+                        user_goal=user_goal,
+                    )
+                    await sync_plan_item_content_resource_links(
+                        db,
+                        plan_item_id=item.id,
+                        materials=details["materials"],
+                    )
+                    logger.info(f"[PLAN_DETAILS] Resolved {len(details['materials'])} material URLs via Google Search")
+            except Exception as resolve_err:
+                logger.warning(f"[PLAN_DETAILS] URL resolution failed, using fallbacks: {resolve_err}")
+            
+            # Step 4: Finalizing steps
+            await _update_job(db, job, step="finalizing_steps", progress=85)
+
             details["generated_at"] = datetime.now(timezone.utc).isoformat()
             
             from app.tasks.ingestion import sanitize_for_postgres
@@ -486,19 +576,15 @@ async def _update_job(db, job, progress=None, status=None, step=None, error_mess
     db.add(job)
     await db.commit()
 
-async def _enqueue_week1_details_generation_async(db, plan, user_id):
-    """Enqueue detail generation for all items in Week 1."""
+async def _enqueue_all_details_generation_async(db, plan, user_id):
+    """Enqueue detail generation for all plan items."""
     from app.models.item_detail_job import PlanItemDetailJob
     
     # Explicitly load items to avoid lazy loading (greenlet_spawn error)
     items_stmt = (
         select(PlanItem)
-        .where(
-            and_(
-                PlanItem.plan_id == plan.id,
-                PlanItem.week_start == 1,
-            )
-        )
+        .where(PlanItem.plan_id == plan.id)
+        .order_by(PlanItem.week_start.asc(), PlanItem.id.asc())
     )
     items_result = await db.execute(items_stmt)
     items = list(items_result.scalars().all())
@@ -513,7 +599,7 @@ async def _enqueue_week1_details_generation_async(db, plan, user_id):
         db.add(job)
         await db.flush()
         
-        # Enqueue task
-        regenerate_plan_item_details.delay(job.id)
+        # Enqueue task to low priority so interactive features aren't blocked
+        regenerate_plan_item_details.apply_async(args=[job.id], queue="low_priority")
     
-    logger.info(f"[PLANNING] Enqueued {len(items)} items for detail generation (Week 1)")
+    logger.info(f"[PLANNING] Enqueued {len(items)} items for detail generation (All Weeks)")

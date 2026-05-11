@@ -50,13 +50,13 @@ async def _run_suggestions_async(job_id: str) -> dict:
 
         interests = job.interests or ""
         interest_list = [i.strip().lower() for i in interests.split(",") if i.strip()]
-        limit = 20 # Default
+        limit = 5 # Reduced from 20. Massively speeds up LLM token output duration
 
         try:
             # Step 1: Analyzing interests (Local search)
             await _update_job(db, job, status="running", step="analyzing_interests", progress=10)
             
-            local_limit = 12
+            local_limit = 5
             local_query = (
                 select(
                     Idol,
@@ -90,6 +90,10 @@ async def _run_suggestions_async(job_id: str) -> dict:
                     "name": idol.name,
                     "birthDate": idol.birth_date.isoformat() if idol.birth_date else None,
                     "domain": idol.domain,
+                    "imageUrl": idol.image_url,
+                    "imageSourceUrl": idol.image_source_url,
+                    "imageLicense": idol.image_license,
+                    "imageAttribution": idol.image_attribution_json,
                     "aliases": [
                         {"id": str(a.id), "alias_text": a.alias_text}
                         for a in idol.aliases
@@ -146,12 +150,22 @@ async def _run_suggestions_async(job_id: str) -> dict:
                             temperature=0.7,
                         )
                         
+                        import time
+                        last_commit_time = time.time()
+                        
                         async for chunk in stream:
                             delta = chunk.choices[0].delta
                             if delta.content:
                                 thinking_text += delta.content
                                 job.thinking_text = thinking_text
-                                await db.commit()
+                                current_time = time.time()
+                                if current_time - last_commit_time > 1.0:
+                                    await db.commit()
+                                    last_commit_time = current_time
+                        
+                        # Final commit for thinking text
+                        job.thinking_text = thinking_text
+                        await db.commit()
                         
                         logger.info(f"[SUGGEST] Thinking generated: {len(thinking_text)} chars")
                     except Exception as e:
@@ -162,12 +176,14 @@ async def _run_suggestions_async(job_id: str) -> dict:
                 await _update_job(db, job, progress=50)
                 
                 # Now generate the actual idol candidates (JSON)
+                # Request just the remaining items, capped to a maximum of 5 to preserve latency
+                llm_limit = min(remaining, 5) 
                 system_prompt = "You are a knowledge assistant that helps discover notable people as role models. Be concise."
                 user_template = load_prompt("idol_discover")
                 user_prompt = render_prompt(user_template, {
                     "interests_json_array": json.dumps(interest_list),
                     "user_age": "null",
-                    "limit": str(remaining + 5),
+                    "limit": str(llm_limit),
                 }, prompt_name="idol_discover.txt")
                 
                 validated, response = await client.generate_and_validate(

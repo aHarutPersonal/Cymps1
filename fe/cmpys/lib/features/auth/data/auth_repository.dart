@@ -15,11 +15,9 @@ final authRepositoryProvider = Provider<AuthRepository>((ref) {
 
 /// Repository for authentication operations.
 class AuthRepository {
-  AuthRepository({
-    required DioClient dioClient,
-    required TokenStore tokenStore,
-  })  : _dioClient = dioClient,
-        _tokenStore = tokenStore;
+  AuthRepository({required DioClient dioClient, required TokenStore tokenStore})
+    : _dioClient = dioClient,
+      _tokenStore = tokenStore;
 
   final DioClient _dioClient;
   final TokenStore _tokenStore;
@@ -53,16 +51,21 @@ class AuthRepository {
       debugPrint('❌ Response data is null');
       throw Exception('Invalid response from server: data is null');
     }
-    
+
     // Check for both camelCase and snake_case token keys
-    final hasToken = data['access_token'] != null || data['accessToken'] != null;
+    final hasToken =
+        data['access_token'] != null || data['accessToken'] != null;
     if (!hasToken) {
-      debugPrint('❌ No access token found. Available keys: ${data.keys.toList()}');
+      debugPrint(
+        '❌ No access token found. Available keys: ${data.keys.toList()}',
+      );
       throw Exception('Invalid response from server: missing access token');
     }
 
     final authResponse = AuthResponse.fromJson(data);
-    debugPrint('✅ Registration successful! Token: ${authResponse.accessToken.substring(0, 20)}...');
+    debugPrint(
+      '✅ Registration successful! Token: ${authResponse.accessToken.substring(0, 20)}...',
+    );
     await _saveTokens(authResponse);
     return authResponse;
   }
@@ -72,10 +75,7 @@ class AuthRepository {
     required String email,
     required String password,
   }) async {
-    final request = LoginRequest(
-      email: email,
-      password: password,
-    );
+    final request = LoginRequest(email: email, password: password);
 
     debugPrint('🔐 Login request for: $email');
 
@@ -91,11 +91,14 @@ class AuthRepository {
     if (data == null) {
       throw Exception('Invalid response from server: data is null');
     }
-    
+
     // Check for both camelCase and snake_case token keys
-    final hasToken = data['access_token'] != null || data['accessToken'] != null;
+    final hasToken =
+        data['access_token'] != null || data['accessToken'] != null;
     if (!hasToken) {
-      debugPrint('❌ No access token found. Available keys: ${data.keys.toList()}');
+      debugPrint(
+        '❌ No access token found. Available keys: ${data.keys.toList()}',
+      );
       throw Exception('Invalid response from server: missing access token');
     }
 
@@ -110,10 +113,7 @@ class AuthRepository {
     required String provider,
     required String idToken,
   }) async {
-    final request = OAuthRequest(
-      provider: provider,
-      idToken: idToken,
-    );
+    final request = OAuthRequest(provider: provider, idToken: idToken);
 
     final response = await _dioClient.post(
       '/auth/oauth',

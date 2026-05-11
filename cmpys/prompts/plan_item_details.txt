@@ -1,77 +1,78 @@
-Generate detailed sub-steps and learning materials for a SINGLE plan item.
+You are a world-class learning curriculum designer and high-performance coach.
 
-INPUT:
-- idol_name: "{idol_name}"
-- idol_persona_json:
-{idol_persona_json}
-- user_profile_json:
-{user_profile_json}
-- readiness_by_gap_json:
-{readiness_by_gap_json}
-- plan_item_json (one item only):
-{plan_item_json}
-- allowed_resources_json (may be empty):
-{allowed_resources_json}
+The user needs to complete this fundamental task: "{task_title}"
+Their overarching goal: {user_goal}
+Their preferred learning style: {learning_preferences}
 
-GOAL:
-Turn the plan item into:
-1) 3–7 concrete steps (checkbox-able)
-2) learning materials for each step:
-   - Always include at least 1 in-app lesson (markdown) per item (or per critical step)
-   - Optionally include safe external “search links” (deterministic URLs built from query)
-   - Avoid hallucinated exact course URLs unless allowed_resources_json provides them.
+Design an **immediately actionable**, 100% useful execution protocol with rich sub-steps and curated learning resources that will help the user achieve this specific task as fast and effectively as possible.
 
-IMPORTANT PERSONALIZATION:
-- Use user_profile_json to scale difficulty.
-- If readiness_by_gap says beginner in relevant category, add prerequisite steps first.
-- Steps must produce artifacts and be measurable.
+CRITICAL RULES:
+1. **STEPS = SKILL-BUILDING LESSONS, NOT ADVICE.** Each step must teach the user a REAL skill or technique they can practice. 
+   - ❌ BAD: "Read this book", "Add 50 people on LinkedIn", "Watch this course", "Network with experts"  
+   - ✅ GOOD: "Master the core framework of [topic]", "Practice [specific technique] with these exercises", "Build [specific artifact]", "Apply [method] to your current situation"
+   Books, articles, videos = MATERIALS (attached below steps). They are NOT steps themselves.
+   Advice like "network", "connect with people", "stay consistent" = NOT steps. Steps must TEACH something concrete.
+2. **EACH STEP HAS A FULL LESSON.** Every step MUST include a `lesson_content` field — a full markdown lesson (150-300 words) that teaches the user exactly how to execute that step. This is the CORE VALUE. Write it as a comprehensive, readable article with:
+   - Clear ## section headers
+   - Concrete examples, templates, frameworks, or scripts they can copy-paste
+   - Real-world context and reasoning ("why this works")
+   - Exercises or practice prompts the user can do RIGHT NOW
+   - Bold key terms and action items
+   The lesson should be detailed enough that the user can read it and immediately know how to do the step without any other resource.
+3. **100% USEFUL MATERIALS.** Do not suggest generic ideas. Suggest specific, highly effective, renowned, or industry-standard materials.
+4. **PRECISE REUSABLE MATERIAL METADATA.** Every material must be specific enough for the backend to find or create exactly one shared `content_resource`.
+   - For books: output the exact `title`, exact `author_or_creator`, and `search_query` as "Exact Book Title Author Name".
+   - For videos: output the exact `title` when known, `author_or_creator` as channel/creator when known, and a YouTube-style `search_query`.
+   - For articles/courses/tools: include creator/platform when known.
+5. **PRECISE SEARCH QUERIES.** For materials, output a `search_query` field — a highly optimized, specific search string.
+   - For videos: write query as if searching YouTube. Include creator/channel name and specific topic.
+   - For books: write the exact book title + author name
+   - For courses: write the exact course topic + platform
+   Do NOT invent URLs. Only provide `search_query`.
+6. **MATCH PREFERENCES.** PRIORITIZE material types matching the user's learning preference.
+7. **NO HALLUCINATIONS.** Only recommend REAL, existing books, courses, and tools.
+8. **IN-APP BOOK MODULES.** For any book material, set `type` to `"book"` and provide an `ideas` array (5-8 cards) plus `content_markdown` for a reusable 15-minute book summary module. Each idea: `title` (max 50 chars), `content` (2-3 actionable sentences), `category` (Mindset|Strategy|Productivity|Leadership|Creativity|Finance|Communication|Habits).
+9. **FULL LESSON CONTENT FOR MATERIALS.** For `book` and `in_app_lesson` materials, provide a `content_markdown` field — 150-300 word markdown article.
+10. **ALWAYS INCLUDE AT LEAST 1 VIDEO.** Every task should have at least one video material with type "video" and a detailed `search_query`.
 
-HISTORICAL IDOL GUARD (if idol is historical):
-- Avoid modern MBA jargon (“MVP”, “market”, “competitors”, “go-to-market”, etc.)
-- Use the idol’s worldview metaphors lightly but keep tasks modern & executable.
-
-RESOURCE POLICY:
-If allowed_resources_json is empty:
-- Do NOT output specific book/course URLs.
-- You MAY output kind="search" materials with URL as a deterministic search page:
-  - YouTube: https://www.youtube.com/results?search_query={query}
-  - OpenLibrary: https://openlibrary.org/search?q={query}
-  - Google: https://www.google.com/search?q={query}
-These URLs must be formed only from the query you generate.
-
-If allowed_resources_json is provided:
-- You may include kind="link" with exact title+url from allowed_resources_json only.
-
-OUTPUT JSON ONLY:
-
+OUTPUT FORMAT (strict JSON, no extra keys, no markdown):
 {
   "steps": [
     {
       "id": "step_1",
-      "title": "string",
-      "instruction": "string (1–4 sentences, concrete)",
-      "expected_output": "string (artifact)",
+      "title": "Short, action-verb title — MUST be a skill/technique to learn (max 60 chars)",
+      "description": "1-2 sentence summary of the skill or technique this step teaches.",
       "estimate_minutes": 30,
-      "order": 1,
-      "resources": ["material_id_1", "material_id_2"]
+      "lesson_content": "# Step Title\n\nFull markdown lesson (150-300 words). This is a REAL lesson that teaches the user a skill. Include ## headers, examples, exercises, frameworks.",
+      "substeps": [
+        "Practice exercise 1: specific thing to do",
+        "Practice exercise 2: next specific practice",
+        "Validation: how to confirm you've mastered this"
+      ]
     }
   ],
   "materials": [
     {
-      "id": "material_id_1",
-      "kind": "in_app_lesson|search|link",
-      "title": "string",
-      "url": "string|null",
-      "content_markdown": "string|null",
-      "duration_minutes": 10,
-      "reason": "string (why this helps this step)"
+      "title": "Exact Resource Title",
+      "type": "book|video|in_app_lesson|article|course|tool",
+      "author_or_creator": "Exact author, channel, creator, platform, or null",
+      "search_query": "highly specific search query to find this resource",
+      "duration_minutes": 15,
+      "canonical_hint": "book:author_slug:title_slug or youtube search phrase if URL is unresolved",
+      "source_strategy": "public_domain_or_licensed_lookup|youtube_lookup|external_link_lookup|llm_summary_fallback",
+      "reason": "One sentence on how this resource helps.",
+      "content_markdown": "150-300 word reusable lesson/module (REQUIRED for book and in_app_lesson only).",
+      "ideas": [
+        {
+          "title": "Punchy headline (max 50 chars)",
+          "content": "Key insight in 2-3 actionable sentences.",
+          "category": "Mindset|Strategy|Productivity|Leadership|Creativity|Finance|Communication|Habits"
+        }
+      ]
     }
-  ]
+  ],
+  "definition_of_done": "One precise sentence: the binary completion criteria.",
+  "mental_model": "Name of 1 specific mental model that unlocks efficiency for this task."
 }
 
-QUALITY RULES:
-- Steps: 3–7
-- At least 1 in_app_lesson in materials with content_markdown that fits 1–2 phone screens:
-  - headings + bullets + a tiny exercise
-- Each step must reference at least 1 material_id
-- Use clear, non-generic instructions (“write a 1-page brief”, “do 5 interviews”, “summarize patterns”, “draft a checklist”)
+Provide 2-4 high-leverage steps. Each step MUST be a skill-building lesson with full lesson_content (150-300 words) and 2-4 practice substeps. Steps must TEACH, not advise. Provide 3-5 elite materials. Prefer at least 1 material type "book" with exact author, 5-8 ideas, and content_markdown. At least 1 MUST be type "video".

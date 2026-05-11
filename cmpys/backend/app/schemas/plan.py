@@ -88,6 +88,10 @@ class PlanResponse(BaseModel):
     items: list[PlanItemResponse] = []
     createdAt: datetime
     
+    # Roadmap-level data from plan_generate.txt
+    roadmapThesis: str | None = None
+    antiGoals: list[str] = []
+    
     # Computed fields
     totalItems: int = 0
     completedItems: int = 0
@@ -110,17 +114,33 @@ class StepDetail(BaseModel):
     estimate_minutes: int | None = None  # Estimated time for this step
     order: int | None = None  # Step order (1-based)
     resources: list[str] | None = None  # Material IDs referenced by this step
+    substeps: list[str] | None = None  # Tactical sub-actions
+    lesson_content: str | None = None  # Full markdown lesson for this step
+
+
+class BookIdeaDetail(BaseModel):
+    """A single Deepstash-style idea card from a book."""
+    title: str
+    content: str
+    category: str = "Mindset"
 
 
 class MaterialDetail(BaseModel):
     """A material/resource for a plan item."""
     title: str
     url: str | None = None
-    type: str | None = None  # e.g., "book", "article", "video", "tool"
+    type: str | None = None  # e.g., "book", "article", "video", "in_app_lesson"
+    content_resource_id: str | None = None  # Shared content_resources.id
+    canonical_key: str | None = None  # Stable shared-resource key
+    author_or_creator: str | None = None
+    thumbnail_url: str | None = None
+    license_status: str | None = None
+    search_query: str | None = None
     # Additional fields from LLM prompt schema
     content_markdown: str | None = None  # In-app lesson content
     duration_minutes: int | None = None  # Estimated duration
     reason: str | None = None  # Why this material helps
+    ideas: list[BookIdeaDetail] | None = None  # Deepstash-style idea cards
 
 
 class ItemDetails(BaseModel):

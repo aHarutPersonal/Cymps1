@@ -67,7 +67,8 @@ class DioClient {
         'Accept': 'application/json',
       },
       // Only treat 2xx responses as valid; everything else throws
-      validateStatus: (status) => status != null && status >= 200 && status < 300,
+      validateStatus: (status) =>
+          status != null && status >= 200 && status < 300,
     );
   }
 
@@ -87,61 +88,61 @@ class DioClient {
 
   /// Auth interceptor - automatically adds Authorization header.
   InterceptorsWrapper get _authInterceptor => InterceptorsWrapper(
-        onRequest: (options, handler) async {
-          // Skip auth for public endpoints
-          if (options.extra['skipAuth'] == true) {
-            return handler.next(options);
-          }
+    onRequest: (options, handler) async {
+      // Skip auth for public endpoints
+      if (options.extra['skipAuth'] == true) {
+        return handler.next(options);
+      }
 
-          // Get token from secure storage
-          final token = await _tokenStore.readAccessToken();
-          if (token != null && token.isNotEmpty) {
-            options.headers['Authorization'] = 'Bearer $token';
-          }
+      // Get token from secure storage
+      final token = await _tokenStore.readAccessToken();
+      if (token != null && token.isNotEmpty) {
+        options.headers['Authorization'] = 'Bearer $token';
+      }
 
-          handler.next(options);
-        },
-      );
+      handler.next(options);
+    },
+  );
 
   /// Error interceptor - maps DioException to typed errors and handles 401 Refresh.
   InterceptorsWrapper get _errorInterceptor => InterceptorsWrapper(
-        onError: (error, handler) async {
-          // Handle 401 Unauthorized - Refresh Token Flow
-          if (error.response?.statusCode == 401) {
-            // Attempt to refresh token
-            if (await _refreshToken()) {
-              // Retry original request with new token
-              try {
-                final options = error.requestOptions;
-                final newToken = await _tokenStore.readAccessToken();
-                if (newToken != null) {
-                  options.headers['Authorization'] = 'Bearer $newToken';
-                }
-                
-                final response = await _dio.fetch(options);
-                return handler.resolve(response);
-              } catch (e) {
-                // If retry fails, continue with original error
-              }
-            } else {
-              // Refresh failed - Clear session (Logout)
-              await _tokenStore.clear();
+    onError: (error, handler) async {
+      // Handle 401 Unauthorized - Refresh Token Flow
+      if (error.response?.statusCode == 401) {
+        // Attempt to refresh token
+        if (await _refreshToken()) {
+          // Retry original request with new token
+          try {
+            final options = error.requestOptions;
+            final newToken = await _tokenStore.readAccessToken();
+            if (newToken != null) {
+              options.headers['Authorization'] = 'Bearer $newToken';
             }
-          }
-          
-          final apiError = _mapError(error);
 
-          // Create a new DioException with our typed error
-          handler.reject(
-            DioException(
-              requestOptions: error.requestOptions,
-              response: error.response,
-              type: error.type,
-              error: apiError,
-            ),
-          );
-        },
+            final response = await _dio.fetch(options);
+            return handler.resolve(response);
+          } catch (e) {
+            // If retry fails, continue with original error
+          }
+        } else {
+          // Refresh failed - Clear session (Logout)
+          await _tokenStore.clear();
+        }
+      }
+
+      final apiError = _mapError(error);
+
+      // Create a new DioException with our typed error
+      handler.reject(
+        DioException(
+          requestOptions: error.requestOptions,
+          response: error.response,
+          type: error.type,
+          error: apiError,
+        ),
       );
+    },
+  );
 
   bool _isRefreshing = false;
 
@@ -156,7 +157,7 @@ class DioClient {
 
       // Use a new Dio instance to avoid interceptor loops
       final refreshDio = Dio(BaseOptions(baseUrl: Env.apiBaseUrl));
-      
+
       final response = await refreshDio.post(
         '/auth/refresh',
         data: {'refreshToken': refreshToken},
@@ -198,7 +199,9 @@ class DioClient {
     },
     onError: (error, handler) {
       // ignore: avoid_print
-      print('✗ ${error.response?.statusCode ?? 'ERR'} ${error.requestOptions.uri}');
+      print(
+        '✗ ${error.response?.statusCode ?? 'ERR'} ${error.requestOptions.uri}',
+      );
       handler.next(error);
     },
   );
@@ -224,7 +227,6 @@ class DioClient {
         return const ApiError(message: 'Request cancelled');
 
       case DioExceptionType.unknown:
-      default:
         if (e.error is ApiError) {
           return e.error as ApiError;
         }
@@ -246,7 +248,8 @@ class DioClient {
     String? code;
 
     if (data is Map<String, dynamic>) {
-      message = data['message']?.toString() ??
+      message =
+          data['message']?.toString() ??
           data['error']?.toString() ??
           data['detail']?.toString();
       code = data['code']?.toString();

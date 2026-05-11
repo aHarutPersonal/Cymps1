@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../app/design_tokens.dart';
 
-/// Card component with consistent styling.
+/// Card component with consistent dark glass styling.
 class CmpysCard extends StatelessWidget {
   const CmpysCard({
     super.key,
@@ -14,7 +14,7 @@ class CmpysCard extends StatelessWidget {
     this.borderColor,
     this.borderRadius,
     this.borderWidth = 1,
-    this.showBorder = true,
+    this.showBorder = false, // prototype: flat cards by default
     this.shadow,
   });
 
@@ -36,23 +36,18 @@ class CmpysCard extends StatelessWidget {
       margin: margin,
       decoration: BoxDecoration(
         color: backgroundColor ?? AppColors.surface,
-        borderRadius: borderRadius ?? AppRadii.br16,
-        border: showBorder
-            ? Border.all(
-                color: borderColor ?? AppColors.borderLight,
-                width: borderWidth,
-              )
-            : null,
-        boxShadow: shadow,
+        borderRadius: borderRadius ?? AppRadii.br24,
+        border: Border.all(
+          color: borderColor ?? AppColors.glassBorder,
+          width: borderWidth,
+        ),
+        boxShadow: shadow ?? AppShadows.sm,
       ),
       child: child,
     );
 
     if (onTap != null) {
-      return GestureDetector(
-        onTap: onTap,
-        child: content,
-      );
+      return GestureDetector(onTap: onTap, child: content);
     }
 
     return content;
@@ -82,12 +77,9 @@ class CmpysGradientCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final radius = borderRadius ?? AppRadii.br16;
-    final defaultGradient = LinearGradient(
-      colors: [
-        AppColors.emerald.withOpacity(0.3),
-        AppColors.blue.withOpacity(0.1),
-      ],
+    final radius = borderRadius ?? AppRadii.br24; // prototype highly rounded
+    const defaultGradient = LinearGradient(
+      colors: [AppColors.brandAccent, AppColors.mint],
       begin: Alignment.topLeft,
       end: Alignment.bottomRight,
     );
@@ -97,9 +89,7 @@ class CmpysGradientCard extends StatelessWidget {
       padding: padding ?? AppSpacing.p20,
       decoration: BoxDecoration(
         color: AppColors.surface,
-        borderRadius: BorderRadius.circular(
-          radius.topLeft.x - borderWidth,
-        ),
+        borderRadius: BorderRadius.circular(radius.topLeft.x - borderWidth),
       ),
       child: child,
     );
@@ -114,10 +104,7 @@ class CmpysGradientCard extends StatelessWidget {
     );
 
     if (onTap != null) {
-      return GestureDetector(
-        onTap: onTap,
-        child: content,
-      );
+      return GestureDetector(onTap: onTap, child: content);
     }
 
     return content;
@@ -142,18 +129,13 @@ class CmpysSectionHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: padding ??
-          const EdgeInsets.only(
-            top: AppSpacing.s24,
-            bottom: AppSpacing.s12,
-          ),
+      padding:
+          padding ??
+          const EdgeInsets.only(top: AppSpacing.s24, bottom: AppSpacing.s12),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(
-            title.toUpperCase(),
-            style: AppTypography.captionUpper,
-          ),
+          Text(title.toUpperCase(), style: AppTypography.captionUpper),
           if (action != null)
             GestureDetector(
               onTap: onActionTap,

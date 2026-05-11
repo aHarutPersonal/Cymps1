@@ -37,7 +37,8 @@ class IntakeReady extends IntakeState {
   IntakeQuestion get currentQuestion => questions[currentIndex];
   bool get isFirstQuestion => currentIndex == 0;
   bool get isLastQuestion => currentIndex == questions.length - 1;
-  double get progress => questions.isEmpty ? 0 : (currentIndex + 1) / questions.length;
+  double get progress =>
+      questions.isEmpty ? 0 : (currentIndex + 1) / questions.length;
   int get answeredCount => answers.length;
 
   IntakeReady copyWith({
@@ -60,10 +61,7 @@ class IntakeReady extends IntakeState {
 }
 
 class IntakeCompleted extends IntakeState {
-  const IntakeCompleted({
-    required this.jobId,
-    this.idolId,
-  });
+  const IntakeCompleted({required this.jobId, this.idolId});
 
   final String jobId;
   final String? idolId;
@@ -77,16 +75,14 @@ class IntakeError extends IntakeState {
 /// Intake controller provider.
 final intakeControllerProvider =
     StateNotifierProvider.autoDispose<IntakeController, IntakeState>((ref) {
-  return IntakeController(
-    repository: ref.watch(intakeRepositoryProvider),
-  );
-});
+      return IntakeController(repository: ref.watch(intakeRepositoryProvider));
+    });
 
 /// Controller for the intake wizard flow.
 class IntakeController extends StateNotifier<IntakeState> {
   IntakeController({required IntakeRepository repository})
-      : _repository = repository,
-        super(const IntakeInitial());
+    : _repository = repository,
+      super(const IntakeInitial());
 
   final IntakeRepository _repository;
 
@@ -189,7 +185,8 @@ class IntakeController extends StateNotifier<IntakeState> {
     final answer = current.answers[current.currentQuestion.id];
 
     // Validate required questions
-    if (current.currentQuestion.isRequired && (answer == null || answer == '')) {
+    if (current.currentQuestion.isRequired &&
+        (answer == null || answer == '')) {
       state = current.copyWith(error: 'This question is required');
       return false;
     }
@@ -256,7 +253,8 @@ class IntakeController extends StateNotifier<IntakeState> {
 
     // Submit last answer if not submitted
     final lastAnswer = current.answers[current.currentQuestion.id];
-    if (current.currentQuestion.isRequired && (lastAnswer == null || lastAnswer == '')) {
+    if (current.currentQuestion.isRequired &&
+        (lastAnswer == null || lastAnswer == '')) {
       state = current.copyWith(error: 'This question is required');
       return;
     }
@@ -276,10 +274,7 @@ class IntakeController extends StateNotifier<IntakeState> {
       // Finish intake
       final response = await _repository.finishIntake(current.sessionId);
 
-      state = IntakeCompleted(
-        jobId: response.jobId,
-        idolId: response.idolId,
-      );
+      state = IntakeCompleted(jobId: response.jobId, idolId: response.idolId);
     } catch (e) {
       debugPrint('❌ Failed to finish intake: $e');
       state = current.copyWith(

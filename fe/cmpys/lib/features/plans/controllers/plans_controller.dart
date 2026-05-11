@@ -1,9 +1,11 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/api_error.dart';
 import '../../auth/controllers/session_controller.dart';
 import '../../idols/data/jobs_repository.dart';
 import '../../idols/models/job_models.dart';
+import '../../idols/data/idols_repository.dart';
 import '../data/plans_repository.dart';
 import '../models/plan_models.dart';
 
@@ -31,13 +33,10 @@ class PlansGenerating extends PlansState {
 }
 
 class PlansLoaded extends PlansState {
-  const PlansLoaded({
-    required this.plan,
-    this.weekSummaries = const {},
-  });
-  
+  const PlansLoaded({required this.plan, this.weekSummaries = const {}});
+
   final Plan plan;
-  
+
   /// Cached week summaries by week number
   final Map<int, WeekSummary> weekSummaries;
 
@@ -78,10 +77,7 @@ class PlansLoaded extends PlansState {
 
   /// Create a copy with updated plan
   PlansLoaded copyWithPlan(Plan newPlan) {
-    return PlansLoaded(
-      plan: newPlan,
-      weekSummaries: weekSummaries,
-    );
+    return PlansLoaded(plan: newPlan, weekSummaries: weekSummaries);
   }
 }
 
@@ -93,13 +89,14 @@ class PlansError extends PlansState {
 /// Plans controller provider.
 final plansControllerProvider =
     StateNotifierProvider<PlansController, PlansState>((ref) {
-  return PlansController(
-    plansRepository: ref.watch(plansRepositoryProvider),
-    jobsRepository: ref.watch(jobsRepositoryProvider),
-    currentIdolId: ref.watch(currentIdolIdProvider),
-    sessionController: ref.watch(sessionControllerProvider.notifier),
-  );
-});
+      return PlansController(
+        plansRepository: ref.watch(plansRepositoryProvider),
+        jobsRepository: ref.watch(jobsRepositoryProvider),
+        currentIdolId: ref.watch(currentIdolIdProvider),
+        sessionController: ref.watch(sessionControllerProvider.notifier),
+        idolsRepository: ref.watch(idolsRepositoryProvider),
+      );
+    });
 
 /// Controller for plans screen.
 class PlansController extends StateNotifier<PlansState> {
@@ -108,16 +105,24 @@ class PlansController extends StateNotifier<PlansState> {
     required JobsRepository jobsRepository,
     required String? currentIdolId,
     required SessionController sessionController,
-  })  : _plansRepository = plansRepository,
-        _jobsRepository = jobsRepository,
-        _currentIdolId = currentIdolId,
-        _sessionController = sessionController,
-        super(const PlansInitial());
+    required IdolsRepository idolsRepository,
+  }) : _plansRepository = plansRepository,
+       _jobsRepository = jobsRepository,
+       _currentIdolId = currentIdolId,
+       _sessionController = sessionController,
+       _idolsRepository = idolsRepository,
+       super(const PlansInitial());
 
   final PlansRepository _plansRepository;
   final JobsRepository _jobsRepository;
   final String? _currentIdolId;
   final SessionController _sessionController;
+  final IdolsRepository _idolsRepository;
+
+  bool _isStaleIdolError(ApiError error) {
+    return error.isNotFoundError &&
+        error.message.toLowerCase().contains('idol');
+  }
 
   /// Load current plan.
   /// Calls GET /plans/current
@@ -134,13 +139,26 @@ class PlansController extends StateNotifier<PlansState> {
       }
     } on ApiError catch (e) {
       // 404 means no plan exists
-      if (e.statusCode == 404) {
+      if (_isStaleIdolError(e)) {
+        await _sessionController.clearCurrentIdolId();
+        state = const PlansError(message: 'Choose an idol to continue');
+      } else if (e.statusCode == 404) {
         state = const PlansNoPlan();
       } else {
         state = PlansError(message: e.message);
       }
     } catch (e) {
       state = PlansError(message: e.toString());
+    }
+  }
+
+  Future<void> generateIdolImage(String idolId, int age) async {
+    try {
+      await _idolsRepository.generateAvatar(idolId, age: age);
+      await load();
+    } catch (e) {
+      // ignore: avoid_print
+      print('Failed to generate avatar: $e');
     }
   }
 
@@ -158,12 +176,15 @@ class PlansController extends StateNotifier<PlansState> {
 
     final userAge = _sessionController.userAge;
     if (userAge == null) {
-      state = const PlansError(message: 'User age not available. Please set your birth date in profile.');
+      state = const PlansError(
+        message:
+            'User age not available. Please set your birth date in profile.',
+      );
       return;
     }
 
     state = const PlansGenerating();
-    
+
     try {
       final response = await _plansRepository.generatePlan(
         idolId: _currentIdolId,
@@ -182,13 +203,16 @@ class PlansController extends StateNotifier<PlansState> {
 
       // Start polling
       state = PlansGenerating(jobId: jobId);
-      
-      _jobsRepository.watchJob(jobId, pollInterval: const Duration(seconds: 1))
+
+      _jobsRepository
+          .watchJob(jobId, pollInterval: const Duration(seconds: 1))
           .listen((status) {
             if (status.isCompleted) {
               load();
             } else if (status.isFailed) {
-              state = PlansError(message: status.errorMessage ?? 'Generation failed');
+              state = PlansError(
+                message: status.errorMessage ?? 'Generation failed',
+              );
             } else {
               state = PlansGenerating(jobId: jobId, jobStatus: status);
             }
@@ -196,9 +220,13 @@ class PlansController extends StateNotifier<PlansState> {
           .onError((error) {
             state = PlansError(message: error.toString());
           });
-
     } on ApiError catch (e) {
-      state = PlansError(message: e.message);
+      if (_isStaleIdolError(e)) {
+        await _sessionController.clearCurrentIdolId();
+        state = const PlansError(message: 'Choose an idol to continue');
+      } else {
+        state = PlansError(message: e.message);
+      }
     } catch (e) {
       state = PlansError(message: e.toString());
     }
@@ -255,7 +283,7 @@ class PlansController extends StateNotifier<PlansState> {
         currentState.plan.id,
         week,
       );
-      
+
       if (state is PlansLoaded) {
         state = (state as PlansLoaded).copyWithWeekSummary(week, summary);
       }
@@ -280,11 +308,11 @@ class PlansController extends StateNotifier<PlansState> {
         currentState.plan.id,
         week,
       );
-      
+
       if (state is PlansLoaded) {
         state = (state as PlansLoaded).copyWithWeekSummary(week, summary);
       }
-      
+
       return summary;
     } catch (e) {
       return null;
@@ -368,7 +396,7 @@ class PlansController extends StateNotifier<PlansState> {
   }) async {
     final currentState = state;
     if (currentState is! PlansLoaded) return;
-    
+
     try {
       final item = await _plansRepository.createPlanItem(
         planId: currentState.plan.id,
@@ -376,18 +404,20 @@ class PlansController extends StateNotifier<PlansState> {
         description: description,
         weekStart: week ?? currentState.plan.currentWeek,
       );
-      
+
       // Update state
       final updatedItems = [...currentState.plan.items, item];
-      state = currentState.copyWithPlan(currentState.plan.copyWith(items: updatedItems));
-      
+      state = currentState.copyWithPlan(
+        currentState.plan.copyWith(items: updatedItems),
+      );
+
       // Refresh summary if needed
       if (item.weekStart != null) {
         refreshWeekSummary(item.weekStart!);
       }
     } catch (e) {
       // Handle error
-      print('Failed to create item: $e');
+      debugPrint('Failed to create item: $e');
       rethrow;
     }
   }

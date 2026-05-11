@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../app/design_tokens.dart';
+import 'ambient_background.dart';
 
 /// App scaffold with consistent background, SafeArea, and padding rules.
 class CmpysScaffold extends StatelessWidget {
@@ -38,10 +39,7 @@ class CmpysScaffold extends StatelessWidget {
     Widget content = body;
 
     if (useHorizontalPadding) {
-      content = Padding(
-        padding: AppSpacing.screenH,
-        child: content,
-      );
+      content = Padding(padding: AppSpacing.screenH, child: content);
     }
 
     if (useSafeArea) {
@@ -55,7 +53,7 @@ class CmpysScaffold extends StatelessWidget {
     return Scaffold(
       backgroundColor: backgroundColor ?? AppColors.bg,
       appBar: appBar,
-      body: content,
+      body: AmbientBackground(useSafeArea: false, child: content),
       bottomNavigationBar: bottomNavigationBar,
       floatingActionButton: floatingActionButton,
       extendBody: extendBody,
@@ -102,7 +100,8 @@ class CmpysScrollScaffold extends StatelessWidget {
       useHorizontalPadding: false,
       body: SingleChildScrollView(
         physics: physics ?? const BouncingScrollPhysics(),
-        padding: padding ??
+        padding:
+            padding ??
             EdgeInsets.only(
               left: useHorizontalPadding ? AppSpacing.s24 : 0,
               right: useHorizontalPadding ? AppSpacing.s24 : 0,

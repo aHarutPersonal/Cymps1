@@ -7,7 +7,7 @@ enum CmpysButtonVariant { primary, secondary, ghost, danger }
 
 enum CmpysButtonSize { small, medium, large }
 
-/// Primary button component.
+/// Primary button component — coral capsule style.
 class CmpysButton extends StatelessWidget {
   const CmpysButton({
     super.key,
@@ -38,23 +38,23 @@ class CmpysButton extends StatelessWidget {
 
     final (height, textStyle, iconSize, padding) = switch (size) {
       CmpysButtonSize.small => (
-          40.0,
-          AppTypography.buttonSmall,
-          16.0,
-          AppSpacing.ph16,
-        ),
+        40.0,
+        AppTypography.buttonSmall,
+        16.0,
+        AppSpacing.ph16,
+      ),
       CmpysButtonSize.medium => (
-          48.0,
-          AppTypography.buttonSmall,
-          18.0,
-          AppSpacing.ph20,
-        ),
+        48.0,
+        AppTypography.buttonSmall,
+        18.0,
+        AppSpacing.ph20,
+      ),
       CmpysButtonSize.large => (
-          52.0,
-          AppTypography.button,
-          20.0,
-          AppSpacing.ph24,
-        ),
+        52.0,
+        AppTypography.button,
+        20.0,
+        AppSpacing.ph24,
+      ),
     };
 
     final (bgColor, fgColor, borderColor) = _getColors(isDisabled);
@@ -67,10 +67,7 @@ class CmpysButton extends StatelessWidget {
           SizedBox(
             width: iconSize,
             height: iconSize,
-            child: CircularProgressIndicator(
-              strokeWidth: 2,
-              color: fgColor,
-            ),
+            child: CircularProgressIndicator(strokeWidth: 2, color: fgColor),
           ),
           const SizedBox(width: AppSpacing.s8),
         ] else if (icon != null) ...[
@@ -82,10 +79,7 @@ class CmpysButton extends StatelessWidget {
           ),
           const SizedBox(width: AppSpacing.s8),
         ],
-        Text(
-          label,
-          style: textStyle.copyWith(color: fgColor),
-        ),
+        Text(label, style: textStyle.copyWith(color: fgColor)),
         if (iconRight != null && !isLoading) ...[
           const SizedBox(width: AppSpacing.s8),
           SvgPicture.asset(
@@ -103,14 +97,14 @@ class CmpysButton extends StatelessWidget {
       height: height,
       child: Material(
         color: bgColor,
-        borderRadius: AppRadii.br12,
+        borderRadius: AppRadii.brFull,
         child: InkWell(
           onTap: isDisabled ? null : onPressed,
-          borderRadius: AppRadii.br12,
+          borderRadius: AppRadii.brFull,
           child: Container(
             padding: padding,
             decoration: BoxDecoration(
-              borderRadius: AppRadii.br12,
+              borderRadius: AppRadii.brFull,
               border: borderColor != null
                   ? Border.all(color: borderColor)
                   : null,
@@ -126,49 +120,41 @@ class CmpysButton extends StatelessWidget {
     if (isDisabled) {
       return switch (variant) {
         CmpysButtonVariant.primary => (
-            AppColors.textPrimary.withOpacity(0.3),
-            AppColors.bgTrue.withOpacity(0.5),
-            null,
-          ),
+          AppColors.accent.withValues(alpha: 0.3),
+          Colors.white.withValues(alpha: 0.5),
+          null,
+        ),
         CmpysButtonVariant.secondary => (
-            Colors.transparent,
-            AppColors.textSecondary.withOpacity(0.5),
-            AppColors.borderLight,
-          ),
+          Colors.transparent,
+          AppColors.textSecondary.withValues(alpha: 0.5),
+          AppColors.borderLight,
+        ),
         CmpysButtonVariant.ghost => (
-            Colors.transparent,
-            AppColors.textSecondary.withOpacity(0.5),
-            null,
-          ),
+          Colors.transparent,
+          AppColors.textSecondary.withValues(alpha: 0.5),
+          null,
+        ),
         CmpysButtonVariant.danger => (
-            AppColors.error.withOpacity(0.3),
-            AppColors.textPrimary.withOpacity(0.5),
-            null,
-          ),
+          AppColors.error.withValues(alpha: 0.3),
+          Colors.white.withValues(alpha: 0.5),
+          null,
+        ),
       };
     }
 
     return switch (variant) {
-      CmpysButtonVariant.primary => (
-          AppColors.textPrimary, // White bg
-          AppColors.bgTrue, // Black text
-          null,
-        ),
+      CmpysButtonVariant.primary => (AppColors.accent, Colors.white, null),
       CmpysButtonVariant.secondary => (
-          Colors.transparent,
-          AppColors.textPrimary,
-          AppColors.borderFocus, // 15% white border
-        ),
+        Colors.transparent,
+        AppColors.textPrimary,
+        AppColors.borderFocus,
+      ),
       CmpysButtonVariant.ghost => (
-          Colors.transparent,
-          AppColors.textPrimary,
-          null,
-        ),
-      CmpysButtonVariant.danger => (
-          AppColors.error,
-          AppColors.textPrimary,
-          null,
-        ),
+        Colors.transparent,
+        AppColors.textPrimary,
+        null,
+      ),
+      CmpysButtonVariant.danger => (AppColors.error, Colors.white, null),
     };
   }
 }
@@ -254,12 +240,12 @@ class CmpysFab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: backgroundColor ?? AppColors.textPrimary,
-      borderRadius: label != null ? AppRadii.br12 : AppRadii.brFull,
+      color: backgroundColor ?? AppColors.accent,
+      borderRadius: label != null ? AppRadii.br16 : AppRadii.brFull,
       elevation: 0,
       child: InkWell(
         onTap: onPressed,
-        borderRadius: label != null ? AppRadii.br12 : AppRadii.brFull,
+        borderRadius: label != null ? AppRadii.br16 : AppRadii.brFull,
         child: Container(
           height: 52,
           padding: EdgeInsets.symmetric(
@@ -273,7 +259,7 @@ class CmpysFab extends StatelessWidget {
                 width: 24,
                 height: 24,
                 colorFilter: ColorFilter.mode(
-                  iconColor ?? AppColors.bgTrue,
+                  iconColor ?? Colors.white,
                   BlendMode.srcIn,
                 ),
               ),
@@ -282,7 +268,7 @@ class CmpysFab extends StatelessWidget {
                 Text(
                   label!,
                   style: AppTypography.button.copyWith(
-                    color: iconColor ?? AppColors.bgTrue,
+                    color: iconColor ?? Colors.white,
                   ),
                 ),
               ],

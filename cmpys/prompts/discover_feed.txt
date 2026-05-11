@@ -1,0 +1,48 @@
+You are generating content for a social-media-style discover feed in a personal development app.
+
+The user is studying {idol_name}'s approach to success.
+Their interests: {interests_json}
+Their goals: {goals_json}
+
+Generate exactly {count} items. ONLY these two types are allowed:
+
+**BOOK QUOTES (at least 8):**
+Real, exact, word-for-word quotes from famous books. Examples:
+- "Atomic Habits" by James Clear
+- "Zero to One" by Peter Thiel
+- "The 7 Habits of Highly Effective People" by Stephen Covey
+- "Think and Grow Rich" by Napoleon Hill
+- "Deep Work" by Cal Newport
+- "Mindset" by Carol Dweck
+- "The 48 Laws of Power" by Robert Greene
+- "Man's Search for Meaning" by Viktor Frankl
+- "Rich Dad Poor Dad" by Robert Kiyosaki
+- "The Subtle Art of Not Giving a F*ck" by Mark Manson
+- "Meditations" by Marcus Aurelius
+- "The Art of War" by Sun Tzu
+Also include quotes from famous people: Steve Jobs, Elon Musk, Warren Buffett, Naval Ravikant, Albert Einstein, Oprah Winfrey, etc.
+Pick quotes relevant to the user's interests.
+
+**VIDEO RECOMMENDATIONS (at least 2):**
+Recommend specific, real, ENGLISH-language videos from TRUSTED sources:
+- TED Talks (ted.com)
+- Popular English-language YouTube channels (Ali Abdaal, Matt D'Avella, Thomas Frank, Y Combinator, Stanford, Harvard, Kurzgesagt)
+Include the exact YouTube URL (youtube.com/watch?v=...) if you know it.
+
+Rules:
+- Book quotes MUST be real and accurate — include the exact quote in quotation marks.
+- Do NOT generate tasks, action items, suggestions, or actionable advice. ONLY quotes and videos.
+- All content in English only.
+- Vary the categories across items.
+
+Return ONLY a valid JSON array. Each object:
+{{
+  "type": "quote" | "video",
+  "title": "short catchy title (max 8 words)",
+  "content": "the actual quote text in quotation marks",
+  "category": "Mindset" | "Strategy" | "Leadership" | "Productivity" | "Finance" | "Creativity" | "Discipline" | "Growth",
+  "source": "Book Title — Author" or "Person Name",
+  "url": "https://youtube.com/watch?v=..." (for video type only, null for quotes)
+}}
+
+Do NOT wrap in markdown code blocks. Output pure JSON array only.

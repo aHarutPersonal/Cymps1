@@ -12,6 +12,18 @@ import '../../auth/controllers/session_controller.dart';
 import '../controllers/intake_controller.dart';
 import '../models/intake_models.dart';
 
+abstract final class _IntakePalette {
+  static const canvas = AppColors.bg;
+  static const paper = Color(0xFFFFFFFF);
+  static const paperWarm = AppColors.surfaceHighlight;
+  static const ink = AppColors.textPrimary;
+  static const muted = AppColors.textSecondary;
+  static const line = AppColors.border;
+  static const coral = AppColors.brandAccent;
+  static const coralDark = AppColors.brandAccentDark;
+  static const error = Color(0xFFC64036);
+}
+
 /// Intake wizard screen for collecting user information.
 ///
 /// Shows one question at a time with progress indicator.
@@ -23,6 +35,7 @@ class IntakeWizardScreen extends ConsumerStatefulWidget {
     this.questions,
     this.idolId,
     this.targetAge,
+    this.mentorName,
   });
 
   /// Existing session ID to resume.
@@ -37,13 +50,16 @@ class IntakeWizardScreen extends ConsumerStatefulWidget {
   /// Target age for new intake.
   final int? targetAge;
 
+  /// Display name for the mentor-style conversation.
+  final String? mentorName;
+
   @override
   ConsumerState<IntakeWizardScreen> createState() => _IntakeWizardScreenState();
 }
 
 class _IntakeWizardScreenState extends ConsumerState<IntakeWizardScreen> {
   final _textController = TextEditingController();
-  final _pageController = PageController();
+  final _chatScrollController = ScrollController();
 
   @override
   void initState() {
@@ -56,7 +72,7 @@ class _IntakeWizardScreenState extends ConsumerState<IntakeWizardScreen> {
 
   void _initializeIntake() {
     if (!mounted) return;
-    
+
     final controller = ref.read(intakeControllerProvider.notifier);
 
     if (widget.sessionId != null && widget.questions != null) {
@@ -80,7 +96,7 @@ class _IntakeWizardScreenState extends ConsumerState<IntakeWizardScreen> {
   @override
   void dispose() {
     _textController.dispose();
-    _pageController.dispose();
+    _chatScrollController.dispose();
     super.dispose();
   }
 
@@ -91,19 +107,13 @@ class _IntakeWizardScreenState extends ConsumerState<IntakeWizardScreen> {
     // Listen for state changes
     ref.listen<IntakeState>(intakeControllerProvider, (prev, next) {
       if (next is IntakeReady && prev is IntakeReady) {
-        // Sync page controller with state
         if (next.currentIndex != prev.currentIndex) {
-          _pageController.animateToPage(
-            next.currentIndex,
-            duration: AppDurations.normal,
-            curve: Curves.easeInOut,
-          );
-          // Update text controller for text questions
           _updateTextController(next);
+          _scrollConversationToBottom();
         }
       } else if (next is IntakeReady && prev is! IntakeReady) {
-        // Initial load - update text controller
         _updateTextController(next);
+        _scrollConversationToBottom();
       } else if (next is IntakeCompleted) {
         // Schedule navigation after current build to avoid provider modification during build
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -117,36 +127,51 @@ class _IntakeWizardScreenState extends ConsumerState<IntakeWizardScreen> {
     });
 
     return Scaffold(
-      backgroundColor: AppColors.bg,
-      body: SafeArea(
-        child: switch (state) {
-          IntakeInitial() || IntakeLoading() => const _LoadingView(),
-          IntakeError(message: final msg) => _ErrorView(
+      backgroundColor: _IntakePalette.canvas,
+      body: DecoratedBox(
+        decoration: const BoxDecoration(
+          color: _IntakePalette.canvas,
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              AppColors.surfaceHighlight,
+              _IntakePalette.canvas,
+              AppColors.bg,
+            ],
+            stops: [0, 0.48, 1],
+          ),
+        ),
+        child: SafeArea(
+          bottom: false,
+          child: switch (state) {
+            IntakeInitial() || IntakeLoading() => const _LoadingView(),
+            IntakeError(message: final msg) => _ErrorView(
               message: msg,
               onRetry: _initializeIntake,
             ),
-          IntakeReady() => _WizardView(
+            IntakeReady() => _WizardView(
               state: state,
               textController: _textController,
-              pageController: _pageController,
+              scrollController: _chatScrollController,
+              mentorName: widget.mentorName,
               onBack: _handleBack,
               onNext: _handleNext,
               onSkip: _handleSkip,
               onFinish: _handleFinish,
               onAnswerChanged: _handleAnswerChanged,
             ),
-          IntakeCompleted() => const _LoadingView(), // Transitioning
-        },
+            IntakeCompleted() => const _LoadingView(), // Transitioning
+          },
+        ),
       ),
     );
   }
 
   void _updateTextController(IntakeReady state) {
     final question = state.currentQuestion;
-    if (question.type == 'text' || question.type == 'multiline') {
-      final answer = state.answers[question.id];
-      _textController.text = answer?.toString() ?? '';
-    }
+    final answer = state.answers[question.id];
+    _textController.text = answer?.toString() ?? '';
   }
 
   void _handleBack() {
@@ -173,6 +198,17 @@ class _IntakeWizardScreenState extends ConsumerState<IntakeWizardScreen> {
   void _handleAnswerChanged(dynamic value) {
     ref.read(intakeControllerProvider.notifier).setAnswer(value);
   }
+
+  void _scrollConversationToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_chatScrollController.hasClients) return;
+      _chatScrollController.animateTo(
+        _chatScrollController.position.maxScrollExtent,
+        duration: AppDurations.normal,
+        curve: Curves.easeOutCubic,
+      );
+    });
+  }
 }
 
 /// Loading view.
@@ -189,7 +225,7 @@ class _LoadingView extends StatelessWidget {
           const SizedBox(height: AppSpacing.s16),
           Text(
             'Loading questions...',
-            style: AppTypography.body,
+            style: AppTypography.body.copyWith(color: _IntakePalette.ink),
           ),
         ],
       ),
@@ -199,10 +235,7 @@ class _LoadingView extends StatelessWidget {
 
 /// Error view.
 class _ErrorView extends StatelessWidget {
-  const _ErrorView({
-    required this.message,
-    required this.onRetry,
-  });
+  const _ErrorView({required this.message, required this.onRetry});
 
   final String message;
   final VoidCallback onRetry;
@@ -227,12 +260,12 @@ class _ErrorView extends StatelessWidget {
             const SizedBox(height: AppSpacing.s16),
             Text(
               'Something went wrong',
-              style: AppTypography.h3,
+              style: AppTypography.h3.copyWith(color: _IntakePalette.ink),
             ),
             const SizedBox(height: AppSpacing.s8),
             Text(
               message,
-              style: AppTypography.body.copyWith(color: AppColors.textSecondary),
+              style: AppTypography.body.copyWith(color: _IntakePalette.muted),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: AppSpacing.s24),
@@ -253,7 +286,8 @@ class _WizardView extends StatelessWidget {
   const _WizardView({
     required this.state,
     required this.textController,
-    required this.pageController,
+    required this.scrollController,
+    this.mentorName,
     required this.onBack,
     required this.onNext,
     required this.onSkip,
@@ -263,7 +297,8 @@ class _WizardView extends StatelessWidget {
 
   final IntakeReady state;
   final TextEditingController textController;
-  final PageController pageController;
+  final ScrollController scrollController;
+  final String? mentorName;
   final VoidCallback onBack;
   final VoidCallback onNext;
   final VoidCallback onSkip;
@@ -272,9 +307,11 @@ class _WizardView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final currentQuestion = state.currentQuestion;
+    final currentAnswer = state.answers[currentQuestion.id];
+
     return Column(
       children: [
-        // Header with back button and progress
         _WizardHeader(
           currentIndex: state.currentIndex,
           totalQuestions: state.questions.length,
@@ -283,38 +320,47 @@ class _WizardView extends StatelessWidget {
         ),
 
         // Error banner
-        if (state.error != null)
-          _ErrorBanner(message: state.error!),
+        if (state.error != null) _ErrorBanner(message: state.error!),
 
-        // Question pages
         Expanded(
-          child: PageView.builder(
-            controller: pageController,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: state.questions.length,
-            itemBuilder: (context, index) {
-              final question = state.questions[index];
-              final answer = state.answers[question.id];
-
-              return _QuestionPage(
-                question: question,
-                answer: answer,
-                textController: index == state.currentIndex ? textController : null,
-                onAnswerChanged: onAnswerChanged,
-              );
-            },
+          child: ListView(
+            controller: scrollController,
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+            children: [
+              _MentorIntroBubble(mentorName: mentorName),
+              for (var i = 0; i < state.currentIndex; i++) ...[
+                _MentorQuestionBubble(
+                  question: state.questions[i],
+                  stepLabel: '${i + 1}/${state.questions.length}',
+                  mentorName: mentorName,
+                ),
+                _UserAnswerBubble(
+                  text: _formatAnswer(
+                    state.questions[i],
+                    state.answers[state.questions[i].id],
+                  ),
+                ),
+              ],
+              _MentorQuestionBubble(
+                question: currentQuestion,
+                stepLabel:
+                    '${state.currentIndex + 1}/${state.questions.length}',
+                mentorName: mentorName,
+                isActive: true,
+              ),
+            ],
           ),
         ),
 
-        // Bottom actions
-        _WizardActions(
+        _AnswerDock(
+          question: currentQuestion,
+          answer: currentAnswer,
+          textController: textController,
+          onAnswerChanged: onAnswerChanged,
           isLastQuestion: state.isLastQuestion,
-          isRequired: state.currentQuestion.isRequired,
+          isRequired: currentQuestion.isRequired,
           isSubmitting: state.isSubmitting,
-          hasAnswer: state.answers[state.currentQuestion.id] != null &&
-              state.answers[state.currentQuestion.id] != '' &&
-              (state.answers[state.currentQuestion.id] is! List ||
-                  (state.answers[state.currentQuestion.id] as List).isNotEmpty),
+          hasAnswer: _hasAnswer(currentAnswer),
           onNext: onNext,
           onSkip: onSkip,
           onFinish: onFinish,
@@ -322,6 +368,58 @@ class _WizardView extends StatelessWidget {
       ],
     );
   }
+}
+
+bool _hasAnswer(dynamic answer) {
+  return answer != null &&
+      answer != '' &&
+      (answer is! List || answer.isNotEmpty);
+}
+
+String _formatAnswer(IntakeQuestion question, dynamic answer) {
+  if (!_hasAnswer(answer)) return 'Skipped';
+
+  final type = question.type.toLowerCase();
+  if (type == 'boolean') {
+    return answer == true ? 'Yes' : 'No';
+  }
+  if (type == 'date') {
+    final date = DateTime.tryParse(answer.toString());
+    if (date != null) return _formatShortDate(date);
+  }
+  if (answer is List) {
+    final labels = answer
+        .map((value) => _optionLabel(question, value))
+        .toList();
+    return labels.join(', ');
+  }
+  return _optionLabel(question, answer);
+}
+
+String _optionLabel(IntakeQuestion question, dynamic value) {
+  final raw = value.toString();
+  for (final option in question.options) {
+    if (option.value == raw) return option.label;
+  }
+  return raw;
+}
+
+String _formatShortDate(DateTime date) {
+  final months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
+  return '${months[date.month - 1]} ${date.day}, ${date.year}';
 }
 
 /// Header with progress indicator.
@@ -342,11 +440,10 @@ class _WizardHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        // Top bar
         Padding(
           padding: const EdgeInsets.symmetric(
-            horizontal: AppSpacing.s8,
-            vertical: AppSpacing.s8,
+            horizontal: AppSpacing.s12,
+            vertical: AppSpacing.s10,
           ),
           child: Row(
             children: [
@@ -357,38 +454,283 @@ class _WizardHeader extends StatelessWidget {
                   width: 24,
                   height: 24,
                   colorFilter: const ColorFilter.mode(
-                    AppColors.textPrimary,
+                    _IntakePalette.ink,
                     BlendMode.srcIn,
                   ),
                 ),
               ),
               const Spacer(),
-              Text(
-                '${currentIndex + 1} of $totalQuestions',
-                style: AppTypography.caption.copyWith(
-                  color: AppColors.textSecondary,
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 7,
+                ),
+                decoration: BoxDecoration(
+                  color: _IntakePalette.paper.withValues(alpha: 0.86),
+                  borderRadius: AppRadii.brFull,
+                  border: Border.all(color: _IntakePalette.line),
+                ),
+                child: Text(
+                  '${currentIndex + 1} / $totalQuestions',
+                  style: AppTypography.captionMedium.copyWith(
+                    color: _IntakePalette.ink,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
-              const SizedBox(width: AppSpacing.s16),
+              const SizedBox(width: AppSpacing.s12),
             ],
           ),
         ),
-
-        // Progress bar
         Padding(
-          padding: AppSpacing.ph24,
+          padding: const EdgeInsets.symmetric(horizontal: 24),
           child: ClipRRect(
             borderRadius: AppRadii.brFull,
             child: LinearProgressIndicator(
               value: progress,
-              backgroundColor: AppColors.surface2,
-              color: AppColors.accent,
+              backgroundColor: _IntakePalette.line,
+              color: _IntakePalette.coral,
               minHeight: 4,
             ),
           ),
         ),
-        const SizedBox(height: AppSpacing.s8),
       ],
+    );
+  }
+}
+
+class _MentorIntroBubble extends StatelessWidget {
+  const _MentorIntroBubble({this.mentorName});
+
+  final String? mentorName;
+
+  @override
+  Widget build(BuildContext context) {
+    return _MentorBubbleShell(
+      mentorName: mentorName,
+      child: Text(
+        'I will ask a few focused questions, then turn your answers into a practical path.',
+      ),
+    );
+  }
+}
+
+class _MentorQuestionBubble extends StatelessWidget {
+  const _MentorQuestionBubble({
+    required this.question,
+    required this.stepLabel,
+    this.mentorName,
+    this.isActive = false,
+  });
+
+  final IntakeQuestion question;
+  final String stepLabel;
+  final String? mentorName;
+  final bool isActive;
+
+  @override
+  Widget build(BuildContext context) {
+    return _MentorBubbleShell(
+      mentorName: mentorName,
+      isActive: isActive,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(
+                stepLabel,
+                style: AppTypography.captionUpper.copyWith(
+                  color: _IntakePalette.coralDark,
+                  fontSize: 10,
+                  letterSpacing: 1.2,
+                ),
+              ),
+              if (question.category != null) ...[
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    question.category!.toUpperCase(),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTypography.captionUpper.copyWith(
+                      color: _IntakePalette.muted,
+                      fontSize: 10,
+                      letterSpacing: 1.2,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            question.title,
+            style: AppTypography.h4.copyWith(
+              color: _IntakePalette.ink,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            question.prompt,
+            style: AppTypography.body.copyWith(
+              color: _IntakePalette.ink,
+              height: 1.55,
+            ),
+          ),
+          if (question.isRequired) ...[
+            const SizedBox(height: 10),
+            Text(
+              'Required',
+              style: AppTypography.caption.copyWith(
+                color: _IntakePalette.muted,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _MentorBubbleShell extends StatelessWidget {
+  const _MentorBubbleShell({
+    required this.child,
+    this.mentorName,
+    this.isActive = false,
+  });
+
+  final Widget child;
+  final String? mentorName;
+  final bool isActive;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: _IntakePalette.paper,
+              border: Border.all(color: _IntakePalette.line),
+              boxShadow: isActive
+                  ? [
+                      BoxShadow(
+                        color: _IntakePalette.coral.withValues(alpha: 0.18),
+                        blurRadius: 18,
+                        offset: const Offset(0, 8),
+                      ),
+                    ]
+                  : null,
+            ),
+            child: const Icon(
+              Icons.auto_awesome,
+              size: 17,
+              color: _IntakePalette.coralDark,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Flexible(
+            child: Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: isActive
+                    ? _IntakePalette.paper
+                    : _IntakePalette.paperWarm,
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(6),
+                  topRight: Radius.circular(22),
+                  bottomLeft: Radius.circular(22),
+                  bottomRight: Radius.circular(22),
+                ),
+                border: Border.all(
+                  color: isActive ? _IntakePalette.coral : _IntakePalette.line,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: _IntakePalette.ink.withValues(
+                      alpha: isActive ? 0.10 : 0.05,
+                    ),
+                    blurRadius: isActive ? 20 : 12,
+                    offset: const Offset(0, 8),
+                  ),
+                ],
+              ),
+              child: DefaultTextStyle(
+                style: AppTypography.body.copyWith(
+                  color: _IntakePalette.ink,
+                  height: 1.45,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      mentorName?.isNotEmpty == true
+                          ? mentorName!
+                          : 'Your mentor',
+                      style: AppTypography.captionMedium.copyWith(
+                        color: _IntakePalette.muted,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    child,
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _UserAnswerBubble extends StatelessWidget {
+  const _UserAnswerBubble({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.centerRight,
+      child: Container(
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.sizeOf(context).width * 0.74,
+        ),
+        margin: const EdgeInsets.only(bottom: 14),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: _IntakePalette.ink,
+          borderRadius: const BorderRadius.only(
+            topLeft: Radius.circular(22),
+            topRight: Radius.circular(6),
+            bottomLeft: Radius.circular(22),
+            bottomRight: Radius.circular(22),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: _IntakePalette.ink.withValues(alpha: 0.14),
+              blurRadius: 18,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
+        child: Text(
+          text,
+          style: AppTypography.body.copyWith(
+            color: Colors.white,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
     );
   }
 }
@@ -407,23 +749,21 @@ class _ErrorBanner extends StatelessWidget {
         horizontal: AppSpacing.s24,
         vertical: AppSpacing.s12,
       ),
-      color: AppColors.error.withValues(alpha: 0.1),
+      color: _IntakePalette.error.withValues(alpha: 0.08),
       child: Row(
         children: [
-          SvgPicture.asset(
-            AppAssets.iconAlertCircle,
-            width: 18,
-            height: 18,
-            colorFilter: const ColorFilter.mode(
-              AppColors.error,
-              BlendMode.srcIn,
-            ),
+          const Icon(
+            Icons.error_outline,
+            color: _IntakePalette.error,
+            size: 18,
           ),
           const SizedBox(width: AppSpacing.s12),
           Expanded(
             child: Text(
               message,
-              style: AppTypography.caption.copyWith(color: AppColors.error),
+              style: AppTypography.caption.copyWith(
+                color: _IntakePalette.error,
+              ),
             ),
           ),
         ],
@@ -432,9 +772,9 @@ class _ErrorBanner extends StatelessWidget {
   }
 }
 
-/// Single question page.
-class _QuestionPage extends StatelessWidget {
-  const _QuestionPage({
+/// Structured answer controls shown in the conversation dock.
+class _AnswerInput extends StatelessWidget {
+  const _AnswerInput({
     required this.question,
     required this.answer,
     this.textController,
@@ -448,70 +788,7 @@ class _QuestionPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      padding: AppSpacing.screenH,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const SizedBox(height: AppSpacing.s16),
-
-          // Category badge
-          if (question.category != null)
-            Container(
-              padding: const EdgeInsets.symmetric(
-                horizontal: AppSpacing.s12,
-                vertical: AppSpacing.s6,
-              ),
-              decoration: BoxDecoration(
-                color: AppColors.accentMuted,
-                borderRadius: AppRadii.brFull,
-              ),
-              child: Text(
-                question.category!.toUpperCase(),
-                style: AppTypography.labelSmall.copyWith(
-                  color: AppColors.accent,
-                  letterSpacing: 1,
-                ),
-              ),
-            ),
-
-          const SizedBox(height: AppSpacing.s16),
-
-          // Question title
-          Text(
-            question.title,
-            style: AppTypography.h2,
-          ),
-
-          const SizedBox(height: AppSpacing.s8),
-
-          // Question prompt
-          Text(
-            question.prompt,
-            style: AppTypography.body.copyWith(
-              color: AppColors.textSecondary,
-              height: 1.6,
-            ),
-          ),
-
-          // Required indicator
-          if (question.isRequired) ...[
-            const SizedBox(height: AppSpacing.s4),
-            Text(
-              '* Required',
-              style: AppTypography.caption.copyWith(
-                color: AppColors.textTertiary,
-              ),
-            ),
-          ],
-
-          const SizedBox(height: AppSpacing.s32),
-
-          // Answer input based on type
-          _buildAnswerInput(),
-        ],
-      ),
-    );
+    return _buildAnswerInput();
   }
 
   Widget _buildAnswerInput() {
@@ -534,6 +811,15 @@ class _QuestionPage extends StatelessWidget {
 
       case 'single_choice':
       case 'select':
+        // Fallback to text input if no options provided
+        if (question.options.isEmpty) {
+          return _TextInput(
+            controller: textController,
+            placeholder: question.placeholder,
+            validation: question.validation,
+            onChanged: onAnswerChanged,
+          );
+        }
         return _SingleChoiceInput(
           options: question.options,
           selectedValue: answer?.toString(),
@@ -542,6 +828,14 @@ class _QuestionPage extends StatelessWidget {
 
       case 'multi_choice':
       case 'multiselect':
+        if (question.options.isEmpty) {
+          return _TextInput(
+            controller: textController,
+            placeholder: question.placeholder,
+            validation: question.validation,
+            onChanged: onAnswerChanged,
+          );
+        }
         return _MultiChoiceInput(
           options: question.options,
           selectedValues: answer is List
@@ -579,6 +873,14 @@ class _QuestionPage extends StatelessWidget {
         );
 
       default:
+        // If unknown type but has options, render as single choice
+        if (question.options.isNotEmpty) {
+          return _SingleChoiceInput(
+            options: question.options,
+            selectedValue: answer?.toString(),
+            onChanged: onAnswerChanged,
+          );
+        }
         return _TextInput(
           controller: textController,
           placeholder: question.placeholder,
@@ -702,17 +1004,15 @@ class _SingleChoiceInput extends StatelessWidget {
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 border: Border.all(
-                  color: isSelected ? AppColors.accent : AppColors.border,
+                  color: isSelected
+                      ? _IntakePalette.coral
+                      : _IntakePalette.line,
                   width: 2,
                 ),
-                color: isSelected ? AppColors.accent : Colors.transparent,
+                color: isSelected ? _IntakePalette.coral : Colors.transparent,
               ),
               child: isSelected
-                  ? const Icon(
-                      Icons.check,
-                      size: 16,
-                      color: AppColors.textPrimary,
-                    )
+                  ? const Icon(Icons.check, size: 16, color: Colors.white)
                   : null,
             ),
           ),
@@ -761,17 +1061,15 @@ class _MultiChoiceInput extends StatelessWidget {
               decoration: BoxDecoration(
                 borderRadius: AppRadii.br8,
                 border: Border.all(
-                  color: isSelected ? AppColors.accent : AppColors.border,
+                  color: isSelected
+                      ? _IntakePalette.coral
+                      : _IntakePalette.line,
                   width: 2,
                 ),
-                color: isSelected ? AppColors.accent : Colors.transparent,
+                color: isSelected ? _IntakePalette.coral : Colors.transparent,
               ),
               child: isSelected
-                  ? const Icon(
-                      Icons.check,
-                      size: 16,
-                      color: AppColors.textPrimary,
-                    )
+                  ? const Icon(Icons.check, size: 16, color: Colors.white)
                   : null,
             ),
           ),
@@ -800,17 +1098,17 @@ class _OptionTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: isSelected ? AppColors.accentMuted : AppColors.surface,
-      borderRadius: AppRadii.br16,
+      color: isSelected ? _IntakePalette.paperWarm : _IntakePalette.paper,
+      borderRadius: AppRadii.br12,
       child: InkWell(
         onTap: onTap,
-        borderRadius: AppRadii.br16,
+        borderRadius: AppRadii.br12,
         child: Container(
           padding: const EdgeInsets.all(AppSpacing.s16),
           decoration: BoxDecoration(
-            borderRadius: AppRadii.br16,
+            borderRadius: AppRadii.br12,
             border: Border.all(
-              color: isSelected ? AppColors.accent : AppColors.border,
+              color: isSelected ? _IntakePalette.coral : _IntakePalette.line,
             ),
           ),
           child: Row(
@@ -822,9 +1120,7 @@ class _OptionTile extends StatelessWidget {
                     Text(
                       label,
                       style: AppTypography.bodyMedium.copyWith(
-                        color: isSelected
-                            ? AppColors.textPrimary
-                            : AppColors.textSecondary,
+                        color: _IntakePalette.ink,
                       ),
                     ),
                     if (description != null) ...[
@@ -832,7 +1128,7 @@ class _OptionTile extends StatelessWidget {
                       Text(
                         description!,
                         style: AppTypography.caption.copyWith(
-                          color: AppColors.textTertiary,
+                          color: _IntakePalette.muted,
                         ),
                       ),
                     ],
@@ -873,16 +1169,16 @@ class _ScaleInput extends StatelessWidget {
         Container(
           padding: const EdgeInsets.all(AppSpacing.s24),
           decoration: BoxDecoration(
-            color: AppColors.surface,
+            color: _IntakePalette.paper,
             borderRadius: AppRadii.br20,
-            border: Border.all(color: AppColors.border),
+            border: Border.all(color: _IntakePalette.line),
           ),
           child: Column(
             children: [
               Text(
                 value.toString(),
                 style: AppTypography.h1.copyWith(
-                  color: AppColors.accent,
+                  color: _IntakePalette.coralDark,
                   fontSize: 48,
                 ),
               ),
@@ -891,13 +1187,17 @@ class _ScaleInput extends StatelessWidget {
               // Slider
               SliderTheme(
                 data: SliderThemeData(
-                  activeTrackColor: AppColors.accent,
-                  inactiveTrackColor: AppColors.surface2,
-                  thumbColor: AppColors.accent,
-                  overlayColor: AppColors.accentMuted,
+                  activeTrackColor: _IntakePalette.coral,
+                  inactiveTrackColor: _IntakePalette.line,
+                  thumbColor: _IntakePalette.ink,
+                  overlayColor: _IntakePalette.coral.withValues(alpha: 0.16),
                   trackHeight: 6,
-                  thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 12),
-                  overlayShape: const RoundSliderOverlayShape(overlayRadius: 24),
+                  thumbShape: const RoundSliderThumbShape(
+                    enabledThumbRadius: 12,
+                  ),
+                  overlayShape: const RoundSliderOverlayShape(
+                    overlayRadius: 24,
+                  ),
                 ),
                 child: Slider(
                   value: value.toDouble(),
@@ -914,11 +1214,15 @@ class _ScaleInput extends StatelessWidget {
                 children: [
                   Text(
                     min.toString(),
-                    style: AppTypography.caption,
+                    style: AppTypography.caption.copyWith(
+                      color: _IntakePalette.muted,
+                    ),
                   ),
                   Text(
                     max.toString(),
-                    style: AppTypography.caption,
+                    style: AppTypography.caption.copyWith(
+                      color: _IntakePalette.muted,
+                    ),
                   ),
                 ],
               ),
@@ -940,7 +1244,7 @@ class _ScaleInput extends StatelessWidget {
                   right: index < max - min ? AppSpacing.s8 : 0,
                 ),
                 child: Material(
-                  color: isSelected ? AppColors.accent : AppColors.surface,
+                  color: isSelected ? _IntakePalette.ink : _IntakePalette.paper,
                   borderRadius: AppRadii.br12,
                   child: InkWell(
                     onTap: () => onChanged(buttonValue),
@@ -950,7 +1254,9 @@ class _ScaleInput extends StatelessWidget {
                       decoration: BoxDecoration(
                         borderRadius: AppRadii.br12,
                         border: Border.all(
-                          color: isSelected ? AppColors.accent : AppColors.border,
+                          color: isSelected
+                              ? _IntakePalette.ink
+                              : _IntakePalette.line,
                         ),
                       ),
                       child: Center(
@@ -958,8 +1264,8 @@ class _ScaleInput extends StatelessWidget {
                           buttonValue.toString(),
                           style: AppTypography.buttonSmall.copyWith(
                             color: isSelected
-                                ? AppColors.textPrimary
-                                : AppColors.textSecondary,
+                                ? Colors.white
+                                : _IntakePalette.ink,
                           ),
                         ),
                       ),
@@ -977,10 +1283,7 @@ class _ScaleInput extends StatelessWidget {
 
 /// Boolean (yes/no) input.
 class _BooleanInput extends StatelessWidget {
-  const _BooleanInput({
-    this.currentValue,
-    required this.onChanged,
-  });
+  const _BooleanInput({this.currentValue, required this.onChanged});
 
   final bool? currentValue;
   final ValueChanged<dynamic> onChanged;
@@ -1000,13 +1303,17 @@ class _BooleanInput extends StatelessWidget {
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 border: Border.all(
-                  color: currentValue == true ? AppColors.accent : AppColors.border,
+                  color: currentValue == true
+                      ? _IntakePalette.coral
+                      : _IntakePalette.line,
                   width: 2,
                 ),
-                color: currentValue == true ? AppColors.accent : Colors.transparent,
+                color: currentValue == true
+                    ? _IntakePalette.coral
+                    : Colors.transparent,
               ),
               child: currentValue == true
-                  ? const Icon(Icons.check, size: 16, color: AppColors.textPrimary)
+                  ? const Icon(Icons.check, size: 16, color: Colors.white)
                   : null,
             ),
           ),
@@ -1023,13 +1330,17 @@ class _BooleanInput extends StatelessWidget {
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 border: Border.all(
-                  color: currentValue == false ? AppColors.accent : AppColors.border,
+                  color: currentValue == false
+                      ? _IntakePalette.coral
+                      : _IntakePalette.line,
                   width: 2,
                 ),
-                color: currentValue == false ? AppColors.accent : Colors.transparent,
+                color: currentValue == false
+                    ? _IntakePalette.coral
+                    : Colors.transparent,
               ),
               child: currentValue == false
-                  ? const Icon(Icons.check, size: 16, color: AppColors.textPrimary)
+                  ? const Icon(Icons.check, size: 16, color: Colors.white)
                   : null,
             ),
           ),
@@ -1041,10 +1352,7 @@ class _BooleanInput extends StatelessWidget {
 
 /// Date input.
 class _DateInput extends StatelessWidget {
-  const _DateInput({
-    this.currentValue,
-    required this.onChanged,
-  });
+  const _DateInput({this.currentValue, required this.onChanged});
 
   final String? currentValue;
   final ValueChanged<dynamic> onChanged;
@@ -1057,8 +1365,8 @@ class _DateInput extends StatelessWidget {
     }
 
     return Material(
-      color: AppColors.surface,
-      borderRadius: AppRadii.br16,
+      color: _IntakePalette.paper,
+      borderRadius: AppRadii.br12,
       child: InkWell(
         onTap: () async {
           final date = await showDatePicker(
@@ -1070,10 +1378,10 @@ class _DateInput extends StatelessWidget {
               return Theme(
                 data: Theme.of(context).copyWith(
                   colorScheme: const ColorScheme.dark(
-                    primary: AppColors.accent,
-                    onPrimary: AppColors.textPrimary,
-                    surface: AppColors.surface,
-                    onSurface: AppColors.textPrimary,
+                    primary: _IntakePalette.coral,
+                    onPrimary: Colors.white,
+                    surface: _IntakePalette.paper,
+                    onSurface: _IntakePalette.ink,
                   ),
                 ),
                 child: child!,
@@ -1089,8 +1397,8 @@ class _DateInput extends StatelessWidget {
           height: 56,
           padding: AppSpacing.ph16,
           decoration: BoxDecoration(
-            borderRadius: AppRadii.br16,
-            border: Border.all(color: AppColors.border),
+            borderRadius: AppRadii.br12,
+            border: Border.all(color: _IntakePalette.line),
           ),
           child: Row(
             children: [
@@ -1099,7 +1407,7 @@ class _DateInput extends StatelessWidget {
                 width: 20,
                 height: 20,
                 colorFilter: const ColorFilter.mode(
-                  AppColors.textSecondary,
+                  _IntakePalette.muted,
                   BlendMode.srcIn,
                 ),
               ),
@@ -1111,8 +1419,8 @@ class _DateInput extends StatelessWidget {
                       : 'Select a date',
                   style: AppTypography.body.copyWith(
                     color: selectedDate != null
-                        ? AppColors.textPrimary
-                        : AppColors.textTertiary,
+                        ? _IntakePalette.ink
+                        : _IntakePalette.muted,
                   ),
                 ),
               ),
@@ -1121,7 +1429,7 @@ class _DateInput extends StatelessWidget {
                 width: 20,
                 height: 20,
                 colorFilter: const ColorFilter.mode(
-                  AppColors.textTertiary,
+                  _IntakePalette.muted,
                   BlendMode.srcIn,
                 ),
               ),
@@ -1134,16 +1442,30 @@ class _DateInput extends StatelessWidget {
 
   String _formatDate(DateTime date) {
     final months = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
     ];
     return '${months[date.month - 1]} ${date.day}, ${date.year}';
   }
 }
 
-/// Bottom action buttons.
-class _WizardActions extends StatelessWidget {
-  const _WizardActions({
+/// Bottom answer dock with structured controls and submit actions.
+class _AnswerDock extends StatelessWidget {
+  const _AnswerDock({
+    required this.question,
+    required this.answer,
+    required this.textController,
+    required this.onAnswerChanged,
     required this.isLastQuestion,
     required this.isRequired,
     required this.isSubmitting,
@@ -1153,6 +1475,10 @@ class _WizardActions extends StatelessWidget {
     required this.onFinish,
   });
 
+  final IntakeQuestion question;
+  final dynamic answer;
+  final TextEditingController textController;
+  final ValueChanged<dynamic> onAnswerChanged;
   final bool isLastQuestion;
   final bool isRequired;
   final bool isSubmitting;
@@ -1164,30 +1490,50 @@ class _WizardActions extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(AppSpacing.s24),
+      padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
       decoration: BoxDecoration(
-        color: AppColors.bg,
+        color: _IntakePalette.paper.withValues(alpha: 0.94),
         border: Border(
-          top: BorderSide(color: AppColors.border.withValues(alpha: 0.5)),
+          top: BorderSide(color: _IntakePalette.line.withValues(alpha: 0.9)),
         ),
+        boxShadow: [
+          BoxShadow(
+            color: _IntakePalette.ink.withValues(alpha: 0.10),
+            blurRadius: 24,
+            offset: const Offset(0, -10),
+          ),
+        ],
       ),
       child: SafeArea(
         top: false,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Main action button
+            ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.sizeOf(context).height * 0.34,
+              ),
+              child: SingleChildScrollView(
+                child: _AnswerInput(
+                  question: question,
+                  answer: answer,
+                  textController: textController,
+                  onAnswerChanged: onAnswerChanged,
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
             CmpysButton(
-              label: isLastQuestion ? 'Submit & Generate Plan' : 'Continue',
+              label: isLastQuestion ? 'Generate My Path' : 'Send Answer',
               onPressed: isSubmitting
+                  ? null
+                  : (isRequired && !hasAnswer)
                   ? null
                   : (isLastQuestion ? onFinish : onNext),
               isLoading: isSubmitting,
               icon: isLastQuestion ? AppAssets.iconSparkles : null,
               iconRight: isLastQuestion ? null : AppAssets.iconArrowRight,
             ),
-
-            // Skip button (for optional questions)
             if (!isRequired && !isLastQuestion) ...[
               const SizedBox(height: AppSpacing.s12),
               TextButton(
@@ -1195,7 +1541,7 @@ class _WizardActions extends StatelessWidget {
                 child: Text(
                   'Skip this question',
                   style: AppTypography.buttonSmall.copyWith(
-                    color: AppColors.textSecondary,
+                    color: _IntakePalette.muted,
                   ),
                 ),
               ),

@@ -33,22 +33,23 @@ class AuthError extends AuthState {
 }
 
 /// Auth controller provider.
-final authControllerProvider =
-    StateNotifierProvider<AuthController, AuthState>((ref) {
-  return AuthController(
-    authRepository: ref.watch(authRepositoryProvider),
-    tokenStore: ref.watch(tokenStoreProvider),
-  );
-});
+final authControllerProvider = StateNotifierProvider<AuthController, AuthState>(
+  (ref) {
+    return AuthController(
+      authRepository: ref.watch(authRepositoryProvider),
+      tokenStore: ref.watch(tokenStoreProvider),
+    );
+  },
+);
 
 /// Controller for authentication state and actions.
 class AuthController extends StateNotifier<AuthState> {
   AuthController({
     required AuthRepository authRepository,
     required TokenStore tokenStore,
-  })  : _authRepository = authRepository,
-        _tokenStore = tokenStore,
-        super(const AuthInitial());
+  }) : _authRepository = authRepository,
+       _tokenStore = tokenStore,
+       super(const AuthInitial());
 
   final AuthRepository _authRepository;
   final TokenStore _tokenStore;

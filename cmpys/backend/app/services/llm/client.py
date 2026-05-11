@@ -18,6 +18,103 @@ logger = logging.getLogger(__name__)
 FIXTURES_DIR = Path(__file__).parent.parent.parent.parent / "fixtures"
 
 
+def _repair_json(raw: str) -> dict | None:
+    """
+    Attempt to repair malformed JSON from LLM output.
+
+    Handles common Gemini failure modes:
+    - Markdown code fences (```json ... ```)
+    - Trailing commas before } or ]
+    - Invalid \escape sequences (unescaped backslashes)
+    - Unterminated strings at EOF
+    - Missing closing braces/brackets
+    """
+    import re
+
+    text = raw.strip()
+
+    # 1. Strip markdown code fences
+    if text.startswith("```"):
+        lines = text.split("\n")
+        # Remove first line (```json) and last line (```)
+        if lines[-1].strip() == "```":
+            lines = lines[1:-1]
+        else:
+            lines = lines[1:]
+        text = "\n".join(lines).strip()
+
+    # 2. Fix invalid backslash escapes (e.g. \n in a string that should be \\n,
+    #    or bare backslashes before non-escape characters)
+    #    Valid JSON escapes: \", \\, \/, \b, \f, \n, \r, \t, \uXXXX
+    text = re.sub(
+        r'\\(?!["\\bfnrtu/])',
+        r'\\\\',
+        text,
+    )
+
+    # 3. Remove trailing commas before } or ]
+    text = re.sub(r',\s*([}\]])', r'\1', text)
+
+    # 3b. Insert missing commas between adjacent values
+    #     Handles: } { → }, {   and  } "key" → }, "key"
+    #     and: "value" "key" → "value", "key"  (number/bool/null before ")
+    text = re.sub(r'(\})\s*(\{)', r'\1, \2', text)
+    text = re.sub(r'(\})\s*(")', r'\1, \2', text)
+    text = re.sub(r'("])\s*(")', r'\1, \2', text)
+    text = re.sub(r'(true|false|null|\d+)\s*\n\s*(")', r'\1,\n\2', text)
+
+    # 4. Try parsing
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # 5. Fix unterminated strings: find last valid content, close open strings
+    #    and add missing closing braces
+    try:
+        # Count open/close braces and brackets
+        open_braces = text.count('{')
+        close_braces = text.count('}')
+        open_brackets = text.count('[')
+        close_brackets = text.count(']')
+
+        # If we're inside an unclosed string, close it
+        # Simple heuristic: count unescaped quotes
+        in_string = False
+        i = 0
+        while i < len(text):
+            c = text[i]
+            if c == '\\' and in_string:
+                i += 2
+                continue
+            if c == '"':
+                in_string = not in_string
+            i += 1
+
+        repair = text
+        if in_string:
+            repair += '"'
+
+        # Add missing closing brackets/braces
+        repair += ']' * max(0, open_brackets - close_brackets)
+        repair += '}' * max(0, open_braces - close_braces)
+
+        return json.loads(repair)
+    except json.JSONDecodeError:
+        pass
+
+    # 6. Last resort: truncate to last valid closing brace and try
+    try:
+        last_brace = text.rfind('}')
+        if last_brace > 0:
+            truncated = text[:last_brace + 1]
+            return json.loads(truncated)
+    except json.JSONDecodeError:
+        pass
+
+    return None
+
+
 class LLMResponse(BaseModel):
     """Response from an LLM call."""
     
@@ -341,7 +438,19 @@ class OpenAILLMClient(BaseLLMClient):
                     raw_response=raw_content,
                 )
             except json.JSONDecodeError as e:
-                logger.error(f"[LLM] Invalid JSON in response: {e}")
+                logger.warning(f"[LLM] Invalid JSON in response: {e}, attempting repair...")
+                
+                # Attempt repair
+                repaired = _repair_json(raw_content)
+                if repaired is not None:
+                    logger.info("[LLM] JSON repair succeeded (OpenAI)")
+                    return LLMResponse(
+                        data=repaired,
+                        raw_response=raw_content,
+                        retried=True,
+                    )
+                
+                logger.error(f"[LLM] JSON repair failed for OpenAI response")
                 logger.debug(f"[LLM] Raw content: {raw_content[:500]}...")
                 return LLMResponse(
                     data={},
@@ -500,6 +609,139 @@ class OpenAILLMClient(BaseLLMClient):
             )
 
 
+class GeminiLLMClient(BaseLLMClient):
+    """
+    Google Gemini LLM client for production use.
+    
+    Uses google.genai SDK with JSON output mode.
+    """
+    
+    def __init__(
+        self,
+        model: str = "gemini-2.5-flash",
+        api_key: str | None = None,
+        timeout: float = 60.0,
+        max_tokens: int | None = None,
+    ):
+        self.model = model
+        self.api_key = api_key
+        self.timeout = timeout
+        self.max_tokens = max_tokens
+    
+    async def generate_json(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        json_schema: dict[str, Any] | None = None,
+        output_model: type[BaseModel] | None = None,
+    ) -> LLMResponse:
+        """Generate JSON using Google Gemini API."""
+        import time
+        
+        try:
+            from google import genai
+            from google.genai import types
+        except ImportError:
+            logger.error("[LLM] google-genai package not installed")
+            return LLMResponse(
+                data={},
+                error="google-genai package not installed. Run: pip install google-genai",
+            )
+        
+        from app.core.config import settings
+        
+        api_key = self.api_key or settings.gemini_api_key
+        if not api_key:
+            logger.error("[LLM] GEMINI_API_KEY not configured")
+            return LLMResponse(
+                data={},
+                error="GEMINI_API_KEY not configured",
+            )
+        
+        model_name = output_model.__name__ if output_model else "generic"
+        logger.info(f"[LLM] Gemini request: model={self.model}, output={model_name}")
+        
+        start_time = time.perf_counter()
+        
+        try:
+            client = genai.Client(api_key=api_key)
+            
+            # Build config
+            config_kwargs: dict[str, Any] = {
+                "temperature": 0.1,
+                "response_mime_type": "application/json",
+            }
+            if self.max_tokens:
+                config_kwargs["max_output_tokens"] = self.max_tokens
+            
+            config = types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                **config_kwargs,
+            )
+            
+            response = await client.aio.models.generate_content(
+                model=self.model,
+                contents=user_prompt,
+                config=config,
+            )
+            
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            
+            raw_content = response.text
+            if not raw_content:
+                logger.warning(f"[LLM] Empty response from Gemini after {duration_ms:.0f}ms")
+                return LLMResponse(
+                    data={},
+                    error="Empty response from Gemini",
+                )
+            
+            # Log usage
+            if response.usage_metadata:
+                logger.info(
+                    f"[LLM] Gemini response: {duration_ms:.0f}ms, "
+                    f"prompt_tokens={response.usage_metadata.prompt_token_count}, "
+                    f"completion_tokens={response.usage_metadata.candidates_token_count}"
+                )
+            else:
+                logger.info(f"[LLM] Gemini response: {duration_ms:.0f}ms")
+            
+            try:
+                data = json.loads(raw_content)
+                logger.debug(f"[LLM] JSON parsed, keys: {list(data.keys()) if isinstance(data, dict) else 'array'}")
+                return LLMResponse(
+                    data=data,
+                    raw_response=raw_content,
+                )
+            except json.JSONDecodeError as e:
+                logger.warning(f"[LLM] Invalid JSON in Gemini response: {e}, attempting repair...")
+                
+                # Attempt repair
+                repaired = _repair_json(raw_content)
+                if repaired is not None:
+                    logger.info("[LLM] JSON repair succeeded")
+                    return LLMResponse(
+                        data=repaired,
+                        raw_response=raw_content,
+                        retried=True,
+                    )
+                
+                logger.error(f"[LLM] JSON repair failed for Gemini response")
+                logger.debug(f"[LLM] Raw content (first 500): {raw_content[:500]}")
+                return LLMResponse(
+                    data={},
+                    raw_response=raw_content,
+                    error=f"Invalid JSON in response: {e}",
+                )
+        
+        except Exception as e:
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            logger.exception(f"[LLM] Gemini API error after {duration_ms:.0f}ms: {e}")
+            return LLMResponse(
+                data={},
+                error=f"Gemini API error: {e}",
+            )
+
+
 def get_llm_client(
     timeout: float = 60.0,
     max_tokens: int | None = None,
@@ -508,21 +750,32 @@ def get_llm_client(
     """
     Factory function to get the configured LLM client.
     
-    Uses LLM_PROVIDER env var: 'dummy' (default) or 'openai'
-    
-    If 'openai' is selected but OPENAI_API_KEY is not set,
-    falls back to DummyLLMClient with a warning.
+    Uses LLM_PROVIDER env var: 'dummy', 'openai', or 'gemini'
     
     Args:
         timeout: Request timeout in seconds (default: 60s)
         max_tokens: Optional max tokens to generate (limits response size)
-        fast: If True, use the faster model (gpt-4o-mini) for quicker responses
+        fast: If True, use the faster model for quicker responses
     """
     from app.core.config import settings
     
     provider = settings.llm_provider
     
-    if provider == "openai":
+    if provider == "gemini":
+        if not settings.gemini_api_key:
+            logger.warning(
+                "LLM_PROVIDER=gemini but GEMINI_API_KEY not set. "
+                "Falling back to dummy client."
+            )
+            return DummyLLMClient()
+        
+        model = settings.gemini_fast_model if fast else settings.gemini_model
+        return GeminiLLMClient(
+            model=model,
+            timeout=timeout,
+            max_tokens=max_tokens,
+        )
+    elif provider == "openai":
         if not settings.openai_api_key:
             logger.warning(
                 "LLM_PROVIDER=openai but OPENAI_API_KEY not set. "
@@ -530,9 +783,7 @@ def get_llm_client(
             )
             return DummyLLMClient()
         
-        # Use fast model for simpler tasks (discovery, suggestions)
         model = settings.openai_fast_model if fast else settings.openai_model
-        
         return OpenAILLMClient(
             model=model,
             timeout=timeout,

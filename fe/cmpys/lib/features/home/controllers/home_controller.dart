@@ -6,6 +6,12 @@ import '../../idols/data/idols_repository.dart';
 import '../../idols/models/idol_models.dart';
 import '../../idols/models/timeline_models.dart';
 
+typedef IdolProfileLoader = Future<IdolProfile> Function(String idolId);
+typedef IdolTimelineLoader =
+    Future<TimelineResponse> Function(String idolId, {int? age, String? mode});
+typedef MissingAvatarGenerator =
+    Future<String> Function(String idolId, {int? age});
+
 /// Home screen state.
 sealed class HomeState {
   const HomeState();
@@ -36,33 +42,51 @@ class HomeError extends HomeState {
 }
 
 /// Home controller provider.
-final homeControllerProvider =
-    StateNotifierProvider<HomeController, HomeState>((ref) {
-  return HomeController(
-    idolsRepository: ref.watch(idolsRepositoryProvider),
-    sessionController: ref.watch(sessionControllerProvider.notifier),
-    currentIdolId: ref.watch(currentIdolIdProvider),
-  );
-});
+final homeControllerProvider = StateNotifierProvider<HomeController, HomeState>(
+  (ref) {
+    final idolsRepository = ref.watch(idolsRepositoryProvider);
+    final sessionController = ref.watch(sessionControllerProvider.notifier);
+    return HomeController(
+      currentIdolId: ref.watch(currentIdolIdProvider),
+      readUserAge: () => sessionController.userAge,
+      clearCurrentIdolId: sessionController.clearCurrentIdolId,
+      loadIdolProfile: idolsRepository.getIdolProfile,
+      loadIdolTimeline: idolsRepository.getIdolTimeline,
+      generateMissingAvatar: idolsRepository.generateAvatar,
+    );
+  },
+);
 
 /// Controller for home screen data.
 class HomeController extends StateNotifier<HomeState> {
   HomeController({
-    required IdolsRepository idolsRepository,
-    required SessionController sessionController,
     required String? currentIdolId,
-  })  : _idolsRepository = idolsRepository,
-        _sessionController = sessionController,
-        _currentIdolId = currentIdolId,
-        super(const HomeInitial());
+    required int? Function() readUserAge,
+    required Future<void> Function() clearCurrentIdolId,
+    required IdolProfileLoader loadIdolProfile,
+    required IdolTimelineLoader loadIdolTimeline,
+    required MissingAvatarGenerator generateMissingAvatar,
+  }) : _currentIdolId = currentIdolId,
+       _readUserAge = readUserAge,
+       _clearCurrentIdolId = clearCurrentIdolId,
+       _loadIdolProfile = loadIdolProfile,
+       _loadIdolTimeline = loadIdolTimeline,
+       _generateAvatar = generateMissingAvatar,
+       super(const HomeInitial());
 
-  final IdolsRepository _idolsRepository;
-  final SessionController _sessionController;
   final String? _currentIdolId;
+  final int? Function() _readUserAge;
+  final Future<void> Function() _clearCurrentIdolId;
+  final IdolProfileLoader _loadIdolProfile;
+  final IdolTimelineLoader _loadIdolTimeline;
+  final MissingAvatarGenerator _generateAvatar;
 
   /// Load home screen data.
   Future<void> load() async {
-    if (_currentIdolId == null) {
+    if (state is HomeLoading) return;
+
+    final idolId = _currentIdolId;
+    if (idolId == null) {
       state = const HomeError(message: 'No idol selected');
       return;
     }
@@ -70,36 +94,67 @@ class HomeController extends StateNotifier<HomeState> {
     state = const HomeLoading();
 
     try {
-      final userAge = _sessionController.userAge;
+      final userAge = _readUserAge();
       if (userAge == null) {
         state = const HomeError(message: 'User age not available');
         return;
       }
 
-      // Fetch idol profile and timeline in parallel
-      // GET /idols/{idolId}/profile
-      // GET /idols/{idolId}/timeline?age={age}&mode=up_to
-      final results = await Future.wait([
-        _idolsRepository.getIdolProfile(_currentIdolId),
-        _idolsRepository.getIdolTimeline(
-          _currentIdolId,
-          age: userAge,
-          mode: 'up_to',
-        ),
-      ]);
+      final idol = await _loadIdolProfile(idolId);
+      final timeline = await _loadTimelineOrEmpty(idolId, idol, userAge);
 
-      final idol = results[0] as IdolProfile;
-      final timeline = results[1] as TimelineResponse;
+      state = HomeLoaded(idol: idol, timeline: timeline, userAge: userAge);
 
-      state = HomeLoaded(
-        idol: idol,
-        timeline: timeline,
-        userAge: userAge,
-      );
+      // Auto-generate avatar in background if missing
+      if (idol.avatarUrl == null || (idol.avatarUrl?.isEmpty ?? true)) {
+        _generateMissingAvatar(idol.id, userAge);
+      }
     } on ApiError catch (e) {
+      if (e.isNotFoundError && e.message.toLowerCase().contains('idol')) {
+        await _clearCurrentIdolId();
+        state = const HomeError(message: 'Choose an idol to continue');
+        return;
+      }
       state = HomeError(message: e.message);
     } catch (e) {
       state = HomeError(message: e.toString());
+    }
+  }
+
+  Future<TimelineResponse> _loadTimelineOrEmpty(
+    String idolId,
+    IdolProfile idol,
+    int userAge,
+  ) async {
+    try {
+      return await _loadIdolTimeline(idolId, age: userAge, mode: 'up_to');
+    } on ApiError catch (e) {
+      if (e.isNotFoundError && e.message.toLowerCase().contains('idol')) {
+        rethrow;
+      }
+      return TimelineResponse(
+        idolId: idol.id,
+        idolName: idol.name,
+        totalEvents: 0,
+      );
+    } catch (_) {
+      return TimelineResponse(
+        idolId: idol.id,
+        idolName: idol.name,
+        totalEvents: 0,
+      );
+    }
+  }
+
+  /// Fire-and-forget background generation of missing avatar.
+  Future<void> _generateMissingAvatar(String idolId, int userAge) async {
+    try {
+      await _generateAvatar(idolId, age: userAge);
+      // Wait a moment then seamlessly refresh to display the newly generated image!
+      await Future.delayed(const Duration(milliseconds: 500));
+      refresh();
+    } catch (e) {
+      // Background generation failed, no state disruption needed
     }
   }
 

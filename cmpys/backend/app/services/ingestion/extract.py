@@ -87,7 +87,7 @@ async def run_profile_extraction(
     Returns:
         ProfileExtractionResponse or None if extraction fails
     """
-    client = client or get_llm_client()
+    client = client or get_llm_client(max_tokens=2000)
     
     # Load prompt templates using prompt_loader
     system_prompt = load_prompt("extractor_system")
@@ -153,7 +153,7 @@ async def run_achievements_extraction(
     Returns:
         AchievementsExtractionResponse or None if extraction fails
     """
-    client = client or get_llm_client()
+    client = client or get_llm_client(max_tokens=4000)
     
     # Load prompt templates
     system_prompt = load_prompt("extractor_system")
@@ -212,7 +212,7 @@ async def run_timeline_normalization(
     Returns:
         TimelineNormalizationResponse or None if normalization fails
     """
-    client = client or get_llm_client()
+    client = client or get_llm_client(max_tokens=4000)
     
     # Load prompt templates
     system_prompt = load_prompt("extractor_system")
@@ -280,7 +280,7 @@ async def run_milestones_by_age(
     Returns:
         MilestonesByAgeResponse or None if query fails
     """
-    client = client or get_llm_client()
+    client = client or get_llm_client(max_tokens=4000)
     
     # Load prompt templates
     system_prompt = load_prompt("extractor_system")
@@ -343,7 +343,7 @@ async def run_persona_pack(
     Returns:
         PersonaPackResponse or None if generation fails
     """
-    client = client or get_llm_client()
+    client = client or get_llm_client(max_tokens=2000)
     
     # Load prompt templates
     system_prompt = load_prompt("extractor_system")

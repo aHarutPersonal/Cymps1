@@ -61,14 +61,11 @@ class PlansRepository {
       'durationWeeks': durationWeeks,
       'weeklyHours': weeklyHours,
     };
-    
+
     if (focus != null) data['focus'] = focus;
     if (gapIds != null && gapIds.isNotEmpty) data['gapIds'] = gapIds;
 
-    final response = await _dioClient.post(
-      '/plans/generate',
-      data: data,
-    );
+    final response = await _dioClient.post('/plans/generate', data: data);
 
     return ImportResponse.fromJson(response.data);
   }
@@ -129,7 +126,11 @@ class PlansRepository {
 
   /// Mark a plan item as completed.
   Future<PlanItem> completePlanItem(String planItemId) async {
-    return updatePlanItem(planItemId, status: 'completed', progressPercent: 100);
+    return updatePlanItem(
+      planItemId,
+      status: 'completed',
+      progressPercent: 100,
+    );
   }
 
   /// Mark a plan item as in progress.
@@ -157,7 +158,7 @@ class PlansRepository {
   ///
   /// [itemId] - The plan item's unique identifier.
   /// Returns [PlanItemDetailsResponse] containing the item, details, and progress.
-  /// 
+  ///
   /// API: GET /plan-items/{item_id}/detailed
   Future<PlanItemDetailsResponse> getPlanItem(String itemId) async {
     final response = await _dioClient.get('/plan-items/$itemId/detailed');
@@ -168,10 +169,12 @@ class PlansRepository {
   ///
   /// [itemId] - The plan item's unique identifier.
   /// Returns [ToggleCompleteResponse] with new completion state and progress.
-  /// 
+  ///
   /// API: POST /plan-items/{item_id}/toggle-complete
   Future<ToggleCompleteResponse> togglePlanItemComplete(String itemId) async {
-    final response = await _dioClient.post('/plan-items/$itemId/toggle-complete');
+    final response = await _dioClient.post(
+      '/plan-items/$itemId/toggle-complete',
+    );
     return ToggleCompleteResponse.fromJson(response.data);
   }
 
@@ -180,7 +183,7 @@ class PlansRepository {
   /// [itemId] - The plan item's unique identifier.
   /// [stepId] - The step's unique identifier.
   /// Returns [ToggleStepResponse] with new completion state and progress.
-  /// 
+  ///
   /// API: POST /plan-items/{item_id}/steps/{step_id}/toggle
   Future<ToggleStepResponse> togglePlanStep(
     String itemId,
@@ -196,7 +199,7 @@ class PlansRepository {
   ///
   /// [itemId] - The plan item's unique identifier.
   /// Returns [RegenerateDetailsResponse] with the job ID to poll for status.
-  /// 
+  ///
   /// API: POST /plan-items/{item_id}/regenerate-details
   Future<RegenerateDetailsResponse> regeneratePlanItemDetails(
     String itemId,
@@ -212,7 +215,7 @@ class PlansRepository {
   /// [planId] - The plan's unique identifier.
   /// [week] - The week number (1-indexed).
   /// Returns [WeekSummary] with week statistics and items.
-  /// 
+  ///
   /// API: GET /plans/{plan_id}/weeks/{week}/summary
   Future<WeekSummary> getWeekSummary(String planId, int week) async {
     final response = await _dioClient.get('/plans/$planId/weeks/$week/summary');

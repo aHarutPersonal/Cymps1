@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -25,7 +26,7 @@ class IntakeRepository {
   /// [targetAge] - Optional target age for comparison.
   ///
   /// Returns [IntakeStartResponse] with session ID and questions.
-  /// 
+  ///
   /// NOTE: If backend doesn't support intake, returns mock questions for testing.
   Future<IntakeStartResponse> startIntake({
     String? idolId,
@@ -44,18 +45,20 @@ class IntakeRepository {
       );
 
       debugPrint('📋 Intake start response: ${response.data}');
-      return IntakeStartResponse.fromJson(response.data as Map<String, dynamic>);
+      return IntakeStartResponse.fromJson(
+        response.data as Map<String, dynamic>,
+      );
     } catch (e) {
       debugPrint('📋 Backend intake not available, using mock questions: $e');
       // Return mock questions for testing when backend doesn't support intake
       return _getMockIntakeResponse(idolId, targetAge);
     }
   }
-  
+
   /// Mock intake response for testing when backend doesn't have intake endpoints.
   IntakeStartResponse _getMockIntakeResponse(String? idolId, int? targetAge) {
     final sessionId = 'mock-session-${DateTime.now().millisecondsSinceEpoch}';
-    
+
     return IntakeStartResponse(
       sessionId: sessionId,
       questions: [
@@ -67,11 +70,31 @@ class IntakeRepository {
           isRequired: true,
           category: 'career',
           options: [
-            IntakeOption(value: 'student', label: 'Student', description: 'Still in school or recently graduated'),
-            IntakeOption(value: 'early_career', label: 'Early Career', description: '0-3 years of professional experience'),
-            IntakeOption(value: 'mid_career', label: 'Mid Career', description: '4-10 years of experience'),
-            IntakeOption(value: 'senior', label: 'Senior/Leadership', description: '10+ years or in leadership role'),
-            IntakeOption(value: 'entrepreneur', label: 'Entrepreneur', description: 'Running my own business'),
+            IntakeOption(
+              value: 'student',
+              label: 'Student',
+              description: 'Still in school or recently graduated',
+            ),
+            IntakeOption(
+              value: 'early_career',
+              label: 'Early Career',
+              description: '0-3 years of professional experience',
+            ),
+            IntakeOption(
+              value: 'mid_career',
+              label: 'Mid Career',
+              description: '4-10 years of experience',
+            ),
+            IntakeOption(
+              value: 'senior',
+              label: 'Senior/Leadership',
+              description: '10+ years or in leadership role',
+            ),
+            IntakeOption(
+              value: 'entrepreneur',
+              label: 'Entrepreneur',
+              description: 'Running my own business',
+            ),
           ],
         ),
         const IntakeQuestion(
@@ -82,12 +105,36 @@ class IntakeRepository {
           isRequired: true,
           category: 'goals',
           options: [
-            IntakeOption(value: 'career_growth', label: 'Career Advancement', description: 'Promotions, leadership roles'),
-            IntakeOption(value: 'skill_development', label: 'Skill Development', description: 'Learn new technologies or skills'),
-            IntakeOption(value: 'financial', label: 'Financial Success', description: 'Increase income, build wealth'),
-            IntakeOption(value: 'startup', label: 'Start a Business', description: 'Launch my own company'),
-            IntakeOption(value: 'work_life', label: 'Work-Life Balance', description: 'Better balance and well-being'),
-            IntakeOption(value: 'impact', label: 'Make an Impact', description: 'Contribute to meaningful causes'),
+            IntakeOption(
+              value: 'career_growth',
+              label: 'Career Advancement',
+              description: 'Promotions, leadership roles',
+            ),
+            IntakeOption(
+              value: 'skill_development',
+              label: 'Skill Development',
+              description: 'Learn new technologies or skills',
+            ),
+            IntakeOption(
+              value: 'financial',
+              label: 'Financial Success',
+              description: 'Increase income, build wealth',
+            ),
+            IntakeOption(
+              value: 'startup',
+              label: 'Start a Business',
+              description: 'Launch my own company',
+            ),
+            IntakeOption(
+              value: 'work_life',
+              label: 'Work-Life Balance',
+              description: 'Better balance and well-being',
+            ),
+            IntakeOption(
+              value: 'impact',
+              label: 'Make an Impact',
+              description: 'Contribute to meaningful causes',
+            ),
           ],
         ),
         const IntakeQuestion(
@@ -98,12 +145,36 @@ class IntakeRepository {
           isRequired: true,
           category: 'challenges',
           options: [
-            IntakeOption(value: 'direction', label: 'Finding Direction', description: 'Not sure what path to take'),
-            IntakeOption(value: 'motivation', label: 'Staying Motivated', description: 'Maintaining focus and energy'),
-            IntakeOption(value: 'skills', label: 'Skill Gaps', description: 'Need to learn new things'),
-            IntakeOption(value: 'network', label: 'Building Network', description: 'Connecting with the right people'),
-            IntakeOption(value: 'confidence', label: 'Confidence', description: 'Believing in myself'),
-            IntakeOption(value: 'time', label: 'Time Management', description: 'Balancing everything'),
+            IntakeOption(
+              value: 'direction',
+              label: 'Finding Direction',
+              description: 'Not sure what path to take',
+            ),
+            IntakeOption(
+              value: 'motivation',
+              label: 'Staying Motivated',
+              description: 'Maintaining focus and energy',
+            ),
+            IntakeOption(
+              value: 'skills',
+              label: 'Skill Gaps',
+              description: 'Need to learn new things',
+            ),
+            IntakeOption(
+              value: 'network',
+              label: 'Building Network',
+              description: 'Connecting with the right people',
+            ),
+            IntakeOption(
+              value: 'confidence',
+              label: 'Confidence',
+              description: 'Believing in myself',
+            ),
+            IntakeOption(
+              value: 'time',
+              label: 'Time Management',
+              description: 'Balancing everything',
+            ),
           ],
         ),
         const IntakeQuestion(
@@ -114,17 +185,38 @@ class IntakeRepository {
           isRequired: false,
           category: 'preferences',
           options: [
-            IntakeOption(value: 'reading', label: 'Reading & Research', description: 'Books, articles, deep dives'),
-            IntakeOption(value: 'video', label: 'Videos & Courses', description: 'Visual and structured learning'),
-            IntakeOption(value: 'doing', label: 'Learning by Doing', description: 'Hands-on projects'),
-            IntakeOption(value: 'mentorship', label: 'Mentorship', description: 'Learning from others'),
-            IntakeOption(value: 'mixed', label: 'Mix of Everything', description: 'Varies by topic'),
+            IntakeOption(
+              value: 'reading',
+              label: 'Reading & Research',
+              description: 'Books, articles, deep dives',
+            ),
+            IntakeOption(
+              value: 'video',
+              label: 'Videos & Courses',
+              description: 'Visual and structured learning',
+            ),
+            IntakeOption(
+              value: 'doing',
+              label: 'Learning by Doing',
+              description: 'Hands-on projects',
+            ),
+            IntakeOption(
+              value: 'mentorship',
+              label: 'Mentorship',
+              description: 'Learning from others',
+            ),
+            IntakeOption(
+              value: 'mixed',
+              label: 'Mix of Everything',
+              description: 'Varies by topic',
+            ),
           ],
         ),
         const IntakeQuestion(
           id: 'q5_commitment',
           title: 'Weekly Commitment',
-          prompt: 'How many hours per week can you dedicate to personal development?',
+          prompt:
+              'How many hours per week can you dedicate to personal development?',
           type: 'scale',
           isRequired: true,
           category: 'commitment',
@@ -137,7 +229,8 @@ class IntakeRepository {
           type: 'multiline',
           isRequired: false,
           category: 'motivation',
-          placeholder: 'Share what aspects of their journey resonate with you...',
+          placeholder:
+              'Share what aspects of their journey resonate with you...',
           validation: IntakeValidation(maxLength: 500),
         ),
       ],
@@ -158,19 +251,20 @@ class IntakeRepository {
   }) async {
     // Handle mock sessions locally
     if (sessionId.startsWith('mock-session-')) {
-      debugPrint('📝 Mock session - storing answer locally: $questionId = $answer');
+      debugPrint(
+        '📝 Mock session - storing answer locally: $questionId = $answer',
+      );
       return SubmitAnswerResponse(
         success: true,
         answer: IntakeAnswer(questionId: questionId, answer: answer),
       );
     }
-    
-    final data = {
-      'questionId': questionId,
-      'answer': answer,
-    };
 
-    debugPrint('📝 Submitting answer: sessionId=$sessionId, questionId=$questionId');
+    final data = {'questionId': questionId, 'answer': answer};
+
+    debugPrint(
+      '📝 Submitting answer: sessionId=$sessionId, questionId=$questionId',
+    );
 
     // API: POST /intake/{session_id}/answer
     final response = await _dioClient.post(
@@ -196,12 +290,16 @@ class IntakeRepository {
         message: 'Intake completed (mock mode)',
       );
     }
-    
+
     debugPrint('✅ Finishing intake: sessionId=$sessionId');
 
     // API: POST /intake/{session_id}/finish
     final response = await _dioClient.post(
       '/intake/$sessionId/finish',
+      options: Options(
+        receiveTimeout: const Duration(minutes: 3),
+        sendTimeout: const Duration(minutes: 3),
+      ),
     );
 
     debugPrint('✅ Finish intake response: ${response.data}');
@@ -217,12 +315,12 @@ class IntakeRepository {
     debugPrint('📖 Getting intake session: sessionId=$sessionId');
 
     // API: GET /intake/{session_id}
-    final response = await _dioClient.get(
-      '/intake/$sessionId',
-    );
+    final response = await _dioClient.get('/intake/$sessionId');
 
     debugPrint('📖 Intake session response: ${response.data}');
-    return IntakeSessionResponse.fromJson(response.data as Map<String, dynamic>);
+    return IntakeSessionResponse.fromJson(
+      response.data as Map<String, dynamic>,
+    );
   }
 
   /// Get job status by ID.
@@ -308,8 +406,10 @@ class IntakeRepository {
       debugPrint('⏭️ Mock session - skipping question locally: $questionId');
       return const SubmitAnswerResponse(success: true);
     }
-    
-    debugPrint('⏭️ Skipping question: sessionId=$sessionId, questionId=$questionId');
+
+    debugPrint(
+      '⏭️ Skipping question: sessionId=$sessionId, questionId=$questionId',
+    );
 
     // API: POST /intake/{session_id}/skip (if supported)
     final response = await _dioClient.post(
@@ -348,11 +448,59 @@ class IntakeRepository {
       }
 
       debugPrint('🔍 Active intake session found: ${response.data}');
-      return IntakeSessionResponse.fromJson(response.data as Map<String, dynamic>);
+      return IntakeSessionResponse.fromJson(
+        response.data as Map<String, dynamic>,
+      );
     } catch (e) {
       // No active session
       debugPrint('🔍 No active intake session (error: $e)');
       return null;
     }
+  }
+
+  /// Start an achievement-specific intake session.
+  ///
+  /// Generates idol-specific questions focused on the user's
+  /// existing achievements for later comparison.
+  Future<IntakeStartResponse> startAchievementIntake({
+    String? idolId,
+    int? targetAge,
+  }) async {
+    final data = <String, dynamic>{};
+    if (idolId != null) data['idolId'] = idolId;
+    if (targetAge != null) data['targetAge'] = targetAge;
+
+    debugPrint(
+      '🏆 Starting achievement intake: idolId=$idolId, targetAge=$targetAge',
+    );
+
+    try {
+      final response = await _dioClient.post(
+        '/intake/achievement-intake',
+        data: data.isNotEmpty ? data : null,
+      );
+
+      debugPrint('🏆 Achievement intake response: ${response.data}');
+      return IntakeStartResponse.fromJson(
+        response.data as Map<String, dynamic>,
+      );
+    } catch (e) {
+      debugPrint('🏆 Achievement intake failed: $e');
+      rethrow;
+    }
+  }
+
+  /// Finish an achievement intake session.
+  ///
+  /// Extracts achievements from answers and stores them as UserAchievement records.
+  Future<Map<String, dynamic>> finishAchievementIntake(String sessionId) async {
+    debugPrint('🏆 Finishing achievement intake: sessionId=$sessionId');
+
+    final response = await _dioClient.post(
+      '/intake/achievement-intake/$sessionId/finish',
+    );
+
+    debugPrint('🏆 Achievement intake finish response: ${response.data}');
+    return response.data as Map<String, dynamic>;
   }
 }

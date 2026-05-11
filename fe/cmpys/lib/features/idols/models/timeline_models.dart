@@ -31,6 +31,7 @@ class TimelineItem with _$TimelineItem {
 
   const factory TimelineItem({
     String? id,
+
     /// Title of the milestone (backend may use 'canonical_title' or 'title')
     String? canonicalTitle,
     String? title,
@@ -47,12 +48,15 @@ class TimelineItem with _$TimelineItem {
   factory TimelineItem.fromJson(Map<String, dynamic> json) {
     return TimelineItem(
       id: json['id']?.toString(),
-      canonicalTitle: (json['canonicalTitle'] ?? json['canonical_title'])?.toString(),
+      canonicalTitle: (json['canonicalTitle'] ?? json['canonical_title'])
+          ?.toString(),
       title: json['title']?.toString(),
       description: json['description']?.toString(),
       ageAtEvent: (json['ageAtEvent'] ?? json['age_at_event'] as num?)?.toInt(),
       category: json['category']?.toString(),
-      importanceScore: (json['importanceScore'] ?? json['importance_score'] as num?)?.toDouble(),
+      importanceScore:
+          (json['importanceScore'] ?? json['importance_score'] as num?)
+              ?.toDouble(),
       confidence: (json['confidence'] as num?)?.toDouble(),
       evidence: _parseEvidence(json['evidence']) ?? [],
       dateText: (json['dateText'] ?? json['date_text'])?.toString(),
@@ -104,9 +108,13 @@ class TimelineResponse with _$TimelineResponse {
       events: _parseItems(json['events']) ?? [],
       timeline: _parseItems(json['timeline']) ?? [],
       milestones: _parseItems(json['milestones']) ?? [],
-      completenessEstimate: (json['completenessEstimate'] ?? json['completeness_estimate'] as num?)?.toDouble(),
+      completenessEstimate:
+          (json['completenessEstimate'] ??
+                  json['completeness_estimate'] as num?)
+              ?.toDouble(),
       totalCount: (json['totalCount'] ?? json['total_count'] as num?)?.toInt(),
-      totalEvents: (json['totalEvents'] ?? json['total_events'] as num?)?.toInt(),
+      totalEvents: (json['totalEvents'] ?? json['total_events'] as num?)
+          ?.toInt(),
       idolId: (json['idolId'] ?? json['idol_id'])?.toString(),
       idolName: (json['idolName'] ?? json['idol_name'])?.toString(),
       mode: json['mode']?.toString(),

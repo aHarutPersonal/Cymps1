@@ -1,18 +1,16 @@
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
+import 'package:phosphor_flutter/phosphor_flutter.dart';
 
-import '../../app/assets.dart';
 import '../../app/design_tokens.dart';
+import '../../app/router.dart';
 
-/// Main app shell with bottom navigation.
+/// Main app shell with product-deck glass navigation.
 class AppShell extends StatelessWidget {
-  const AppShell({
-    super.key,
-    required this.navigationShell,
-  });
+  const AppShell({super.key, required this.navigationShell});
 
   final StatefulNavigationShell navigationShell;
 
@@ -20,7 +18,19 @@ class AppShell extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       body: navigationShell,
-      bottomNavigationBar: _BottomNavBar(
+      extendBody: true, // content extends behind the blurred nav bar
+      floatingActionButton: FloatingActionButton(
+        backgroundColor: AppColors.brandAccent,
+        foregroundColor: Colors.white,
+        elevation: 0,
+        shape: const StadiumBorder(),
+        onPressed: () {
+          HapticFeedback.lightImpact();
+          context.goToChat();
+        },
+        child: const Icon(PhosphorIconsBold.chatCircle),
+      ),
+      bottomNavigationBar: _GlassNavBar(
         currentIndex: navigationShell.currentIndex,
         onTap: (index) => _onTap(context, index),
       ),
@@ -28,6 +38,7 @@ class AppShell extends StatelessWidget {
   }
 
   void _onTap(BuildContext context, int index) {
+    HapticFeedback.selectionClick();
     navigationShell.goBranch(
       index,
       initialLocation: index == navigationShell.currentIndex,
@@ -35,71 +46,71 @@ class AppShell extends StatelessWidget {
   }
 }
 
-class _BottomNavBar extends StatelessWidget {
-  const _BottomNavBar({
-    required this.currentIndex,
-    required this.onTap,
-  });
+/// Glassmorphism bottom navigation bar with frosted-glass effect.
+class _GlassNavBar extends StatelessWidget {
+  const _GlassNavBar({required this.currentIndex, required this.onTap});
 
   final int currentIndex;
   final ValueChanged<int> onTap;
 
   @override
   Widget build(BuildContext context) {
-    return ClipRect(
+    return ClipRRect(
       child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
         child: Container(
-          decoration: const BoxDecoration(
-            color: AppColors.surfaceGlass,
+          decoration: BoxDecoration(
+            color: AppColors.surface.withValues(alpha: 0.88),
             border: Border(
-              top: BorderSide(color: AppColors.borderLight, width: 0.5),
+              top: BorderSide(
+                color: AppColors.glassBorder.withValues(alpha: 0.9),
+                width: 0.8,
+              ),
             ),
+            boxShadow: [
+              BoxShadow(
+                color: AppColors.charcoal.withValues(alpha: 0.08),
+                blurRadius: 24,
+                offset: const Offset(0, -10),
+              ),
+            ],
           ),
           child: SafeArea(
             top: false,
             child: ConstrainedBox(
               constraints: const BoxConstraints(minHeight: 56, maxHeight: 80),
               child: Padding(
-                padding: const EdgeInsets.only(top: 12),
+                padding: const EdgeInsets.only(top: 10),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceAround,
                   children: [
                     _NavItem(
-                      icon: AppAssets.iconHome,
-                      label: 'HUB',
+                      icon: PhosphorIconsBold.house,
+                      iconOutline: PhosphorIconsRegular.house,
+                      label: 'MIRROR',
                       isSelected: currentIndex == 0,
                       onTap: () => onTap(0),
                     ),
                     _NavItem(
-                      icon: AppAssets.iconTrendingUp,
-                      label: 'MIRROR',
+                      icon: PhosphorIconsBold.trendUp,
+                      iconOutline: PhosphorIconsRegular.trendUp,
+                      label: 'PATH',
                       isSelected: currentIndex == 1,
                       onTap: () => onTap(1),
                     ),
                     _NavItem(
-                      icon: AppAssets.iconTarget,
-                      label: 'PLAN',
+                      icon: PhosphorIconsBold.cpu,
+                      iconOutline: PhosphorIconsRegular.cpu,
+                      label: 'STUDIO',
                       isSelected: currentIndex == 2,
                       onTap: () => onTap(2),
                     ),
                     _NavItem(
-                      icon: AppAssets.iconMessageCircle,
-                      label: 'ADVISOR',
+                      icon: PhosphorIconsBold.vault,
+                      iconOutline: PhosphorIconsRegular.vault,
+                      label: 'VAULT',
                       isSelected: currentIndex == 3,
                       onTap: () => onTap(3),
-                    ),
-                    _NavItem(
-                      icon: AppAssets.iconFileText,
-                      label: 'LEDGER',
-                      isSelected: currentIndex == 4,
-                      onTap: () => onTap(4),
-                    ),
-                    _NavItem(
-                      icon: AppAssets.iconUser,
-                      label: 'PROFILE',
-                      isSelected: currentIndex == 5,
-                      onTap: () => onTap(5),
                     ),
                   ],
                 ),
@@ -112,51 +123,63 @@ class _BottomNavBar extends StatelessWidget {
   }
 }
 
+/// Individual navigation item with bold/regular icon toggle.
 class _NavItem extends StatelessWidget {
   const _NavItem({
     required this.icon,
+    required this.iconOutline,
     required this.label,
     required this.isSelected,
     required this.onTap,
   });
 
-  final String icon;
+  final IconData icon; // bold fill
+  final IconData iconOutline; // regular outline
   final String label;
   final bool isSelected;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(minWidth: 48, maxWidth: 64),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SvgPicture.asset(
-              icon,
-              width: 24,
-              height: 24,
-              colorFilter: ColorFilter.mode(
-                isSelected ? AppColors.textPrimary : AppColors.textTertiary,
-                BlendMode.srcIn,
+    return Semantics(
+      label: label,
+      selected: isSelected,
+      button: true,
+      child: GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minWidth: 48, maxWidth: 72),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              AnimatedSwitcher(
+                duration: AppDurations.fast,
+                child: Icon(
+                  isSelected ? icon : iconOutline,
+                  key: ValueKey(isSelected),
+                  size: 24,
+                  color: isSelected
+                      ? AppColors.brandAccent
+                      : AppColors.textTertiary,
+                ),
               ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              style: AppTypography.captionUpper.copyWith(
-                fontSize: 10,
-                color: isSelected ? AppColors.textPrimary : AppColors.textTertiary,
-                fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
+              const SizedBox(height: 4),
+              Text(
+                label,
+                style: AppTypography.captionUpper.copyWith(
+                  fontSize: 10,
+                  color: isSelected
+                      ? AppColors.brandAccent
+                      : AppColors.textTertiary,
+                  fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

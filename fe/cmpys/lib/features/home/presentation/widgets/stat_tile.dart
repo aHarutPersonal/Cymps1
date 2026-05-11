@@ -29,9 +29,8 @@ class MetricCard extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: AppColors.surface,
-          borderRadius: AppRadii.br16,
-          border: Border.all(color: AppColors.borderLight),
+          color: AppColors.cardCream,
+          borderRadius: AppRadii.br24,
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -42,14 +41,14 @@ class MetricCard extends StatelessWidget {
                 Text(
                   label.toUpperCase(),
                   style: AppTypography.captionUpper.copyWith(
-                    color: AppColors.textSecondary,
+                    color: AppColors.cardTextSecondary,
                   ),
                 ),
                 if (trailingIcon != null)
                   Icon(
                     trailingIcon,
                     size: 16,
-                    color: trailingIconColor ?? AppColors.emerald,
+                    color: trailingIconColor ?? AppColors.coral,
                   ),
               ],
             ),
@@ -57,7 +56,7 @@ class MetricCard extends StatelessWidget {
             Text(
               value,
               style: AppTypography.h2.copyWith(
-                color: valueColor ?? AppColors.textPrimary,
+                color: valueColor ?? AppColors.cardTextPrimary,
               ),
             ),
             if (subLabel != null) ...[
@@ -65,7 +64,7 @@ class MetricCard extends StatelessWidget {
               Text(
                 subLabel!,
                 style: AppTypography.caption.copyWith(
-                  color: AppColors.textTertiary,
+                  color: AppColors.cardTextSecondary,
                   fontSize: 11,
                 ),
               ),

@@ -66,10 +66,7 @@ class OnboardingIdolConfirmStep extends OnboardingState {
 }
 
 class OnboardingImportingIdol extends OnboardingState {
-  const OnboardingImportingIdol({
-    required this.idol,
-    required this.jobStatus,
-  });
+  const OnboardingImportingIdol({required this.idol, required this.jobStatus});
   final IdolCandidate idol;
   final JobStatus jobStatus;
 }
@@ -88,13 +85,13 @@ class OnboardingError extends OnboardingState {
 /// Onboarding controller provider.
 final onboardingControllerProvider =
     StateNotifierProvider<OnboardingController, OnboardingState>((ref) {
-  return OnboardingController(
-    meRepository: ref.watch(meRepositoryProvider),
-    idolsRepository: ref.watch(idolsRepositoryProvider),
-    jobsRepository: ref.watch(jobsRepositoryProvider),
-    sessionController: ref.watch(sessionControllerProvider.notifier),
-  );
-});
+      return OnboardingController(
+        meRepository: ref.watch(meRepositoryProvider),
+        idolsRepository: ref.watch(idolsRepositoryProvider),
+        jobsRepository: ref.watch(jobsRepositoryProvider),
+        sessionController: ref.watch(sessionControllerProvider.notifier),
+      );
+    });
 
 /// Controller for onboarding flow.
 class OnboardingController extends StateNotifier<OnboardingState> {
@@ -103,11 +100,11 @@ class OnboardingController extends StateNotifier<OnboardingState> {
     required IdolsRepository idolsRepository,
     required JobsRepository jobsRepository,
     required SessionController sessionController,
-  })  : _meRepository = meRepository,
-        _idolsRepository = idolsRepository,
-        _jobsRepository = jobsRepository,
-        _sessionController = sessionController,
-        super(const OnboardingInitial());
+  }) : _meRepository = meRepository,
+       _idolsRepository = idolsRepository,
+       _jobsRepository = jobsRepository,
+       _sessionController = sessionController,
+       super(const OnboardingInitial());
 
   final MeRepository _meRepository;
   final IdolsRepository _idolsRepository;
@@ -153,8 +150,10 @@ class OnboardingController extends StateNotifier<OnboardingState> {
   /// Save profile and move to idol suggestions.
   Future<void> saveProfile() async {
     debugPrint('🎯 OnboardingController.saveProfile() called');
-    debugPrint('🎯 fullName=$_fullName, birthDate=$_birthDate, interests=$_interests');
-    
+    debugPrint(
+      '🎯 fullName=$_fullName, birthDate=$_birthDate, interests=$_interests',
+    );
+
     if (_fullName == null || _birthDate == null || _interests.isEmpty) {
       debugPrint('🎯 Validation failed');
       state = const OnboardingError(message: 'Please complete all fields');
@@ -212,7 +211,7 @@ class OnboardingController extends StateNotifier<OnboardingState> {
 
     try {
       final response = await _idolsRepository.suggest(_interests);
-      
+
       if (response.jobId != null) {
         debugPrint('🎯 Got jobId for suggestions: ${response.jobId}');
         await _pollSuggestionJob(response.jobId!);
@@ -220,7 +219,9 @@ class OnboardingController extends StateNotifier<OnboardingState> {
         // Fallback for immediate response (if backend supports it)
         // Note: Our updated backend always returns a job for LLM suggestions
         debugPrint('🎯 No jobId, using immediate suggestions');
-        state = OnboardingIdolSuggestStep(suggestions: []); // Needs to be filled if ever used
+        state = OnboardingIdolSuggestStep(
+          suggestions: [],
+        ); // Needs to be filled if ever used
       }
     } on ApiError catch (e) {
       state = OnboardingError(
@@ -300,11 +301,12 @@ class OnboardingController extends StateNotifier<OnboardingState> {
 
     try {
       final response = await _idolsRepository.discover(query);
-      
+
       // Only update state if this query is still the current one
       // This prevents race conditions where old results overwrite newer ones
       final currentState = state;
-      if (currentState is OnboardingIdolSearchStep && currentState.query == query) {
+      if (currentState is OnboardingIdolSearchStep &&
+          currentState.query == query) {
         state = OnboardingIdolSearchStep(
           query: query,
           results: response.candidates,
@@ -315,7 +317,8 @@ class OnboardingController extends StateNotifier<OnboardingState> {
     } on ApiError catch (e) {
       // Only show error if still on this query
       final currentState = state;
-      if (currentState is OnboardingIdolSearchStep && currentState.query == query) {
+      if (currentState is OnboardingIdolSearchStep &&
+          currentState.query == query) {
         state = OnboardingError(
           message: e.message,
           previousState: OnboardingIdolSearchStep(query: query),
@@ -323,7 +326,8 @@ class OnboardingController extends StateNotifier<OnboardingState> {
       }
     } catch (e) {
       final currentState = state;
-      if (currentState is OnboardingIdolSearchStep && currentState.query == query) {
+      if (currentState is OnboardingIdolSearchStep &&
+          currentState.query == query) {
         state = OnboardingError(
           message: e.toString(),
           previousState: OnboardingIdolSearchStep(query: query),
@@ -352,7 +356,9 @@ class OnboardingController extends StateNotifier<OnboardingState> {
     final idol = _selectedIdol!;
 
     // ignore: avoid_print
-    print('🎯 Confirming idol: ${idol.name} (provider: ${idol.provider}, id: ${idol.externalId})');
+    print(
+      '🎯 Confirming idol: ${idol.name} (provider: ${idol.provider}, id: ${idol.externalId})',
+    );
 
     state = OnboardingImportingIdol(
       idol: idol,
@@ -374,13 +380,17 @@ class OnboardingController extends StateNotifier<OnboardingState> {
         externalId: idol.externalId,
         name: idol.name,
         description: idol.description,
-        birthDate: idol.birthDate?.toIso8601String().split('T')[0], // YYYY-MM-DD
+        birthDate: idol.birthDate?.toIso8601String().split(
+          'T',
+        )[0], // YYYY-MM-DD
         wikipediaUrl: idol.wikipediaUrl,
         occupations: idol.occupations.isNotEmpty ? idol.occupations : null,
       );
 
       if (importResponse.jobId == null || importResponse.idolId == null) {
-        throw Exception(importResponse.detail ?? 'Failed to start import: missing ID');
+        throw Exception(
+          importResponse.detail ?? 'Failed to start import: missing ID',
+        );
       }
 
       // Poll for job completion

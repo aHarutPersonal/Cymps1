@@ -9,22 +9,16 @@ import '../../../app/assets.dart';
 import '../../../app/design_tokens.dart';
 import '../../../app/router.dart';
 import '../../../core/ui/cmpys_button.dart';
-import '../../../core/ui/progress_bar.dart';
-import '../../../core/ui/thinking_stream.dart';
+import '../../../core/ui/prototype_grid_background.dart';
 import '../../auth/controllers/session_controller.dart';
-import '../../intake/data/intake_repository.dart';
 import '../data/idols_repository.dart';
 import '../data/jobs_repository.dart';
 import '../models/idol_models.dart';
 import '../models/job_models.dart';
+import 'idol_visuals.dart';
 
 class EnrichingScreen extends ConsumerStatefulWidget {
-  const EnrichingScreen({
-    super.key,
-    this.jobId,
-    this.idolId,
-    this.idol,
-  });
+  const EnrichingScreen({super.key, this.jobId, this.idolId, this.idol});
 
   final String? jobId;
   final String? idolId;
@@ -34,9 +28,7 @@ class EnrichingScreen extends ConsumerStatefulWidget {
   ConsumerState<EnrichingScreen> createState() => _EnrichingScreenState();
 }
 
-class _EnrichingScreenState extends ConsumerState<EnrichingScreen>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _pulseController;
+class _EnrichingScreenState extends ConsumerState<EnrichingScreen> {
   final ScrollController _scrollController = ScrollController();
 
   JobStatus? _jobStatus;
@@ -52,11 +44,6 @@ class _EnrichingScreenState extends ConsumerState<EnrichingScreen>
   @override
   void initState() {
     super.initState();
-    _pulseController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 2),
-    )..repeat();
-
     _currentJobId = widget.jobId;
     _currentIdolId = widget.idolId;
 
@@ -66,7 +53,6 @@ class _EnrichingScreenState extends ConsumerState<EnrichingScreen>
 
   @override
   void dispose() {
-    _pulseController.dispose();
     _scrollController.dispose();
     _stopPolling();
     super.dispose();
@@ -101,42 +87,43 @@ class _EnrichingScreenState extends ConsumerState<EnrichingScreen>
     // Poll every 1.5 seconds (between 1-2s as requested)
     _jobSubscription = jobsRepository
         .watchJob(
-      _currentJobId!,
-      pollInterval: const Duration(milliseconds: 1500),
-    )
+          _currentJobId!,
+          pollInterval: const Duration(milliseconds: 1500),
+        )
         .listen(
-      (status) {
-        if (!mounted) return;
+          (status) {
+            if (!mounted) return;
 
-        setState(() => _jobStatus = status);
-        _scrollToBottom();
+            setState(() => _jobStatus = status);
+            _scrollToBottom();
 
-        // Store idol ID from job status if available
-        if (status.idolId != null) {
-          _currentIdolId = status.idolId;
-        }
+            // Store idol ID from job status if available
+            if (status.idolId != null) {
+              _currentIdolId = status.idolId;
+            }
 
-        // Stop polling when status is terminal (done/failed)
-        if (status.isCompleted) {
-          _stopPolling();
-          _onJobComplete();
-        } else if (status.isFailed) {
-          _stopPolling();
-          setState(() {
-            _hasError = true;
-            _errorMessage = status.errorMessage ?? 'Import failed. Please try again.';
-          });
-        }
-      },
-      onError: (error) {
-        if (!mounted) return;
-        _stopPolling();
-        setState(() {
-          _hasError = true;
-          _errorMessage = error.toString();
-        });
-      },
-    );
+            // Stop polling when status is terminal (done/failed)
+            if (status.isCompleted) {
+              _stopPolling();
+              _onJobComplete();
+            } else if (status.isFailed) {
+              _stopPolling();
+              setState(() {
+                _hasError = true;
+                _errorMessage =
+                    status.errorMessage ?? 'Import failed. Please try again.';
+              });
+            }
+          },
+          onError: (error) {
+            if (!mounted) return;
+            _stopPolling();
+            setState(() {
+              _hasError = true;
+              _errorMessage = error.toString();
+            });
+          },
+        );
   }
 
   void _scrollToBottom() {
@@ -154,48 +141,35 @@ class _EnrichingScreenState extends ConsumerState<EnrichingScreen>
   /// Called when job completes successfully (status = done)
   Future<void> _onJobComplete() async {
     debugPrint('✅ _onJobComplete called, idolId: $_currentIdolId');
-    
+
     // Store idol ID in session
     if (_currentIdolId != null) {
-      await ref.read(sessionControllerProvider.notifier).setCurrentIdolId(_currentIdolId!);
+      await ref
+          .read(sessionControllerProvider.notifier)
+          .setCurrentIdolId(_currentIdolId!);
     }
 
     if (!mounted) return;
 
     // Small delay to show completion state before navigating
     await Future.delayed(const Duration(seconds: 1));
-    
+
     if (!mounted) return;
 
-    // Start intake flow with idol ID and user age
-    try {
+    // Navigate to achievement intake first (before general intake)
+    if (_currentIdolId != null) {
       final userAge = ref.read(sessionControllerProvider.notifier).userAge;
-      final intakeRepository = ref.read(intakeRepositoryProvider);
-      
-      debugPrint('📋 Starting intake: idolId=$_currentIdolId, targetAge=$userAge');
-      
-      final intakeResponse = await intakeRepository.startIntake(
-        idolId: _currentIdolId,
+      context.goToAchievementIntake(
+        idolId: _currentIdolId!,
         targetAge: userAge,
+        mentorName: widget.idol?.name,
+        mentorImageUrl: widget.idol != null
+            ? imageUrlForIdolCandidate(widget.idol!)
+            : null,
       );
-
-      debugPrint('📋 Intake started: sessionId=${intakeResponse.sessionId}, questions=${intakeResponse.questions.length}');
-
-      if (!mounted) return;
-
-      // Navigate to intake wizard with session and questions
-      debugPrint('🚀 Navigating to IntakeWizardScreen');
-      context.goToIntake(
-        sessionId: intakeResponse.sessionId,
-        questions: intakeResponse.questions,
-        idolId: _currentIdolId,
-        targetAge: userAge,
-      );
-    } catch (e) {
-      // If intake fails, complete onboarding and go to home
-      debugPrint('❌ Failed to start intake: $e');
+    } else {
+      // Fallback: skip to home
       await ref.read(sessionControllerProvider.notifier).completeOnboarding();
-      
       if (!mounted) return;
       context.go(AppRoutes.home);
     }
@@ -253,12 +227,26 @@ class _EnrichingScreenState extends ConsumerState<EnrichingScreen>
     if (step == null) return 'Preparing...';
 
     return switch (step.toLowerCase()) {
-      'collecting_sources' || 'fetching' || 'fetch' || 'scraping' => 'Gathering timeline data...',
-      'extracting_profile' || 'parsing' || 'parse' => 'Reading profile information...',
+      'collecting_sources' ||
+      'fetching' ||
+      'fetch' ||
+      'scraping' => 'Gathering timeline data...',
+      'extracting_profile' ||
+      'parsing' ||
+      'parse' => 'Reading profile information...',
       'extracting_achievements' || 'extracting' => 'Analyzing achievements...',
-      'normalizing_timeline' || 'enriching' || 'enrich' || 'processing' => 'Building comparison model...',
-      'generating_persona' || 'generating' || 'generate' || 'analyzing' => 'Generating insights...',
-      'storing_data' || 'finalizing' || 'finalize' || 'completing' => 'Preparing your dashboard...',
+      'normalizing_timeline' ||
+      'enriching' ||
+      'enrich' ||
+      'processing' => 'Building comparison model...',
+      'generating_persona' ||
+      'generating' ||
+      'generate' ||
+      'analyzing' => 'Generating insights...',
+      'storing_data' ||
+      'finalizing' ||
+      'finalize' ||
+      'completing' => 'Preparing your dashboard...',
       'pending' => 'Starting import...',
       'running' || 'in_progress' => 'Processing...',
       'done' => 'Complete!',
@@ -272,165 +260,196 @@ class _EnrichingScreenState extends ConsumerState<EnrichingScreen>
     final stepLabel = _getStepLabel(_jobStatus?.step);
     // Prefer idol name from job status, fallback to widget idol
     final idolName = _jobStatus?.idolName ?? widget.idol?.name ?? 'your idol';
-    final thinkingStream = _jobStatus?.thinkingStream;
-    final previewAchievements = _jobStatus?.previewAchievements;
     final previewDomains = _jobStatus?.previewDomains;
 
     return Scaffold(
-      backgroundColor: AppColors.bg,
-      body: SafeArea(
-        child: Column(
-          children: [
-            // Fixed header section
-            Padding(
-              padding: AppSpacing.screenH,
-              child: Column(
-                children: [
-                  const SizedBox(height: AppSpacing.s32),
-                  // Header with idol name and progress
-                  _HeaderSection(
-                    idolName: idolName,
-                    hasError: _hasError,
+      backgroundColor: AppColors.surface,
+      body: PrototypeGridBackground(
+        color: AppColors.surface,
+        child: SafeArea(
+          child: _hasError
+              ? SingleChildScrollView(
+                  padding: AppSpacing.p24,
+                  child: _ErrorSection(
+                    errorMessage: _errorMessage,
                     isRetrying: _isRetrying,
+                    onRetry: _onRetryImport,
+                    onChooseDifferent: _onChooseDifferentIdol,
                   ),
-                  const SizedBox(height: AppSpacing.s24),
-                  // Progress bar
-                  if (!_hasError)
-                    _ProgressSection(
-                      progress: progress,
-                      stepLabel: stepLabel,
-                    ),
-                ],
-              ),
-            ),
-
-            const SizedBox(height: AppSpacing.s24),
-
-            // Scrollable content section
-            Expanded(
-              child: SingleChildScrollView(
-                controller: _scrollController,
-                padding: AppSpacing.screenH,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (_hasError) ...[
-                      // Error state
-                      _ErrorSection(
-                        errorMessage: _errorMessage,
-                        isRetrying: _isRetrying,
-                        onRetry: _onRetryImport,
-                        onChooseDifferent: _onChooseDifferentIdol,
+                )
+              : Padding(
+                  padding: AppSpacing.p24,
+                  child: Column(
+                    children: [
+                      const Spacer(),
+                      AspectRatio(
+                        aspectRatio: 1,
+                        child: Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            _ThinkingRing(inset: 0, opacity: 0.10),
+                            _ThinkingRing(inset: 40, opacity: 0.20),
+                            _ThinkingRing(inset: 80, opacity: 0.40),
+                            Container(
+                              width: 192,
+                              height: 192,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: AppColors.mint,
+                                  width: 2,
+                                ),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: AppColors.mint.withValues(
+                                      alpha: 0.20,
+                                    ),
+                                    blurRadius: 40,
+                                  ),
+                                ],
+                              ),
+                              clipBehavior: Clip.antiAlias,
+                              child: Image.network(
+                                widget.idol != null
+                                    ? imageUrlForIdolCandidate(widget.idol!)
+                                    : kPrototypeThinkingAsset,
+                                fit: BoxFit.cover,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
-                    ] else ...[
-                      // Thinking stream (AI text)
-                      if (thinkingStream != null) ...[
-                        ThinkingStreamWidget(
-                          stream: thinkingStream,
-                          idolName: idolName,
-                        ),
-                        const SizedBox(height: AppSpacing.s24),
-                      ] else ...[
-                        // Fallback animated icon when no thinking stream
-                        Center(
-                          child: _AnimatedIcon(
-                            animation: _pulseController,
-                            hasError: false,
-                            isRetrying: _isRetrying,
+                      const SizedBox(height: AppSpacing.s32),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Container(
+                            width: 8,
+                            height: 8,
+                            decoration: const BoxDecoration(
+                              color: AppColors.mint,
+                              shape: BoxShape.circle,
+                            ),
                           ),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Engine.Reasoning_Active',
+                            style: AppTypography.captionUpper.copyWith(
+                              color: AppColors.mint,
+                              fontSize: 10,
+                              letterSpacing: 2,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: AppSpacing.s16),
+                      Text(
+                        'Synthesizing\n$idolName...',
+                        style: AppTypography.h2.copyWith(height: 1.2),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: AppSpacing.s24),
+                      Container(
+                        width: double.infinity,
+                        padding: AppSpacing.p20,
+                        decoration: BoxDecoration(
+                          color: AppColors.surfaceHighlight,
+                          border: Border.all(color: AppColors.borderLight),
+                          borderRadius: AppRadii.br12,
                         ),
-                        const SizedBox(height: AppSpacing.s24),
+                        child: Column(
+                          children: [
+                            _ThinkingLogRow(
+                              label: 'COLLECTING_SOURCE_GRAPH',
+                              complete: progress >= 0.20,
+                            ),
+                            _ThinkingLogRow(
+                              label: 'READING_PROFILE_INFORMATION',
+                              active: stepLabel.contains('Reading'),
+                              complete: progress >= 0.35,
+                            ),
+                            _ThinkingLogRow(
+                              label: 'EXTRACTING_ACHIEVEMENT_NODES',
+                              active:
+                                  stepLabel.contains('achievement') ||
+                                  stepLabel.contains('Analyzing'),
+                              complete: progress >= 0.60,
+                            ),
+                            _ThinkingLogRow(
+                              label: 'ALIGNING_COMPARISON_PROTOCOL',
+                              active: progress > 0.60,
+                              complete: progress >= 1.0,
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (previewDomains != null &&
+                          previewDomains.isNotEmpty) ...[
+                        const SizedBox(height: AppSpacing.s16),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          alignment: WrapAlignment.center,
+                          children: previewDomains
+                              .map(
+                                (domain) => Chip(
+                                  label: Text(domain),
+                                  backgroundColor: AppColors.surface,
+                                  side: const BorderSide(
+                                    color: AppColors.border,
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                        ),
                       ],
-
-                      // Preview domains (available after 25%)
-                      if (previewDomains != null && previewDomains.isNotEmpty) ...[
-                        PreviewDomainsWidget(domains: previewDomains),
-                        const SizedBox(height: AppSpacing.s24),
-                      ],
-
-                      // Preview achievements (available after 60%)
-                      if (previewAchievements != null && previewAchievements.isNotEmpty) ...[
-                        PreviewAchievementsWidget(achievements: previewAchievements),
-                        const SizedBox(height: AppSpacing.s24),
-                      ],
+                      const Spacer(),
+                      _StepIndicators(
+                        totalSteps: 5,
+                        currentStep: _calculateStep(progress),
+                      ),
+                      const SizedBox(height: AppSpacing.s16),
+                      CmpysButton(
+                        label: 'Skip for Now',
+                        variant: CmpysButtonVariant.ghost,
+                        onPressed: _onSkipEnrichment,
+                      ),
                     ],
-                  ],
+                  ),
                 ),
-              ),
-            ),
-
-            // Step indicators and skip button at bottom
-            if (!_hasError && !_isRetrying)
-              Padding(
-                padding: const EdgeInsets.only(bottom: AppSpacing.s24),
-                child: Column(
-                  children: [
-                    _StepIndicators(
-                      totalSteps: 5,
-                      currentStep: _calculateStep(progress),
-                    ),
-                    const SizedBox(height: AppSpacing.s16),
-                    // Skip button - allows proceeding even if enrichment is slow
-                    CmpysButton(
-                      label: 'Skip for Now',
-                      variant: CmpysButtonVariant.ghost,
-                      onPressed: _onSkipEnrichment,
-                    ),
-                  ],
-                ),
-              ),
-          ],
         ),
       ),
     );
   }
 
-  /// Skip enrichment and proceed directly to intake
+  /// Skip enrichment and proceed directly to achievement intake
   Future<void> _onSkipEnrichment() async {
-    debugPrint('⏭️ Skipping enrichment, proceeding to intake');
-    
+    debugPrint('⏭️ Skipping enrichment, proceeding to achievement intake');
+
     // Stop polling
     _stopPolling();
-    
-    // If we have an idol ID, proceed to intake
+
+    // If we have an idol ID, proceed to achievement intake
     if (_currentIdolId != null) {
-      await ref.read(sessionControllerProvider.notifier).setCurrentIdolId(_currentIdolId!);
-      
+      await ref
+          .read(sessionControllerProvider.notifier)
+          .setCurrentIdolId(_currentIdolId!);
+
       if (!mounted) return;
-      
-      try {
-        final userAge = ref.read(sessionControllerProvider.notifier).userAge;
-        final intakeRepository = ref.read(intakeRepositoryProvider);
-        
-        debugPrint('📋 Starting intake (skipped enrichment): idolId=$_currentIdolId, targetAge=$userAge');
-        
-        final intakeResponse = await intakeRepository.startIntake(
-          idolId: _currentIdolId,
-          targetAge: userAge,
-        );
 
-        debugPrint('📋 Intake started: sessionId=${intakeResponse.sessionId}, questions=${intakeResponse.questions.length}');
-
-        if (!mounted) return;
-
-        context.goToIntake(
-          sessionId: intakeResponse.sessionId,
-          questions: intakeResponse.questions,
-          idolId: _currentIdolId,
-          targetAge: userAge,
-        );
-      } catch (e) {
-        debugPrint('❌ Failed to start intake after skip: $e');
-        // Fallback to home if intake fails
-        await ref.read(sessionControllerProvider.notifier).completeOnboarding();
-        
-        if (!mounted) return;
-        context.go(AppRoutes.home);
-      }
+      final userAge = ref.read(sessionControllerProvider.notifier).userAge;
+      context.goToAchievementIntake(
+        idolId: _currentIdolId!,
+        targetAge: userAge,
+        mentorName: widget.idol?.name,
+        mentorImageUrl: widget.idol != null
+            ? imageUrlForIdolCandidate(widget.idol!)
+            : null,
+      );
     } else {
       // No idol ID available, complete onboarding and go home
       await ref.read(sessionControllerProvider.notifier).completeOnboarding();
-      
+
       if (!mounted) return;
       context.go(AppRoutes.home);
     }
@@ -441,95 +460,66 @@ class _EnrichingScreenState extends ConsumerState<EnrichingScreen>
   }
 }
 
-/// Header section with idol name and title
-class _HeaderSection extends StatelessWidget {
-  const _HeaderSection({
-    required this.idolName,
-    required this.hasError,
-    required this.isRetrying,
-  });
+class _ThinkingRing extends StatelessWidget {
+  const _ThinkingRing({required this.inset, required this.opacity});
 
-  final String idolName;
-  final bool hasError;
-  final bool isRetrying;
+  final double inset;
+  final double opacity;
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        // Subtitle
-        AnimatedSwitcher(
-          duration: AppDurations.normal,
-          child: Text(
-            hasError
-                ? 'Import Failed'
-                : isRetrying
-                    ? 'Retrying...'
-                    : 'Researching',
-            key: ValueKey(hasError ? 'error' : isRetrying ? 'retry' : 'loading'),
-            style: AppTypography.body.copyWith(
-              color: AppColors.textTertiary,
-            ),
-          ),
+    return Positioned.fill(
+      left: inset,
+      right: inset,
+      top: inset,
+      bottom: inset,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(color: AppColors.mint.withValues(alpha: opacity)),
         ),
-        const SizedBox(height: AppSpacing.s4),
-        // Idol name
-        Text(
-          idolName,
-          style: AppTypography.h2.copyWith(
-            fontWeight: FontWeight.bold,
-          ),
-          textAlign: TextAlign.center,
-        ),
-      ],
+      ),
     );
   }
 }
 
-/// Progress section with bar and step label
-class _ProgressSection extends StatelessWidget {
-  const _ProgressSection({
-    required this.progress,
-    required this.stepLabel,
+class _ThinkingLogRow extends StatelessWidget {
+  const _ThinkingLogRow({
+    required this.label,
+    this.active = false,
+    this.complete = false,
   });
 
-  final double progress;
-  final String stepLabel;
+  final String label;
+  final bool active;
+  final bool complete;
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        // Progress bar
-        ProgressBar(
-          progress: progress,
-          height: 6,
-          animated: true,
-        ),
-        const SizedBox(height: AppSpacing.s8),
-        // Percentage and step label
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Opacity(
+        opacity: active || complete ? 1 : 0.30,
+        child: Row(
           children: [
-            Text(
-              '${(progress * 100).round()}% complete',
-              style: AppTypography.caption.copyWith(
-                color: AppColors.accent,
-                fontFeatures: [const FontFeature.tabularFigures()],
-              ),
-            ),
-            Flexible(
+            Expanded(
               child: Text(
-                stepLabel,
-                style: AppTypography.caption.copyWith(
-                  color: AppColors.textTertiary,
+                label,
+                style: AppTypography.captionUpper.copyWith(
+                  color: active
+                      ? AppColors.textPrimary
+                      : AppColors.textTertiary,
+                  fontSize: 9,
                 ),
-                overflow: TextOverflow.ellipsis,
               ),
             ),
+            if (complete)
+              const Icon(Icons.check_rounded, color: AppColors.mint, size: 14)
+            else if (active)
+              Container(width: 12, height: 2, color: AppColors.mint),
           ],
         ),
-      ],
+      ),
     );
   }
 }
@@ -550,6 +540,7 @@ class _ErrorSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final displayMessage = _friendlyError(errorMessage);
     return Center(
       child: Column(
         children: [
@@ -559,7 +550,7 @@ class _ErrorSection extends StatelessWidget {
             width: 64,
             height: 64,
             decoration: BoxDecoration(
-              color: AppColors.error.withOpacity(0.1),
+              color: AppColors.error.withValues(alpha: 0.1),
               borderRadius: AppRadii.br16,
             ),
             child: Center(
@@ -579,7 +570,7 @@ class _ErrorSection extends StatelessWidget {
           Padding(
             padding: AppSpacing.ph16,
             child: Text(
-              errorMessage ?? 'An error occurred',
+              displayMessage,
               style: AppTypography.body.copyWith(
                 color: AppColors.textSecondary,
               ),
@@ -603,90 +594,23 @@ class _ErrorSection extends StatelessWidget {
       ),
     );
   }
-}
 
-/// Animated icon widget (fallback when no thinking stream)
-class _AnimatedIcon extends StatelessWidget {
-  const _AnimatedIcon({
-    required this.animation,
-    required this.hasError,
-    required this.isRetrying,
-  });
+  String _friendlyError(String? raw) {
+    if (raw == null || raw.trim().isEmpty) {
+      return 'We could not finish importing this idol. Please try again.';
+    }
 
-  final Animation<double> animation;
-  final bool hasError;
-  final bool isRetrying;
+    if (raw.contains('user_id') || raw.contains('IdolImportJob')) {
+      return 'We could not finish preparing personalized materials for this idol. The import can be retried safely.';
+    }
 
-  @override
-  Widget build(BuildContext context) {
-    return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 0, end: 1),
-      duration: const Duration(milliseconds: 600),
-      builder: (context, value, child) {
-        return Transform.scale(
-          scale: 0.8 + (0.2 * value),
-          child: Opacity(opacity: value, child: child),
-        );
-      },
-      child: AnimatedBuilder(
-        animation: animation,
-        builder: (context, child) {
-          final color = hasError ? AppColors.error : AppColors.accent;
-          final colorLight = hasError ? AppColors.error.withOpacity(0.7) : AppColors.accentLight;
-
-          return Container(
-            width: 96,
-            height: 96,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [color, colorLight],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                transform: GradientRotation(animation.value * 6.28),
-              ),
-              borderRadius: AppRadii.br24,
-              boxShadow: [
-                BoxShadow(
-                  color: color.withOpacity(0.3),
-                  blurRadius: 20,
-                  offset: const Offset(0, 6),
-                ),
-              ],
-            ),
-            child: Center(
-              child: hasError
-                  ? SvgPicture.asset(
-                      AppAssets.iconAlertCircle,
-                      width: 44,
-                      height: 44,
-                      colorFilter: const ColorFilter.mode(
-                        AppColors.textPrimary,
-                        BlendMode.srcIn,
-                      ),
-                    )
-                  : SvgPicture.asset(
-                      AppAssets.iconSparkles,
-                      width: 44,
-                      height: 44,
-                      colorFilter: const ColorFilter.mode(
-                        AppColors.textPrimary,
-                        BlendMode.srcIn,
-                      ),
-                    ),
-            ),
-          );
-        },
-      ),
-    );
+    return raw;
   }
 }
 
 /// Step indicators at bottom
 class _StepIndicators extends StatelessWidget {
-  const _StepIndicators({
-    required this.totalSteps,
-    required this.currentStep,
-  });
+  const _StepIndicators({required this.totalSteps, required this.currentStep});
 
   final int totalSteps;
   final int currentStep;

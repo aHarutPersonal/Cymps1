@@ -75,14 +75,17 @@ class EmptyState extends StatelessWidget {
                 textAlign: TextAlign.center,
               ),
             ],
-            if (action != null || (actionLabel != null && onAction != null)) ...[
+            if (action != null ||
+                (actionLabel != null && onAction != null)) ...[
               SizedBox(height: compact ? AppSpacing.s16 : AppSpacing.s24),
               action ??
                   CmpysButton(
                     label: actionLabel!,
                     onPressed: onAction,
                     isExpanded: false,
-                    size: compact ? CmpysButtonSize.small : CmpysButtonSize.medium,
+                    size: compact
+                        ? CmpysButtonSize.small
+                        : CmpysButtonSize.medium,
                   ),
             ],
           ],
@@ -94,11 +97,7 @@ class EmptyState extends StatelessWidget {
 
 /// No results state for search.
 class NoResultsState extends StatelessWidget {
-  const NoResultsState({
-    super.key,
-    this.query,
-    this.onClear,
-  });
+  const NoResultsState({super.key, this.query, this.onClear});
 
   final String? query;
   final VoidCallback? onClear;
@@ -147,10 +146,7 @@ class ErrorState extends StatelessWidget {
 
 /// Offline state.
 class OfflineState extends StatelessWidget {
-  const OfflineState({
-    super.key,
-    this.onRetry,
-  });
+  const OfflineState({super.key, this.onRetry});
 
   final VoidCallback? onRetry;
 

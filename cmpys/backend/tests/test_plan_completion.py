@@ -134,7 +134,17 @@ class TestPlanCompletionLogic:
                 {"id": "1", "title": "S1", "description": "D1", "estimate_minutes": 10}
             ],
             "materials": [
-                {"title": "M1", "url": "http://x.com", "type": "article"}
+                {
+                    "title": "M1",
+                    "url": "http://x.com",
+                    "type": "article",
+                    "content_resource_id": "resource-1",
+                    "canonical_key": "article:m1",
+                    "author_or_creator": "Creator",
+                    "thumbnail_url": "http://x.com/thumb.jpg",
+                    "license_status": "external_link",
+                    "search_query": "M1 creator",
+                }
             ]
         }
         
@@ -148,6 +158,12 @@ class TestPlanCompletionLogic:
         assert len(parsed.materials) == 1
         assert parsed.materials[0].title == "M1"
         assert parsed.materials[0].type == "article"
+        assert parsed.materials[0].content_resource_id == "resource-1"
+        assert parsed.materials[0].canonical_key == "article:m1"
+        assert parsed.materials[0].author_or_creator == "Creator"
+        assert parsed.materials[0].thumbnail_url == "http://x.com/thumb.jpg"
+        assert parsed.materials[0].license_status == "external_link"
+        assert parsed.materials[0].search_query == "M1 creator"
 
     async def test_parse_item_details_empty(self):
         """Test parsing of empty details."""

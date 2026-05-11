@@ -27,13 +27,12 @@ class MirrorCard extends StatelessWidget {
               child: Container(
                 padding: AppSpacing.p16,
                 decoration: BoxDecoration(
-                  color: userEvent != null 
-                    ? AppColors.primary.withOpacity(0.05) 
-                    : Colors.transparent,
-                  borderRadius: const BorderRadius.horizontal(left: Radius.circular(16)),
-                  border: userEvent != null
-                    ? Border.all(color: AppColors.primary.withOpacity(0.3))
-                    : null,
+                  color: userEvent != null
+                      ? AppColors.cardCream
+                      : Colors.transparent,
+                  borderRadius: const BorderRadius.horizontal(
+                    left: Radius.circular(24),
+                  ),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.end,
@@ -44,27 +43,31 @@ class MirrorCard extends StatelessWidget {
                         userEvent!,
                         textAlign: TextAlign.right,
                         style: AppTypography.bodySmall.copyWith(
-                          color: AppColors.textPrimary,
+                          color: AppColors.cardTextPrimary,
                         ),
                       ),
-                      if (isMatched) 
+                      if (isMatched)
                         Padding(
                           padding: const EdgeInsets.only(top: 4),
-                          child: Icon(Icons.check_circle, size: 14, color: AppColors.primary),
+                          child: Icon(
+                            Icons.check_circle,
+                            size: 14,
+                            color: AppColors.coral,
+                          ),
                         ),
                     ] else
                       Text(
                         'No data',
                         textAlign: TextAlign.right,
                         style: AppTypography.caption.copyWith(
-                          color: AppColors.textTertiary.withOpacity(0.3),
+                          color: AppColors.textTertiary.withValues(alpha: 0.3),
                         ),
                       ),
                   ],
                 ),
               ),
             ),
-            
+
             // Center Axis (Age)
             Container(
               width: 50,
@@ -74,11 +77,7 @@ class MirrorCard extends StatelessWidget {
                   vertical: BorderSide(color: AppColors.cardBorder, width: 1),
                 ),
                 gradient: LinearGradient(
-                  colors: [
-                    AppColors.bg,
-                    AppColors.surface,
-                    AppColors.bg,
-                  ],
+                  colors: [AppColors.bg, AppColors.surface, AppColors.bg],
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
                 ),
@@ -91,20 +90,24 @@ class MirrorCard extends StatelessWidget {
                   shape: BoxShape.circle,
                   color: AppColors.bg,
                   border: Border.all(
-                    color: isMatched ? AppColors.primary : AppColors.cardBorder,
+                    color: isMatched ? AppColors.coral : AppColors.cardBorder,
                   ),
-                  boxShadow: isMatched ? [
-                    BoxShadow(
-                      color: AppColors.primary.withOpacity(0.4),
-                      blurRadius: 8,
-                      spreadRadius: 1,
-                    )
-                  ] : null,
+                  boxShadow: isMatched
+                      ? [
+                          BoxShadow(
+                            color: AppColors.coral.withValues(alpha: 0.4),
+                            blurRadius: 8,
+                            spreadRadius: 1,
+                          ),
+                        ]
+                      : null,
                 ),
                 child: Text(
                   age.toString(),
                   style: AppTypography.monoLabel.copyWith(
-                    color: isMatched ? AppColors.primary : AppColors.textSecondary,
+                    color: isMatched
+                        ? AppColors.coral
+                        : AppColors.textSecondary,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
@@ -116,9 +119,10 @@ class MirrorCard extends StatelessWidget {
               child: Container(
                 padding: AppSpacing.p16,
                 decoration: BoxDecoration(
-                  color: AppColors.secondary.withOpacity(0.05),
-                  borderRadius: const BorderRadius.horizontal(right: Radius.circular(16)),
-                  border: Border.all(color: AppColors.secondary.withOpacity(0.3)),
+                  color: AppColors.cardMint,
+                  borderRadius: const BorderRadius.horizontal(
+                    right: Radius.circular(24),
+                  ),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -128,7 +132,7 @@ class MirrorCard extends StatelessWidget {
                       idolEvent,
                       textAlign: TextAlign.left,
                       style: AppTypography.bodySmall.copyWith(
-                        color: AppColors.textPrimary,
+                        color: AppColors.cardTextPrimary,
                       ),
                     ),
                   ],

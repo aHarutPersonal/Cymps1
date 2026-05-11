@@ -33,9 +33,8 @@ class CmpysAppBar extends StatelessWidget implements PreferredSizeWidget {
   final VoidCallback? onBackPressed;
 
   @override
-  Size get preferredSize => Size.fromHeight(
-        kToolbarHeight + (bottom?.preferredSize.height ?? 0),
-      );
+  Size get preferredSize =>
+      Size.fromHeight(kToolbarHeight + (bottom?.preferredSize.height ?? 0));
 
   @override
   Widget build(BuildContext context) {
@@ -54,18 +53,11 @@ class CmpysAppBar extends StatelessWidget implements PreferredSizeWidget {
       automaticallyImplyLeading: false,
       leading: leadingWidget,
       leadingWidth: leadingWidget != null ? 56 : 0,
-      title: titleWidget ??
-          (title != null
-              ? Text(
-                  title!,
-                  style: AppTypography.h3,
-                )
-              : null),
+      title:
+          titleWidget ??
+          (title != null ? Text(title!, style: AppTypography.h3) : null),
       actions: actions != null
-          ? [
-              ...actions!,
-              const SizedBox(width: AppSpacing.s8),
-            ]
+          ? [...actions!, const SizedBox(width: AppSpacing.s8)]
           : null,
       bottom: bottom,
     );
@@ -74,11 +66,7 @@ class CmpysAppBar extends StatelessWidget implements PreferredSizeWidget {
 
 /// Back button with consistent styling.
 class CmpysBackButton extends StatelessWidget {
-  const CmpysBackButton({
-    super.key,
-    this.onPressed,
-    this.color,
-  });
+  const CmpysBackButton({super.key, this.onPressed, this.color});
 
   final VoidCallback? onPressed;
   final Color? color;
@@ -86,11 +74,13 @@ class CmpysBackButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return IconButton(
-      onPressed: onPressed ?? () {
-        if (context.canPop()) {
-          context.pop();
-        }
-      },
+      onPressed:
+          onPressed ??
+          () {
+            if (context.canPop()) {
+              context.pop();
+            }
+          },
       icon: SvgPicture.asset(
         AppAssets.iconChevronLeft,
         width: 24,
@@ -152,10 +142,7 @@ class CmpysAppBarAction extends StatelessWidget {
                 color: AppColors.error,
                 shape: BoxShape.circle,
               ),
-              constraints: const BoxConstraints(
-                minWidth: 16,
-                minHeight: 16,
-              ),
+              constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
               child: Text(
                 badge! > 99 ? '99+' : badge.toString(),
                 style: AppTypography.tiny.copyWith(

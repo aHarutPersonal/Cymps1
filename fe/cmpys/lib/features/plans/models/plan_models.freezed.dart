@@ -33,7 +33,11 @@ mixin _$PlanItem {
   DateTime? get dueDate => throw _privateConstructorUsedError;
   DateTime? get completedAt => throw _privateConstructorUsedError;
   DateTime? get createdAt => throw _privateConstructorUsedError;
-  DateTime? get updatedAt => throw _privateConstructorUsedError;
+  DateTime? get updatedAt =>
+      throw _privateConstructorUsedError; // New: from meta_json
+  String? get predictedFriction => throw _privateConstructorUsedError;
+  String? get frictionSolution => throw _privateConstructorUsedError;
+  String? get primaryMission => throw _privateConstructorUsedError;
 
   /// Create a copy of PlanItem
   /// with the given fields replaced by the non-null parameter values.
@@ -65,6 +69,9 @@ abstract class $PlanItemCopyWith<$Res> {
     DateTime? completedAt,
     DateTime? createdAt,
     DateTime? updatedAt,
+    String? predictedFriction,
+    String? frictionSolution,
+    String? primaryMission,
   });
 }
 
@@ -100,6 +107,9 @@ class _$PlanItemCopyWithImpl<$Res, $Val extends PlanItem>
     Object? completedAt = freezed,
     Object? createdAt = freezed,
     Object? updatedAt = freezed,
+    Object? predictedFriction = freezed,
+    Object? frictionSolution = freezed,
+    Object? primaryMission = freezed,
   }) {
     return _then(
       _value.copyWith(
@@ -171,6 +181,18 @@ class _$PlanItemCopyWithImpl<$Res, $Val extends PlanItem>
                 ? _value.updatedAt
                 : updatedAt // ignore: cast_nullable_to_non_nullable
                       as DateTime?,
+            predictedFriction: freezed == predictedFriction
+                ? _value.predictedFriction
+                : predictedFriction // ignore: cast_nullable_to_non_nullable
+                      as String?,
+            frictionSolution: freezed == frictionSolution
+                ? _value.frictionSolution
+                : frictionSolution // ignore: cast_nullable_to_non_nullable
+                      as String?,
+            primaryMission: freezed == primaryMission
+                ? _value.primaryMission
+                : primaryMission // ignore: cast_nullable_to_non_nullable
+                      as String?,
           )
           as $Val,
     );
@@ -204,6 +226,9 @@ abstract class _$$PlanItemImplCopyWith<$Res>
     DateTime? completedAt,
     DateTime? createdAt,
     DateTime? updatedAt,
+    String? predictedFriction,
+    String? frictionSolution,
+    String? primaryMission,
   });
 }
 
@@ -238,6 +263,9 @@ class __$$PlanItemImplCopyWithImpl<$Res>
     Object? completedAt = freezed,
     Object? createdAt = freezed,
     Object? updatedAt = freezed,
+    Object? predictedFriction = freezed,
+    Object? frictionSolution = freezed,
+    Object? primaryMission = freezed,
   }) {
     return _then(
       _$PlanItemImpl(
@@ -309,6 +337,18 @@ class __$$PlanItemImplCopyWithImpl<$Res>
             ? _value.updatedAt
             : updatedAt // ignore: cast_nullable_to_non_nullable
                   as DateTime?,
+        predictedFriction: freezed == predictedFriction
+            ? _value.predictedFriction
+            : predictedFriction // ignore: cast_nullable_to_non_nullable
+                  as String?,
+        frictionSolution: freezed == frictionSolution
+            ? _value.frictionSolution
+            : frictionSolution // ignore: cast_nullable_to_non_nullable
+                  as String?,
+        primaryMission: freezed == primaryMission
+            ? _value.primaryMission
+            : primaryMission // ignore: cast_nullable_to_non_nullable
+                  as String?,
       ),
     );
   }
@@ -335,6 +375,9 @@ class _$PlanItemImpl extends _PlanItem {
     this.completedAt,
     this.createdAt,
     this.updatedAt,
+    this.predictedFriction,
+    this.frictionSolution,
+    this.primaryMission,
   }) : super._();
 
   @override
@@ -373,10 +416,17 @@ class _$PlanItemImpl extends _PlanItem {
   final DateTime? createdAt;
   @override
   final DateTime? updatedAt;
+  // New: from meta_json
+  @override
+  final String? predictedFriction;
+  @override
+  final String? frictionSolution;
+  @override
+  final String? primaryMission;
 
   @override
   String toString() {
-    return 'PlanItem(id: $id, title: $title, type: $type, description: $description, weekStart: $weekStart, weekEnd: $weekEnd, status: $status, progressPercent: $progressPercent, resourceTitle: $resourceTitle, resourceUrl: $resourceUrl, category: $category, estimatedHours: $estimatedHours, successMetric: $successMetric, dueDate: $dueDate, completedAt: $completedAt, createdAt: $createdAt, updatedAt: $updatedAt)';
+    return 'PlanItem(id: $id, title: $title, type: $type, description: $description, weekStart: $weekStart, weekEnd: $weekEnd, status: $status, progressPercent: $progressPercent, resourceTitle: $resourceTitle, resourceUrl: $resourceUrl, category: $category, estimatedHours: $estimatedHours, successMetric: $successMetric, dueDate: $dueDate, completedAt: $completedAt, createdAt: $createdAt, updatedAt: $updatedAt, predictedFriction: $predictedFriction, frictionSolution: $frictionSolution, primaryMission: $primaryMission)';
   }
 
   @override
@@ -411,11 +461,17 @@ class _$PlanItemImpl extends _PlanItem {
             (identical(other.createdAt, createdAt) ||
                 other.createdAt == createdAt) &&
             (identical(other.updatedAt, updatedAt) ||
-                other.updatedAt == updatedAt));
+                other.updatedAt == updatedAt) &&
+            (identical(other.predictedFriction, predictedFriction) ||
+                other.predictedFriction == predictedFriction) &&
+            (identical(other.frictionSolution, frictionSolution) ||
+                other.frictionSolution == frictionSolution) &&
+            (identical(other.primaryMission, primaryMission) ||
+                other.primaryMission == primaryMission));
   }
 
   @override
-  int get hashCode => Object.hash(
+  int get hashCode => Object.hashAll([
     runtimeType,
     id,
     title,
@@ -434,7 +490,10 @@ class _$PlanItemImpl extends _PlanItem {
     completedAt,
     createdAt,
     updatedAt,
-  );
+    predictedFriction,
+    frictionSolution,
+    primaryMission,
+  ]);
 
   /// Create a copy of PlanItem
   /// with the given fields replaced by the non-null parameter values.
@@ -464,6 +523,9 @@ abstract class _PlanItem extends PlanItem {
     final DateTime? completedAt,
     final DateTime? createdAt,
     final DateTime? updatedAt,
+    final String? predictedFriction,
+    final String? frictionSolution,
+    final String? primaryMission,
   }) = _$PlanItemImpl;
   const _PlanItem._() : super._();
 
@@ -500,7 +562,13 @@ abstract class _PlanItem extends PlanItem {
   @override
   DateTime? get createdAt;
   @override
-  DateTime? get updatedAt;
+  DateTime? get updatedAt; // New: from meta_json
+  @override
+  String? get predictedFriction;
+  @override
+  String? get frictionSolution;
+  @override
+  String? get primaryMission;
 
   /// Create a copy of PlanItem
   /// with the given fields replaced by the non-null parameter values.
@@ -527,7 +595,10 @@ mixin _$Plan {
   DateTime? get updatedAt => throw _privateConstructorUsedError;
   int? get totalItems => throw _privateConstructorUsedError;
   int? get completedItems => throw _privateConstructorUsedError;
-  double? get overallProgress => throw _privateConstructorUsedError;
+  double? get overallProgress =>
+      throw _privateConstructorUsedError; // New: from plan_generate.txt prompt output
+  String? get roadmapThesis => throw _privateConstructorUsedError;
+  List<String> get antiGoals => throw _privateConstructorUsedError;
 
   /// Create a copy of Plan
   /// with the given fields replaced by the non-null parameter values.
@@ -557,6 +628,8 @@ abstract class $PlanCopyWith<$Res> {
     int? totalItems,
     int? completedItems,
     double? overallProgress,
+    String? roadmapThesis,
+    List<String> antiGoals,
   });
 }
 
@@ -591,6 +664,8 @@ class _$PlanCopyWithImpl<$Res, $Val extends Plan>
     Object? totalItems = freezed,
     Object? completedItems = freezed,
     Object? overallProgress = freezed,
+    Object? roadmapThesis = freezed,
+    Object? antiGoals = null,
   }) {
     return _then(
       _value.copyWith(
@@ -658,6 +733,14 @@ class _$PlanCopyWithImpl<$Res, $Val extends Plan>
                 ? _value.overallProgress
                 : overallProgress // ignore: cast_nullable_to_non_nullable
                       as double?,
+            roadmapThesis: freezed == roadmapThesis
+                ? _value.roadmapThesis
+                : roadmapThesis // ignore: cast_nullable_to_non_nullable
+                      as String?,
+            antiGoals: null == antiGoals
+                ? _value.antiGoals
+                : antiGoals // ignore: cast_nullable_to_non_nullable
+                      as List<String>,
           )
           as $Val,
     );
@@ -689,6 +772,8 @@ abstract class _$$PlanImplCopyWith<$Res> implements $PlanCopyWith<$Res> {
     int? totalItems,
     int? completedItems,
     double? overallProgress,
+    String? roadmapThesis,
+    List<String> antiGoals,
   });
 }
 
@@ -720,6 +805,8 @@ class __$$PlanImplCopyWithImpl<$Res>
     Object? totalItems = freezed,
     Object? completedItems = freezed,
     Object? overallProgress = freezed,
+    Object? roadmapThesis = freezed,
+    Object? antiGoals = null,
   }) {
     return _then(
       _$PlanImpl(
@@ -787,6 +874,14 @@ class __$$PlanImplCopyWithImpl<$Res>
             ? _value.overallProgress
             : overallProgress // ignore: cast_nullable_to_non_nullable
                   as double?,
+        roadmapThesis: freezed == roadmapThesis
+            ? _value.roadmapThesis
+            : roadmapThesis // ignore: cast_nullable_to_non_nullable
+                  as String?,
+        antiGoals: null == antiGoals
+            ? _value._antiGoals
+            : antiGoals // ignore: cast_nullable_to_non_nullable
+                  as List<String>,
       ),
     );
   }
@@ -812,7 +907,10 @@ class _$PlanImpl extends _Plan {
     this.totalItems,
     this.completedItems,
     this.overallProgress,
+    this.roadmapThesis,
+    final List<String> antiGoals = const [],
   }) : _items = items,
+       _antiGoals = antiGoals,
        super._();
 
   @override
@@ -855,10 +953,21 @@ class _$PlanImpl extends _Plan {
   final int? completedItems;
   @override
   final double? overallProgress;
+  // New: from plan_generate.txt prompt output
+  @override
+  final String? roadmapThesis;
+  final List<String> _antiGoals;
+  @override
+  @JsonKey()
+  List<String> get antiGoals {
+    if (_antiGoals is EqualUnmodifiableListView) return _antiGoals;
+    // ignore: implicit_dynamic_type
+    return EqualUnmodifiableListView(_antiGoals);
+  }
 
   @override
   String toString() {
-    return 'Plan(id: $id, durationWeeks: $durationWeeks, weeklyHours: $weeklyHours, focus: $focus, items: $items, idolId: $idolId, idolName: $idolName, targetAge: $targetAge, startDate: $startDate, endDate: $endDate, status: $status, createdAt: $createdAt, updatedAt: $updatedAt, totalItems: $totalItems, completedItems: $completedItems, overallProgress: $overallProgress)';
+    return 'Plan(id: $id, durationWeeks: $durationWeeks, weeklyHours: $weeklyHours, focus: $focus, items: $items, idolId: $idolId, idolName: $idolName, targetAge: $targetAge, startDate: $startDate, endDate: $endDate, status: $status, createdAt: $createdAt, updatedAt: $updatedAt, totalItems: $totalItems, completedItems: $completedItems, overallProgress: $overallProgress, roadmapThesis: $roadmapThesis, antiGoals: $antiGoals)';
   }
 
   @override
@@ -891,7 +1000,13 @@ class _$PlanImpl extends _Plan {
             (identical(other.completedItems, completedItems) ||
                 other.completedItems == completedItems) &&
             (identical(other.overallProgress, overallProgress) ||
-                other.overallProgress == overallProgress));
+                other.overallProgress == overallProgress) &&
+            (identical(other.roadmapThesis, roadmapThesis) ||
+                other.roadmapThesis == roadmapThesis) &&
+            const DeepCollectionEquality().equals(
+              other._antiGoals,
+              _antiGoals,
+            ));
   }
 
   @override
@@ -913,6 +1028,8 @@ class _$PlanImpl extends _Plan {
     totalItems,
     completedItems,
     overallProgress,
+    roadmapThesis,
+    const DeepCollectionEquality().hash(_antiGoals),
   );
 
   /// Create a copy of Plan
@@ -942,6 +1059,8 @@ abstract class _Plan extends Plan {
     final int? totalItems,
     final int? completedItems,
     final double? overallProgress,
+    final String? roadmapThesis,
+    final List<String> antiGoals,
   }) = _$PlanImpl;
   const _Plan._() : super._();
 
@@ -976,7 +1095,11 @@ abstract class _Plan extends Plan {
   @override
   int? get completedItems;
   @override
-  double? get overallProgress;
+  double? get overallProgress; // New: from plan_generate.txt prompt output
+  @override
+  String? get roadmapThesis;
+  @override
+  List<String> get antiGoals;
 
   /// Create a copy of Plan
   /// with the given fields replaced by the non-null parameter values.
@@ -1629,9 +1752,11 @@ mixin _$PlanStep {
   String? get description => throw _privateConstructorUsedError;
   String? get instruction => throw _privateConstructorUsedError;
   String? get expectedOutput => throw _privateConstructorUsedError;
+  String? get lessonContent => throw _privateConstructorUsedError;
   int? get estimateMinutes => throw _privateConstructorUsedError;
   int get order => throw _privateConstructorUsedError;
   List<String> get resources => throw _privateConstructorUsedError;
+  List<String> get substeps => throw _privateConstructorUsedError;
   bool get completed => throw _privateConstructorUsedError;
 
   /// Create a copy of PlanStep
@@ -1652,9 +1777,11 @@ abstract class $PlanStepCopyWith<$Res> {
     String? description,
     String? instruction,
     String? expectedOutput,
+    String? lessonContent,
     int? estimateMinutes,
     int order,
     List<String> resources,
+    List<String> substeps,
     bool completed,
   });
 }
@@ -1679,9 +1806,11 @@ class _$PlanStepCopyWithImpl<$Res, $Val extends PlanStep>
     Object? description = freezed,
     Object? instruction = freezed,
     Object? expectedOutput = freezed,
+    Object? lessonContent = freezed,
     Object? estimateMinutes = freezed,
     Object? order = null,
     Object? resources = null,
+    Object? substeps = null,
     Object? completed = null,
   }) {
     return _then(
@@ -1706,6 +1835,10 @@ class _$PlanStepCopyWithImpl<$Res, $Val extends PlanStep>
                 ? _value.expectedOutput
                 : expectedOutput // ignore: cast_nullable_to_non_nullable
                       as String?,
+            lessonContent: freezed == lessonContent
+                ? _value.lessonContent
+                : lessonContent // ignore: cast_nullable_to_non_nullable
+                      as String?,
             estimateMinutes: freezed == estimateMinutes
                 ? _value.estimateMinutes
                 : estimateMinutes // ignore: cast_nullable_to_non_nullable
@@ -1717,6 +1850,10 @@ class _$PlanStepCopyWithImpl<$Res, $Val extends PlanStep>
             resources: null == resources
                 ? _value.resources
                 : resources // ignore: cast_nullable_to_non_nullable
+                      as List<String>,
+            substeps: null == substeps
+                ? _value.substeps
+                : substeps // ignore: cast_nullable_to_non_nullable
                       as List<String>,
             completed: null == completed
                 ? _value.completed
@@ -1743,9 +1880,11 @@ abstract class _$$PlanStepImplCopyWith<$Res>
     String? description,
     String? instruction,
     String? expectedOutput,
+    String? lessonContent,
     int? estimateMinutes,
     int order,
     List<String> resources,
+    List<String> substeps,
     bool completed,
   });
 }
@@ -1769,9 +1908,11 @@ class __$$PlanStepImplCopyWithImpl<$Res>
     Object? description = freezed,
     Object? instruction = freezed,
     Object? expectedOutput = freezed,
+    Object? lessonContent = freezed,
     Object? estimateMinutes = freezed,
     Object? order = null,
     Object? resources = null,
+    Object? substeps = null,
     Object? completed = null,
   }) {
     return _then(
@@ -1796,6 +1937,10 @@ class __$$PlanStepImplCopyWithImpl<$Res>
             ? _value.expectedOutput
             : expectedOutput // ignore: cast_nullable_to_non_nullable
                   as String?,
+        lessonContent: freezed == lessonContent
+            ? _value.lessonContent
+            : lessonContent // ignore: cast_nullable_to_non_nullable
+                  as String?,
         estimateMinutes: freezed == estimateMinutes
             ? _value.estimateMinutes
             : estimateMinutes // ignore: cast_nullable_to_non_nullable
@@ -1807,6 +1952,10 @@ class __$$PlanStepImplCopyWithImpl<$Res>
         resources: null == resources
             ? _value._resources
             : resources // ignore: cast_nullable_to_non_nullable
+                  as List<String>,
+        substeps: null == substeps
+            ? _value._substeps
+            : substeps // ignore: cast_nullable_to_non_nullable
                   as List<String>,
         completed: null == completed
             ? _value.completed
@@ -1826,11 +1975,14 @@ class _$PlanStepImpl extends _PlanStep {
     this.description,
     this.instruction,
     this.expectedOutput,
+    this.lessonContent,
     this.estimateMinutes,
     this.order = 0,
     final List<String> resources = const [],
+    final List<String> substeps = const [],
     this.completed = false,
   }) : _resources = resources,
+       _substeps = substeps,
        super._();
 
   @override
@@ -1843,6 +1995,8 @@ class _$PlanStepImpl extends _PlanStep {
   final String? instruction;
   @override
   final String? expectedOutput;
+  @override
+  final String? lessonContent;
   @override
   final int? estimateMinutes;
   @override
@@ -1857,13 +2011,22 @@ class _$PlanStepImpl extends _PlanStep {
     return EqualUnmodifiableListView(_resources);
   }
 
+  final List<String> _substeps;
+  @override
+  @JsonKey()
+  List<String> get substeps {
+    if (_substeps is EqualUnmodifiableListView) return _substeps;
+    // ignore: implicit_dynamic_type
+    return EqualUnmodifiableListView(_substeps);
+  }
+
   @override
   @JsonKey()
   final bool completed;
 
   @override
   String toString() {
-    return 'PlanStep(id: $id, title: $title, description: $description, instruction: $instruction, expectedOutput: $expectedOutput, estimateMinutes: $estimateMinutes, order: $order, resources: $resources, completed: $completed)';
+    return 'PlanStep(id: $id, title: $title, description: $description, instruction: $instruction, expectedOutput: $expectedOutput, lessonContent: $lessonContent, estimateMinutes: $estimateMinutes, order: $order, resources: $resources, substeps: $substeps, completed: $completed)';
   }
 
   @override
@@ -1879,6 +2042,8 @@ class _$PlanStepImpl extends _PlanStep {
                 other.instruction == instruction) &&
             (identical(other.expectedOutput, expectedOutput) ||
                 other.expectedOutput == expectedOutput) &&
+            (identical(other.lessonContent, lessonContent) ||
+                other.lessonContent == lessonContent) &&
             (identical(other.estimateMinutes, estimateMinutes) ||
                 other.estimateMinutes == estimateMinutes) &&
             (identical(other.order, order) || other.order == order) &&
@@ -1886,6 +2051,7 @@ class _$PlanStepImpl extends _PlanStep {
               other._resources,
               _resources,
             ) &&
+            const DeepCollectionEquality().equals(other._substeps, _substeps) &&
             (identical(other.completed, completed) ||
                 other.completed == completed));
   }
@@ -1898,9 +2064,11 @@ class _$PlanStepImpl extends _PlanStep {
     description,
     instruction,
     expectedOutput,
+    lessonContent,
     estimateMinutes,
     order,
     const DeepCollectionEquality().hash(_resources),
+    const DeepCollectionEquality().hash(_substeps),
     completed,
   );
 
@@ -1920,9 +2088,11 @@ abstract class _PlanStep extends PlanStep {
     final String? description,
     final String? instruction,
     final String? expectedOutput,
+    final String? lessonContent,
     final int? estimateMinutes,
     final int order,
     final List<String> resources,
+    final List<String> substeps,
     final bool completed,
   }) = _$PlanStepImpl;
   const _PlanStep._() : super._();
@@ -1938,11 +2108,15 @@ abstract class _PlanStep extends PlanStep {
   @override
   String? get expectedOutput;
   @override
+  String? get lessonContent;
+  @override
   int? get estimateMinutes;
   @override
   int get order;
   @override
   List<String> get resources;
+  @override
+  List<String> get substeps;
   @override
   bool get completed;
 
@@ -1963,6 +2137,7 @@ mixin _$PlanMaterial {
   String? get contentMarkdown => throw _privateConstructorUsedError;
   int? get durationMinutes => throw _privateConstructorUsedError;
   String? get reason => throw _privateConstructorUsedError;
+  List<BookIdea> get ideas => throw _privateConstructorUsedError;
 
   /// Create a copy of PlanMaterial
   /// with the given fields replaced by the non-null parameter values.
@@ -1986,6 +2161,7 @@ abstract class $PlanMaterialCopyWith<$Res> {
     String? contentMarkdown,
     int? durationMinutes,
     String? reason,
+    List<BookIdea> ideas,
   });
 }
 
@@ -2011,6 +2187,7 @@ class _$PlanMaterialCopyWithImpl<$Res, $Val extends PlanMaterial>
     Object? contentMarkdown = freezed,
     Object? durationMinutes = freezed,
     Object? reason = freezed,
+    Object? ideas = null,
   }) {
     return _then(
       _value.copyWith(
@@ -2042,6 +2219,10 @@ class _$PlanMaterialCopyWithImpl<$Res, $Val extends PlanMaterial>
                 ? _value.reason
                 : reason // ignore: cast_nullable_to_non_nullable
                       as String?,
+            ideas: null == ideas
+                ? _value.ideas
+                : ideas // ignore: cast_nullable_to_non_nullable
+                      as List<BookIdea>,
           )
           as $Val,
     );
@@ -2065,6 +2246,7 @@ abstract class _$$PlanMaterialImplCopyWith<$Res>
     String? contentMarkdown,
     int? durationMinutes,
     String? reason,
+    List<BookIdea> ideas,
   });
 }
 
@@ -2089,6 +2271,7 @@ class __$$PlanMaterialImplCopyWithImpl<$Res>
     Object? contentMarkdown = freezed,
     Object? durationMinutes = freezed,
     Object? reason = freezed,
+    Object? ideas = null,
   }) {
     return _then(
       _$PlanMaterialImpl(
@@ -2120,6 +2303,10 @@ class __$$PlanMaterialImplCopyWithImpl<$Res>
             ? _value.reason
             : reason // ignore: cast_nullable_to_non_nullable
                   as String?,
+        ideas: null == ideas
+            ? _value._ideas
+            : ideas // ignore: cast_nullable_to_non_nullable
+                  as List<BookIdea>,
       ),
     );
   }
@@ -2136,7 +2323,9 @@ class _$PlanMaterialImpl extends _PlanMaterial {
     this.contentMarkdown,
     this.durationMinutes,
     this.reason,
-  }) : super._();
+    final List<BookIdea> ideas = const [],
+  }) : _ideas = ideas,
+       super._();
 
   @override
   final String? id;
@@ -2152,10 +2341,18 @@ class _$PlanMaterialImpl extends _PlanMaterial {
   final int? durationMinutes;
   @override
   final String? reason;
+  final List<BookIdea> _ideas;
+  @override
+  @JsonKey()
+  List<BookIdea> get ideas {
+    if (_ideas is EqualUnmodifiableListView) return _ideas;
+    // ignore: implicit_dynamic_type
+    return EqualUnmodifiableListView(_ideas);
+  }
 
   @override
   String toString() {
-    return 'PlanMaterial(id: $id, type: $type, title: $title, url: $url, contentMarkdown: $contentMarkdown, durationMinutes: $durationMinutes, reason: $reason)';
+    return 'PlanMaterial(id: $id, type: $type, title: $title, url: $url, contentMarkdown: $contentMarkdown, durationMinutes: $durationMinutes, reason: $reason, ideas: $ideas)';
   }
 
   @override
@@ -2171,7 +2368,8 @@ class _$PlanMaterialImpl extends _PlanMaterial {
                 other.contentMarkdown == contentMarkdown) &&
             (identical(other.durationMinutes, durationMinutes) ||
                 other.durationMinutes == durationMinutes) &&
-            (identical(other.reason, reason) || other.reason == reason));
+            (identical(other.reason, reason) || other.reason == reason) &&
+            const DeepCollectionEquality().equals(other._ideas, _ideas));
   }
 
   @override
@@ -2184,6 +2382,7 @@ class _$PlanMaterialImpl extends _PlanMaterial {
     contentMarkdown,
     durationMinutes,
     reason,
+    const DeepCollectionEquality().hash(_ideas),
   );
 
   /// Create a copy of PlanMaterial
@@ -2204,6 +2403,7 @@ abstract class _PlanMaterial extends PlanMaterial {
     final String? contentMarkdown,
     final int? durationMinutes,
     final String? reason,
+    final List<BookIdea> ideas,
   }) = _$PlanMaterialImpl;
   const _PlanMaterial._() : super._();
 
@@ -2221,6 +2421,8 @@ abstract class _PlanMaterial extends PlanMaterial {
   int? get durationMinutes;
   @override
   String? get reason;
+  @override
+  List<BookIdea> get ideas;
 
   /// Create a copy of PlanMaterial
   /// with the given fields replaced by the non-null parameter values.

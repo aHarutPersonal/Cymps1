@@ -28,10 +28,18 @@ class Settings(BaseSettings):
     extractor_mode: str = "deterministic"  # "deterministic" or "llm"
     
     # LLM Configuration
-    llm_provider: str = "dummy"  # "dummy" or "openai"
+    llm_provider: str = "dummy"  # "dummy", "openai", or "gemini"
     openai_api_key: str | None = None
-    openai_model: str = "gpt-4o"  # Main model for complex tasks
-    openai_fast_model: str = "gpt-4o-mini"  # Faster model for simple tasks (discovery, etc.)
+    openai_model: str = "gpt-4.1-mini"  # Fast model for structured extraction
+    openai_fast_model: str = "gpt-4o-mini"  # Lightweight model for thinking/discovery
+    
+    # Tavily (real-time web search for material URL resolution)
+    tavily_api_key: str | None = None
+    
+    # Google Gemini (search grounding + LearnLM tutoring + structured extraction)
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-2.5-flash"  # Main model for structured extraction
+    gemini_fast_model: str = "gemini-2.5-flash"  # Lightweight model for thinking/discovery
     
     # Plan generation
     plan_generator_mode: str = "deterministic"  # "deterministic" or "llm"
@@ -41,6 +49,8 @@ class Settings(BaseSettings):
         """Check if LLM is properly configured."""
         if self.llm_provider == "openai":
             return bool(self.openai_api_key)
+        if self.llm_provider == "gemini":
+            return bool(self.gemini_api_key)
         return True  # Dummy is always configured
 
 
