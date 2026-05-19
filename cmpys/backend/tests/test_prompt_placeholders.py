@@ -28,7 +28,13 @@ class TestPlanGeneratePlaceholders:
             "user_goal",
             "idol_name",
             "hours_per_week",
+            "target_age",
             "user_context",
+            "idol_profile_json",
+            "idol_persona_json",
+            "idol_milestones_json",
+            "gaps_json",
+            "readiness_by_gap_json",
         ]
         
         for placeholder in expected:
@@ -40,7 +46,13 @@ class TestPlanGeneratePlaceholders:
             "user_goal": "learn finance",
             "idol_name": "Warren Buffett",
             "hours_per_week": "10",
+            "target_age": "30",
             "user_context": "beginner in investing",
+            "idol_profile_json": {"domain": "investing"},
+            "idol_persona_json": {"principles": ["margin of safety"]},
+            "idol_milestones_json": [{"age": 30, "title": "ran partnership"}],
+            "gaps_json": [{"category": "finance", "gap": "analysis"}],
+            "readiness_by_gap_json": {"finance": "beginner"},
         }
         
         # Should not raise
@@ -65,6 +77,27 @@ class TestPlanGeneratePlaceholders:
         # Check the error mentions missing params
         assert "hours_per_week" in exc_info.value.missing_keys or \
                "user_context" in exc_info.value.missing_keys
+
+    def test_plan_generate_render_leaves_no_unresolved_placeholders(self):
+        """Rendered plan prompt must not leak raw placeholders to the LLM."""
+        rendered = load_and_render(
+            "plan_generate",
+            {
+                "user_goal": "learn finance",
+                "idol_name": "Warren Buffett",
+                "hours_per_week": "10",
+                "target_age": "30",
+                "user_context": "beginner in investing",
+                "idol_profile_json": {"domain": "investing"},
+                "idol_persona_json": {"principles": ["margin of safety"]},
+                "idol_milestones_json": [{"age": 30, "title": "ran partnership"}],
+                "gaps_json": [{"category": "finance", "gap": "analysis"}],
+                "readiness_by_gap_json": {"finance": "beginner"},
+            },
+            strict=True,
+        )
+
+        assert not extract_placeholders(rendered)
 
     def test_plan_generate_placeholder_names_match_template(self):
         """Ensure registry placeholders match what's actually in the template."""
@@ -99,7 +132,13 @@ class TestValidatePromptParams:
             "user_goal": "Win",
             "idol_name": "Test",
             "hours_per_week": "10",
+            "target_age": "30",
             "user_context": "",
+            "idol_profile_json": {},
+            "idol_persona_json": {},
+            "idol_milestones_json": [],
+            "gaps_json": [],
+            "readiness_by_gap_json": {},
         }
         missing = validate_prompt_params("plan_generate", params)
         

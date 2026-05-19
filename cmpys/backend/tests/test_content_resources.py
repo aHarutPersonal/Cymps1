@@ -7,6 +7,7 @@ from app.services.content_resources import (
     canonical_book_key,
     canonical_video_query_key,
     canonical_youtube_key,
+    generate_book_module,
     get_or_create_book_module_resource,
     get_or_create_video_resource,
     material_to_resource_payload,
@@ -21,6 +22,16 @@ class ScalarResult:
 
     def scalar_one_or_none(self):
         return self._value
+
+
+class LLMResponse:
+    def __init__(self, data=None, error=None):
+        self.data = data or {}
+        self.error = error
+
+
+def _book_module_markdown(title: str, words: int = 3000) -> str:
+    return f"# {title}\n\n" + " ".join(["insight"] * words)
 
 
 def test_canonical_book_key_is_stable_for_title_and_author_variants():
@@ -69,6 +80,41 @@ def test_material_to_resource_payload_converts_book_summary_material():
     assert payload["license_status"] == LicenseStatus.LLM_SUMMARY
     assert payload["canonical_key"] == "book:benjamin_graham:the_intelligent_investor"
     assert payload["summary_json"]["ideas"][0]["title"] == "Margin"
+
+
+@pytest.mark.asyncio
+async def test_generate_book_module_retries_until_prd_minimum(monkeypatch):
+    """Book modules below 2,500 words should trigger the stronger retry."""
+    calls = []
+
+    class Client:
+        async def generate_json(self, **kwargs):
+            calls.append(kwargs["user_prompt"])
+            word_count = 2000 if len(calls) == 1 else 2600
+            return LLMResponse(
+                {
+                    "title": "Deep Work",
+                    "author_or_creator": "Cal Newport",
+                    "content_markdown": "word " * word_count,
+                    "sections": [],
+                    "ideas": [],
+                }
+            )
+
+    monkeypatch.setattr(
+        "app.services.llm.client.get_llm_client",
+        lambda **kwargs: Client(),
+    )
+
+    result = await generate_book_module(
+        title="Deep Work",
+        author="Cal Newport",
+        user_goal="focus better",
+    )
+
+    assert len(calls) == 2
+    assert len(result["content_markdown"].split()) == 2600
+    assert result["duration_minutes"] == 13
 
 
 def test_material_to_resource_payload_converts_valid_youtube_video():
@@ -163,7 +209,7 @@ async def test_get_or_create_book_module_resource_generates_and_saves_once_when_
             "promise": "Build a distraction-resistant work ritual.",
             "sections": [{"title": "Protect Focus", "summary": "Batch shallow work."}],
             "ideas": [{"title": "Depth Wins", "content": "Schedule deep work first."}],
-            "content_markdown": "# Deep Work\n\nA reusable 15-minute summary.",
+            "content_markdown": _book_module_markdown("Deep Work"),
         }
 
     async def no_source(**kwargs):
@@ -247,7 +293,7 @@ async def test_attach_content_resources_generates_missing_book_module():
             "promise": "Apply one durable idea.",
             "sections": [],
             "ideas": [{"title": "Practice", "content": "Use the idea today."}],
-            "content_markdown": "# Atomic Habits\n\nSmall improvements compound.",
+            "content_markdown": _book_module_markdown("Atomic Habits"),
         }
 
     async def no_source(**kwargs):

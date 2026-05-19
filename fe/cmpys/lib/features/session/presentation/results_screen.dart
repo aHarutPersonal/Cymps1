@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
 import '../../../app/design_tokens.dart';
 import '../../../app/router.dart';
@@ -100,13 +99,19 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> {
       padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
       children: [
         _ResultsHeader(
-          title: isComparison ? 'Mirror analysis' : 'Path blueprint',
+          title: isComparison ? 'Mirror analysis' : 'Plan blueprint',
           subtitle: isComparison
-              ? 'Comparing your current trajectory with the mentor pattern.'
-              : 'Turning the diagnosis into your first quarterly path.',
+              ? 'Comparing your current trajectory with the mentor pattern. Choose the intensity that keeps you honest and moving.'
+              : 'Turning the diagnosis into the strategic verdict that powers your 12-week execution path.',
           icon: isComparison ? Icons.compare_arrows : Icons.map_outlined,
         ),
         const SizedBox(height: 14),
+        _TrustStrip(
+          label: isComparison
+              ? 'AI mentor simulation. Verify historical claims before major decisions.'
+              : 'Strategic blueprint. Your actionable work continues in the 12-week Plan tab.',
+        ),
+        const SizedBox(height: 12),
         _ResultPaper(
           title: isComparison ? 'Comparison' : 'Blueprint',
           body: content.isEmpty ? 'Preparing your analysis...' : content,
@@ -147,8 +152,13 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> {
           body: state.session.comparisonOutput ?? 'No comparison available.',
         ),
         const SizedBox(height: 12),
+        const _TrustStrip(
+          label:
+              'This is AI-assisted coaching from public context. Treat it as directional, then use the Plan tab for concrete work.',
+        ),
+        const SizedBox(height: 12),
         _ResultPaper(
-          title: 'Quarterly blueprint',
+          title: 'Strategic blueprint',
           body: state.session.blueprintOutput ?? 'No blueprint available.',
         ),
         const SizedBox(height: 18),
@@ -162,10 +172,10 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> {
                 borderRadius: BorderRadius.circular(18),
               ),
             ),
-            onPressed: () => context.goToAgenticGuidedLearning('My Plan'),
+            onPressed: () => context.goToPlan(),
             icon: const Icon(Icons.school_outlined),
             label: Text(
-              'Start guided learning',
+              'Open my 12-week plan',
               style: AppTypography.button.copyWith(color: Colors.white),
             ),
           ),
@@ -181,12 +191,50 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> {
                 borderRadius: BorderRadius.circular(18),
               ),
             ),
-            onPressed: () => context.go('/home'),
+            onPressed: () => context.goToHome(),
             icon: const Icon(Icons.home_outlined),
-            label: const Text('Go to dashboard'),
+            label: const Text('Go to Today'),
           ),
         ),
       ],
+    );
+  }
+}
+
+class _TrustStrip extends StatelessWidget {
+  const _TrustStrip({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: _ResultsPalette.paperWarm,
+        borderRadius: AppRadii.br12,
+        border: Border.all(color: _ResultsPalette.line),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(
+            Icons.fact_check_outlined,
+            size: 18,
+            color: _ResultsPalette.coralDark,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              label,
+              style: AppTypography.caption.copyWith(
+                color: _ResultsPalette.muted,
+                height: 1.35,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

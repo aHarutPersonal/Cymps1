@@ -53,6 +53,8 @@ dependencies:
   percent_indicator: ^4.2.3
   phosphor_flutter: ^2.1.0
   flutter_staggered_grid_view: ^0.7.0
+  flutter_local_notifications: ^18.0.1
+  timezone: ^0.9.4
 
 dev_dependencies:
   build_runner: ^2.4.12

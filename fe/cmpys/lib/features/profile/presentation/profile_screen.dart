@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import '../../../app/assets.dart';
 import '../../../app/design_tokens.dart';
 import '../../../app/router.dart';
+import '../../../core/notifications/notification_provider.dart';
 import '../../../core/ui/cmpys_button.dart';
 
 import '../../../core/ui/cmpys_chip.dart';
@@ -81,6 +82,133 @@ void _showProfileConsoleSheet(
   );
 }
 
+void _showNotificationSettingsSheet(BuildContext context, WidgetRef ref) {
+  showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: Colors.transparent,
+    builder: (context) {
+      return Consumer(
+        builder: (context, ref, _) {
+          final settingsAsync = ref.watch(notificationSettingsProvider);
+          return Container(
+            margin: const EdgeInsets.all(AppSpacing.s16),
+            padding: const EdgeInsets.all(AppSpacing.s20),
+            decoration: BoxDecoration(
+              color: _ProfilePalette.paper,
+              borderRadius: AppRadii.br24,
+              border: Border.all(color: _ProfilePalette.line),
+              boxShadow: AppShadows.lg,
+            ),
+            child: SafeArea(
+              top: false,
+              child: settingsAsync.when(
+                loading: () => const Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+                error: (error, _) => Text(
+                  'Could not load notification settings: $error',
+                  style: AppTypography.body.copyWith(color: AppColors.error),
+                ),
+                data: (settings) => Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: 42,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: _ProfilePalette.line,
+                        borderRadius: AppRadii.brFull,
+                      ),
+                    ),
+                    const SizedBox(height: AppSpacing.s20),
+                    Text('Daily reminder', style: AppTypography.h3),
+                    const SizedBox(height: AppSpacing.s8),
+                    Text(
+                      'Use reminders as the trigger for Today: daily focus, reading, and reflection.',
+                      style: AppTypography.body.copyWith(
+                        color: _ProfilePalette.muted,
+                      ),
+                    ),
+                    const SizedBox(height: AppSpacing.s16),
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Reminder time'),
+                      subtitle: Text(settings.timeString),
+                      trailing: const Icon(Icons.schedule_outlined),
+                      onTap: () async {
+                        final picked = await showTimePicker(
+                          context: context,
+                          initialTime: TimeOfDay(
+                            hour: settings.hour,
+                            minute: settings.minute,
+                          ),
+                        );
+                        if (picked == null) return;
+                        final service = ref.read(notificationServiceProvider);
+                        final granted = await service.requestPermissions();
+                        if (!granted) return;
+                        await service.scheduleDailyReminder(
+                          hour: picked.hour,
+                          minute: picked.minute,
+                        );
+                        ref.invalidate(notificationSettingsProvider);
+                      },
+                    ),
+                    const SizedBox(height: AppSpacing.s12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: CmpysButton(
+                            label: settings.enabled ? 'Update Time' : 'Enable',
+                            size: CmpysButtonSize.medium,
+                            onPressed: () async {
+                              final service = ref.read(
+                                notificationServiceProvider,
+                              );
+                              final granted = await service
+                                  .requestPermissions();
+                              if (!granted) return;
+                              await service.scheduleDailyReminder(
+                                hour: settings.hour,
+                                minute: settings.minute,
+                              );
+                              ref.invalidate(notificationSettingsProvider);
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: AppSpacing.s12),
+                        Expanded(
+                          child: CmpysButton(
+                            label: 'Disable',
+                            variant: CmpysButtonVariant.secondary,
+                            size: CmpysButtonSize.medium,
+                            onPressed: settings.enabled
+                                ? () async {
+                                    await ref
+                                        .read(notificationServiceProvider)
+                                        .cancelDailyReminder();
+                                    ref.invalidate(
+                                      notificationSettingsProvider,
+                                    );
+                                  }
+                                : null,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      );
+    },
+  );
+}
+
 class ProfileScreen extends ConsumerStatefulWidget {
   const ProfileScreen({super.key});
 
@@ -135,7 +263,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         child: SafeArea(
           bottom: false,
           child: SingleChildScrollView(
-            padding: EdgeInsets.only(bottom: AppSpacing.s100),
+            padding: EdgeInsets.only(bottom: 88),
             child: Column(
               children: [
                 // Header
@@ -452,12 +580,15 @@ class SettingsScreen extends ConsumerWidget {
                   SettingsTile(
                     title: 'Notifications',
                     icon: AppAssets.iconBell,
-                    onTap: () => _showProfileConsoleSheet(
-                      context,
-                      title: 'Notification logic',
-                      message:
-                          'Reminder controls are staged here for daily directives, path tasks, and reading sessions.',
-                    ),
+                    subtitle: ref
+                        .watch(notificationSettingsProvider)
+                        .maybeWhen(
+                          data: (settings) => settings.enabled
+                              ? 'Daily reminder at ${settings.timeString}'
+                              : 'Off',
+                          orElse: () => 'Daily focus reminder',
+                        ),
+                    onTap: () => _showNotificationSettingsSheet(context, ref),
                     showDivider: false,
                   ),
                 ],

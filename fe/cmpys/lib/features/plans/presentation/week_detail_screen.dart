@@ -8,7 +8,10 @@ import '../../../core/ui/loading_state.dart';
 import '../../../core/ui/prototype_grid_background.dart';
 import '../controllers/plans_controller.dart';
 import '../models/plan_models.dart';
+import '../models/daily_task_models.dart';
+import '../providers/daily_tasks_provider.dart';
 import 'widgets/path_design_helpers.dart';
+import 'widgets/daily_rhythm_card.dart';
 
 class WeekDetailScreen extends ConsumerStatefulWidget {
   const WeekDetailScreen({super.key, required this.weekNumber});
@@ -110,58 +113,138 @@ class _WeekDetailScreenState extends ConsumerState<WeekDetailScreen> {
               hasScrollBody: false,
               child: _emptyState(compact: true),
             )
-          else
-            SliverPadding(
-              padding: const EdgeInsets.fromLTRB(24, 0, 24, 112),
-              sliver: SliverList.builder(
-                itemCount: weekItems.length,
-                itemBuilder: (context, index) {
-                  final item = weekItems[index];
-                  final isExpanded =
-                      _expandedItems.contains(item.id) ||
-                      (_expandedItems.isEmpty && index == 0);
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 16),
-                    child: _WeekPlanItemCard(
-                      item: item,
-                      index: index,
-                      isExpanded: isExpanded,
-                      onToggleExpand: () {
-                        setState(() {
-                          if (_expandedItems.contains(item.id)) {
-                            _expandedItems.remove(item.id);
-                          } else {
-                            _expandedItems.add(item.id);
-                          }
-                        });
-                      },
-                      onOpen: () => context.goToTaskDetail(item.id),
-                      onToggleComplete: () => ref
-                          .read(plansControllerProvider.notifier)
-                          .toggleItemCompletion(
-                            item.id,
-                            weekNumber: widget.weekNumber,
-                          ),
-                    ),
-                  );
-                },
-              ),
-            ),
+          else ...[
+            // ── Mission section ──
+            ..._buildMissionSection(weekItems),
+            // ── Daily Rhythm section ──
+            ..._buildDailyRhythmSection(weekItems),
+            // Bottom padding
+            const SliverToBoxAdapter(child: SizedBox(height: 112)),
+          ],
         ],
       ),
     );
+  }
+
+  List<Widget> _buildMissionSection(List<PlanItem> weekItems) {
+    final missionItems = weekItems.where((item) {
+      final type = item.type.toLowerCase();
+      return !type.contains('habit') &&
+          !type.contains('practice') &&
+          pathItemHasRenderableContent(item);
+    }).toList();
+
+    if (missionItems.isEmpty) return [];
+
+    return [
+      SliverToBoxAdapter(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 8, 24, 16),
+          child: Text(
+            'Strategic_Mission',
+            style: AppTypography.captionUpper.copyWith(
+              color: AppColors.textTertiary,
+              fontSize: 10,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 1.2,
+            ),
+          ),
+        ),
+      ),
+      SliverPadding(
+        padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
+        sliver: SliverList.builder(
+          itemCount: missionItems.length,
+          itemBuilder: (context, index) {
+            final item = missionItems[index];
+            final isExpanded =
+                _expandedItems.contains(item.id) ||
+                (_expandedItems.isEmpty && index == 0);
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 16),
+              child: _WeekPlanItemCard(
+                item: item,
+                index: index,
+                isExpanded: isExpanded,
+                onToggleExpand: () {
+                  setState(() {
+                    if (_expandedItems.contains(item.id)) {
+                      _expandedItems.remove(item.id);
+                    } else {
+                      _expandedItems.add(item.id);
+                    }
+                  });
+                },
+                onOpen: () => context.goToTaskDetail(item.id),
+                onToggleComplete: () => ref
+                    .read(plansControllerProvider.notifier)
+                    .toggleItemCompletion(
+                      item.id,
+                      weekNumber: widget.weekNumber,
+                    ),
+              ),
+            );
+          },
+        ),
+      ),
+    ];
+  }
+
+  List<Widget> _buildDailyRhythmSection(List<PlanItem> weekItems) {
+    final dailyItems = weekItems.where((item) {
+      final type = item.type.toLowerCase();
+      return (type.contains('habit') || type.contains('practice')) &&
+          pathItemHasRenderableContent(item);
+    }).toList();
+
+    if (dailyItems.isEmpty) return [];
+
+    return [
+      SliverToBoxAdapter(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+          child: Text(
+            'Daily_Rhythm',
+            style: AppTypography.captionUpper.copyWith(
+              color: AppColors.mint,
+              fontSize: 10,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 1.2,
+            ),
+          ),
+        ),
+      ),
+      SliverPadding(
+        padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
+        sliver: SliverList.builder(
+          itemCount: dailyItems.length,
+          itemBuilder: (context, index) {
+            final item = dailyItems[index];
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 16),
+              child: _DailyRhythmWrapper(
+                itemId: item.id,
+                title: item.title,
+                type: item.type,
+                estimatedHours: item.estimatedHours,
+              ),
+            );
+          },
+        ),
+      ),
+    ];
   }
 
   Widget _emptyState({bool compact = false}) {
     return PathEmptyState(
       title: compact ? 'No Items This Week' : 'No Plan Found',
       message: compact
-          ? 'This week is empty. Regenerate the path to fill it with plan items.'
-          : 'Generate a path before opening week detail.',
+          ? 'This week is empty. Regenerate the plan to fill it with plan items.'
+          : 'Generate a plan before opening week detail.',
       action: compact
           ? null
           : CmpysButton(
-              label: 'Back to Path',
+              label: 'Back to Plan',
               onPressed: () => Navigator.of(context).pop(),
             ),
     );
@@ -339,6 +422,7 @@ class _WeekPlanItemCard extends StatelessWidget {
         : index == 0
         ? AppColors.mint
         : AppColors.textTertiary;
+    final title = pathItemTitle(item);
 
     return Material(
       color: Colors.transparent,
@@ -401,11 +485,13 @@ class _WeekPlanItemCard extends StatelessWidget {
               ),
               const SizedBox(height: 16),
               Text(
-                item.title,
+                title,
                 style: AppTypography.h4.copyWith(
                   fontSize: 16,
                   fontWeight: FontWeight.w800,
                 ),
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
               ),
               const SizedBox(height: 8),
               Text(
@@ -415,6 +501,8 @@ class _WeekPlanItemCard extends StatelessWidget {
                   fontSize: 12,
                   height: 1.45,
                 ),
+                maxLines: isExpanded ? 4 : 2,
+                overflow: TextOverflow.ellipsis,
               ),
               const SizedBox(height: 16),
               Wrap(
@@ -526,10 +614,70 @@ class _CompactStepLine extends StatelessWidget {
                 color: AppColors.textSecondary,
                 fontSize: 12,
               ),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
             ),
           ),
         ],
       ),
+    );
+  }
+}
+
+class _DailyRhythmWrapper extends ConsumerStatefulWidget {
+  const _DailyRhythmWrapper({
+    required this.itemId,
+    required this.title,
+    required this.type,
+    this.estimatedHours,
+  });
+
+  final String itemId;
+  final String title;
+  final String type;
+  final double? estimatedHours;
+
+  @override
+  ConsumerState<_DailyRhythmWrapper> createState() =>
+      _DailyRhythmWrapperState();
+}
+
+class _DailyRhythmWrapperState extends ConsumerState<_DailyRhythmWrapper> {
+  DailyTaskWeekStatus? _weekStatus;
+  @override
+  void initState() {
+    super.initState();
+    _loadWeekStatus();
+  }
+
+  Future<void> _loadWeekStatus() async {
+    try {
+      final repo = ref.read(dailyTasksRepoProvider);
+      _weekStatus = await repo.getDailyTaskWeekStatus(widget.itemId);
+    } catch (_) {
+      // Silently fail — card shows without dot grid
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final task = DailyTask(
+      id: widget.itemId,
+      title: widget.title,
+      type: widget.type,
+      estimatedHours: widget.estimatedHours,
+    );
+
+    return DailyRhythmCard(
+      task: task,
+      weekStatus: _weekStatus,
+      onDayTap: (itemId, date) async {
+        try {
+          final repo = ref.read(dailyTasksRepoProvider);
+          await repo.toggleDailyTask(itemId);
+          await _loadWeekStatus();
+        } catch (_) {}
+      },
     );
   }
 }

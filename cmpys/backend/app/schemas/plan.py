@@ -42,14 +42,15 @@ class PlanItemUpdate(BaseModel):
 
 class PlanItemCreate(BaseModel):
     """Request to create a plan item manually."""
-    
+
     title: str = Field(..., min_length=1, max_length=200)
-    description: str = Field(..., min_length=1)
+    description: str = Field(..., min_length=10)
     type: PlanItemType = PlanItemType.PROJECT
     weekStart: int | None = Field(None, ge=1)
     weekEnd: int | None = Field(None, ge=1)
     estimatedHours: int = Field(default=1, ge=0)
     successMetric: str = Field(default="Completed as planned", max_length=300)
+    dailyInstructions: str | None = Field(default=None, max_length=2000)
 
 
 class PlanItemResponse(BaseModel):

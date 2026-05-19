@@ -129,12 +129,12 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
 
       if (next is OnboardingIdolSuggestStep ||
           next is OnboardingIdolSearchStep) {
-        // Profile saved successfully via PATCH /me, navigate to idol suggestions
-        debugPrint('📋 ProfileSetup: Navigating to idol-suggest');
+        // Profile saved successfully via PATCH /me, start canonical agentic activation.
+        debugPrint('📋 ProfileSetup: Navigating to agentic intake');
         // Use addPostFrameCallback to avoid modifying during build
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) {
-            context.go(AppRoutes.idolSuggest);
+            context.go(AppRoutes.agenticIntake);
           }
         });
       } else if (next is OnboardingError) {
@@ -207,7 +207,9 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
                     ),
                     // Bottom button
                     _BottomButton(
-                      label: _currentStep < 2 ? 'Continue' : 'Find My Idol',
+                      label: _currentStep < 2
+                          ? 'Continue'
+                          : 'Start Mentor Setup',
                       isEnabled: _canContinue() && !_isLoading,
                       isLoading: _isLoading,
                       onPressed: _onContinue,

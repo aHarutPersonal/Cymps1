@@ -1,5 +1,7 @@
 # Implementation Plan: Agentic Persona Workflow
 
+> Canonical update: this historical implementation plan is superseded for product direction by `cmpys/business/product_strategy.md`, `fe/cmpys/docs/UX_SPEC.md`, and `cmpys/backend/docs/prompt_contracts.md`. The current product spine is agentic activation -> 12-week execution -> daily retention.
+
 **Branch**: `001-agentic-refactor` | **Date**: 2026-02-20 | **Spec**: [spec.md](file:///Users/harutantonyan/work/specs/001-agentic-refactor/spec.md)
 **Input**: Feature specification from `/specs/001-agentic-refactor/spec.md`
 

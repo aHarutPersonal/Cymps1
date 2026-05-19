@@ -849,15 +849,15 @@ def _validate_plan_item_details_schema(details: dict) -> list[str]:
 def _normalize_plan_item_details(details: dict) -> dict:
     """
     Normalize plan item details from `plan_item_details.txt` output schema.
-    
+
     New schema (plan_item_details.txt):
       { steps: [{id, title, description, estimate_minutes, substeps: [str...]}],
         materials: [{title, type, url, reason}],
         definition_of_done, mental_model }
-    
+
     Legacy schema (micro_steps):
       { mental_model, micro_steps: [str...], definition_of_done, common_trap }
-    
+
     Output storage schema:
       { steps: [{id, title, description, estimate_minutes, substeps, completed}],
         materials: [{title, type, url, reason}],
@@ -893,7 +893,7 @@ def _normalize_plan_item_details(details: dict) -> dict:
                 step["description"] = step.pop("instruction")
             elif "description" not in step:
                 step["description"] = step.get("expected_output", "")
-            # Preserve substeps (already a list of strings from new schema)
+            # Preserve substeps — normalize bare strings to descriptive objects if needed
             if "substeps" not in step:
                 step["substeps"] = []
             # Normalize estimate_minutes
@@ -901,6 +901,28 @@ def _normalize_plan_item_details(details: dict) -> dict:
                 step["estimateMinutes"] = step.pop("estimate_minutes")
             # Ensure completion state defaults to false (never trust LLM on this)
             step.setdefault("completed", False)
+
+    # --- Validate content depth ---
+    min_lesson_words = 500
+    min_material_words = 600
+
+    # Flag steps with thin lesson_content (should be 500+ words per prompt)
+    for step in details.get("steps", []):
+        lesson = step.get("lesson_content", "")
+        if lesson and len(lesson.split()) < min_lesson_words:
+            logger.warning(
+                f"[PLAN_DETAILS] Step '{step.get('title', '?')}' has thin lesson_content: "
+                f"{len(lesson.split())} words (minimum {min_lesson_words})"
+            )
+
+    # --- Validate materials content depth ---
+    for mat in details.get("materials", []):
+        md = mat.get("content_markdown", "")
+        if md and len(md.split()) < min_material_words:
+            logger.warning(
+                f"[PLAN_DETAILS] Material '{mat.get('title', '?')}' has thin content_markdown: "
+                f"{len(md.split())} words (minimum {min_material_words})"
+            )
 
     # --- Store meta fields ---
     meta = details.setdefault("meta", {})

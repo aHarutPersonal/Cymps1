@@ -26,7 +26,7 @@ import '../features/plans/presentation/plan_video_screen.dart';
 import '../features/plans/presentation/task_detail_screen.dart';
 import '../features/achievements/presentation/achievements_screen.dart';
 import '../features/onboarding/presentation/profile_setup_screen.dart';
-import '../features/plans/presentation/growth_screen.dart';
+import '../features/plans/presentation/plans_screen.dart';
 import '../features/notes/presentation/studio_screen.dart';
 import '../features/plans/presentation/week_detail_screen.dart';
 import '../features/profile/presentation/premium_paywall_screen.dart';
@@ -38,6 +38,7 @@ import '../features/session/presentation/results_screen.dart';
 import '../features/session/presentation/guided_learning_screen.dart';
 import '../features/session/presentation/stash_screen.dart';
 import '../features/session/presentation/library_screen.dart';
+import '../features/feed/presentation/discover_feed_screen.dart';
 
 /// Route paths.
 abstract final class AppRoutes {
@@ -64,7 +65,7 @@ abstract final class AppRoutes {
   static const String agenticResults = '/agentic/results';
   static const String agenticGuidedLearning = '/agentic/guided-learning';
   static const String stash = '/stash';
-  static const String library = '/library';
+  static const String vault = '/vault';
 
   // Plan Generation
   static const String generatingPlan = '/generating-plan';
@@ -93,8 +94,8 @@ abstract final class AppRoutes {
   static const String chat = '/chat';
   static const String chatThreads = '/chat-threads';
   static const String chatThread = '/chat-thread';
-  static const String discover = '/discover';
-  static const String notes = '/notes';
+  static const String mentorChat = '/mentor-chat';
+  static const String ideas = '/ideas';
   static const String profile = '/profile';
   static const String premium = '/premium';
 
@@ -112,7 +113,7 @@ abstract final class AppRoutes {
   ];
 
   // Main app routes (require full auth + onboarding)
-  static const mainRoutes = [home, plan, discover, chat, library];
+  static const mainRoutes = [home, plan, chat, vault, profile];
 }
 
 /// Navigation keys for shell routes.
@@ -335,7 +336,7 @@ final routerProvider = Provider<GoRouter>((ref) {
 
       // Chat
       GoRoute(
-        path: AppRoutes.chat,
+        path: AppRoutes.mentorChat,
         parentNavigatorKey: _rootNavigatorKey,
         builder: (context, state) => const MentorIntakeScreen(),
       ),
@@ -360,11 +361,11 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => const ComparisonScreen(),
       ),
 
-      // Profile (push route from Home tab)
+      // Discover feed remains available as a secondary route from Today/Library.
       GoRoute(
-        path: AppRoutes.profile,
+        path: AppRoutes.ideas,
         parentNavigatorKey: _rootNavigatorKey,
-        builder: (context, state) => const ProfileScreen(),
+        builder: (context, state) => const DiscoverFeedScreen(),
       ),
       GoRoute(
         path: AppRoutes.premium,
@@ -372,7 +373,7 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => const PremiumPaywallScreen(),
       ),
 
-      // Main App Shell with Bottom Navigation — 4 tabs
+      // Main App Shell with Bottom Navigation — 5 tabs
       StatefulShellRoute.indexedStack(
         builder: (context, state, navigationShell) {
           return AppShell(navigationShell: navigationShell);
@@ -387,33 +388,42 @@ final routerProvider = Provider<GoRouter>((ref) {
               ),
             ],
           ),
-          // Tab 1: Growth (Plan main)
+          // Tab 1: Plan
           StatefulShellBranch(
             routes: [
               GoRoute(
                 path: AppRoutes.plan,
-                builder: (context, state) => const GrowthScreen(),
+                builder: (context, state) => const PlansScreen(),
               ),
             ],
           ),
-          // Tab 2: Studio (Notes main)
+          // Tab 2: Chat (Studio main)
           StatefulShellBranch(
             routes: [
               GoRoute(
-                path: AppRoutes.notes,
+                path: AppRoutes.chat,
                 builder: (context, state) => const StudioScreen(),
               ),
             ],
           ),
-          // Tab 3: Vault (Library main)
+          // Tab 3: Library
           StatefulShellBranch(
             routes: [
               GoRoute(
-                path: AppRoutes.library,
+                path: AppRoutes.vault,
                 builder: (context, state) {
                   final tab = state.extra as int? ?? 0;
                   return LibraryScreen(initialTab: tab);
                 },
+              ),
+            ],
+          ),
+          // Tab 4: Profile
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: AppRoutes.profile,
+                builder: (context, state) => const ProfileScreen(),
               ),
             ],
           ),
@@ -479,7 +489,7 @@ extension GoRouterExtension on BuildContext {
   void goToAgenticGuidedLearning(String topic) =>
       push(AppRoutes.agenticGuidedLearning, extra: topic);
   void goToStash() => push(AppRoutes.stash);
-  void goToLibrary({int tab = 0}) => push(AppRoutes.library, extra: tab);
+  void goToVault({int tab = 0}) => push(AppRoutes.vault, extra: tab);
   void goToPremium() => push(AppRoutes.premium);
 
   void goToGeneratingPlan(String jobId) =>
@@ -527,8 +537,8 @@ extension GoRouterExtension on BuildContext {
   void goToHome() => go(AppRoutes.home);
   void goToComparison() => push(AppRoutes.comparison);
   void goToPlan() => go(AppRoutes.plan);
-  void goToChat() => push(AppRoutes.chat);
-  void goToNotes() => go(AppRoutes.notes);
+  void goToChat() => go(AppRoutes.chat);
+  void goToIdeas() => push(AppRoutes.ideas);
   void goToProfile() => go(AppRoutes.profile);
   void goToAchievements() => push(AppRoutes.achievements);
   void goToAddAchievement() => push(AppRoutes.addAchievement);

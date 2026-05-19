@@ -201,7 +201,10 @@ class _ChatThreadsScreenState extends ConsumerState<ChatThreadsScreen> {
       color: AppColors.accent,
       onRefresh: _loadThreads,
       child: ListView.separated(
-        padding: const EdgeInsets.symmetric(vertical: 8),
+        padding: const EdgeInsets.only(
+          top: 8,
+          bottom: AppSpacing.floatingNavBarHeight,
+        ),
         itemCount: _threads.length,
         separatorBuilder: (_, _) =>
             const Divider(height: 1, indent: 80, color: AppColors.glassBorder),

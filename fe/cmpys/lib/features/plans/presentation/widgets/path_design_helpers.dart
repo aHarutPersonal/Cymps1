@@ -33,7 +33,7 @@ class PathSyntheticMaterial {
 }
 
 String pathWeekTitle(int week, List<PlanItem> items, {WeekSummary? summary}) {
-  final theme = summary?.theme?.trim();
+  final theme = _compactPlanText(summary?.theme);
   if (theme != null && theme.isNotEmpty) return theme;
 
   final mission = _firstNonEmpty(
@@ -47,7 +47,7 @@ String pathWeekTitle(int week, List<PlanItem> items, {WeekSummary? summary}) {
 }
 
 String pathWeekSummary(int week, List<PlanItem> items, {WeekSummary? summary}) {
-  final text = summary?.summary?.trim();
+  final text = _compactPlanText(summary?.summary);
   if (text != null && text.isNotEmpty) return text;
   if (items.isEmpty) return 'A quiet week ready for your next plan item.';
 
@@ -65,14 +65,28 @@ String pathWeekSummary(int week, List<PlanItem> items, {WeekSummary? summary}) {
 
 String pathItemSubtitle(PlanItem item) {
   final due = item.dueDate;
-  if (item.successMetric?.trim().isNotEmpty ?? false) {
-    return item.successMetric!.trim();
+  final successMetric = _compactPlanText(item.successMetric);
+  if (successMetric != null && successMetric.isNotEmpty) {
+    return successMetric;
   }
-  if (item.description?.trim().isNotEmpty ?? false) {
-    return item.description!.trim();
+  final description = _compactPlanText(item.description);
+  if (description != null && description.isNotEmpty) {
+    return description;
   }
   if (due != null) return 'Proof artifact due ${_formatDueDate(due)}.';
   return 'Turn this into a visible proof artifact.';
+}
+
+String pathItemTitle(PlanItem item) {
+  return _compactPlanText(item.title) ?? 'Untitled plan item';
+}
+
+bool pathItemHasRenderableContent(PlanItem item) {
+  return _compactPlanText(item.title) != null ||
+      _compactPlanText(item.primaryMission) != null ||
+      _compactPlanText(item.successMetric) != null ||
+      _compactPlanText(item.description) != null ||
+      _compactPlanText(item.resourceTitle) != null;
 }
 
 String pathItemKind(PlanItem item) {
@@ -89,11 +103,11 @@ String pathItemKind(PlanItem item) {
 }
 
 List<PathSyntheticStep> pathSyntheticSteps(PlanItem item) {
-  final mission = item.primaryMission?.trim();
-  final proof = item.successMetric?.trim();
-  final friction = item.predictedFriction?.trim();
-  final solution = item.frictionSolution?.trim();
-  final description = item.description?.trim();
+  final mission = _compactPlanText(item.primaryMission);
+  final proof = _compactPlanText(item.successMetric);
+  final friction = _compactPlanText(item.predictedFriction);
+  final solution = _compactPlanText(item.frictionSolution);
+  final description = _compactPlanText(item.description);
 
   final steps = <PathSyntheticStep>[
     PathSyntheticStep(
@@ -519,10 +533,19 @@ String _cleanWeekTitle(int week, String title) {
 
 String? _firstNonEmpty(Iterable<String?> values) {
   for (final value in values) {
-    final trimmed = value?.trim();
+    final trimmed = _compactPlanText(value);
     if (trimmed != null && trimmed.isNotEmpty) return trimmed;
   }
   return null;
+}
+
+String? _compactPlanText(String? value) {
+  final clean = value
+      ?.replaceAll(RegExp(r'[\u200B-\u200D\uFEFF]'), '')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+  if (clean == null || clean.isEmpty) return null;
+  return clean;
 }
 
 String _formatDueDate(DateTime date) {

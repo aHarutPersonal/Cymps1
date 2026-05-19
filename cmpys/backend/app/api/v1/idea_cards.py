@@ -18,7 +18,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.dependencies import CurrentUser, get_current_user
-from app.core.config import settings
 from app.core.db import get_db
 from app.models.idea_card import IdeaCard
 from app.models.idol import Idol
@@ -329,13 +328,11 @@ async def _generate_idea_cards(
     """
     Generate atomized IdeaCards via LLM and persist to DB.
 
-    Uses the `idea_cards_generate.txt` prompt template which instructs
-    the LLM to return a strict JSON array of card objects.
+    Uses the unified LLM client for consistent error handling,
+    retry, and model fallback.
     """
     try:
-        from google import genai
-        from google.genai import types
-
+        from app.services.llm import get_llm_client
         from app.services.llm.prompt_loader import load_and_render
 
         # Build user context
@@ -369,36 +366,23 @@ async def _generate_idea_cards(
             {
                 "count": str(count),
                 "idol_name": idol.name,
-                "idol_domain": idol.domain,
+                "idol_domain": idol.domain or "general",
                 "persona_context": persona_context,
                 "user_profile_json": json_lib.dumps(user_profile_data),
             },
         )
 
-        client = genai.Client(api_key=settings.gemini_api_key)
-        response = await client.aio.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.9,
-                response_mime_type="application/json",
-            ),
+        client = get_llm_client(timeout=60.0)
+        response = await client.generate_json(
+            system_prompt="You are an expert at creating concise, actionable wisdom cards. Return only valid JSON.",
+            user_prompt=prompt,
         )
 
-        if not response.text:
-            logger.warning("[IDEA_CARDS] LLM returned empty response")
+        if response.error:
+            logger.warning(f"[IDEA_CARDS] LLM error: {response.error}")
             return []
 
-        text = response.text.strip()
-        # Strip markdown code fences if present
-        if text.startswith("```json"):
-            text = text[7:]
-        if text.startswith("```"):
-            text = text[3:]
-        if text.endswith("```"):
-            text = text[:-3]
-
-        parsed = json_lib.loads(text.strip())
+        parsed = response.data
 
         # Handle both {"idea_cards": [...]} and bare [...] formats
         if isinstance(parsed, dict) and "idea_cards" in parsed:

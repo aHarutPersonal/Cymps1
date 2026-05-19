@@ -1,5 +1,7 @@
 # Feature Specification: Agentic Persona Workflow
 
+> Canonical update: this historical spec is superseded for product direction by `cmpys/business/product_strategy.md` and `fe/cmpys/docs/UX_SPEC.md`. Treat the blueprint as the strategic verdict after comparison; the 12-week plan is the execution artifact and daily retention surface.
+
 **Feature Branch**: `001-agentic-refactor`
 **Created**: 2026-02-20
 **Status**: Draft

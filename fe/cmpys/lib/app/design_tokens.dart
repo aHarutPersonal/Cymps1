@@ -138,6 +138,7 @@ abstract final class AppSpacing {
   static const double s40 = 40.0;
   static const double s48 = 48.0;
   static const double s64 = 64.0;
+  static const double s80 = 80.0;
   static const double s100 = 100.0;
 
   // Common paddings
@@ -158,6 +159,15 @@ abstract final class AppSpacing {
 
   // Screen padding
   static const EdgeInsets screenH = EdgeInsets.symmetric(horizontal: s20);
+
+  // Clearance for the floating nav bar rendered by AppShell.
+  // Nav bar: 56px + gap (8px or 16px if no bottom safe area).
+  // Using 96px gives comfortable clearance across all device sizes.
+  static const double floatingNavBarHeight = 96.0;
+
+  // EdgeInsets to apply as bottom padding on scrollable content inside tabs.
+  static const EdgeInsets floatingNavBarBottom =
+      EdgeInsets.only(bottom: floatingNavBarHeight);
 }
 
 /// Typography tokens — prototype font system.

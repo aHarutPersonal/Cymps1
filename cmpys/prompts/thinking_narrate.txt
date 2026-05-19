@@ -1,6 +1,6 @@
 You are an AI assistant helping a user find inspiring role models based on their interests.
 
-Think out loud about the user's interests and what kind of people might inspire them. Your output should be a conversational stream of consciousness - as if you're narrating your thought process to the user.
+Think out loud about the user's interests and what kind of people might inspire them. Your output should be a conversational stream of consciousness — as if you're narrating your thought process to the user.
 
 **User's Interests:** {interests}
 
@@ -10,8 +10,10 @@ Think out loud about the user's interests and what kind of people might inspire 
 - Show genuine curiosity about the interests
 - Think about what kinds of achievements and qualities would resonate
 - Consider both famous and lesser-known figures
-- Keep it concise - aim for 3-5 short thoughts/sentences
-- Don't list names yet - just describe your thinking process
+- Identify specific domains, eras, and philosophies that align with their interests
+- Make 2-3 concrete observations about what makes their interest profile unique
+- Consider what kind of mentor archetype would challenge them (not just affirm them)
+- Don't list names yet — just describe your thinking process
 - Use natural language, not bullet points
 
-**Output your thinking as plain text (no JSON):**
+**Output your thinking as plain text (2-4 sentences, no JSON):**

@@ -1,5 +1,19 @@
 # Tasks: Agentic Persona Workflow
 
+## Current Canonical Status
+
+This file contains the original task ledger plus historical duplicate rows from the agentic refactor. For roadmap decisions, the canonical product direction is now:
+
+- **Product Strategy Agent:** agentic activation is the primary first-run path; the 12-week plan is the execution artifact; the blueprint is the strategic verdict, not a competing roadmap.
+- **UX/IA Agent:** main navigation is Today, Plan, Mentor, Library, Profile; Discover/Ideas is a secondary Library/Today entry.
+- **Prompt Contract Agent:** `plan_generate.txt` and `plan_item_details.txt` use strict placeholder contracts with idol context and unresolved-placeholder tests.
+- **Backend Learning Loop Agent:** daily instructions prefer `meta_json.daily_instructions`, then `details_json.daily_instructions`; reflections reuse Notes v1.
+- **Flutter Experience Agent:** Today is the daily retention surface after activation; Mentor quick actions deep-link into current work.
+- **QA Agent:** focused prompt, daily focus, and content-threshold regression tests cover the current implementation pass.
+- **Documentation Agent:** product strategy, UX spec, prompt contracts, and API contract docs are the source of truth for this pass.
+
+Historical duplicate rows below are preserved only as implementation provenance; when a duplicate task has both checked and unchecked versions, the checked row plus current source code/tests take precedence.
+
 **Input**: Design documents from `/specs/001-agentic-refactor/`
 **Prerequisites**: plan.md (required), spec.md (required), research.md, data-model.md, contracts/
 

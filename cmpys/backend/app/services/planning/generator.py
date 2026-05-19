@@ -105,7 +105,13 @@ async def _generate_llm_items(
     idol_name: str,
     user_goal: str,
     hours_per_week: int,
+    target_age: int | None = None,
     user_context: str = "",
+    idol_profile: dict | list | str | None = None,
+    idol_persona: dict | list | str | None = None,
+    idol_milestones: dict | list | str | None = None,
+    gaps: dict | list | str | None = None,
+    readiness_by_gap: dict | list | str | None = None,
 ) -> PlanRoadmap:
     """
     Generate plan items using LLM.
@@ -123,13 +129,19 @@ async def _generate_llm_items(
         system_prompt = load_prompt("extractor_system")
         user_template = load_prompt("plan_generate")
 
-        # Render user prompt with the 4 variables
+        # Render user prompt with the full plan contract.
         user_prompt = render_prompt(user_template, {
             "user_goal": user_goal,
             "idol_name": idol_name,
             "hours_per_week": str(hours_per_week),
+            "target_age": str(target_age or "null"),
             "user_context": user_context,
-        }, prompt_name="plan_generate.txt", strict=False)
+            "idol_profile_json": idol_profile or {},
+            "idol_persona_json": idol_persona or {},
+            "idol_milestones_json": idol_milestones or [],
+            "gaps_json": gaps or [],
+            "readiness_by_gap_json": readiness_by_gap or {},
+        }, prompt_name="plan_generate.txt", strict=True)
 
         validated, response = await client.generate_and_validate(
             system_prompt=system_prompt,
@@ -151,6 +163,7 @@ async def _generate_llm_items(
             for week in validated.weeks:
                 for task in week.binary_tasks:
                     item_type = type_map.get(task.type.lower(), PlanItemType.PROJECT)
+                    estimated_hours = task.estimated_hours or max(1, hours_per_week // max(1, len(week.binary_tasks)))
                     result_items.append(PlanItemData(
                         title=task.title,
                         type=item_type,
@@ -158,11 +171,12 @@ async def _generate_llm_items(
                         week_start=week.week_number,
                         week_end=week.week_number,
                         success_metric=f"Task completed: {task.title}",
-                        estimated_hours=max(1, hours_per_week // max(1, len(week.binary_tasks))),
+                        estimated_hours=estimated_hours,
                         meta_json={
                             "primary_mission": week.primary_mission,
                             "predicted_friction": week.predicted_friction,
                             "friction_solution": week.friction_solution,
+                            "daily_instructions": task.daily_instructions,
                         },
                     ))
 
@@ -224,7 +238,13 @@ async def generate_plan(
             idol_name=idol_name,
             user_goal=user_goal,
             hours_per_week=weekly_hours,
+            target_age=kwargs.get("target_age"),
             user_context=user_context,
+            idol_profile=kwargs.get("idol_profile"),
+            idol_persona=kwargs.get("idol_persona"),
+            idol_milestones=kwargs.get("idol_milestones"),
+            gaps=kwargs.get("gaps"),
+            readiness_by_gap=kwargs.get("readiness_by_gap"),
         )
     else:
         logger.info("Generating plan using deterministic templates")

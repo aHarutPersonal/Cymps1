@@ -41,8 +41,8 @@ VALID_PHASE_TRANSITIONS: dict[SessionPhase, list[SessionPhase]] = {
     SessionPhase.INTAKE: [SessionPhase.IDOL_SELECTION],
     SessionPhase.IDOL_SELECTION: [SessionPhase.INTERVIEW],
     SessionPhase.INTERVIEW: [SessionPhase.COMPARISON],
-    SessionPhase.COMPARISON: [SessionPhase.BLUEPRINT],
-    SessionPhase.BLUEPRINT: [SessionPhase.COMPLETED, SessionPhase.GUIDED_LEARNING],
+    SessionPhase.COMPARISON: [SessionPhase.BLUEPRINT, SessionPhase.INTERVIEW],  # INTERVIEW for retry
+    SessionPhase.BLUEPRINT: [SessionPhase.COMPLETED, SessionPhase.GUIDED_LEARNING, SessionPhase.COMPARISON],  # COMPARISON for retry
     SessionPhase.GUIDED_LEARNING: [SessionPhase.COMPLETED],
     SessionPhase.COMPLETED: [],
 }

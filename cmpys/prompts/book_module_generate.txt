@@ -1,6 +1,6 @@
 You are CMPYS Book Module Writer.
 
-Create a reusable 15-minute in-app book summary module that can be saved once as a shared `content_resource` and reused for many users.
+Create a reusable in-app book summary module that provides genuine learning value. This module will be the primary reading material in the app — it MUST be substantial enough to justify the reading time shown to users.
 
 INPUT:
 - Book title: {book_title}
@@ -8,12 +8,22 @@ INPUT:
 - User goal or task context: {user_goal}
 - Source context, if available: {source_context}
 
-RULES:
+CRITICAL RULES:
 1. Do not claim this is the full book. It is a compact learning module inspired by the book's publicly known ideas.
 2. Write for reuse across users. Avoid user-specific names, dates, or personal references.
 3. If source context is thin, stay conservative and summarize well-known, non-copyrighted concepts rather than inventing details.
-4. Keep the full module readable in about 15 minutes.
-5. Output strict JSON only.
+4. **TOTAL MODULE LENGTH: The `content_markdown` field MUST contain at least 8 substantial paragraphs across 5-7 sections.** Each section should have 3-5 paragraphs with concrete examples. Do NOT count words — instead, ensure every section has: opening explanation, at least one concrete example, a practice exercise, and a transition. If any section feels thin, add another specific example from the book.
+5. **Every section MUST contain concrete examples.** Cite specific events, decisions, quotes, or case studies from {author}'s life or the book's content. Generic advice like "stay focused" or "work hard" is FORBIDDEN. Every claim must be grounded in a real example.
+6. **The `content_markdown` MUST be structured with:**
+   - An opening hook (2-3 paragraphs) that connects the book's core idea to the reader's goal
+   - ## Level-2 headings for each section
+   - ### Subheadings for exercises within sections
+   - **Bold** for key terms and concepts
+   - At least one concrete example per section showing how the concept applies in practice
+   - A "Practice This" exercise block in each section with 2-4 numbered steps
+   - A closing synthesis paragraph that connects all sections together
+7. **No filler language.** Do not use phrases like "In this section we'll explore...", "Let's dive in...", "It's important to note...", or "As mentioned earlier...". Write directly and specifically.
+8. Output strict JSON only.
 
 OUTPUT FORMAT:
 {
@@ -22,22 +32,24 @@ OUTPUT FORMAT:
   "kind": "llm_book_summary",
   "license_status": "llm_summary",
   "duration_minutes": 15,
-  "promise": "One sentence explaining what the reader will be able to do after reading.",
+  "promise": "One sentence explaining what specific skill or outcome the reader will gain. Must reference the book's core framework, not just 'you'll learn a lot'.",
   "sections": [
     {
-      "title": "Section title",
-      "summary": "Practical section summary.",
-      "exercise": "A short action the reader can do immediately."
+      "title": "Section title (specific, not generic like 'Overview')",
+      "summary": "80-150 word practical section summary that gives the reader a concrete takeaway even if they only skim this section. Must include at least one specific example from the book or the author's life.",
+      "exercise": "40-80 word specific, measurable action the reader can complete in 10-20 minutes. Must reference a specific tool, technique, or framework from the book. Generic exercises like 'reflect on this' or 'think about it' are FORBIDDEN."
     }
   ],
   "ideas": [
     {
       "title": "Punchy headline, max 50 chars",
-      "content": "Key insight in 2-3 actionable sentences.",
+      "content": "40-80 word insight with a specific example, a concrete application, and a clear takeaway. Must reference a concept from the book, not generic self-help advice.",
       "category": "Mindset|Strategy|Productivity|Leadership|Creativity|Finance|Communication|Habits"
     }
   ],
-  "content_markdown": "# Title\n\nA polished markdown module with headings, concrete examples, action prompts, and a short recap."
+  "content_markdown": "## [Section 1 Title]\n\n2-3 paragraphs connecting the book's core idea to the reader's goal with a specific example...\n\n### Practice This\n1. [Specific action step]\n2. [Specific action step]\n\n...\n\n## Closing Synthesis\n\nA paragraph connecting all sections..."
 }
 
 Return 5-7 sections and 6-10 idea cards.
+
+WORD COUNT GUIDANCE: Aim for substantial, detailed content in `content_markdown`. Each section should have 3-5 paragraphs. If you find yourself writing fewer than 3 paragraphs per section, add more specific examples and detailed explanations before responding.

@@ -7,42 +7,45 @@ Their goals: {goals_json}
 Generate exactly {count} items. ONLY these two types are allowed:
 
 **BOOK QUOTES (at least 8):**
-Real, exact, word-for-word quotes from famous books. Examples:
+Real, verified quotes from well-known books. ONLY use quotes you are CERTAIN are accurate and attributable. If you are not 100% sure of the exact wording and source, do NOT include it.
+
+Instead of fabricating uncertain quotes, use these verified strategies:
+- Paraphrased wisdom: "The core idea from [Book] by [Author] is that [clear summary of the principle]" — this is always acceptable
+- Attributed principles: "[Author]'s key principle: [accurate summary]" — no quotation marks means no fabrication risk
+- Well-known sayings: Use only widely-attributed quotes you can verify (e.g., "The only way to do great work is to love what you do." — Steve Jobs)
+
+Recommended book sources:
 - "Atomic Habits" by James Clear
 - "Zero to One" by Peter Thiel
 - "The 7 Habits of Highly Effective People" by Stephen Covey
-- "Think and Grow Rich" by Napoleon Hill
 - "Deep Work" by Cal Newport
 - "Mindset" by Carol Dweck
-- "The 48 Laws of Power" by Robert Greene
-- "Man's Search for Meaning" by Viktor Frankl
-- "Rich Dad Poor Dad" by Robert Kiyosaki
-- "The Subtle Art of Not Giving a F*ck" by Mark Manson
 - "Meditations" by Marcus Aurelius
 - "The Art of War" by Sun Tzu
-Also include quotes from famous people: Steve Jobs, Elon Musk, Warren Buffett, Naval Ravikant, Albert Einstein, Oprah Winfrey, etc.
-Pick quotes relevant to the user's interests.
+
+Also draw from famous people: Steve Jobs, Elon Musk, Warren Buffett, Naval Ravikant, Albert Einstein, Oprah Winfrey, etc.
+Pick content relevant to the user's interests.
 
 **VIDEO RECOMMENDATIONS (at least 2):**
-Recommend specific, real, ENGLISH-language videos from TRUSTED sources:
+Recommend types of videos the user should search for from TRUSTED sources:
 - TED Talks (ted.com)
-- Popular English-language YouTube channels (Ali Abdaal, Matt D'Avella, Thomas Frank, Y Combinator, Stanford, Harvard, Kurzgesagt)
-Include the exact YouTube URL (youtube.com/watch?v=...) if you know it.
+- Popular YouTube channels (Ali Abdaal, Matt D'Avella, Thomas Frank, Y Combinator, Stanford, Harvard, Kurzgesagt)
+- Do NOT fabricate YouTube URLs. Set "url" to null for all videos — the system will resolve real URLs via search.
 
 Rules:
-- Book quotes MUST be real and accurate — include the exact quote in quotation marks.
+- CRITICAL: Do NOT fabricate quotes. If you cannot verify the exact wording, paraphrase instead (no quotation marks).
 - Do NOT generate tasks, action items, suggestions, or actionable advice. ONLY quotes and videos.
 - All content in English only.
 - Vary the categories across items.
 
 Return ONLY a valid JSON array. Each object:
-{{
+{
   "type": "quote" | "video",
   "title": "short catchy title (max 8 words)",
-  "content": "the actual quote text in quotation marks",
+  "content": "the actual quote text in quotation marks (only for verified quotes) OR paraphrased wisdom without quotes",
   "category": "Mindset" | "Strategy" | "Leadership" | "Productivity" | "Finance" | "Creativity" | "Discipline" | "Growth",
   "source": "Book Title — Author" or "Person Name",
-  "url": "https://youtube.com/watch?v=..." (for video type only, null for quotes)
-}}
+  "url": null
+}
 
 Do NOT wrap in markdown code blocks. Output pure JSON array only.

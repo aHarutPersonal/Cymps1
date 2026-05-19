@@ -202,7 +202,7 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
         padding: EdgeInsets.only(
           left: AppSpacing.s24,
           right: AppSpacing.s24,
-          bottom: AppSpacing.s100,
+          bottom: 88,
         ),
         itemCount: displayNotes.length,
         separatorBuilder: (_, _) => const SizedBox(height: AppSpacing.s12),

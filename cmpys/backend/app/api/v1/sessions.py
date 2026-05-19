@@ -66,7 +66,11 @@ async def _get_session(
     """Load a session and verify ownership."""
     stmt = (
         select(IntakeSession)
-        .options(selectinload(IntakeSession.idol))
+        .options(
+            selectinload(IntakeSession.idol),
+            selectinload(IntakeSession.idol).selectinload("profile"),
+            selectinload(IntakeSession.idol).selectinload("persona"),
+        )
         .where(
             IntakeSession.id == session_id,
             IntakeSession.user_id == user_id,
@@ -89,14 +93,35 @@ def _require_phase(session: IntakeSession, expected: SessionPhase) -> None:
         )
 
 
+def _persona_to_dict(persona) -> dict:
+    """Convert an IdolPersona object to a dict for JSON serialization and .get() access."""
+    if persona is None:
+        return {}
+    return {
+        "voice_style": persona.voice_style or "",
+        "principles": persona.principles or [],
+        "dos": persona.dos or [],
+        "donts": persona.donts or [],
+        "signature_phrases": persona.signature_phrases or [],
+        "topics_of_strength": persona.topics_of_strength or [],
+        "taboo_topics": persona.taboo_topics or [],
+        "era_context": persona.era_context or "contemporary",
+        "lexicon_allow": persona.lexicon_allow or [],
+        "lexicon_ban": persona.lexicon_ban or [],
+        "worldview_adapter": persona.worldview_adapter or {},
+        "default_frameworks": persona.default_frameworks or [],
+        "disclaimer": persona.disclaimer or "",
+    }
+
+
 def _build_session_response(session: IntakeSession) -> dict:
     """Build a session response dict from the model."""
     selected_idol = None
     if session.idol:
         selected_idol = {
             "id": session.idol.id,
-            "name": session.idol.display_name,
-            "era": getattr(session.idol, "era_tags", None),
+            "name": session.idol.name,
+            "era": getattr(session.idol.profile, "era_tags", None) if session.idol.profile else None,
         }
     return {
         "id": session.id,
@@ -126,7 +151,7 @@ def _build_chat_history_json(messages: list[ChatMessage]) -> str:
 
 
 # =============================================================================
-# T012: POST /sessions — Create session (Phase 1: Intake)
+# T012: POST /sessions - Create session (Phase 1: Intake)
 # =============================================================================
 
 
@@ -138,7 +163,7 @@ async def create_session(
 ):
     """
     Create a new agentic session with intake data.
-    
+
     Accepts age, financial status, and interests.
     Returns a new session in the 'intake' phase, then auto-transitions
     to 'idol_selection'.
@@ -157,7 +182,7 @@ async def create_session(
             detail=f"Active session already exists (id: {existing.id}, "
                    f"phase: {existing.phase.value}). Complete or abandon it first.",
         )
-    
+
     session = IntakeSession(
         id=str(uuid.uuid4()),
         user_id=current_user.id,
@@ -168,19 +193,19 @@ async def create_session(
         status="draft",  # Legacy field compatibility
     )
     db.add(session)
-    
+
     # Auto-transition to idol_selection since intake data is provided inline
     session.transition_to(SessionPhase.IDOL_SELECTION)
-    
+
     await db.commit()
     await db.refresh(session)
-    
+
     logger.info(f"[SESSION] Created session {session.id} for user {current_user.id}")
     return _build_session_response(session)
 
 
 # =============================================================================
-# T013: POST /sessions/{id}/suggest-idols — Get 3 idol suggestions
+# T013: POST /sessions/{id}/suggest-idols - Get 3 idol suggestions
 # =============================================================================
 
 
@@ -192,20 +217,20 @@ async def suggest_idols(
 ):
     """
     Generate 3 idol suggestions based on intake data.
-    
+
     Uses Gemini + Google Search to find idols whose achievements
     at the user's age are most relevant to their interests.
     """
     session = await _get_session(session_id, current_user.id, db)
     _require_phase(session, SessionPhase.IDOL_SELECTION)
-    
+
     # Render the idol suggestion prompt
     prompt = load_and_render("idol_suggest.txt", {
         "user_age": str(session.user_age),
         "user_financial_status": session.user_financial_status,
         "user_interests_json": json_lib.dumps(session.user_interests),
     })
-    
+
     # Call Gemini with Google Search for factual grounding
     full_response = ""
     async for chunk in stream_with_grounding(
@@ -213,7 +238,7 @@ async def suggest_idols(
         user_message=prompt,
     ):
         full_response += chunk
-    
+
     # Parse the LLM response into structured suggestions
     try:
         parsed = json_lib.loads(full_response)
@@ -224,7 +249,7 @@ async def suggest_idols(
             status_code=502,
             detail="Failed to parse idol suggestions from AI",
         )
-    
+
     suggestions = [
         IdolSuggestionItem(
             name=s.get("name", "Unknown"),
@@ -236,13 +261,13 @@ async def suggest_idols(
         )
         for s in suggestions_raw[:3]
     ]
-    
+
     logger.info(f"[SESSION] Generated {len(suggestions)} idol suggestions for session {session_id}")
     return IdolSuggestionsResponse(suggestions=suggestions)
 
 
 # =============================================================================
-# T014: POST /sessions/{id}/select-idol — Select idol + create thread
+# T014: POST /sessions/{id}/select-idol - Select idol + create thread
 # =============================================================================
 
 
@@ -255,29 +280,38 @@ async def select_idol(
 ):
     """
     Select an idol for the session.
-    
+
     Finds or imports the idol, creates a chat thread,
     and transitions to the 'interview' phase.
     """
     session = await _get_session(session_id, current_user.id, db)
     _require_phase(session, SessionPhase.IDOL_SELECTION)
-    
+
     # Try to find existing idol by name
-    stmt = select(Idol).where(Idol.display_name == data.idol_name)
+    stmt = select(Idol).where(Idol.name == data.idol_name)
     result = await db.execute(stmt)
     idol = result.scalar_one_or_none()
-    
+
     if not idol:
         # Create a minimal idol record; full import can happen async
         idol = Idol(
             id=str(uuid.uuid4()),
-            display_name=data.idol_name,
-            wikidata_id=data.wikidata_id,
-            is_ready=False,
+            name=data.idol_name,
+            domain="unknown",  # Placeholder until ingestion fills it in
         )
+        # Store wikidata_id as an external ID if provided
+        if data.wikidata_id:
+            from app.models.idol_external_id import IdolExternalId
+            ext_id = IdolExternalId(
+                id=str(uuid.uuid4()),
+                idol_id=idol.id,
+                provider="wikidata",
+                external_id=data.wikidata_id,
+            )
+            db.add(ext_id)
         db.add(idol)
         await db.flush()  # Get the idol ID
-    
+
     # Create a chat thread for the interview
     thread = ChatThread(
         id=str(uuid.uuid4()),
@@ -286,15 +320,15 @@ async def select_idol(
     )
     db.add(thread)
     await db.flush()
-    
+
     # Update session
     session.idol_id = idol.id
     session.interview_thread_id = thread.id
     session.transition_to(SessionPhase.INTERVIEW)
-    
+
     await db.commit()
     await db.refresh(session, ["idol"])
-    
+
     logger.info(
         f"[SESSION] Selected idol '{data.idol_name}' for session {session_id}, "
         f"thread {thread.id}"
@@ -303,7 +337,7 @@ async def select_idol(
 
 
 # =============================================================================
-# T015 + T021: GET /sessions/{id} — Get session state
+# T015 + T021: GET /sessions/{id} - Get session state
 # =============================================================================
 
 
@@ -315,7 +349,7 @@ async def get_session(
 ):
     """
     Get the current state of a session.
-    
+
     Used for polling, resume, and state display.
     Returns full session data including phase, turn count, outputs.
     """
@@ -324,7 +358,7 @@ async def get_session(
 
 
 # =============================================================================
-# T022: GET /sessions/current — Get current active session
+# T022: GET /sessions/current - Get current active session
 # =============================================================================
 
 
@@ -335,13 +369,17 @@ async def get_current_session(
 ):
     """
     Get the user's most recent non-completed session, if any.
-    
+
     Used by the frontend on app launch to detect and resume
     an in-progress session.
     """
     stmt = (
         select(IntakeSession)
-        .options(selectinload(IntakeSession.idol))
+        .options(
+            selectinload(IntakeSession.idol),
+            selectinload(IntakeSession.idol).selectinload("profile"),
+            selectinload(IntakeSession.idol).selectinload("persona"),
+        )
         .where(
             IntakeSession.user_id == current_user.id,
             IntakeSession.phase.isnot(None),
@@ -352,15 +390,15 @@ async def get_current_session(
     )
     result = await db.execute(stmt)
     session = result.scalar_one_or_none()
-    
+
     if not session:
         return None
-    
+
     return _build_session_response(session)
 
 
 # =============================================================================
-# T016 + T017: POST /sessions/{id}/interview — SSE interview stream
+# T016 + T017: POST /sessions/{id}/interview - SSE interview stream
 # =============================================================================
 
 
@@ -373,16 +411,16 @@ async def interview(
 ):
     """
     Send a message during the interview phase (SSE stream).
-    
+
     The AI responds in-character as the selected idol, asks exactly
-    one question per turn, and enforces turn limits (3–5 turns).
+    one question per turn, and enforces turn limits (3-5 turns).
     """
     session = await _get_session(session_id, current_user.id, db)
     _require_phase(session, SessionPhase.INTERVIEW)
-    
+
     if not session.interview_thread_id:
         raise HTTPException(status_code=400, detail="No interview thread linked")
-    
+
     # Load chat history from the thread
     stmt = (
         select(ChatThread)
@@ -393,7 +431,7 @@ async def interview(
     thread = result.scalar_one_or_none()
     if not thread:
         raise HTTPException(status_code=404, detail="Interview thread not found")
-    
+
     # Persist the user's message
     user_msg = ChatMessage(
         id=str(uuid.uuid4()),
@@ -403,13 +441,15 @@ async def interview(
     )
     db.add(user_msg)
     await db.flush()
-    
+
     # Build context for the prompt
     chat_history_json = _build_chat_history_json(thread.messages)
-    
-    idol_name = session.idol.display_name if session.idol else "Unknown"
-    idol_persona = getattr(session.idol, "persona_pack", None) or {}
-    
+
+    idol_name = session.idol.name if session.idol else "Unknown"
+    idol_persona_obj = getattr(session.idol, "persona", None)
+    idol_persona = _persona_to_dict(idol_persona_obj)
+    idol_persona_data = json_lib.dumps(idol_persona)
+
     # On first turn, fetch idol facts via Google Search
     if session.interview_turn_count == 0 and not session.idol_facts_json:
         logger.info(f"[SESSION] Fetching idol facts for {idol_name} at age {session.user_age}")
@@ -424,7 +464,7 @@ async def interview(
         ):
             facts_response += chunk
         session.idol_facts_json = {"raw_facts": facts_response}
-    
+
     # Load and render the system prompt (interview_system.xml)
     system_prompt = load_and_render("interview_system.xml", {
         "idol_name": idol_name,
@@ -437,7 +477,7 @@ async def interview(
         "user_interests_json": json_lib.dumps(session.user_interests or []),
         "chat_history_json": chat_history_json,
     })
-    
+
     # Render the per-turn user prompt
     user_prompt = load_and_render("interview_question.txt", {
         "idol_name": idol_name,
@@ -450,15 +490,15 @@ async def interview(
         "idol_facts_json": json_lib.dumps(session.idol_facts_json or {}),
         "user_message": data.content,
     })
-    
+
     # Determine if this should be the last turn
     current_turn = session.interview_turn_count + 1
     should_transition = current_turn >= MAX_INTERVIEW_TURNS
-    
+
     async def generate_stream():
         nonlocal should_transition
         full_response = ""
-        
+
         try:
             async for chunk in interview_stream(
                 system_prompt=system_prompt,
@@ -467,7 +507,7 @@ async def interview(
             ):
                 full_response += chunk
                 yield f"data: {json_lib.dumps({'type': 'chunk', 'content': chunk})}\n\n"
-            
+
             # Persist the AI's response
             async with db.begin_nested():
                 ai_msg = ChatMessage(
@@ -477,10 +517,10 @@ async def interview(
                     content=full_response,
                 )
                 db.add(ai_msg)
-                
+
                 # Update turn count
                 session.interview_turn_count = current_turn
-                
+
                 # Check for soft transition (AI signals completion after min turns)
                 if current_turn >= MIN_INTERVIEW_TURNS:
                     # Check for completion signals in the response
@@ -493,20 +533,20 @@ async def interview(
                     ]
                     if any(sig in full_response.lower() for sig in completion_signals):
                         should_transition = True
-                
+
                 # Hard cap enforcement
                 if should_transition:
                     session.transition_to(SessionPhase.COMPARISON)
-                
+
                 await db.commit()
-            
+
             # Send done event with phase transition info
             yield f"data: {json_lib.dumps({'type': 'done', 'turn': current_turn, 'max_turns': MAX_INTERVIEW_TURNS, 'phase_transition': should_transition})}\n\n"
-            
+
         except Exception as e:
             logger.error(f"[SESSION] Interview stream error: {e}")
             yield f"data: {json_lib.dumps({'type': 'error', 'message': str(e)})}\n\n"
-    
+
     return StreamingResponse(
         generate_stream(),
         media_type="text/event-stream",
@@ -519,7 +559,7 @@ async def interview(
 
 
 # =============================================================================
-# T019 + T020: POST /sessions/{id}/generate-results — Comparison + Blueprint
+# T019 + T020: POST /sessions/{id}/generate-results - Comparison + Blueprint
 # =============================================================================
 
 
@@ -531,17 +571,27 @@ async def generate_results(
 ):
     """
     Generate the brutal comparison and quarterly blueprint (SSE stream).
-    
+
     Streams two sections sequentially:
-    1. Comparison (Phase 4) — emotionally intense reality check
-    2. Blueprint (Phase 5) — actionable Q1–Q4 roadmap
+    1. Comparison (Phase 4) - emotionally intense reality check
+    2. Blueprint (Phase 5) - actionable Q1-Q4 roadmap
     """
     session = await _get_session(session_id, current_user.id, db)
-    _require_phase(session, SessionPhase.COMPARISON)
-    
+    # Allow retry from COMPARISON or BLUEPRINT phase (blueprint may have failed)
+    if session.phase not in (SessionPhase.COMPARISON, SessionPhase.BLUEPRINT):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Session is in phase '{session.phase.value}', expected 'comparison' or 'blueprint'",
+        )
+    # If in BLUEPRINT phase (retry scenario), reset blueprint output
+    if session.phase == SessionPhase.BLUEPRINT:
+        session.blueprint_output = None
+        session.transition_to(SessionPhase.COMPARISON)
+        await db.commit()
+
     if not session.interview_thread_id:
         raise HTTPException(status_code=400, detail="No interview thread")
-    
+
     # Load full interview transcript
     stmt = (
         select(ChatThread)
@@ -552,30 +602,32 @@ async def generate_results(
     thread = result.scalar_one_or_none()
     if not thread:
         raise HTTPException(status_code=404, detail="Interview thread not found")
-    
+
     interview_transcript = _build_chat_history_json(thread.messages)
-    idol_name = session.idol.display_name if session.idol else "Unknown"
-    idol_persona = getattr(session.idol, "persona_pack", None) or {}
-    
+    idol_name = session.idol.name if session.idol else "Unknown"
+    idol_persona_obj = getattr(session.idol, "persona", None)
+    idol_persona = _persona_to_dict(idol_persona_obj)
+    idol_persona_data = json_lib.dumps(idol_persona)
+
     # Build user profile JSON
     user_profile = {
         "age": session.user_age,
         "financial_status": session.user_financial_status,
         "interests": session.user_interests,
     }
-    
+
     # Persona system prompt (reusable for both phases)
     persona_system = (
         f"You are {idol_name}. Stay 100% in character. First person only. "
         f"Never break character. Never use AI disclaimers."
     )
-    
+
     async def generate_stream():
         # =====================================================================
         # Part 1: Brutal Comparison (Phase 4)
         # =====================================================================
         yield f"data: {json_lib.dumps({'type': 'section', 'section': 'comparison'})}\n\n"
-        
+
         comparison_prompt = load_and_render("comparison_generate.txt", {
             "idol_name": idol_name,
             "user_age": str(session.user_age),
@@ -583,7 +635,7 @@ async def generate_results(
             "interview_transcript_json": interview_transcript,
             "idol_facts_json": json_lib.dumps(session.idol_facts_json or {}),
         })
-        
+
         full_comparison = ""
         try:
             async for chunk in comparison_stream(
@@ -592,22 +644,26 @@ async def generate_results(
             ):
                 full_comparison += chunk
                 yield f"data: {json_lib.dumps({'type': 'chunk', 'section': 'comparison', 'content': chunk})}\n\n"
-            
+
             # Persist comparison output
             session.comparison_output = full_comparison
             session.transition_to(SessionPhase.BLUEPRINT)
             await db.commit()
-            
+
         except Exception as e:
             logger.error(f"[SESSION] Comparison stream error: {e}")
-            yield f"data: {json_lib.dumps({'type': 'error', 'section': 'comparison', 'message': str(e)})}\n\n"
+            # Roll back to INTERVIEW phase so the user can retry
+            session.transition_to(SessionPhase.INTERVIEW)
+            session.comparison_output = None
+            await db.commit()
+            yield f"data: {json_lib.dumps({'type': 'error', 'section': 'comparison', 'message': f'Comparison generation failed. You can retry. Error: {str(e)}', 'retryable': True})}\n\n"
             return
-        
+
         # =====================================================================
         # Part 2: Quarterly Blueprint (Phase 5)
         # =====================================================================
         yield f"data: {json_lib.dumps({'type': 'section', 'section': 'blueprint'})}\n\n"
-        
+
         blueprint_prompt = load_and_render("blueprint_generate.txt", {
             "idol_name": idol_name,
             "user_age": str(session.user_age),
@@ -616,7 +672,7 @@ async def generate_results(
             "comparison_summary": full_comparison[:2000],  # Truncate for context window
             "idol_facts_json": json_lib.dumps(session.idol_facts_json or {}),
         })
-        
+
         full_blueprint = ""
         try:
             async for chunk in blueprint_stream(
@@ -625,20 +681,24 @@ async def generate_results(
             ):
                 full_blueprint += chunk
                 yield f"data: {json_lib.dumps({'type': 'chunk', 'section': 'blueprint', 'content': chunk})}\n\n"
-            
+
             # Persist blueprint and transition to completed
             session.blueprint_output = full_blueprint
             session.transition_to(SessionPhase.COMPLETED)
             await db.commit()
-            
+
         except Exception as e:
             logger.error(f"[SESSION] Blueprint stream error: {e}")
-            yield f"data: {json_lib.dumps({'type': 'error', 'section': 'blueprint', 'message': str(e)})}\n\n"
+            # Roll back to COMPARISON phase so the user can retry
+            session.transition_to(SessionPhase.COMPARISON)
+            session.blueprint_output = None
+            await db.commit()
+            yield f"data: {json_lib.dumps({'type': 'error', 'section': 'blueprint', 'message': f'Blueprint generation failed. You can retry. Error: {str(e)}', 'retryable': True})}\n\n"
             return
-        
+
         # Final done event
         yield f"data: {json_lib.dumps({'type': 'done', 'phase': 'completed'})}\n\n"
-    
+
     return StreamingResponse(
         generate_stream(),
         media_type="text/event-stream",
@@ -668,25 +728,25 @@ async def get_learning_materials(
     Uses Google Search grounding to find real articles and videos.
     """
     session = await _get_session(session_id, current_user.id, db)
-    
+
     prompt = (
         f"Find 3 highly educational, beginner-friendly resources (mix of articles and videos) "
         f"to help someone learn about: '{data.topic}'. "
         f"Return ONLY a JSON array of objects with keys: 'title', 'url', 'type' (must be 'article' or 'video'), and 'summary'."
     )
-    
+
     full_response = ""
     async for chunk in stream_with_grounding(
         system_prompt="You are an expert curriculum designer. Return valid JSON only.",
         user_message=prompt,
     ):
         full_response += chunk
-        
+
     try:
         # Strip markdown json block if present
         if full_response.strip().startswith("```json"):
             full_response = full_response.strip()[7:-3]
-            
+
         parsed = json_lib.loads(full_response)
         raw_materials = [
             {
@@ -735,10 +795,10 @@ async def guided_learning(
     Stream a Socratic tutoring response using LearnLM.
     """
     session = await _get_session(session_id, current_user.id, db)
-    
+
     if session.phase not in [SessionPhase.BLUEPRINT, SessionPhase.GUIDED_LEARNING, SessionPhase.COMPLETED]:
         session.transition_to(SessionPhase.GUIDED_LEARNING)
-    
+
     if not session.learning_thread_id:
         thread = ChatThread(
             id=str(uuid.uuid4()),
@@ -763,12 +823,14 @@ async def guided_learning(
     )
     db.add(user_msg)
     await db.flush()
-    
+
     chat_history_json = _build_chat_history_json(thread.messages if 'thread' in locals() and hasattr(thread, 'messages') else [])
-    
-    idol_name = session.idol.display_name if session.idol else "Your Mentor"
-    idol_persona = getattr(session.idol, "persona_pack", None) or {}
-    
+
+    idol_name = session.idol.name if session.idol else "Your Mentor"
+    idol_persona_obj = getattr(session.idol, "persona", None)
+    idol_persona = _persona_to_dict(idol_persona_obj)
+    idol_persona_data = json_lib.dumps(idol_persona)
+
     async def generate_stream():
         full_response = ""
         try:
@@ -780,7 +842,7 @@ async def guided_learning(
             ):
                 full_response += chunk
                 yield f"data: {json_lib.dumps({'type': 'chunk', 'content': chunk})}\n\n"
-                
+
             async with db.begin_nested():
                 ai_msg = ChatMessage(
                     id=str(uuid.uuid4()),
@@ -790,12 +852,12 @@ async def guided_learning(
                 )
                 db.add(ai_msg)
                 await db.commit()
-                
+
             yield f"data: {json_lib.dumps({'type': 'done'})}\n\n"
         except Exception as e:
             logger.error(f"[SESSION] Guided learning stream error: {e}")
             yield f"data: {json_lib.dumps({'type': 'error', 'message': str(e)})}\n\n"
-            
+
     return StreamingResponse(
         generate_stream(),
         media_type="text/event-stream",
@@ -803,7 +865,7 @@ async def guided_learning(
     )
 
 # =============================================================================
-# T023: GET /sessions/{id}/feed — Generate Daily Insights (Idea Cards)
+# T023: GET /sessions/{id}/feed - Generate Daily Insights (Idea Cards)
 # =============================================================================
 
 from app.schemas.session import DailyFeedResponse, DailyInsightResponse
@@ -818,35 +880,35 @@ async def get_daily_feed(
     Generate a daily feed of bite-sized insights (Idea Cards) from the idol.
     """
     session = await _get_session(session_id, current_user.id, db)
-    
-    idol_name = session.idol.display_name if session.idol else "Your Mentor"
-    
+
+    idol_name = session.idol.name if session.idol else "Your Mentor"
+
     user_profile = {
         "age": session.user_age,
         "financial_status": session.user_financial_status,
         "interests": session.user_interests,
     }
-    
+
     prompt = load_and_render("daily_feed_generate.txt", {
         "count": "3",
         "idol_name": idol_name,
         "user_profile_json": json_lib.dumps(user_profile),
     })
-    
+
     full_response = ""
     async for chunk in stream_with_grounding(
         system_prompt=f"You are {idol_name}. Deliver profound microlearning insights.",
         user_message=prompt,
     ):
         full_response += chunk
-        
+
     try:
         # Strip markdown json block if present
         if full_response.strip().startswith("```json"):
             full_response = full_response.strip()[7:-3]
         elif full_response.strip().startswith("```"):
             full_response = full_response.strip()[3:-3]
-            
+
         parsed = json_lib.loads(full_response)
         insights = [
             DailyInsightResponse(

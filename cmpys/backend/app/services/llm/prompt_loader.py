@@ -37,7 +37,7 @@ Each prompt file and its required placeholders:
 7. chat_system.txt
    - Placeholders: {idol_name}, {voice_style}, {principles}, {dos}, {donts},
                    {signature_phrases}, {topics_of_strength}, {grounding_facts_json},
-                   {user_context_json}, {disclaimer}
+                   {idol_persona_json}, {user_context_json}, {disclaimer}
    - Used by: generate_reply() in chat
 
 8. chat_reply.txt
@@ -106,7 +106,13 @@ PROMPT_PLACEHOLDERS = {
         "user_goal",
         "idol_name",
         "hours_per_week",
+        "target_age",
         "user_context",
+        "idol_profile_json",
+        "idol_persona_json",
+        "idol_milestones_json",
+        "gaps_json",
+        "readiness_by_gap_json",
     ],
     
     "chat_system.txt": [
@@ -142,7 +148,9 @@ PROMPT_PLACEHOLDERS = {
         "limit",
     ],
     
-    "persona_pack.txt": [],  # Uses f-string injection, not render_prompt
+    "persona_pack.txt": [
+        "idol_name",
+    ],  # Also receives profile and sources via f-string injection
     
     "intake_questions_generate.txt": [
         "idol_name",
@@ -176,6 +184,8 @@ PROMPT_PLACEHOLDERS = {
         "task_title",
         "user_goal",
         "learning_preferences",
+        "idol_name",
+        "idol_domain",
     ],
 
     "book_module_generate.txt": [
@@ -268,6 +278,23 @@ PROMPT_PLACEHOLDERS = {
         "idol_domain",
         "persona_context",
         "user_profile_json",
+    ],
+    
+    "image_generate.txt": [
+        "idol_name",
+        "age",
+        "idol_description",
+    ],
+    
+    "comparison_analyze.txt": [
+        "idol_name",
+        "idol_field",
+        "idol_bio",
+        "target_age",
+        "idol_milestones",
+        "user_age",
+        "user_background",
+        "user_achievements",
     ],
 }
 
@@ -435,6 +462,12 @@ def render_prompt(
     unused = set(str_variables.keys()) - used_keys
     if unused:
         logger.debug(f"Unused variables in prompt render: {unused}")
+
+    if strict:
+        unresolved = extract_placeholders(result)
+        if unresolved:
+            logger.error(f"PROMPT_PARAMS_MISSING: {prompt_name or '<inline>'} unresolved: {unresolved}")
+            raise PromptRenderError(prompt_name or "<inline>", sorted(unresolved))
     
     return result
 

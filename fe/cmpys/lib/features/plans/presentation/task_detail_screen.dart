@@ -397,6 +397,33 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                     height: 1.5,
                   ),
                 ),
+                if (item.weekStart != null) ...[
+                  const SizedBox(height: 14),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppColors.mint.withValues(alpha: 0.16),
+                        borderRadius: AppRadii.brFull,
+                        border: Border.all(
+                          color: AppColors.mint.withValues(alpha: 0.35),
+                        ),
+                      ),
+                      child: Text(
+                        'Relevant to Week ${item.weekStart}',
+                        style: AppTypography.captionUpper.copyWith(
+                          color: AppColors.textPrimary,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
                 if (_details!.isGenerating || _isRegenerating) ...[
                   const SizedBox(height: 20),
                   _buildPathGeneratingState(),

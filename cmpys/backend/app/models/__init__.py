@@ -24,6 +24,7 @@ from app.models.plan import (
     PlanItemStepCompletion,
     PlanItemCompletion,
 )
+from app.models.daily_task_completion import DailyTaskCompletion
 from app.models.note import Note, NoteAttachment
 from app.models.chat import ChatThread, ChatMessage, MessageRole
 from app.models.intake import IntakeSession, IntakeAnswer, IntakeSessionStatus
@@ -71,6 +72,7 @@ __all__ = [
     "PlanItemContentResource",
     "PlanItemStepCompletion",
     "PlanItemCompletion",
+    "DailyTaskCompletion",
     "Note",
     "NoteAttachment",
     "ChatThread",

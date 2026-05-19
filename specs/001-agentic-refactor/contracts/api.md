@@ -1,5 +1,7 @@
 # API Contracts: Agentic Persona Workflow
 
+> Canonical update: prompt/API ownership for the current roadmap lives in `cmpys/backend/docs/prompt_contracts.md` and `cmpys/backend/docs/api_reference.md`. Blueprint output is a strategic verdict; plan and daily endpoints are the execution contract.
+
 **Feature**: `001-agentic-refactor`
 **Date**: 2026-02-20
 **Base Path**: `/api/v1`

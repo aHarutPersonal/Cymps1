@@ -18,6 +18,8 @@ BookSourceLookup = Callable[..., Awaitable[dict[str, Any] | None]]
 VideoResolver = Callable[[str], Awaitable[str | None]]
 
 
+MIN_BOOK_MODULE_WORDS = 2500
+
 _YOUTUBE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 
 
@@ -105,6 +107,11 @@ def material_to_resource_payload(material: dict[str, Any]) -> dict[str, Any] | N
     if raw_type in {"book", "in_app_lesson"} and (
         material.get("ideas") or material.get("content_markdown")
     ):
+        # Calculate duration from actual word count (200 wpm reading speed)
+        content_md = material.get("content_markdown", "") or ""
+        word_count = len(content_md.split()) if content_md else 0
+        calculated_duration = max(5, round(word_count / 200)) if word_count > 0 else (material.get("duration_minutes") or 15)
+
         return {
             "kind": ContentResourceKind.LLM_BOOK_SUMMARY,
             "canonical_key": canonical_book_key(title, author),
@@ -113,8 +120,8 @@ def material_to_resource_payload(material: dict[str, Any]) -> dict[str, Any] | N
             "source_url": material.get("url"),
             "thumbnail_url": material.get("thumbnail_url"),
             "license_status": LicenseStatus.LLM_SUMMARY,
-            "content_markdown": material.get("content_markdown"),
-            "duration_minutes": material.get("duration_minutes") or 15,
+            "content_markdown": content_md,
+            "duration_minutes": calculated_duration,
             "summary_json": {
                 "ideas": material.get("ideas", []),
                 "promise": material.get("promise"),
@@ -208,14 +215,48 @@ async def generate_book_module(
         },
         strict=True,
     )
-    client = get_llm_client(max_tokens=8000)
+    client = get_llm_client(max_tokens=16000)
     response = await client.generate_json(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
     )
     if response.error:
         raise RuntimeError(response.error)
-    return response.data
+
+    data = response.data
+
+    # Validate content depth — retry once if content_markdown is too thin
+    md = data.get("content_markdown", "")
+    word_count = len(md.split()) if md else 0
+    if word_count < MIN_BOOK_MODULE_WORDS:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(
+            f"[BOOK_MODULE] Generated module for '{title}' has only {word_count} words "
+            f"in content_markdown (minimum {MIN_BOOK_MODULE_WORDS}). Retrying with stronger prompt."
+        )
+        retry_prompt = user_prompt + (
+            "\n\nIMPORTANT: Your previous attempt produced only {wc} words for content_markdown. "
+            "A proper 15-minute module requires 2,500-4,000 words. You MUST expand each section "
+            "with real examples from {author}'s life, detailed practice exercises, and concrete "
+            "case studies. Every section MUST have a 'Practice This' exercise block."
+        ).format(wc=word_count, author=author or "the author")
+        retry_response = await client.generate_json(
+            system_prompt=system_prompt,
+            user_prompt=retry_prompt,
+        )
+        if not retry_response.error:
+            retry_md = retry_response.data.get("content_markdown", "")
+            if len(retry_md.split()) > word_count:
+                data = retry_response.data
+
+    # Recalculate duration from actual word count (200 wpm reading speed)
+    md = data.get("content_markdown", "")
+    word_count = len(md.split()) if md else 0
+    if word_count > 0:
+        data["duration_minutes"] = max(5, round(word_count / 200))
+
+    return data
 
 
 async def lookup_public_domain_book(
@@ -254,22 +295,26 @@ async def lookup_public_domain_book(
         if not text_url:
             continue
         source_url = f"https://www.gutenberg.org/ebooks/{item.get('id')}"
+        content_md = (
+            f"# {item_title or title}\n\n"
+            f"This public-domain book is available for in-app reading via Project Gutenberg.\n\n"
+            f"Source text: {text_url}"
+        )
+        # Calculate duration from content length (200 wpm reading speed)
+        word_count = len(content_md.split())
+        duration = max(5, round(word_count / 200))
         return {
             "title": item_title or title,
             "author_or_creator": ", ".join(author_names) or author,
             "source_url": source_url,
             "license_status": "public_domain",
-            "content_markdown": (
-                f"# {item_title or title}\n\n"
-                f"This public-domain book is available for in-app reading via Project Gutenberg.\n\n"
-                f"Source text: {text_url}"
-            ),
+            "content_markdown": content_md,
             "summary_json": {
                 "source": "project_gutenberg",
                 "text_url": text_url,
                 "subjects": item.get("subjects", []),
             },
-            "duration_minutes": 15,
+            "duration_minutes": duration,
             "metadata_json": {
                 "provider": "gutendex",
                 "gutenberg_id": item.get("id"),
@@ -302,6 +347,10 @@ async def get_or_create_book_module_resource(
     lookup = source_lookup or lookup_public_domain_book
     source = await lookup(title=title, author=author)
     if source:
+        # Calculate duration from word count (200 wpm reading speed)
+        source_md = source.get("content_markdown", "") or ""
+        source_words = len(source_md.split()) if source_md else 0
+        source_duration = max(5, round(source_words / 200)) if source_words > 0 else (source.get("duration_minutes") or 15)
         license_status = (
             LicenseStatus.PUBLIC_DOMAIN
             if source.get("license_status") == "public_domain"
@@ -317,9 +366,9 @@ async def get_or_create_book_module_resource(
             source_url=source.get("source_url"),
             thumbnail_url=source.get("thumbnail_url"),
             license_status=license_status,
-            content_markdown=source.get("content_markdown"),
+            content_markdown=source_md,
             summary_json=source.get("summary_json"),
-            duration_minutes=source.get("duration_minutes") or 15,
+            duration_minutes=source_duration,
             metadata_json=source.get("metadata_json"),
         )
         db.add(resource)
@@ -334,6 +383,11 @@ async def get_or_create_book_module_resource(
         source_context=source_context,
     )
 
+    # Calculate duration from actual word count (200 wpm reading speed)
+    module_md = module.get("content_markdown", "") or ""
+    module_words = len(module_md.split()) if module_md else 0
+    module_duration = max(5, round(module_words / 200)) if module_words > 0 else (module.get("duration_minutes") or 15)
+
     resource = ContentResource(
         kind=ContentResourceKind.LLM_BOOK_SUMMARY,
         canonical_key=canonical_key,
@@ -342,13 +396,13 @@ async def get_or_create_book_module_resource(
         source_url=None,
         thumbnail_url=module.get("thumbnail_url"),
         license_status=LicenseStatus.LLM_SUMMARY,
-        content_markdown=module.get("content_markdown"),
+        content_markdown=module_md,
         summary_json={
             "promise": module.get("promise"),
             "sections": module.get("sections", []),
             "ideas": module.get("ideas", []),
         },
-        duration_minutes=module.get("duration_minutes") or 15,
+        duration_minutes=module_duration,
         metadata_json={
             "source": "llm_book_module",
             "user_goal_seed": user_goal,

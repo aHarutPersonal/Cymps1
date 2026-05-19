@@ -111,7 +111,7 @@ class _DailyFeedScreenState extends ConsumerState<DailyFeedScreen> {
         duration: const Duration(seconds: 1),
         shape: RoundedRectangleBorder(borderRadius: AppRadii.br12),
         margin: const EdgeInsets.only(
-          bottom: 100,
+          bottom: 88,
           left: AppSpacing.s20,
           right: AppSpacing.s20,
         ),
@@ -246,7 +246,7 @@ class _DailyFeedScreenState extends ConsumerState<DailyFeedScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Library.Idea_Stack',
+                      'Ideas',
                       style: AppTypography.captionUpper.copyWith(
                         color: AppColors.mint,
                         fontSize: 9,
@@ -309,7 +309,7 @@ class _DailyFeedScreenState extends ConsumerState<DailyFeedScreen> {
         // Loading more indicator
         if (ref.watch(ideasFeedProvider).isLoadingMore)
           const Positioned(
-            bottom: 100,
+            bottom: 88,
             left: 0,
             right: 0,
             child: Center(

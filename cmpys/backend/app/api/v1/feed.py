@@ -22,7 +22,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.dependencies import get_current_user
-from app.core.config import settings
 from app.core.db import get_db
 from app.models.feed_comment import FeedComment
 from app.models.feed_like import FeedLike
@@ -115,8 +114,7 @@ async def _generate_and_persist(
 ) -> list[FeedPost]:
     """Generate AI content and persist new items to DB. Returns the saved FeedPost objects."""
     try:
-        from google import genai
-        from google.genai import types
+        from app.services.llm import get_llm_client
 
         prompt = load_and_render("discover_feed.txt", {
             "count": str(count),
@@ -125,29 +123,17 @@ async def _generate_and_persist(
             "idol_name": idol_name,
         })
 
-        client = genai.Client(api_key=settings.gemini_api_key)
-        response = await client.aio.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.9,
-                response_mime_type="application/json",
-            ),
+        client = get_llm_client(timeout=60.0)
+        response = await client.generate_json(
+            system_prompt="You are a content curator. Return only valid JSON, no markdown code blocks.",
+            user_prompt=prompt,
         )
 
-        if not response.text:
-            logger.warning("[FEED] LLM returned empty response")
+        if response.error:
+            logger.warning(f"[FEED] LLM error: {response.error}")
             return []
 
-        text = response.text.strip()
-        if text.startswith("```json"):
-            text = text[7:]
-        if text.startswith("```"):
-            text = text[3:]
-        if text.endswith("```"):
-            text = text[:-3]
-
-        parsed = json_lib.loads(text.strip())
+        parsed = response.data
         saved_posts: list[FeedPost] = []
         video_posts_needing_urls: list[tuple[FeedPost, str]] = []  # (post, search_query)
 
@@ -181,6 +167,7 @@ async def _generate_and_persist(
                 source=item.get("source"),
                 url=None,  # Never trust LLM URLs — resolve via Tavily
                 content_hash=content_hash,
+                generated_by_user_id=None,  # Global content, not user-specific
             )
             db.add(post)
             saved_posts.append(post)
@@ -273,8 +260,11 @@ async def get_feed(
     else:
         liked_ids = set()
 
-    # 4. Shuffle and paginate
-    rng = random.Random(seed) if seed else random.Random()
+    # 4. Shuffle and paginate (deterministic seed for consistent pagination)
+    if seed is None:
+        # Use date-based seed so pagination is consistent within a day
+        seed = int(datetime.now().strftime("%Y%m%d"))
+    rng = random.Random(seed)
     rng.shuffle(db_posts)
 
     total = len(db_posts)

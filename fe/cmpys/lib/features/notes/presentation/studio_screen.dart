@@ -9,6 +9,9 @@ import '../../../core/ui/loading_state.dart';
 import '../../../core/ui/prototype_grid_background.dart';
 import '../../chat/controllers/chat_controller.dart';
 import '../../chat/models/chat_models.dart';
+import '../../plans/controllers/plans_controller.dart';
+import '../../session/providers/content_resources_provider.dart';
+import '../../plans/providers/daily_tasks_provider.dart';
 
 class StudioScreen extends ConsumerStatefulWidget {
   const StudioScreen({super.key});
@@ -81,7 +84,7 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
   Widget _buildBody(ChatState state) {
     return switch (state) {
       ChatInitial() ||
-      ChatLoading() => const LoadingState(message: 'Opening Studio...'),
+      ChatLoading() => const LoadingState(message: 'Opening Chat...'),
       ChatError(:final message) => _StudioError(
         message: message,
         onRetry: () => ref.read(chatControllerProvider.notifier).initialize(),
@@ -144,7 +147,10 @@ class _StudioChat extends StatelessWidget {
             ],
           ),
         ),
-        _StudioComposer(controller: controller, onSend: onSend),
+        Padding(
+          padding: EdgeInsets.only(bottom: AppSpacing.floatingNavBarHeight),
+          child: _StudioComposer(controller: controller, onSend: onSend),
+        ),
       ],
     );
   }
@@ -226,7 +232,7 @@ class _StudioHeader extends StatelessWidget {
                     ),
                     const SizedBox(width: 6),
                     Text(
-                      'Strategic_Consultation',
+                      'Mentor Chat',
                       style: AppTypography.captionUpper.copyWith(
                         color: AppColors.mint,
                         fontSize: 9,
@@ -339,7 +345,7 @@ class _ContextReference extends StatelessWidget {
           const Icon(Icons.description_outlined, color: AppColors.mint),
           const SizedBox(width: 10),
           Text(
-            'REF: Logic_Node.014',
+            'Your Plan',
             style: AppTypography.captionUpper.copyWith(
               color: AppColors.textSecondary,
               fontSize: 9,
@@ -394,7 +400,7 @@ class _StudioBubble extends StatelessWidget {
           ),
           const SizedBox(height: 7),
           Text(
-            '${_clock(message.createdAt)} // ${isUser ? 'ENCRYPTED' : 'BUFFERED'}',
+            _clock(message.createdAt),
             style: AppTypography.captionUpper.copyWith(
               color: AppColors.textTertiary,
               fontSize: 8,
@@ -464,14 +470,61 @@ class _StudioTypingBubble extends StatelessWidget {
   }
 }
 
-class _StudioComposer extends StatelessWidget {
+class _StudioComposer extends ConsumerWidget {
   const _StudioComposer({required this.controller, required this.onSend});
 
   final TextEditingController controller;
   final VoidCallback onSend;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final plansState = ref.watch(plansControllerProvider);
+    final readingAsync = ref.watch(continueReadingProvider);
+    final focusAsync = ref.watch(dailyFocusProvider);
+
+    final chips = <_QuickAction>[
+      // Show plan-related prompt if plan exists
+      if (plansState is PlansLoaded)
+        _QuickAction(
+          icon: Icons.menu_book_rounded,
+          label: 'Open plan',
+          prompt: 'What should I focus on this week in my plan?',
+          onTap: () => context.goToPlan(),
+        ),
+      // Show reading-related prompt if reading in progress
+      ...readingAsync.when(
+        data: (resource) => resource != null
+            ? [
+                _QuickAction(
+                  icon: Icons.auto_stories_rounded,
+                  label: 'Continue reading',
+                  prompt:
+                      'Can you summarize what I\'ve been reading about "${resource.title}"?',
+                  onTap: () => context.goToVault(tab: 0),
+                ),
+              ]
+            : [],
+        loading: () => [],
+        error: (_, _) => [],
+      ),
+      // Show daily focus prompt
+      ...focusAsync.when(
+        data: (focus) => focus.focusItem != null
+            ? [
+                _QuickAction(
+                  icon: Icons.today_rounded,
+                  label: 'Open today\'s task',
+                  prompt:
+                      'Help me with today\'s task: "${focus.focusItem!.title}"',
+                  onTap: () => context.goToTaskDetail(focus.focusItem!.id),
+                ),
+              ]
+            : [],
+        loading: () => [],
+        error: (_, _) => [],
+      ),
+    ];
+
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 34),
       decoration: const BoxDecoration(
@@ -481,26 +534,32 @@ class _StudioComposer extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          SizedBox(
-            height: 44,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              children: const [
-                _ReferenceChip(
-                  icon: Icons.menu_book_rounded,
-                  label: 'RE: INTEL_INV',
-                  active: true,
-                ),
-                SizedBox(width: 8),
-                _ReferenceChip(
-                  icon: Icons.attach_file_rounded,
-                  label: 'ATTACH',
-                  active: false,
-                ),
-              ],
+          if (chips.isNotEmpty)
+            SizedBox(
+              height: 44,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: chips.length,
+                separatorBuilder: (_, _) => const SizedBox(width: 8),
+                itemBuilder: (context, index) {
+                  final chip = chips[index];
+                  return _ReferenceChip(
+                    icon: chip.icon,
+                    label: chip.label,
+                    active: true,
+                    onTap: () {
+                      if (chip.onTap != null) {
+                        chip.onTap!();
+                      } else {
+                        controller.text = chip.prompt;
+                        onSend();
+                      }
+                    },
+                  );
+                },
+              ),
             ),
-          ),
-          const SizedBox(height: 14),
+          if (chips.isNotEmpty) const SizedBox(height: 14),
           Row(
             children: [
               Expanded(
@@ -550,48 +609,66 @@ class _StudioComposer extends StatelessWidget {
   }
 }
 
+class _QuickAction {
+  const _QuickAction({
+    required this.icon,
+    required this.label,
+    required this.prompt,
+    this.onTap,
+  });
+  final IconData icon;
+  final String label;
+  final String prompt;
+  final VoidCallback? onTap;
+}
+
 class _ReferenceChip extends StatelessWidget {
   const _ReferenceChip({
     required this.icon,
     required this.label,
     required this.active,
+    this.onTap,
   });
 
   final IconData icon;
   final String label;
   final bool active;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      height: 44,
-      padding: const EdgeInsets.symmetric(horizontal: 14),
-      decoration: BoxDecoration(
-        color: active
-            ? AppColors.mint.withValues(alpha: 0.06)
-            : AppColors.surfaceHighlight,
-        borderRadius: AppRadii.br12,
-        border: Border.all(
-          color: active ? AppColors.mint : AppColors.borderLight,
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        height: 44,
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        decoration: BoxDecoration(
+          color: active
+              ? AppColors.mint.withValues(alpha: 0.06)
+              : AppColors.surfaceHighlight,
+          borderRadius: AppRadii.br12,
+          border: Border.all(
+            color: active ? AppColors.mint : AppColors.borderLight,
+          ),
         ),
-      ),
-      child: Row(
-        children: [
-          Icon(
-            icon,
-            size: 18,
-            color: active ? AppColors.mint : AppColors.textTertiary,
-          ),
-          const SizedBox(width: 8),
-          Text(
-            label,
-            style: AppTypography.captionUpper.copyWith(
-              color: active ? AppColors.textPrimary : AppColors.textTertiary,
-              fontSize: 9,
-              fontWeight: FontWeight.w900,
+        child: Row(
+          children: [
+            Icon(
+              icon,
+              size: 18,
+              color: active ? AppColors.mint : AppColors.textTertiary,
             ),
-          ),
-        ],
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: AppTypography.captionUpper.copyWith(
+                color: active ? AppColors.textPrimary : AppColors.textTertiary,
+                fontSize: 9,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -617,7 +694,7 @@ class _StudioError extends StatelessWidget {
               size: 48,
             ),
             const SizedBox(height: 16),
-            Text('Studio Unavailable', style: AppTypography.h3),
+            Text('Chat Unavailable', style: AppTypography.h3),
             const SizedBox(height: 8),
             Text(
               message,

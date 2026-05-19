@@ -22,12 +22,11 @@ abstract final class _VaultPalette {
   static const ink = AppColors.textPrimary;
   static const muted = AppColors.textSecondary;
   static const line = AppColors.border;
-  static const mint = AppColors.mint;
   static const coral = AppColors.brandAccent;
   static const coralDark = AppColors.brandAccentDark;
 }
 
-/// Unified library screen showing stashed IdeaCards and saved lessons.
+/// Unified library screen showing Reading content, Insights, and Saved items.
 class LibraryScreen extends ConsumerStatefulWidget {
   const LibraryScreen({super.key, this.initialTab = 0});
 
@@ -50,7 +49,6 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
       initialIndex: widget.initialTab,
     );
 
-    // Load stashed cards from API
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(stashProvider.notifier).load();
     });
@@ -65,10 +63,9 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   @override
   Widget build(BuildContext context) {
     final stashState = ref.watch(stashProvider);
-    final resourceState = ref.watch(vaultResourcesProvider);
+    final libraryState = ref.watch(libraryResourcesProvider);
     final legacyLibrary = ref.watch(libraryProvider);
     final lessons = legacyLibrary.where((e) => e.isLesson).toList();
-    final feedItems = legacyLibrary.where((e) => e.type == 'card').toList();
 
     return Scaffold(
       backgroundColor: _VaultPalette.canvas,
@@ -124,22 +121,22 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                   indicatorSize: TabBarIndicatorSize.tab,
                   tabs: [
                     Tab(
-                      text: stashState.when(
-                        data: (cards) => 'Stashed (${cards.length})',
-                        loading: () => 'Stashed',
-                        error: (_, _) => 'Stashed',
+                      text: libraryState.when(
+                        data: (resources) => 'Reading (${resources.length})',
+                        loading: () => 'Reading',
+                        error: (_, _) => lessons.isEmpty
+                            ? 'Reading'
+                            : 'Reading (${lessons.length})',
                       ),
                     ),
                     Tab(
-                      text: resourceState.when(
-                        data: (resources) => 'Resources (${resources.length})',
-                        loading: () => 'Resources',
-                        error: (_, _) => lessons.isEmpty
-                            ? 'Resources'
-                            : 'Resources (${lessons.length})',
+                      text: stashState.when(
+                        data: (cards) => 'Insights (${cards.length})',
+                        loading: () => 'Insights',
+                        error: (_, _) => 'Insights',
                       ),
                     ),
-                    Tab(text: 'Feed (${feedItems.length})'),
+                    Tab(text: 'Saved'),
                   ],
                 ),
               ),
@@ -151,9 +148,9 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
               child: TabBarView(
                 controller: _tabController,
                 children: [
-                  _buildStashedCards(stashState),
-                  _buildResourceList(resourceState, lessons),
-                  _buildFeedList(feedItems),
+                  _buildReadingList(libraryState, lessons),
+                  _buildInsightsList(stashState),
+                  _buildSavedList(libraryState),
                 ],
               ),
             ),
@@ -163,9 +160,61 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     );
   }
 
-  // ── Tab 1: Stashed IdeaCards (API-backed) ──
+  // ── Tab 1: Reading — full-length content from library endpoint ──
 
-  Widget _buildStashedCards(AsyncValue<List<IdeaCardModel>> stashState) {
+  Widget _buildReadingList(
+    AsyncValue<List<ContentResource>> libraryState,
+    List<SavedItem> fallbackLessons,
+  ) {
+    return libraryState.when(
+      loading: () => const Center(
+        child: CircularProgressIndicator(color: _VaultPalette.coral),
+      ),
+      error: (_, _) {
+        if (fallbackLessons.isNotEmpty) {
+          return _buildLessonsList(fallbackLessons);
+        }
+        return _buildEmptyState(
+          icon: PhosphorIconsRegular.bookOpen,
+          title: 'No reading material yet',
+          subtitle: 'Books and lessons from your Path\nwill appear here.',
+        );
+      },
+      data: (resources) {
+        if (resources.isEmpty) {
+          if (fallbackLessons.isNotEmpty) {
+            return _buildLessonsList(fallbackLessons);
+          }
+          return _buildEmptyState(
+            icon: PhosphorIconsRegular.bookOpen,
+            title: 'No reading material yet',
+            subtitle: 'Books and lessons from your Path\nwill appear here.',
+          );
+        }
+
+        return RefreshIndicator(
+          color: _VaultPalette.coral,
+          onRefresh: () async => ref.invalidate(libraryResourcesProvider),
+          child: ListView.separated(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.s20,
+              AppSpacing.s8,
+              AppSpacing.s20,
+              AppSpacing.floatingNavBarHeight,
+            ),
+            itemCount: resources.length,
+            separatorBuilder: (_, _) => const SizedBox(height: AppSpacing.s12),
+            itemBuilder: (context, index) =>
+                _buildResourceItem(resources[index]),
+          ),
+        );
+      },
+    );
+  }
+
+  // ── Tab 2: Insights — stashed idea cards ──
+
+  Widget _buildInsightsList(AsyncValue<List<IdeaCardModel>> stashState) {
     return stashState.when(
       loading: () => const Center(
         child: CircularProgressIndicator(color: _VaultPalette.coral),
@@ -181,7 +230,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
             ),
             const SizedBox(height: 12),
             Text(
-              'Could not load stash',
+              'Could not load insights',
               style: AppTypography.body.copyWith(color: _VaultPalette.ink),
             ),
             TextButton(
@@ -194,8 +243,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
       data: (cards) {
         if (cards.isEmpty) {
           return _buildEmptyState(
-            icon: PhosphorIconsRegular.bookmarkSimple,
-            title: 'No stashed ideas yet',
+            icon: PhosphorIconsRegular.lightbulb,
+            title: 'No insights yet',
             subtitle:
                 'Swipe through the Ideas tab and tap\n"Stash" to save insights here.',
           );
@@ -205,9 +254,11 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
           color: _VaultPalette.coral,
           onRefresh: () => ref.read(stashProvider.notifier).load(),
           child: ListView.separated(
-            padding: const EdgeInsets.symmetric(
-              horizontal: AppSpacing.s20,
-              vertical: AppSpacing.s8,
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.s20,
+              AppSpacing.s8,
+              AppSpacing.s20,
+              AppSpacing.floatingNavBarHeight,
             ),
             itemCount: cards.length,
             separatorBuilder: (_, _) => const SizedBox(height: AppSpacing.s12),
@@ -250,35 +301,26 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     );
   }
 
-  // ── Tab 2: Shared Resources, with local lessons as a fallback ──
+  // ── Tab 3: Saved — vault resources (bookmarked items) ──
 
-  Widget _buildResourceList(
-    AsyncValue<List<ContentResource>> resourceState,
-    List<SavedItem> fallbackLessons,
-  ) {
-    return resourceState.when(
+  Widget _buildSavedList(AsyncValue<List<ContentResource>> libraryState) {
+    final vaultState = ref.watch(vaultResourcesProvider);
+    return vaultState.when(
       loading: () => const Center(
         child: CircularProgressIndicator(color: _VaultPalette.coral),
       ),
-      error: (_, _) {
-        if (fallbackLessons.isNotEmpty) {
-          return _buildLessonsList(fallbackLessons);
-        }
-        return _buildEmptyState(
-          icon: PhosphorIconsRegular.books,
-          title: 'No saved resources yet',
-          subtitle: 'Save books, videos, and lessons from your Path.',
-        );
-      },
+      error: (_, _) => _buildEmptyState(
+        icon: PhosphorIconsRegular.bookmarkSimple,
+        title: 'No saved items yet',
+        subtitle: 'Bookmark books, lessons, and insights\nto find them here.',
+      ),
       data: (resources) {
         if (resources.isEmpty) {
-          if (fallbackLessons.isNotEmpty) {
-            return _buildLessonsList(fallbackLessons);
-          }
           return _buildEmptyState(
-            icon: PhosphorIconsRegular.books,
-            title: 'No saved resources yet',
-            subtitle: 'Save books, videos, and lessons from your Path.',
+            icon: PhosphorIconsRegular.bookmarkSimple,
+            title: 'No saved items yet',
+            subtitle:
+                'Bookmark books, lessons, and insights\nto find them here.',
           );
         }
 
@@ -286,9 +328,11 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
           color: _VaultPalette.coral,
           onRefresh: () async => ref.invalidate(vaultResourcesProvider),
           child: ListView.separated(
-            padding: const EdgeInsets.symmetric(
-              horizontal: AppSpacing.s20,
-              vertical: AppSpacing.s8,
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.s20,
+              AppSpacing.s8,
+              AppSpacing.s20,
+              AppSpacing.floatingNavBarHeight,
             ),
             itemCount: resources.length,
             separatorBuilder: (_, _) => const SizedBox(height: AppSpacing.s12),
@@ -299,6 +343,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
       },
     );
   }
+
+  // ── Resource item builder (shared between Reading and Saved tabs) ──
 
   Future<void> _openResource(ContentResource resource) async {
     if (resource.canReadInApp) {
@@ -342,6 +388,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
             .read(contentResourcesRepositoryProvider)
             .unsaveResource(resource.id);
         ref.invalidate(vaultResourcesProvider);
+        ref.invalidate(libraryResourcesProvider);
       },
       child: LearningResourceCard(
         title: resource.title,
@@ -405,9 +452,11 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     }
 
     return ListView.separated(
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.s20,
-        vertical: AppSpacing.s8,
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.s20,
+        AppSpacing.s8,
+        AppSpacing.s20,
+        AppSpacing.floatingNavBarHeight,
       ),
       itemCount: lessons.length,
       separatorBuilder: (_, _) => const SizedBox(height: AppSpacing.s12),
@@ -440,100 +489,6 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
           context.goToInAppLesson(title: item.title, markdown: item.content);
         },
       ),
-    );
-  }
-
-  // ── Tab 3: Feed Ideas ──
-  Widget _buildFeedList(List<SavedItem> items) {
-    if (items.isEmpty) {
-      return _buildEmptyState(
-        icon: PhosphorIconsRegular.cards,
-        title: 'No saved ideas',
-        subtitle: 'Save ideas from your discover feed.',
-      );
-    }
-    return ListView.separated(
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.s20,
-        vertical: AppSpacing.s8,
-      ),
-      itemCount: items.length,
-      separatorBuilder: (_, _) => const SizedBox(height: AppSpacing.s12),
-      itemBuilder: (context, index) {
-        final item = items[index];
-        return Dismissible(
-          key: ValueKey(item.id),
-          direction: DismissDirection.endToStart,
-          background: Container(
-            alignment: Alignment.centerRight,
-            padding: const EdgeInsets.only(right: AppSpacing.s20),
-            decoration: BoxDecoration(
-              color: _VaultPalette.paperWarm,
-              borderRadius: AppRadii.br16,
-            ),
-            child: Icon(
-              PhosphorIconsRegular.trash,
-              size: 22,
-              color: _VaultPalette.coralDark,
-            ),
-          ),
-          onDismissed: (_) {
-            ref.read(libraryProvider.notifier).removeItem(item.id);
-          },
-          child: Container(
-            decoration: BoxDecoration(
-              color: _VaultPalette.paper,
-              borderRadius: AppRadii.br16,
-              border: Border.all(color: _VaultPalette.line),
-            ),
-            padding: const EdgeInsets.all(AppSpacing.s16),
-            child: Row(
-              children: [
-                Container(
-                  width: 48,
-                  height: 48,
-                  decoration: BoxDecoration(
-                    color: _VaultPalette.mint,
-                    borderRadius: AppRadii.br12,
-                  ),
-                  child: Center(
-                    child: Icon(
-                      PhosphorIconsRegular.quotes,
-                      size: 22,
-                      color: _VaultPalette.ink,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: AppSpacing.s12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        item.title,
-                        style: AppTypography.bodyMedium.copyWith(
-                          fontWeight: FontWeight.w600,
-                          color: _VaultPalette.ink,
-                          height: 1.3,
-                        ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: AppSpacing.s4),
-                      Text(
-                        item.source ?? 'Vault Item',
-                        style: AppTypography.caption.copyWith(
-                          color: _VaultPalette.muted,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
     );
   }
 

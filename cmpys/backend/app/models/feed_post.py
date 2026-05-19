@@ -21,6 +21,8 @@ class FeedPost(Base, UUIDMixin, TimestampMixin):
     content_hash: Mapped[str] = mapped_column(
         String(64), nullable=False, unique=True, index=True,
     )
+    # Optional: track which user triggered generation (for personalization)
+    generated_by_user_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
 
     like_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     comment_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")

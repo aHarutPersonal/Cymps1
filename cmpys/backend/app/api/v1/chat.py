@@ -30,7 +30,9 @@ from app.models.idol_timeline import IdolTimelineEvent
 from app.models.user import User
 from app.models.user_profile import UserProfile
 from app.models.user_achievement import UserAchievement
-from app.models.plan import Plan, PlanItem
+from app.models.plan import Plan, PlanItem, PlanItemCompletion
+from app.models.stashed_idea import StashedIdea
+from app.models.content_resource import ContentResource, UserContentProgress
 from app.schemas.chat import (
     AssistantReplyResponse,
     MessageCreate,
@@ -476,6 +478,44 @@ async def send_message_stream(
     plan_result = await db.execute(plan_stmt)
     active_plan = plan_result.scalar_one_or_none()
 
+    # Load recently completed tasks for context
+    recent_completions: list = []
+    if active_plan:
+        comp_stmt = (
+            select(PlanItemCompletion)
+            .join(PlanItem)
+            .where(PlanItem.plan_id == active_plan.id)
+            .order_by(PlanItemCompletion.completed_at.desc())
+            .limit(3)
+        )
+        comp_result = await db.execute(comp_stmt)
+        recent_completions = list(comp_result.scalars().all())
+
+    # Load recently stashed ideas for context
+    stash_stmt = (
+        select(StashedIdea)
+        .where(StashedIdea.user_id == current_user.id)
+        .order_by(StashedIdea.created_at.desc())
+        .limit(3)
+    )
+    stash_result = await db.execute(stash_stmt)
+    recent_stash = list(stash_result.scalars().all())
+
+    # Load current reading progress for context
+    reading_stmt = (
+        select(ContentResource, UserContentProgress)
+        .join(UserContentProgress, UserContentProgress.content_resource_id == ContentResource.id)
+        .where(
+            UserContentProgress.user_id == current_user.id,
+            UserContentProgress.progress_percent > 0,
+            UserContentProgress.progress_percent < 100,
+        )
+        .order_by(UserContentProgress.updated_at.desc())
+        .limit(1)
+    )
+    reading_result = await db.execute(reading_stmt)
+    reading_row = reading_result.first()
+
     # Store user message first
     user_msg = ChatMessage(
         thread_id=thread.id,
@@ -510,6 +550,17 @@ async def send_message_stream(
                 pending = [i.title for i in active_plan.items if i.status in ('pending', 'in_progress', 'not_started')][:3]
                 if pending:
                     user_context_str += f"Focus items: {', '.join(pending)}\n"
+            if recent_completions:
+                completed_titles = [c.plan_item.title for c in recent_completions if hasattr(c, 'plan_item') and c.plan_item]
+                if completed_titles:
+                    user_context_str += f"Recently completed: {', '.join(completed_titles)}\n"
+            if recent_stash:
+                stash_titles = [s.title for s in recent_stash if s.title]
+                if stash_titles:
+                    user_context_str += f"Recently stashed ideas: {', '.join(stash_titles)}\n"
+            if reading_row:
+                resource, progress = reading_row
+                user_context_str += f"Currently reading: {resource.title} ({progress.progress_percent}% complete)\n"
 
             voice_style = persona.voice_style if persona else "Thoughtful and informative"
             principles = "\n".join(persona.principles) if persona and persona.principles else "Be helpful and honest."

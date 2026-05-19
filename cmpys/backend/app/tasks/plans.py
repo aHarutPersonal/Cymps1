@@ -20,6 +20,9 @@ from app.services.planning.generator import generate_plan
 
 logger = logging.getLogger(__name__)
 
+MIN_PLAN_DETAIL_LESSON_WORDS = 500
+MIN_PLAN_DETAIL_MATERIAL_WORDS = 600
+
 @celery_app.task(bind=True)
 def run_plan_generation(self, job_id: str) -> dict:
     """
@@ -256,7 +259,18 @@ async def _run_plan_generation_async(job_id: str) -> dict:
                 user_goal=user_goal,
                 weekly_hours=job.weekly_hours,
                 duration_weeks=job.duration_weeks,
+                target_age=job.target_age,
                 user_context=user_context_str,
+                idol_profile={
+                    "display_name": idol_profile.display_name,
+                    "domains": idol_profile.domains,
+                    "notable_themes": idol_profile.notable_themes,
+                    "primary_roles": idol_profile.primary_roles,
+                } if idol_profile else {},
+                idol_persona={},
+                idol_milestones=[],
+                gaps=[],
+                readiness_by_gap={},
             )
             
             plan_items_data = roadmap.items
@@ -376,6 +390,7 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
         plan = item.plan
         idol = plan.idol if plan else None
         idol_name = idol.name if idol else "this person"
+        idol_domain = idol.domain if idol and idol.domain else "general excellence"
         
         # Load idol persona for context
         idol_persona_dict = {}
@@ -490,6 +505,8 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                 "task_title": item.title,
                 "user_goal": user_goal,
                 "learning_preferences": user_learning_pref,
+                "idol_name": idol_name,
+                "idol_domain": idol_domain,
             },
             strict=True,
         )
@@ -514,6 +531,56 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
             # and book/video resources can be deduplicated reliably.
             from app.tasks.ingestion import _normalize_plan_item_details
             details = _normalize_plan_item_details(details)
+
+            # Validate content depth — retry once if lesson_content is too thin
+            min_lesson_words = MIN_PLAN_DETAIL_LESSON_WORDS
+            min_material_words = MIN_PLAN_DETAIL_MATERIAL_WORDS
+            needs_retry = False
+            for step in details.get("steps", []):
+                lesson = step.get("lesson_content", "")
+                if lesson and len(lesson.split()) < min_lesson_words:
+                    needs_retry = True
+                    break
+            if not needs_retry:
+                for mat in details.get("materials", []):
+                    md = mat.get("content_markdown", "")
+                    if md and len(md.split()) < min_material_words:
+                        needs_retry = True
+                        break
+
+            if needs_retry:
+                logger.warning(
+                    f"[PLAN_DETAILS] Content too thin for item '{item.title}'. "
+                    f"Retrying with stronger prompt."
+                )
+                retry_prompt = prompt + (
+                    "\n\nIMPORTANT: Your previous attempt produced content that was too brief. "
+                    "You MUST write at least 500 words for each step's lesson_content (800+ if the "
+                    "step claims 60+ minutes), and 600-1,000 words for each book/in_app_lesson "
+                    "material's content_markdown. Expand every section with real examples from "
+                    "the idol's life, detailed practice exercises, and concrete case studies."
+                )
+                retry_response = await client.generate_json(
+                    system_prompt=system_prompt,
+                    user_prompt=retry_prompt,
+                )
+                if not retry_response.error:
+                    retry_details = _normalize_plan_item_details(retry_response.data)
+                    # Check if retry produced deeper content
+                    retry_ok = True
+                    for step in retry_details.get("steps", []):
+                        lesson = step.get("lesson_content", "")
+                        if lesson and len(lesson.split()) < min_lesson_words:
+                            retry_ok = False
+                            break
+                    if retry_ok:
+                        for mat in retry_details.get("materials", []):
+                            md = mat.get("content_markdown", "")
+                            if md and len(md.split()) < min_material_words:
+                                retry_ok = False
+                                break
+                    if retry_ok:
+                        details = retry_details
             
             # Step 3: Resolve material URLs via Tavily (real web search)
             await _update_job(db, job, step="resolving_materials", progress=75)

@@ -194,8 +194,10 @@ class BinaryTask(BaseModel):
     """A single binary (done/not-done) task within a week."""
 
     title: str = Field(max_length=300)
-    description: str = Field(max_length=1000)
+    description: str = Field(min_length=10, max_length=1000)
     type: str = Field(default="project", max_length=50)  # project|course|habit|practice|reading|reflection
+    estimated_hours: float = Field(default=1.0, ge=0.1, le=40.0)
+    daily_instructions: str | None = Field(default=None, max_length=2000)
 
 
 class PlanWeek(BaseModel):

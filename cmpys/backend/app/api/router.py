@@ -17,6 +17,7 @@ from app.api.v1 import (
     plans,
     sessions,
     tools,
+    daily_tasks,
 )
 
 router = APIRouter(prefix="/api/v1")
@@ -39,6 +40,7 @@ router.include_router(intake.router)
 router.include_router(sessions.router)
 router.include_router(debug.router)
 router.include_router(tools.router, prefix="/tools", tags=["tools"])
+router.include_router(daily_tasks.router)
 
 
 @router.get("/")

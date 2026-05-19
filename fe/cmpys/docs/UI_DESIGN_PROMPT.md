@@ -1,5 +1,7 @@
 # CMPYS (CoMPare Your Success) - UI Design Prompt
 
+> Legacy design note: the canonical IA now lives in `fe/cmpys/docs/UX_SPEC.md`. Use Today, Plan, Mentor, Library, Profile as the primary shell, with Discover/Ideas as a secondary entry.
+
 ## App Overview
 CMPYS is a mobile app that helps users compare their life journey and achievements against historical "idols" (famous personalities like entrepreneurs, scientists, artists). Users set personal goals, track progress, and receive AI-powered mentorship in the voice of their chosen idol.
 

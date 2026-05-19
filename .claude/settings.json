@@ -1,0 +1,14 @@
+{
+  "enabledPlugins": {
+    "ruflo-core@ruflo": true,
+    "ruflo-swarm@ruflo": true,
+    "ruflo-autopilot@ruflo": true,
+    "ruflo-federation@ruflo": true,
+    "ruflo-loop-workers@ruflo": true,
+    "ruflo-workflows@ruflo": true,
+    "ruflo-rag-memory@ruflo": true,
+    "ruflo-testgen@ruflo": true,
+    "ruflo-docs@ruflo": true,
+    "frontend-design@claude-plugins-official": true
+  }
+}

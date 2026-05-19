@@ -82,4 +82,39 @@ class ContentResourcesRepository {
     );
     return ContentResource.fromJson(response.data as Map<String, dynamic>);
   }
+
+  Future<List<ContentResource>> listLibraryResources({
+    String? kind,
+    String? query,
+    String? sort,
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    final queryParams = <String, dynamic>{
+      if (kind != null) 'kind': kind,
+      if (query != null) 'q': query,
+      if (sort != null) 'sort': sort,
+      'limit': limit,
+      'offset': offset,
+    };
+    final response = await _dioClient.get(
+      '/content-resources/library',
+      queryParameters: queryParams,
+    );
+    final data = response.data as Map<String, dynamic>;
+    final resources = data['resources'] as List? ?? [];
+    return resources
+        .map((json) => ContentResource.fromJson(json as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<ContentResource?> getContinueReading() async {
+    final response = await _dioClient.get('/content-resources/continue-reading');
+    if (response.data == null) return null;
+    final data = response.data as Map<String, dynamic>;
+    if (data.isEmpty) return null;
+    final resource = data['resource'] as Map<String, dynamic>?;
+    if (resource == null) return null;
+    return ContentResource.fromJson(resource);
+  }
 }

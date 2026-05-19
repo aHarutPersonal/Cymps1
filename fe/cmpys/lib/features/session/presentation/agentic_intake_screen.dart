@@ -142,6 +142,11 @@ class _AgenticIntakeScreenState extends ConsumerState<AgenticIntakeScreen> {
                   maxLines: 3,
                   validator: (v) => v == null || v.isEmpty ? 'Required' : null,
                 ),
+                const SizedBox(height: 8),
+                const _TrustNotice(
+                  text:
+                      'Used only to calibrate mentor suggestions, the diagnostic interview, and your first 12-week path. Avoid passwords, account numbers, or private documents.',
+                ),
                 const SizedBox(height: 22),
                 _SectionLabel(
                   title: 'Interests',
@@ -283,6 +288,49 @@ class _AgenticHeader extends StatelessWidget {
           Text(
             'These answers shape mentor suggestions, the diagnostic interview, and the first weekly path.',
             style: AppTypography.body.copyWith(color: _SessionPalette.muted),
+          ),
+          const SizedBox(height: 12),
+          const _TrustNotice(
+            text:
+                'CMPYS simulates mentors from public information. Historical claims should be treated as AI-assisted guidance, not biography or financial advice.',
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TrustNotice extends StatelessWidget {
+  const _TrustNotice({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: _SessionPalette.paper.withValues(alpha: 0.72),
+        borderRadius: AppRadii.br12,
+        border: Border.all(color: _SessionPalette.line),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(
+            Icons.verified_user_outlined,
+            size: 18,
+            color: _SessionPalette.coralDark,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              style: AppTypography.caption.copyWith(
+                color: _SessionPalette.muted,
+                height: 1.35,
+              ),
+            ),
           ),
         ],
       ),

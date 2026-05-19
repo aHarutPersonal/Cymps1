@@ -82,7 +82,12 @@ class _PlansScreenState extends ConsumerState<PlansScreen> {
             ),
           ),
           SliverPadding(
-            padding: const EdgeInsets.fromLTRB(24, 28, 24, 112),
+            padding: const EdgeInsets.fromLTRB(
+              24,
+              28,
+              24,
+              AppSpacing.floatingNavBarHeight,
+            ),
             sliver: SliverList.builder(
               itemCount: totalWeeks,
               itemBuilder: (context, index) {
@@ -145,7 +150,7 @@ class _PlansScreenState extends ConsumerState<PlansScreen> {
       child: Column(
         children: [
           const SizedBox(height: AppSpacing.s48),
-          Text('Building Your Path', style: AppTypography.h1),
+          Text('Building Your Plan', style: AppTypography.h1),
           const SizedBox(height: AppSpacing.s8),
           Text(
             'Turning the intake into weeks, plan items, steps, and learning sections.',
@@ -187,9 +192,9 @@ class _PlansScreenState extends ConsumerState<PlansScreen> {
 
   Widget _buildNoPlanState() {
     return PathEmptyState(
-      title: 'No Path Charted',
+      title: 'No Plan Yet',
       message:
-          'Generate a personalized 12-week learning path from your idol, gaps, and goals.',
+          'Generate a personalized 12-week plan from your idol, gaps, and goals.',
       action: CmpysButton(
         label: 'Generate Plan',
         onPressed: () =>
@@ -204,10 +209,10 @@ class _PlansScreenState extends ConsumerState<PlansScreen> {
         message.toLowerCase().contains('choose an idol');
 
     return PathEmptyState(
-      title: needsIdol ? 'Choose Your North Star' : 'Path Unavailable',
+      title: needsIdol ? 'Choose Your North Star' : 'Plan Unavailable',
       message: needsIdol
-          ? 'Pick a benchmark before opening your growth path.'
-          : 'We could not load your Path right now. Please try again.',
+          ? 'Pick a benchmark before opening your 12-week plan.'
+          : 'We could not load your plan right now. Please try again.',
       action: CmpysButton(
         label: needsIdol ? 'Choose Idol' : 'Retry',
         onPressed: needsIdol
@@ -225,7 +230,7 @@ class _PlansScreenState extends ConsumerState<PlansScreen> {
         shape: RoundedRectangleBorder(borderRadius: AppRadii.br24),
         title: Text('Regenerate Plan?', style: AppTypography.h3),
         content: Text(
-          'This will replace the current path with a new 12-week structure.',
+          'This will replace the current plan with a new 12-week structure.',
           style: AppTypography.body.copyWith(color: AppColors.textSecondary),
         ),
         actions: [
@@ -280,7 +285,7 @@ class _PathPrototypeHeader extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Console.Pathfinder',
+                    'Plan',
                     style: AppTypography.captionUpper.copyWith(
                       color: AppColors.textTertiary,
                       fontSize: 9,
@@ -289,7 +294,7 @@ class _PathPrototypeHeader extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'Trajectory Roadmap',
+                    '12-Week Execution',
                     style: AppTypography.h2.copyWith(
                       fontWeight: FontWeight.w900,
                       color: AppColors.textPrimary,

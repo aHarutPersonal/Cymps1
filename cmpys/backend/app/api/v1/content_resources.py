@@ -15,6 +15,7 @@ from app.models.content_resource import (
     UserContentProgress,
     UserContentSave,
 )
+from app.models.plan import Plan, PlanItem, PlanItemContentResource
 from app.models.user import User
 from app.schemas.content_resource import (
     ContentHighlightCreate,
@@ -25,6 +26,7 @@ from app.schemas.content_resource import (
     ContentResourceResponse,
     ContentResourceSaveRequest,
     ContentResourceSaveResponse,
+    ContinueReadingResponse,
 )
 
 router = APIRouter(prefix="/content-resources", tags=["content-resources"])
@@ -216,6 +218,163 @@ async def list_vault_resources(
         ],
         total=total,
     )
+
+
+@router.get("/library", response_model=ContentResourceListResponse)
+async def list_library_resources(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+    kind: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+    sort: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> ContentResourceListResponse:
+    """List all content resources available to the user.
+
+    Includes: vault saves, plan-linked materials, and public-domain books.
+    Supports filtering by kind, searching by title/author, and sorting.
+    """
+    # Collect resource IDs from three sources: vault, plan links, and public domain
+    resource_ids: set[str] = set()
+
+    # 1. Vault saves
+    vault_result = await db.execute(
+        select(UserContentSave.content_resource_id).where(
+            UserContentSave.user_id == current_user.id
+        )
+    )
+    resource_ids.update(row[0] for row in vault_result.fetchall())
+
+    # 2. Plan-linked materials
+    plan_result = await db.execute(
+        select(Plan.id).where(Plan.user_id == current_user.id).limit(1)
+    )
+    plan_id = plan_result.scalar_one_or_none()
+    if plan_id:
+        link_result = await db.execute(
+            select(PlanItemContentResource.content_resource_id)
+            .join(PlanItem, PlanItemContentResource.plan_item_id == PlanItem.id)
+            .where(PlanItem.plan_id == plan_id)
+        )
+        resource_ids.update(row[0] for row in link_result.fetchall())
+
+    # 3. Public domain books (always available)
+    pd_result = await db.execute(
+        select(ContentResource.id).where(
+            ContentResource.kind == ContentResourceKind.PUBLIC_DOMAIN_BOOK
+        )
+    )
+    resource_ids.update(row[0] for row in pd_result.fetchall())
+
+    if not resource_ids:
+        return ContentResourceListResponse(resources=[], total=0)
+
+    # Build base query filtering to accessible resource IDs
+    stmt = select(ContentResource).where(ContentResource.id.in_(resource_ids))
+
+    # Apply kind filter
+    if kind:
+        try:
+            parsed_kind = ContentResourceKind(kind)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid resource kind") from exc
+        stmt = stmt.where(ContentResource.kind == parsed_kind)
+
+    # Apply search filter
+    if q:
+        needle = f"%{q}%"
+        stmt = stmt.where(
+            or_(
+                ContentResource.title.ilike(needle),
+                ContentResource.author_or_creator.ilike(needle),
+            )
+        )
+
+    # Count total before pagination
+    total_result = await db.execute(select(func.count()).select_from(stmt.subquery()))
+    total = total_result.scalar() or 0
+
+    # Apply sort
+    if sort == "duration":
+        stmt = stmt.order_by(ContentResource.duration_minutes.asc().nulls_last())
+    elif sort == "duration_desc":
+        stmt = stmt.order_by(ContentResource.duration_minutes.desc().nulls_last())
+    elif sort == "title":
+        stmt = stmt.order_by(ContentResource.title.asc())
+    else:
+        stmt = stmt.order_by(ContentResource.updated_at.desc())
+
+    result = await db.execute(stmt.offset(offset).limit(limit))
+    resources = list(result.scalars().all())
+
+    # Fetch user state for all resources
+    saves_by_resource: dict[str, UserContentSave] = {}
+    progress_by_resource: dict[str, UserContentProgress] = {}
+    if resources:
+        resource_id_list = [r.id for r in resources]
+        save_result = await db.execute(
+            select(UserContentSave).where(
+                UserContentSave.user_id == current_user.id,
+                UserContentSave.content_resource_id.in_(resource_id_list),
+            )
+        )
+        saves_by_resource = {s.content_resource_id: s for s in save_result.scalars().all()}
+        progress_result = await db.execute(
+            select(UserContentProgress).where(
+                UserContentProgress.user_id == current_user.id,
+                UserContentProgress.content_resource_id.in_(resource_id_list),
+            )
+        )
+        progress_by_resource = {
+            p.content_resource_id: p for p in progress_result.scalars().all()
+        }
+
+    return ContentResourceListResponse(
+        resources=[
+            _resource_response(
+                r,
+                save=saves_by_resource.get(r.id),
+                progress=progress_by_resource.get(r.id),
+            )
+            for r in resources
+        ],
+        total=total,
+    )
+
+
+@router.get("/continue-reading", response_model=ContinueReadingResponse | None)
+async def get_continue_reading(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> ContinueReadingResponse | None:
+    """Get the most recent in-progress content resource for the current user.
+
+    Returns the resource with progress > 0 and < 100, ordered by most recently updated.
+    Returns null if no in-progress resource exists.
+    """
+    result = await db.execute(
+        select(ContentResource, UserContentProgress)
+        .join(
+            UserContentProgress,
+            UserContentProgress.content_resource_id == ContentResource.id,
+        )
+        .where(
+            UserContentProgress.user_id == current_user.id,
+            UserContentProgress.progress_percent > 0,
+            UserContentProgress.progress_percent < 100,
+        )
+        .order_by(UserContentProgress.updated_at.desc())
+        .limit(1)
+    )
+    row = result.first()
+    if not row:
+        return None
+
+    resource, progress = row
+    save = await _get_save(db, current_user.id, resource.id)
+    resource_resp = _resource_response(resource, save=save, progress=progress)
+    return ContinueReadingResponse(resource=resource_resp)
 
 
 @router.get("/{resource_id}", response_model=ContentResourceResponse)

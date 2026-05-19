@@ -352,9 +352,8 @@ async def compare_to_idol(
 from app.core.config import settings
 from app.schemas.comparison import ComparisonStrength, ComparisonGap, NextMilestone
 from app.services.llm import get_llm_client
-from app.services.llm.prompt_loader import load_prompt
-import json
-import os
+from app.services.llm.prompt_loader import load_prompt, render_prompt
+import json as json_lib
 
 
 async def _run_ai_comparison(
@@ -372,28 +371,21 @@ async def _run_ai_comparison(
     
     Returns parsed JSON response from the LLM.
     """
-    # Read prompt template
-    try:
-        prompt_template = load_prompt("comparison_analyze")
-    except FileNotFoundError:
-        # Fallback to old path resolution
-        prompt_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
-            "..", "prompts", "comparison_analyze.txt"
-        )
-        prompt_path = os.path.abspath(prompt_path)
-        with open(prompt_path, "r") as f:
-            prompt_template = f.read()
-    
-    # Fill in the template
-    prompt = prompt_template.replace("{{idol_name}}", idol_name)
-    prompt = prompt.replace("{{idol_field}}", idol_field or "Various")
-    prompt = prompt.replace("{{idol_bio}}", idol_bio or "No biography available")
-    prompt = prompt.replace("{{target_age}}", str(target_age))
-    prompt = prompt.replace("{{idol_milestones}}", idol_milestones_text)
-    prompt = prompt.replace("{{user_age}}", str(user_age))
-    prompt = prompt.replace("{{user_background}}", user_background or "Not specified")
-    prompt = prompt.replace("{{user_achievements}}", user_achievements_text)
+    # Render prompt template with unified system
+    prompt = render_prompt(
+        load_prompt("comparison_analyze"),
+        {
+            "idol_name": idol_name,
+            "idol_field": idol_field or "Various",
+            "idol_bio": idol_bio or "No biography available",
+            "target_age": str(target_age),
+            "idol_milestones": idol_milestones_text,
+            "user_age": str(user_age),
+            "user_background": user_background or "Not specified",
+            "user_achievements": user_achievements_text,
+        },
+        prompt_name="comparison_analyze.txt",
+    )
     
     # Use the unified LLM client
     client = get_llm_client(timeout=90.0)

@@ -296,7 +296,7 @@ class _GenerationPathContent extends StatelessWidget {
       children: [
         const SizedBox(height: AppSpacing.s32),
         Text(
-          isRetrying ? 'Rebuilding Path' : 'Building Path',
+          isRetrying ? 'Rebuilding Plan' : 'Building Plan',
           style: AppTypography.h1,
         ),
         const SizedBox(height: AppSpacing.s8),
@@ -426,7 +426,7 @@ class _GenerationErrorContent extends StatelessWidget {
         ),
         Expanded(
           child: PathEmptyState(
-            title: 'Path Generation Failed',
+            title: 'Plan Generation Failed',
             message:
                 errorMessage ??
                 'The plan could not be generated. Try again when ready.',

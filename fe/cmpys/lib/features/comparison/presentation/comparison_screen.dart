@@ -225,7 +225,7 @@ class _ComparisonScreenState extends ConsumerState<ComparisonScreen>
     final overallScore = comparison.overallScore.clamp(0, 100);
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.only(bottom: 120),
+      padding: const EdgeInsets.only(bottom: 88),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 24),
         child: Column(

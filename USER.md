@@ -1,17 +1,19 @@
+---
+summary: "User profile record"
+autoclaw.schema: "agent-profile/v1"
+human.name: "Coder"
+human.call: "Coder"
+human.timezone: "Asia/Yerevan"
+human.focus:
+  - "product"
+---
+
 # USER.md - About Your Human
 
-_Learn about the person you're helping. Update this as you go._
-
-- **Name:**
-- **What to call them:**
-- **Pronouns:** _(optional)_
-- **Timezone:**
-- **Notes:**
+- **Name:** Coder
+- **Timezone:** Asia/Yerevan
+- **Focus areas:** product
 
 ## Context
 
-_(What do they care about? What projects are they working on? What annoys them? What makes them laugh? Build this over time.)_
-
----
-
-The more you know, the better you can help. But remember — you're learning about a person, not building a dossier. Respect the difference.
+_(Build this over time as you learn more about your human.)_

@@ -84,3 +84,9 @@ class ContentHighlightListResponse(BaseModel):
 
     highlights: list[ContentHighlightResponse]
     total: int
+
+
+class ContinueReadingResponse(BaseModel):
+    """The most recent in-progress content resource."""
+
+    resource: ContentResourceResponse

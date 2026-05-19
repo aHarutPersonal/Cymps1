@@ -295,7 +295,7 @@ class _DiscoverFeedScreenState extends ConsumerState<DiscoverFeedScreen> {
           color: AppColors.accent,
           backgroundColor: AppColors.surface,
           child: Padding(
-            padding: EdgeInsets.only(top: topPadding, bottom: 112),
+            padding: EdgeInsets.only(top: topPadding, bottom: AppSpacing.floatingNavBarHeight),
             child: PageView.builder(
               controller: _pageController,
               scrollDirection: Axis.vertical,
@@ -358,7 +358,7 @@ class _DiscoverFeedScreenState extends ConsumerState<DiscoverFeedScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Library.Idea_Stack',
+                    'Ideas',
                     style: AppTypography.captionUpper.copyWith(
                       color: AppColors.mint,
                       fontSize: 9,

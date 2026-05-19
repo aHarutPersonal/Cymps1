@@ -12,6 +12,11 @@ import '../models/chat_models.dart';
 import '../../notes/controllers/notes_controller.dart';
 import '../../plans/controllers/plans_controller.dart';
 
+/// Extra bottom clearance for the floating nav bar rendered by AppShell.
+/// Nav bar is 56px tall + ~8px bottom gap = 64px. The SafeArea handles
+/// the system bottom inset, so we only need to add the nav bar space.
+const _kNavBarClearance = 64.0;
+
 class ChatScreen extends ConsumerStatefulWidget {
   const ChatScreen({super.key, this.threadId});
 
@@ -90,7 +95,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         useSafeArea: false,
         child: SafeArea(
           top: false,
-          bottom: false,
           child: _buildBody(chatState),
         ),
       ),
@@ -409,98 +413,104 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         const SizedBox(height: 12),
 
         // -- INPUT --
-        SafeArea(
-          top: false,
-          child: Container(
-            padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
-            decoration: BoxDecoration(
-              color: AppColors.bg.withValues(alpha: 0.94),
-              border: const Border(
-                top: BorderSide(color: AppColors.glassBorder),
+        // SafeArea handles the system bottom inset (home indicator).
+        // The extra bottom padding accounts for the floating nav bar
+        // rendered by the parent AppShell scaffold (56px bar + 8px gap).
+        Padding(
+          padding: const EdgeInsets.only(bottom: _kNavBarClearance),
+          child: SafeArea(
+            top: false,
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
+              decoration: BoxDecoration(
+                color: AppColors.bg.withValues(alpha: 0.94),
+                border: const Border(
+                  top: BorderSide(color: AppColors.glassBorder),
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: AppColors.charcoal.withValues(alpha: 0.08),
+                    blurRadius: 24,
+                    offset: const Offset(0, -10),
+                  ),
+                ],
               ),
-              boxShadow: [
-                BoxShadow(
-                  color: AppColors.charcoal.withValues(alpha: 0.08),
-                  blurRadius: 24,
-                  offset: const Offset(0, -10),
-                ),
-              ],
-            ),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Expanded(
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: AppColors.surface,
-                      borderRadius: AppRadii.br20,
-                      border: Border.all(color: AppColors.glassBorder),
-                    ),
-                    child: TextField(
-                      controller: _messageController,
-                      style: AppTypography.body.copyWith(
-                        color: AppColors.textPrimary,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Expanded(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: AppColors.surface,
+                        borderRadius: AppRadii.br20,
+                        border: Border.all(color: AppColors.glassBorder),
                       ),
-                      cursorColor: AppColors.accent,
-                      keyboardAppearance: Brightness.light,
-                      enabled: !isSending,
-                      minLines: 1,
-                      maxLines: 4,
-                      textCapitalization: TextCapitalization.sentences,
-                      decoration: InputDecoration(
-                        isDense: true,
-                        filled: false,
-                        hintText: 'Ask anything...',
-                        hintStyle: AppTypography.body.copyWith(
-                          color: AppColors.textTertiary,
+                      child: TextField(
+                        controller: _messageController,
+                        style: AppTypography.body.copyWith(
+                          color: AppColors.textPrimary,
                         ),
-                        border: InputBorder.none,
-                        enabledBorder: InputBorder.none,
-                        focusedBorder: InputBorder.none,
-                        disabledBorder: InputBorder.none,
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 14,
+                        cursorColor: AppColors.accent,
+                        keyboardAppearance: Brightness.light,
+                        enabled: !isSending,
+                        minLines: 1,
+                        maxLines: 4,
+                        textCapitalization: TextCapitalization.sentences,
+                        decoration: InputDecoration(
+                          isDense: true,
+                          filled: false,
+                          hintText: 'Ask anything...',
+                          hintStyle: AppTypography.body.copyWith(
+                            color: AppColors.textTertiary,
+                          ),
+                          border: InputBorder.none,
+                          enabledBorder: InputBorder.none,
+                          focusedBorder: InputBorder.none,
+                          disabledBorder: InputBorder.none,
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 14,
+                          ),
                         ),
+                        textInputAction: TextInputAction.send,
+                        onSubmitted: (_) => _sendMessage(),
                       ),
-                      textInputAction: TextInputAction.send,
-                      onSubmitted: (_) => _sendMessage(),
                     ),
                   ),
-                ),
-                const SizedBox(width: 12),
-                GestureDetector(
-                  onTap: isSending ? null : _sendMessage,
-                  child: AnimatedContainer(
-                    duration: AppDurations.fast,
-                    width: 48,
-                    height: 48,
-                    decoration: BoxDecoration(
-                      color: isSending
-                          ? AppColors.surfaceHighlight
-                          : AppColors.accent,
-                      shape: BoxShape.circle,
-                      boxShadow: isSending ? null : AppShadows.glowSubtle,
-                    ),
-                    child: Center(
-                      child: isSending
-                          ? SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: AppColors.textSecondary,
+                  const SizedBox(width: 12),
+                  GestureDetector(
+                    onTap: isSending ? null : _sendMessage,
+                    child: AnimatedContainer(
+                      duration: AppDurations.fast,
+                      width: 48,
+                      height: 48,
+                      decoration: BoxDecoration(
+                        color: isSending
+                            ? AppColors.surfaceHighlight
+                            : AppColors.accent,
+                        shape: BoxShape.circle,
+                        boxShadow: isSending ? null : AppShadows.glowSubtle,
+                      ),
+                      child: Center(
+                        child: isSending
+                            ? SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: AppColors.textSecondary,
+                                ),
+                              )
+                            : const Icon(
+                                Icons.send,
+                                size: 20,
+                                color: Colors.white,
                               ),
-                            )
-                          : const Icon(
-                              Icons.send,
-                              size: 20,
-                              color: Colors.white,
-                            ),
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
