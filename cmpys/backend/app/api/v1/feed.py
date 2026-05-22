@@ -17,7 +17,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select, func, exists
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -137,23 +137,33 @@ async def _generate_and_persist(
         saved_posts: list[FeedPost] = []
         video_posts_needing_urls: list[tuple[FeedPost, str]] = []  # (post, search_query)
 
+        # ⚡ Bolt: Prevent N+1 queries by batch checking content hashes
+        # Collect all valid items and compute their hashes first
+        valid_items = []
+        hashes = set()
         for item in parsed:
             item_type = item.get("type", "")
             if item_type not in ("quote", "video", "motivation"):
                 continue
-
             title = item.get("title", "")
             content = item.get("content", "")
             content_hash = FeedPost.compute_hash(title, content)
+            valid_items.append((item, item_type, title, content, content_hash))
+            hashes.add(content_hash)
 
-            # Check if already exists (dedup by content_hash)
+        # Fetch all existing posts with these hashes in a single query
+        existing_posts_map = {}
+        if hashes:
             existing = await db.execute(
-                select(FeedPost).where(FeedPost.content_hash == content_hash)
+                select(FeedPost).where(FeedPost.content_hash.in_(hashes))
             )
-            existing_post = existing.scalar_one_or_none()
+            for post in existing.scalars().all():
+                existing_posts_map[post.content_hash] = post
 
-            if existing_post:
-                saved_posts.append(existing_post)
+        for item, item_type, title, content, content_hash in valid_items:
+            # Use the pre-fetched existing posts map
+            if content_hash in existing_posts_map:
+                saved_posts.append(existing_posts_map[content_hash])
                 continue
 
             is_video = item_type == "video"
