@@ -45,7 +45,7 @@ from app.schemas.chat import (
 from app.services.chat import generate_reply
 import json as json_lib
 import openai
-from app.services.chat.responder import LLMNotConfiguredError, _persona_to_json, _profile_to_json, _grounding_facts_to_json, _user_context_to_json, _milestones_to_json, _conversation_to_json
+from app.services.chat.responder import LLMNotConfiguredError
 
 logger = logging.getLogger(__name__)
 
@@ -675,7 +675,6 @@ Respond as {idol_name}:"""
             yield f"data: {json_lib.dumps({'type': 'error', 'error': str(e)})}\n\n"
     
     # Import session maker for saving
-    from app.core.db import async_session_maker
     
     await db.commit()  # Commit user message before streaming
     

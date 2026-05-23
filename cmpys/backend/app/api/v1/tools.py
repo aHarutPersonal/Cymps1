@@ -3,7 +3,6 @@ import urllib.parse
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import List, Optional
-import datetime
 
 router = APIRouter()
 

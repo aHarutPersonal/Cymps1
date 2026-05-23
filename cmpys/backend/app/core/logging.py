@@ -8,7 +8,6 @@ Features:
 - Structured log format with timestamps
 """
 import logging
-import os
 import sys
 from datetime import datetime
 from logging.handlers import RotatingFileHandler

@@ -34,7 +34,6 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from datetime import date
 
 from pydantic import BaseModel, Field
 
@@ -436,7 +435,7 @@ async def _apply_jargon_guard(
     found_jargon = _contains_banned_jargon(reply, banned_terms)
     
     if not found_jargon:
-        logger.debug(f"[JARGON_GUARD] No banned jargon found, skipping rewrite")
+        logger.debug("[JARGON_GUARD] No banned jargon found, skipping rewrite")
         return reply
     
     logger.info(f"[JARGON_GUARD] Found banned jargon: {found_jargon}. Rewriting...")
@@ -483,10 +482,10 @@ Return JSON with key "rewritten_reply" containing the rewritten text."""
             # Re-append disclaimer
             if disclaimer_sentence not in rewritten:
                 rewritten = f"{rewritten}\n\n{disclaimer_sentence}"
-            logger.info(f"[JARGON_GUARD] Successfully rewrote reply")
+            logger.info("[JARGON_GUARD] Successfully rewrote reply")
             return rewritten
         else:
-            logger.warning(f"[JARGON_GUARD] Rewrite failed, returning original")
+            logger.warning("[JARGON_GUARD] Rewrite failed, returning original")
             return reply
             
     except Exception as e:
@@ -595,7 +594,7 @@ async def generate_reply(
     }, prompt_name="chat_reply.txt")
     
     # Generate reply
-    logger.info(f"[CHAT] Calling LLM for chat response...")
+    logger.info("[CHAT] Calling LLM for chat response...")
     validated, response = await client.generate_and_validate(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
@@ -646,6 +645,6 @@ async def generate_reply(
     # Error fallback
     logger.error(f"[CHAT] LLM call failed completely. Error: {response.error}")
     return ChatReplyResult(
-        content=f"I apologize, but I'm having trouble generating a response right now. Please try again.",
+        content="I apologize, but I'm having trouble generating a response right now. Please try again.",
         disclaimer=disclaimer,
     )

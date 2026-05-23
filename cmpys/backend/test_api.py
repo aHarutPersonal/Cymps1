@@ -1,4 +1,3 @@
-import httpx
 import asyncio
 from app.core.db import async_session_maker
 from app.models.intake import IntakeSession

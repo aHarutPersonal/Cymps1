@@ -1,10 +1,8 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
-from datetime import datetime, timezone
+from datetime import datetime
 
-from app.models.plan import PlanItem, PlanItemCompletion, PlanItemStepCompletion
-from app.models.plan import PlanItemStatus
-from app.schemas.plan import ItemProgress
+from app.models.plan import PlanItem, PlanItemCompletion
 from app.api.v1.plans import _compute_item_progress, _parse_item_details
 
 class ResultMock:

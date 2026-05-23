@@ -17,7 +17,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select, func, exists
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -137,21 +137,28 @@ async def _generate_and_persist(
         saved_posts: list[FeedPost] = []
         video_posts_needing_urls: list[tuple[FeedPost, str]] = []  # (post, search_query)
 
+        # Pre-calculate hashes and check db in one go to prevent N+1 queries
+        valid_items = []
+        hashes = []
         for item in parsed:
             item_type = item.get("type", "")
             if item_type not in ("quote", "video", "motivation"):
                 continue
-
             title = item.get("title", "")
             content = item.get("content", "")
-            content_hash = FeedPost.compute_hash(title, content)
+            h = FeedPost.compute_hash(title, content)
+            valid_items.append((item, item_type, title, content, h))
+            hashes.append(h)
 
-            # Check if already exists (dedup by content_hash)
-            existing = await db.execute(
-                select(FeedPost).where(FeedPost.content_hash == content_hash)
+        existing_posts_map = {}
+        if hashes:
+            existing_result = await db.execute(
+                select(FeedPost).where(FeedPost.content_hash.in_(hashes))
             )
-            existing_post = existing.scalar_one_or_none()
+            existing_posts_map = {p.content_hash: p for p in existing_result.scalars().all()}
 
+        for item, item_type, title, content, content_hash in valid_items:
+            existing_post = existing_posts_map.get(content_hash)
             if existing_post:
                 saved_posts.append(existing_post)
                 continue

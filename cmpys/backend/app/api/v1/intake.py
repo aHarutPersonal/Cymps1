@@ -436,7 +436,6 @@ async def _apply_profile_patch(
     readiness: "ReadinessByGap",
 ) -> UserProfile:
     """Apply the profile patch to the user's profile."""
-    from app.schemas.intake import UserProfilePatch, ReadinessByGap
     
     # Get or create user profile
     if not user.profile:
@@ -480,7 +479,6 @@ async def _store_structured_achievements(
 ) -> list[UserAchievement]:
     """Store structured achievements as UserAchievement records."""
     from datetime import datetime
-    from app.schemas.intake import StructuredAchievement
     
     stored = []
     for ach in achievements:
@@ -594,7 +592,7 @@ async def finish_intake(
     )
     
     # Step 3 & 4: Persist profile patch and achievements
-    logger.info(f"[INTAKE] Step 3-4: Persisting profile patch and achievements")
+    logger.info("[INTAKE] Step 3-4: Persisting profile patch and achievements")
     await _apply_profile_patch(
         db=db,
         user=current_user,
@@ -667,7 +665,7 @@ async def finish_intake(
     logger.info(f"[INTAKE] Step 5: Generating plan with gaps={gaps}, target_age={target_age}")
     
     # Generate plan (this uses LLM internally)
-    from app.models.plan import Plan, PlanItem, PlanItemType
+    from app.models.plan import Plan, PlanItem
     
     roadmap = await generate_plan(
         gaps=gaps,
@@ -930,7 +928,6 @@ async def finish_achievement_intake(
         for ans in session.answers
     }
     
-    from datetime import datetime
     
     stored_count = 0
     for q in questions:
