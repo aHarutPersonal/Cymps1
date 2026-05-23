@@ -1,4 +1,3 @@
-import random
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -8,7 +7,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.db import get_db
-from app.models.idol import Idol
 from app.models.idol_job import IdolImportJob
 from app.models.plan_job import PlanGenerationJob
 from app.models.item_detail_job import PlanItemDetailJob

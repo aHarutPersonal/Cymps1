@@ -9,7 +9,6 @@ from app.models.idol import Idol
 from app.models.idol_profile import IdolProfile
 from app.models.idol_persona import IdolPersona
 from app.models.idol_timeline import IdolTimelineEvent
-import json
 
 async def main():
     async with async_session_maker() as session:

@@ -3,9 +3,8 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import and_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.api.dependencies import get_current_user
 from app.core.db import get_db
@@ -138,7 +137,6 @@ async def compare_to_idol(
     
     # Load idol milestones at target age
     # Strategy: First try to get milestones with known ages, then consider NULL ages
-    from sqlalchemy import or_
     from app.models.idol_achievement import IdolAchievement
     
     milestone_stmt = select(IdolTimelineEvent).where(
@@ -161,7 +159,7 @@ async def compare_to_idol(
     
     # If no milestones with known ages, try IdolAchievement table
     if not idol_milestones:
-        logger.info(f"[COMPARISON] No timeline events with age, trying IdolAchievement table")
+        logger.info("[COMPARISON] No timeline events with age, trying IdolAchievement table")
         
         ach_stmt = select(IdolAchievement).where(
             IdolAchievement.idol_id == idolId
@@ -198,7 +196,7 @@ async def compare_to_idol(
         else:
             # Last resort: include early-career categories with NULL ages
             # Filter to categories likely to be early-career: learning, career starts
-            logger.info(f"[COMPARISON] No age-based data, using early-career heuristic")
+            logger.info("[COMPARISON] No age-based data, using early-career heuristic")
             
             early_career_categories = ["learning", "career", "finance"]
             
@@ -353,7 +351,6 @@ from app.core.config import settings
 from app.schemas.comparison import ComparisonStrength, ComparisonGap, NextMilestone
 from app.services.llm import get_llm_client
 from app.services.llm.prompt_loader import load_prompt, render_prompt
-import json as json_lib
 
 
 async def _run_ai_comparison(

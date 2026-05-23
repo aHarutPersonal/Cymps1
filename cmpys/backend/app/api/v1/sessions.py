@@ -42,7 +42,7 @@ from app.services.gemini import (
     stream_with_grounding,
 )
 from app.services.content_resources import attach_content_resources_to_materials
-from app.services.llm.prompt_loader import load_and_render, load_prompt
+from app.services.llm.prompt_loader import load_and_render
 
 logger = logging.getLogger("cmpys.api.sessions")
 

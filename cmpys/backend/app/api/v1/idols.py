@@ -15,9 +15,7 @@ PROMPT MAPPING:
 - GET /idols/discover (Wikidata only, no LLM)
   - Uses Wikidata API for exact name searches
 """
-import json
 import logging
-import os
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
@@ -49,7 +47,6 @@ from app.providers import DiscoveryResponse, search_candidates
 from app.providers.wikidata import fetch_entity_by_id
 from app.schemas.idol import (
     EvidenceResponse,
-    HybridSuggestResponse,
     IdolAliasResponse,
     IdolDetailResponse,
     IdolExternalIdResponse,
@@ -61,11 +58,8 @@ from app.schemas.idol import (
     IdolSearchResponse,
     IdolSuggestResponse,
     IdolTagResponse,
-    LocalIdolSuggestion,
-    SourceMix,
     TimelineEventResponse,
     TimelineResponse,
-    WebIdolSuggestion,
 )
 
 router = APIRouter(prefix="/idols", tags=["idols"])
@@ -842,7 +836,6 @@ async def generate_idol_image(
     Resolve/cache a real Wikimedia/Wikipedia idol photo, with generated art as
     a compatibility fallback for older clients that call this endpoint.
     """
-    import openai
     from app.core.config import settings
 
     # 1. Fetch Idol
