@@ -1,0 +1,3 @@
+## 2023-10-27 - Batching N+1 Queries with Intra-batch Deduplication
+**Learning:** When replacing an N+1 database query in a loop (like `FeedPost` insertions) with a batched `IN` query, it's easy to accidentally introduce a bug where duplicate items *within the same batch* are no longer caught. The original N+1 loop caught them because it queried the DB dynamically on every iteration.
+**Action:** When batch fetching to prevent N+1 issues, always ensure that newly instantiated objects are inserted into the local cache (e.g., `existing_posts_by_hash`) during the processing loop so subsequent identical items in the same batch use the cached instance instead of trying to create duplicates.
