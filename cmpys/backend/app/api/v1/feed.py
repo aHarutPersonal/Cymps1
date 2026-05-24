@@ -17,7 +17,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select, func, exists
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -137,6 +137,10 @@ async def _generate_and_persist(
         saved_posts: list[FeedPost] = []
         video_posts_needing_urls: list[tuple[FeedPost, str]] = []  # (post, search_query)
 
+        # ⚡ Bolt Optimization: Batch fetch existing posts to prevent N+1 query problem
+        # 1. First pass: compute hashes for valid items
+        valid_items = []
+        hashes = []
         for item in parsed:
             item_type = item.get("type", "")
             if item_type not in ("quote", "video", "motivation"):
@@ -146,11 +150,20 @@ async def _generate_and_persist(
             content = item.get("content", "")
             content_hash = FeedPost.compute_hash(title, content)
 
-            # Check if already exists (dedup by content_hash)
-            existing = await db.execute(
-                select(FeedPost).where(FeedPost.content_hash == content_hash)
-            )
-            existing_post = existing.scalar_one_or_none()
+            valid_items.append((item, item_type, title, content, content_hash))
+            hashes.append(content_hash)
+
+        # 2. Batch fetch existing posts from DB
+        existing_posts_by_hash = {}
+        if hashes:
+            existing_stmt = select(FeedPost).where(FeedPost.content_hash.in_(hashes))
+            existing_result = await db.execute(existing_stmt)
+            for post in existing_result.scalars():
+                existing_posts_by_hash[post.content_hash] = post
+
+        # 3. Second pass: process items, reusing existing posts or creating new ones
+        for item, item_type, title, content, content_hash in valid_items:
+            existing_post = existing_posts_by_hash.get(content_hash)
 
             if existing_post:
                 saved_posts.append(existing_post)
@@ -171,6 +184,9 @@ async def _generate_and_persist(
             )
             db.add(post)
             saved_posts.append(post)
+
+            # Cache newly created post to handle duplicates within the same batch
+            existing_posts_by_hash[content_hash] = post
 
             if is_video:
                 # Build search query from title + source
