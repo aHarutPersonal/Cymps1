@@ -5,7 +5,6 @@ import sys
 # Add backend to path
 sys.path.append(os.path.join(os.getcwd(), "app"))
 
-from app.services.llm import get_llm_client
 from app.services.llm.prompt_loader import load_prompt, render_prompt
 
 async def test_comparison_prompt():
