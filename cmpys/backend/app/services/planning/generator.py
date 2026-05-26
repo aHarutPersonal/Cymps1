@@ -7,7 +7,6 @@ PROMPT MAPPING:
 When PLAN_GENERATOR_MODE=llm and LLM is configured, uses LLM to generate plan items.
 Otherwise, generates deterministic template-based items.
 """
-import json
 import logging
 from dataclasses import dataclass, field
 

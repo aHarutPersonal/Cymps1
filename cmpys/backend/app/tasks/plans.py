@@ -1,13 +1,11 @@
 import asyncio
 import logging
-from typing import Any
 
 from sqlalchemy import and_, select
 from sqlalchemy.orm import selectinload
 
 from app.core.celery import celery_app
 from app.core.db import async_session_maker
-from app.models.idol import Idol
 from app.models.idol_persona import IdolPersona
 from app.models.idol_profile import IdolProfile
 from app.models.idol_timeline import IdolTimelineEvent
@@ -204,7 +202,7 @@ async def _run_plan_generation_async(job_id: str) -> dict:
                     except Exception as e:
                         logger.warning(f"[PLANNING] Concurrent thinking stream failed: {e}")
                 
-                logger.info(f"[PLANNING] Starting concurrent thinking stream...")
+                logger.info("[PLANNING] Starting concurrent thinking stream...")
                 asyncio.create_task(_generate_thinking_stream_concurrently())
             except Exception as e:
                 logger.warning(f"[PLANNING] Failed to start thinking stream: {e}")
@@ -360,7 +358,6 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
     from datetime import datetime, timezone
     from app.models.item_detail_job import PlanItemDetailJob
     from app.models.plan import Plan, PlanItem
-    from app.models.idol_profile import IdolProfile
     from app.models.idol_persona import IdolPersona
     from app.models.user_profile import UserProfile
     from app.services.llm.client import get_llm_client
@@ -489,7 +486,7 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                 except Exception as e:
                     logger.warning(f"[PLAN_DETAILS] Concurrent thinking generation failed: {e}")
             
-            logger.info(f"[PLAN_DETAILS] Starting concurrent thinking stream...")
+            logger.info("[PLAN_DETAILS] Starting concurrent thinking stream...")
             asyncio.create_task(_generate_thinking_stream_concurrently())
         except Exception as e:
             logger.warning(f"[PLAN_DETAILS] Failed to start thinking stream: {e}")

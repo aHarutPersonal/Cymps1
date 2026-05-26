@@ -5,7 +5,7 @@ Tests that historical idols (like Hannibal) respond without modern corporate jar
 when asked about modern topics like startups.
 """
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 from app.services.chat.responder import (
     _contains_banned_jargon,

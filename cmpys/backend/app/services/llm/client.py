@@ -450,7 +450,7 @@ class OpenAILLMClient(BaseLLMClient):
                         retried=True,
                     )
                 
-                logger.error(f"[LLM] JSON repair failed for OpenAI response")
+                logger.error("[LLM] JSON repair failed for OpenAI response")
                 logger.debug(f"[LLM] Raw content: {raw_content[:500]}...")
                 return LLMResponse(
                     data={},
@@ -725,7 +725,7 @@ class GeminiLLMClient(BaseLLMClient):
                         retried=True,
                     )
                 
-                logger.error(f"[LLM] JSON repair failed for Gemini response")
+                logger.error("[LLM] JSON repair failed for Gemini response")
                 logger.debug(f"[LLM] Raw content (first 500): {raw_content[:500]}")
                 return LLMResponse(
                     data={},
