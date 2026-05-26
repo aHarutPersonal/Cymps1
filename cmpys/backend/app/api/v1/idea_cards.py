@@ -13,16 +13,14 @@ from typing import Annotated
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
-from app.api.dependencies import CurrentUser, get_current_user
+from app.api.dependencies import CurrentUser
 from app.core.db import get_db
 from app.models.idea_card import IdeaCard
 from app.models.idol import Idol
 from app.models.idol_persona import IdolPersona
-from app.models.plan import Plan
 from app.models.stashed_idea import StashedIdea
 from app.models.user import User
 from app.schemas.idea_card import (

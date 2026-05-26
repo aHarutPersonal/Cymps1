@@ -98,7 +98,7 @@ async def _run_ingestion_async(job_id: str) -> dict:
     
     async with async_session_maker() as db:
         # Fetch job with idol and external IDs
-        logger.debug(f"[INGESTION] Fetching job from database...")
+        logger.debug("[INGESTION] Fetching job from database...")
         stmt = (
             select(IdolImportJob)
             .options(
