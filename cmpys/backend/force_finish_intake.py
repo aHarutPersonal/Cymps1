@@ -37,7 +37,7 @@ async def main():
         try:
             response = await finish_intake(session_id=session.id, db=db, current_user=user)
             print("Successfully finished intake! Plan generated with ID:", response.job_id)
-        except Exception as e:
+        except Exception:
             print("Error while finishing intake:")
             import traceback
             traceback.print_exc()

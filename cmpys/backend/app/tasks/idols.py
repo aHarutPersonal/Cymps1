@@ -9,12 +9,6 @@ from app.models.suggest_job import IdolSuggestJob
 from app.models.idol import Idol
 from app.models.idol_tag import IdolTag
 from app.models.idol_tag_link import IdolTagLink
-from app.schemas.idol import (
-    LocalIdolSuggestion, 
-    WebIdolSuggestion, 
-    IdolAliasResponse, 
-    IdolTagResponse,
-)
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import selectinload
 

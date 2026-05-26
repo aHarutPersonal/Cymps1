@@ -45,7 +45,7 @@ from app.schemas.chat import (
 from app.services.chat import generate_reply
 import json as json_lib
 import openai
-from app.services.chat.responder import LLMNotConfiguredError, _persona_to_json, _profile_to_json, _grounding_facts_to_json, _user_context_to_json, _milestones_to_json, _conversation_to_json
+from app.services.chat.responder import LLMNotConfiguredError
 
 logger = logging.getLogger(__name__)
 
@@ -137,10 +137,10 @@ async def list_threads(
     count_result = await db.execute(count_stmt)
     total = count_result.scalar() or 0
     
-    # Get threads with idol info
+    # Get threads with idol info (do not eager load all messages)
     stmt = (
         select(ChatThread)
-        .options(selectinload(ChatThread.idol), selectinload(ChatThread.messages))
+        .options(selectinload(ChatThread.idol))
         .where(ChatThread.user_id == current_user.id)
         .order_by(ChatThread.created_at.desc())
         .offset(offset)
@@ -150,13 +150,39 @@ async def list_threads(
     threads = result.scalars().unique().all()
     
     thread_responses = []
+    if threads:
+        thread_ids = [t.id for t in threads]
+
+        # 1. Fetch message counts
+        count_stmt = (
+            select(ChatMessage.thread_id, func.count())
+            .where(ChatMessage.thread_id.in_(thread_ids))
+            .group_by(ChatMessage.thread_id)
+        )
+        count_result = await db.execute(count_stmt)
+        counts_by_thread = dict(count_result.all())
+
+        # 2. Fetch last message for each thread
+        last_msg_stmt = (
+            select(ChatMessage)
+            .where(ChatMessage.thread_id.in_(thread_ids))
+            .distinct(ChatMessage.thread_id)
+            .order_by(ChatMessage.thread_id, ChatMessage.created_at.desc())
+        )
+        last_msg_result = await db.execute(last_msg_stmt)
+        last_msgs = last_msg_result.scalars().all()
+        last_msg_by_thread = {m.thread_id: m for m in last_msgs}
+    else:
+        counts_by_thread = {}
+        last_msg_by_thread = {}
+
     for thread in threads:
-        last_msg = thread.messages[-1] if thread.messages else None
+        last_msg = last_msg_by_thread.get(thread.id)
         thread_responses.append(_thread_to_response(
             thread,
             idol_name=thread.idol.name if thread.idol else None,
             idol_image_url=thread.idol.image_url if thread.idol else None,
-            message_count=len(thread.messages),
+            message_count=counts_by_thread.get(thread.id, 0),
             last_message=last_msg,
         ))
     
@@ -675,7 +701,6 @@ Respond as {idol_name}:"""
             yield f"data: {json_lib.dumps({'type': 'error', 'error': str(e)})}\n\n"
     
     # Import session maker for saving
-    from app.core.db import async_session_maker
     
     await db.commit()  # Commit user message before streaming
     

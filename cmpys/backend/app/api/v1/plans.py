@@ -19,24 +19,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.dependencies import get_current_user
-from app.core.config import settings
 from app.core.db import get_db
-from app.models.idol import Idol
-from app.models.idol_persona import IdolPersona
 from app.models.item_detail_job import PlanItemDetailJob
-from app.models.idol_profile import IdolProfile
-from app.models.idol_timeline import IdolTimelineEvent
 from app.models.plan import (
     Plan,
     PlanItem,
     PlanItemStatus,
-    PlanItemType,
     PlanItemCompletion,
     PlanItemStepCompletion,
 )
 from app.models.plan_job import PlanGenerationJob
 from app.models.user import User
-from app.models.user_achievement import UserAchievement
 from app.schemas.plan import (
     BookIdeaDetail,
     DetailsStatus,
@@ -56,7 +49,6 @@ from app.schemas.plan import (
     WeekSummaryResponse,
 )
 from app.schemas.idol import IdolImportResponse
-from app.services.planning import generate_plan
 
 logger = logging.getLogger(__name__)
 

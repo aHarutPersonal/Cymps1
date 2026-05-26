@@ -1,8 +1,7 @@
 import asyncio
 from app.core.db import async_session_maker
-from app.models.intake import IntakeSession, IntakeAnswer
+from app.models.intake import IntakeSession
 from sqlalchemy import select
-from sqlalchemy.orm import selectinload
 
 async def main():
     async with async_session_maker() as session:
@@ -14,7 +13,6 @@ async def main():
             print(f"Session: {intake_sess.id}, Status: {intake_sess.status}")
             print(f"Answers count: {len(intake_sess.answers)}")
             # show questions
-            import json
             questions = intake_sess.questions_json.get("questions", [])
             print(f"Questions count: {len(questions)}")
             
