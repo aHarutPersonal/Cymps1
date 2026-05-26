@@ -172,7 +172,7 @@ async def search_idols(
         )
 
     # Get total count
-    count_query = select(Idol.id).distinct()
+    count_query = select(func.count(func.distinct(Idol.id)))
     if q.strip():
         search_term = f"%{q.strip()}%"
         count_query = (
@@ -186,7 +186,7 @@ async def search_idols(
             )
         )
     count_result = await db.execute(count_query)
-    total = len(count_result.all())
+    total = count_result.scalar() or 0
 
     # Apply pagination
     query = base_query.offset(offset).limit(limit)
