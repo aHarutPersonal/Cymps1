@@ -17,3 +17,6 @@
 ## 2026-05-21 - Optimize Chat Thread Fetching
 **Learning:** In `app/api/v1/chat.py`, we discovered an N+1 query issue combined with eager loading in the `list_threads` endpoint. The code originally used `selectinload(ChatThread.messages)`, loading all messages into memory to compute `len(thread.messages)` and extract `thread.messages[-1]`.
 **Action:** Avoid eager loading potentially large child collections if only aggregates or the latest elements are needed. In Postgres, `DISTINCT ON` combined with `GROUP BY` aggregates can compute counts and fetch the latest rows without loading the entire collection in memory. This improves memory usage from O(ALL_MESSAGES) to O(THREADS).
+## 2025-05-20 - Optimized Pagination Counts in SQLAlchemy
+**Learning:** Using `select(func.count()).select_from(stmt.subquery())` for pagination count queries generates inefficient SQL with an unnecessary subquery.
+**Action:** Use `stmt.with_only_columns(func.count(Model.id)).order_by(None)` instead to generate direct `SELECT COUNT(*) FROM table WHERE...` queries. This removes overhead and produces simpler execution plans.
