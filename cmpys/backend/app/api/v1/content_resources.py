@@ -1,4 +1,5 @@
 """Shared content resource and Vault endpoints."""
+
 from datetime import datetime, timezone
 from typing import Annotated
 
@@ -41,7 +42,9 @@ def _resource_response(
     """Convert a shared resource plus user state into API shape."""
     return ContentResourceResponse(
         id=resource.id,
-        kind=resource.kind.value if hasattr(resource.kind, "value") else str(resource.kind),
+        kind=resource.kind.value
+        if hasattr(resource.kind, "value")
+        else str(resource.kind),
         canonicalKey=resource.canonical_key,
         title=resource.title,
         authorOrCreator=resource.author_or_creator,
@@ -79,7 +82,9 @@ def _highlight_response(highlight: UserContentHighlight) -> ContentHighlightResp
 async def _get_resource(db: AsyncSession, resource_id: str) -> ContentResource:
     resource = await db.get(ContentResource, resource_id)
     if not resource:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found"
+        )
     return resource
 
 
@@ -126,7 +131,9 @@ async def list_content_resources(
         try:
             parsed_kind = ContentResourceKind(kind)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid resource kind") from exc
+            raise HTTPException(
+                status_code=400, detail="Invalid resource kind"
+            ) from exc
         stmt = stmt.where(ContentResource.kind == parsed_kind)
     if q:
         needle = f"%{q}%"
@@ -138,7 +145,9 @@ async def list_content_resources(
             )
         )
 
-    total_result = await db.execute(select(func.count()).select_from(stmt.subquery()))
+    total_result = await db.execute(
+        stmt.with_only_columns(func.count(ContentResource.id)).order_by(None)
+    )
     total = total_result.scalar() or 0
 
     result = await db.execute(
@@ -156,7 +165,9 @@ async def list_content_resources(
                 UserContentSave.content_resource_id.in_(resource_ids),
             )
         )
-        saves_by_resource = {s.content_resource_id: s for s in save_result.scalars().all()}
+        saves_by_resource = {
+            s.content_resource_id: s for s in save_result.scalars().all()
+        }
 
         progress_result = await db.execute(
             select(UserContentProgress).where(
@@ -190,13 +201,17 @@ async def list_vault_resources(
 ) -> ContentResourceListResponse:
     """List the current user's saved books, videos, articles, and lessons."""
     total_result = await db.execute(
-        select(func.count(UserContentSave.id)).where(UserContentSave.user_id == current_user.id)
+        select(func.count(UserContentSave.id)).where(
+            UserContentSave.user_id == current_user.id
+        )
     )
     total = total_result.scalar() or 0
 
     result = await db.execute(
         select(ContentResource, UserContentSave, UserContentProgress)
-        .join(UserContentSave, UserContentSave.content_resource_id == ContentResource.id)
+        .join(
+            UserContentSave, UserContentSave.content_resource_id == ContentResource.id
+        )
         .outerjoin(
             UserContentProgress,
             and_(
@@ -278,7 +293,9 @@ async def list_library_resources(
         try:
             parsed_kind = ContentResourceKind(kind)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid resource kind") from exc
+            raise HTTPException(
+                status_code=400, detail="Invalid resource kind"
+            ) from exc
         stmt = stmt.where(ContentResource.kind == parsed_kind)
 
     # Apply search filter
@@ -292,7 +309,9 @@ async def list_library_resources(
         )
 
     # Count total before pagination
-    total_result = await db.execute(select(func.count()).select_from(stmt.subquery()))
+    total_result = await db.execute(
+        stmt.with_only_columns(func.count(ContentResource.id)).order_by(None)
+    )
     total = total_result.scalar() or 0
 
     # Apply sort
@@ -319,7 +338,9 @@ async def list_library_resources(
                 UserContentSave.content_resource_id.in_(resource_id_list),
             )
         )
-        saves_by_resource = {s.content_resource_id: s for s in save_result.scalars().all()}
+        saves_by_resource = {
+            s.content_resource_id: s for s in save_result.scalars().all()
+        }
         progress_result = await db.execute(
             select(UserContentProgress).where(
                 UserContentProgress.user_id == current_user.id,
@@ -535,5 +556,7 @@ async def delete_content_highlight(
     )
     highlight = result.scalar_one_or_none()
     if not highlight:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Highlight not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Highlight not found"
+        )
     await db.delete(highlight)
