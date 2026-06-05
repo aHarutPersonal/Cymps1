@@ -138,7 +138,8 @@ async def list_content_resources(
             )
         )
 
-    total_result = await db.execute(select(func.count()).select_from(stmt.subquery()))
+    # Bolt Optimization: Avoid inefficient subquery by using with_only_columns and removing order_by
+    total_result = await db.execute(stmt.with_only_columns(func.count(ContentResource.id)).order_by(None))
     total = total_result.scalar() or 0
 
     result = await db.execute(
@@ -292,7 +293,8 @@ async def list_library_resources(
         )
 
     # Count total before pagination
-    total_result = await db.execute(select(func.count()).select_from(stmt.subquery()))
+    # Bolt Optimization: Avoid inefficient subquery by using with_only_columns and removing order_by
+    total_result = await db.execute(stmt.with_only_columns(func.count(ContentResource.id)).order_by(None))
     total = total_result.scalar() or 0
 
     # Apply sort
