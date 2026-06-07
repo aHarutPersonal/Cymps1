@@ -1,4 +1,5 @@
 """User notes CRUD endpoints."""
+
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -56,7 +57,7 @@ async def create_note(
     )
     db.add(note)
     await db.flush()
-    
+
     # Add attachments
     for att_data in data.attachments:
         attachment = NoteAttachment(
@@ -66,18 +67,16 @@ async def create_note(
             achievement_id=att_data.achievementId,
         )
         db.add(attachment)
-    
+
     await db.commit()
-    
+
     # Reload with attachments
     stmt = (
-        select(Note)
-        .options(selectinload(Note.attachments))
-        .where(Note.id == note.id)
+        select(Note).options(selectinload(Note.attachments)).where(Note.id == note.id)
     )
     result = await db.execute(stmt)
     note = result.scalar_one()
-    
+
     return _to_response(note)
 
 
@@ -95,30 +94,28 @@ async def list_notes(
         .options(selectinload(Note.attachments))
         .where(Note.user_id == current_user.id)
     )
-    
+
     if q:
         search_filter = or_(
             Note.title.ilike(f"%{q}%"),
             Note.content.ilike(f"%{q}%"),
         )
         stmt = stmt.where(search_filter)
-    
+
     # Get total count
-    count_stmt = select(func.count()).select_from(
-        select(Note).where(Note.user_id == current_user.id).subquery()
-    )
+    count_stmt = select(func.count(Note.id)).where(Note.user_id == current_user.id)
     if q:
-        count_stmt = select(func.count()).select_from(stmt.subquery())
+        count_stmt = stmt.with_only_columns(func.count(Note.id)).order_by(None)
     total_result = await db.execute(count_stmt)
     total = total_result.scalar() or 0
-    
+
     # Get paginated results
     stmt = stmt.order_by(Note.created_at.desc())
     stmt = stmt.offset(offset).limit(limit)
-    
+
     result = await db.execute(stmt)
     notes = result.scalars().unique().all()
-    
+
     return NoteListResponse(
         notes=[_to_response(n) for n in notes],
         total=total,
@@ -144,13 +141,13 @@ async def get_note(
     )
     result = await db.execute(stmt)
     note = result.scalar_one_or_none()
-    
+
     if not note:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Note not found",
         )
-    
+
     return _to_response(note)
 
 
@@ -174,24 +171,24 @@ async def update_note(
     )
     result = await db.execute(stmt)
     note = result.scalar_one_or_none()
-    
+
     if not note:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Note not found",
         )
-    
+
     if data.title is not None:
         note.title = data.title
     if data.content is not None:
         note.content = data.content
-    
+
     # Handle attachments update
     if data.attachments is not None:
         # Remove existing attachments
         for att in note.attachments:
             await db.delete(att)
-        
+
         # Add new attachments
         for att_data in data.attachments:
             attachment = NoteAttachment(
@@ -201,18 +198,16 @@ async def update_note(
                 achievement_id=att_data.achievementId,
             )
             db.add(attachment)
-    
+
     await db.commit()
-    
+
     # Reload with attachments
     stmt = (
-        select(Note)
-        .options(selectinload(Note.attachments))
-        .where(Note.id == note.id)
+        select(Note).options(selectinload(Note.attachments)).where(Note.id == note.id)
     )
     result = await db.execute(stmt)
     note = result.scalar_one()
-    
+
     return _to_response(note)
 
 
@@ -231,12 +226,12 @@ async def delete_note(
     )
     result = await db.execute(stmt)
     note = result.scalar_one_or_none()
-    
+
     if not note:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Note not found",
         )
-    
+
     await db.delete(note)
     await db.commit()
