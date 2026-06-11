@@ -92,7 +92,8 @@ async def list_achievements(
         stmt = stmt.where(UserAchievement.achievement_date <= to_date)
     
     # Get total count
-    count_stmt = select(func.count()).select_from(stmt.subquery())
+    # Bolt ⚡: Optimized pagination count query to prevent inefficient subqueries
+    count_stmt = stmt.with_only_columns(func.count(UserAchievement.id)).order_by(None)
     total_result = await db.execute(count_stmt)
     total = total_result.scalar() or 0
     
