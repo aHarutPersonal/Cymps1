@@ -1,4 +1,5 @@
 """User achievements CRUD endpoints."""
+
 from datetime import date
 from typing import Annotated
 
@@ -35,7 +36,9 @@ def _to_response(achievement: UserAchievement) -> AchievementResponse:
     )
 
 
-@router.post("", response_model=AchievementResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "", response_model=AchievementResponse, status_code=status.HTTP_201_CREATED
+)
 async def create_achievement(
     data: AchievementCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -53,7 +56,7 @@ async def create_achievement(
     db.add(achievement)
     await db.commit()
     await db.refresh(achievement)
-    
+
     return _to_response(achievement)
 
 
@@ -70,39 +73,39 @@ async def list_achievements(
 ) -> AchievementListResponse:
     """List user achievements with optional filters."""
     stmt = select(UserAchievement).where(UserAchievement.user_id == current_user.id)
-    
+
     if category:
         try:
             cat_enum = AchievementCategory(category)
             stmt = stmt.where(UserAchievement.category == cat_enum)
         except ValueError:
             pass  # Invalid category, ignore filter
-    
+
     if q:
         search_filter = or_(
             UserAchievement.title.ilike(f"%{q}%"),
             UserAchievement.notes.ilike(f"%{q}%"),
         )
         stmt = stmt.where(search_filter)
-    
+
     if from_date:
         stmt = stmt.where(UserAchievement.achievement_date >= from_date)
-    
+
     if to_date:
         stmt = stmt.where(UserAchievement.achievement_date <= to_date)
-    
+
     # Get total count
-    count_stmt = select(func.count()).select_from(stmt.subquery())
+    count_stmt = stmt.with_only_columns(func.count(UserAchievement.id)).order_by(None)
     total_result = await db.execute(count_stmt)
     total = total_result.scalar() or 0
-    
+
     # Get paginated results
     stmt = stmt.order_by(UserAchievement.achievement_date.desc().nulls_last())
     stmt = stmt.offset(offset).limit(limit)
-    
+
     result = await db.execute(stmt)
     achievements = result.scalars().all()
-    
+
     return AchievementListResponse(
         achievements=[_to_response(a) for a in achievements],
         total=total,
@@ -124,13 +127,13 @@ async def get_achievement(
     )
     result = await db.execute(stmt)
     achievement = result.scalar_one_or_none()
-    
+
     if not achievement:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Achievement not found",
         )
-    
+
     return _to_response(achievement)
 
 
@@ -150,13 +153,13 @@ async def update_achievement(
     )
     result = await db.execute(stmt)
     achievement = result.scalar_one_or_none()
-    
+
     if not achievement:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Achievement not found",
         )
-    
+
     if data.title is not None:
         achievement.title = data.title
     if data.category is not None:
@@ -167,10 +170,10 @@ async def update_achievement(
         achievement.notes = data.notes
     if data.evidenceLink is not None:
         achievement.evidence_link = data.evidenceLink
-    
+
     await db.commit()
     await db.refresh(achievement)
-    
+
     return _to_response(achievement)
 
 
@@ -189,12 +192,12 @@ async def delete_achievement(
     )
     result = await db.execute(stmt)
     achievement = result.scalar_one_or_none()
-    
+
     if not achievement:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Achievement not found",
         )
-    
+
     await db.delete(achievement)
     await db.commit()
