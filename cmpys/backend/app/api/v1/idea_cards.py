@@ -191,7 +191,8 @@ async def get_daily_ideas(
         query = query.where(IdeaCard.category_tag == category)
 
     # Total count (after filter)
-    total_stmt = select(func.count()).select_from(query.subquery())
+    # bolt optimization: avoid subquery to count pagination
+    total_stmt = query.with_only_columns(func.count(IdeaCard.id)).order_by(None)
     total_result = await db.execute(total_stmt)
     total = total_result.scalar() or 0
 
@@ -286,7 +287,8 @@ async def get_stash(
     )
 
     # Total
-    total_stmt = select(func.count()).select_from(base.subquery())
+    # bolt optimization: avoid subquery to count pagination
+    total_stmt = base.with_only_columns(func.count(IdeaCard.id)).order_by(None)
     total_result = await db.execute(total_stmt)
     total = total_result.scalar() or 0
 
