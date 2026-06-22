@@ -104,11 +104,12 @@ async def list_notes(
         stmt = stmt.where(search_filter)
     
     # Get total count
-    count_stmt = select(func.count()).select_from(
-        select(Note).where(Note.user_id == current_user.id).subquery()
-    )
+    # Bolt: Optimized count query to avoid inefficient subquery
     if q:
-        count_stmt = select(func.count()).select_from(stmt.subquery())
+        count_stmt = stmt.with_only_columns(func.count(Note.id)).order_by(None)
+    else:
+        count_stmt = select(func.count(Note.id)).where(Note.user_id == current_user.id)
+
     total_result = await db.execute(count_stmt)
     total = total_result.scalar() or 0
     
