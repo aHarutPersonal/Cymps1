@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../../app/env.dart';
 import '../../../core/network/api_error.dart';
 import '../../../core/storage/token_store.dart';
 import '../data/me_repository.dart';
@@ -111,6 +112,10 @@ class SessionController extends StateNotifier<SessionState> {
     debugPrint('🔑 SessionController.initialize() called');
     state = const SessionInitializing();
     _prefs = await SharedPreferences.getInstance();
+
+    // Drop any token issued by a different API base (e.g. local dev token
+    // surviving a switch to production) before it triggers a 401 loop.
+    await _tokenStore.ensureTokenBoundTo(Env.apiBaseUrl);
 
     // Check if we have a valid token
     final hasToken = await _tokenStore.hasValidToken();
