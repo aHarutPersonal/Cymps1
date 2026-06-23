@@ -39,7 +39,8 @@ final mockIdols = [
     profession: 'Entrepreneur, CEO',
     birthYear: 1971,
     netWorth: '\$180B+',
-    description: 'CEO of Tesla & SpaceX, founder of Neuralink and The Boring Company.',
+    description:
+        'CEO of Tesla & SpaceX, founder of Neuralink and The Boring Company.',
   ),
   const MockIdol(
     id: '2',
@@ -48,7 +49,8 @@ final mockIdols = [
     profession: 'Entrepreneur, Visionary',
     birthYear: 1955,
     netWorth: '\$10B (2011)',
-    description: 'Co-founder of Apple Inc., revolutionized personal computing and mobile phones.',
+    description:
+        'Co-founder of Apple Inc., revolutionized personal computing and mobile phones.',
   ),
   const MockIdol(
     id: '3',
@@ -341,7 +343,8 @@ final mockNotes = [
   MockNote(
     id: 'n1',
     title: 'Key learnings from Elon\'s biography',
-    content: 'The most important thing I learned is the power of first principles thinking. Instead of following conventional wisdom, break problems down to their fundamental truths.',
+    content:
+        'The most important thing I learned is the power of first principles thinking. Instead of following conventional wisdom, break problems down to their fundamental truths.',
     createdAt: DateTime.now().subtract(const Duration(days: 1)),
     tags: ['Learning', 'Inspiration'],
     linkedIdol: 'Elon Musk',
@@ -349,21 +352,24 @@ final mockNotes = [
   MockNote(
     id: 'n2',
     title: 'My 5-year career roadmap',
-    content: 'Year 1: Build skills and network\nYear 2: Start side project\nYear 3: Validate and grow\nYear 4: Full-time transition\nYear 5: Scale or pivot',
+    content:
+        'Year 1: Build skills and network\nYear 2: Start side project\nYear 3: Validate and grow\nYear 4: Full-time transition\nYear 5: Scale or pivot',
     createdAt: DateTime.now().subtract(const Duration(days: 3)),
     tags: ['Career', 'Planning'],
   ),
   MockNote(
     id: 'n3',
     title: 'Investment strategy notes',
-    content: 'Focus on index funds for stability. Allocate 20% for high-growth tech stocks. Keep 6 months emergency fund.',
+    content:
+        'Focus on index funds for stability. Allocate 20% for high-growth tech stocks. Keep 6 months emergency fund.',
     createdAt: DateTime.now().subtract(const Duration(days: 7)),
     tags: ['Finance'],
   ),
   MockNote(
     id: 'n4',
     title: 'Weekly reflection - Week 42',
-    content: 'This week I made progress on my coding skills. Need to focus more on networking next week.',
+    content:
+        'This week I made progress on my coding skills. Need to focus more on networking next week.',
     createdAt: DateTime.now().subtract(const Duration(days: 2)),
     tags: ['Reflection'],
   ),
@@ -390,7 +396,8 @@ class MockMessage {
 final mockChatMessages = [
   MockMessage(
     id: 'm1',
-    content: 'Hi! I\'m your AI coach. I can help you track your progress, suggest actions, and answer questions about your idols. What would you like to work on today?',
+    content:
+        'Hi! I\'m your AI coach. I can help you track your progress, suggest actions, and answer questions about your idols. What would you like to work on today?',
     isUser: false,
     timestamp: DateTime.now().subtract(const Duration(minutes: 30)),
   ),
@@ -402,7 +409,8 @@ final mockChatMessages = [
   ),
   MockMessage(
     id: 'm3',
-    content: 'At age 25, Elon Musk had just co-founded Zip2 with his brother. He was working intensely, sometimes sleeping at the office. Key things he focused on:\n\n• Learning web development\n• Building client relationships\n• Iterating rapidly on the product\n\nWould you like me to suggest specific actions you could take to follow a similar path?',
+    content:
+        'At age 25, Elon Musk had just co-founded Zip2 with his brother. He was working intensely, sometimes sleeping at the office. Key things he focused on:\n\n• Learning web development\n• Building client relationships\n• Iterating rapidly on the product\n\nWould you like me to suggest specific actions you could take to follow a similar path?',
     isUser: false,
     timestamp: DateTime.now().subtract(const Duration(minutes: 25)),
   ),

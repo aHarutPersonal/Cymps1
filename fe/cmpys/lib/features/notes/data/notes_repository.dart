@@ -62,7 +62,7 @@ class NotesRepository {
   /// [content] - Note content (required).
   /// [attachments] - Optional attachments linking to other entities.
   /// Returns the created [Note].
-  /// 
+  ///
   /// API: POST /notes
   Future<Note> createNote({
     String? title,
@@ -75,10 +75,7 @@ class NotesRepository {
       attachments: attachments,
     );
 
-    final response = await _dioClient.post(
-      '/notes',
-      data: request.toJson(),
-    );
+    final response = await _dioClient.post('/notes', data: request.toJson());
 
     return Note.fromJson(response.data);
   }
@@ -90,7 +87,7 @@ class NotesRepository {
   /// [content] - Optional new content.
   /// [attachments] - Optional new attachments.
   /// Returns the updated [Note].
-  /// 
+  ///
   /// API: PATCH /notes/{note_id}
   Future<Note> updateNote(
     String noteId, {

@@ -34,10 +34,7 @@ class MeRepository {
       timezone: timezone,
     );
 
-    final response = await _dioClient.patch(
-      '/me',
-      data: request.toJson(),
-    );
+    final response = await _dioClient.patch('/me', data: request.toJson());
 
     return Me.fromJson(response.data);
   }

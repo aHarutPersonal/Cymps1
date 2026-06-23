@@ -12,6 +12,17 @@ import '../../../core/ui/loading_state.dart';
 import '../controllers/achievements_controller.dart';
 import '../models/achievement_models.dart';
 
+abstract final class _AchievementPalette {
+  static const canvas = AppColors.bg;
+  static const paper = Color(0xFFFFFFFF);
+  static const ink = AppColors.textPrimary;
+  static const muted = AppColors.textSecondary;
+  static const line = AppColors.border;
+  static const mint = AppColors.mint;
+  static const coral = AppColors.brandAccent;
+  static const coralDark = AppColors.brandAccentDark;
+}
+
 /// Screen showing list of user achievements.
 class AchievementsScreen extends ConsumerStatefulWidget {
   const AchievementsScreen({super.key});
@@ -34,21 +45,26 @@ class _AchievementsScreenState extends ConsumerState<AchievementsScreen> {
     final state = ref.watch(achievementsControllerProvider);
 
     return Scaffold(
+      backgroundColor: _AchievementPalette.canvas,
       appBar: AppBar(
-        backgroundColor: AppColors.bg,
+        backgroundColor: _AchievementPalette.canvas.withValues(alpha: 0.92),
+        scrolledUnderElevation: 0,
         leading: IconButton(
           icon: SvgPicture.asset(
             AppAssets.iconArrowLeft,
             width: 24,
             height: 24,
             colorFilter: const ColorFilter.mode(
-              AppColors.textPrimary,
+              _AchievementPalette.ink,
               BlendMode.srcIn,
             ),
           ),
           onPressed: () => Navigator.of(context).pop(),
         ),
-        title: Text('Achievements', style: AppTypography.h3),
+        title: Text(
+          'Achievements',
+          style: AppTypography.h3.copyWith(color: _AchievementPalette.ink),
+        ),
         actions: [
           IconButton(
             icon: SvgPicture.asset(
@@ -56,7 +72,7 @@ class _AchievementsScreenState extends ConsumerState<AchievementsScreen> {
               width: 24,
               height: 24,
               colorFilter: const ColorFilter.mode(
-                AppColors.accent,
+                _AchievementPalette.coralDark,
                 BlendMode.srcIn,
               ),
             ),
@@ -64,7 +80,22 @@ class _AchievementsScreenState extends ConsumerState<AchievementsScreen> {
           ),
         ],
       ),
-      body: _buildBody(state),
+      body: DecoratedBox(
+        decoration: const BoxDecoration(
+          color: _AchievementPalette.canvas,
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              AppColors.surfaceHighlight,
+              _AchievementPalette.canvas,
+              AppColors.bg,
+            ],
+            stops: [0, 0.52, 1],
+          ),
+        ),
+        child: _buildBody(state),
+      ),
     );
   }
 
@@ -99,20 +130,22 @@ class _AchievementsScreenState extends ConsumerState<AchievementsScreen> {
               width: 64,
               height: 64,
               colorFilter: ColorFilter.mode(
-                AppColors.textTertiary.withValues(alpha: 0.5),
+                _AchievementPalette.coralDark.withValues(alpha: 0.7),
                 BlendMode.srcIn,
               ),
             ),
             const SizedBox(height: AppSpacing.s24),
             Text(
               'No achievements yet',
-              style: AppTypography.h3.copyWith(color: AppColors.textSecondary),
+              style: AppTypography.h3.copyWith(color: _AchievementPalette.ink),
             ),
             const SizedBox(height: AppSpacing.s8),
             Text(
               'Start tracking your accomplishments by adding your first achievement!',
               textAlign: TextAlign.center,
-              style: AppTypography.body.copyWith(color: AppColors.textTertiary),
+              style: AppTypography.body.copyWith(
+                color: _AchievementPalette.muted,
+              ),
             ),
             const SizedBox(height: AppSpacing.s32),
             CmpysButton(
@@ -143,21 +176,21 @@ class _AchievementsScreenState extends ConsumerState<AchievementsScreen> {
               ),
             ),
             const SizedBox(height: AppSpacing.s16),
-            Text(
-              'Unable to load achievements',
-              style: AppTypography.h4,
-            ),
+            Text('Unable to load achievements', style: AppTypography.h4),
             const SizedBox(height: AppSpacing.s8),
             Text(
               message,
               textAlign: TextAlign.center,
-              style: AppTypography.body.copyWith(color: AppColors.textSecondary),
+              style: AppTypography.body.copyWith(
+                color: _AchievementPalette.muted,
+              ),
             ),
             const SizedBox(height: AppSpacing.s24),
             CmpysButton(
               label: 'Try Again',
               variant: CmpysButtonVariant.secondary,
-              onPressed: () => ref.read(achievementsControllerProvider.notifier).load(),
+              onPressed: () =>
+                  ref.read(achievementsControllerProvider.notifier).load(),
             ),
           ],
         ),
@@ -167,24 +200,28 @@ class _AchievementsScreenState extends ConsumerState<AchievementsScreen> {
 
   Widget _buildAchievementsList(List<Achievement> achievements) {
     return RefreshIndicator(
-      onRefresh: () => ref.read(achievementsControllerProvider.notifier).refresh(),
-      color: AppColors.accent,
-      backgroundColor: AppColors.surface,
-      child: ListView.builder(
+      onRefresh: () =>
+          ref.read(achievementsControllerProvider.notifier).refresh(),
+      color: _AchievementPalette.coral,
+      backgroundColor: _AchievementPalette.paper,
+      child: GridView.builder(
         padding: const EdgeInsets.symmetric(
           horizontal: AppSpacing.s24,
           vertical: AppSpacing.s16,
         ),
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 2,
+          crossAxisSpacing: AppSpacing.s16,
+          mainAxisSpacing: AppSpacing.s16,
+          childAspectRatio: 0.85,
+        ),
         itemCount: achievements.length,
         itemBuilder: (context, index) {
           final achievement = achievements[index];
-          return Padding(
-            padding: const EdgeInsets.only(bottom: AppSpacing.s12),
-            child: _AchievementCard(
-              achievement: achievement,
-              onTap: () => _showAchievementDetail(context, achievement),
-              onDelete: () => _deleteAchievement(achievement),
-            ),
+          return _AchievementCard(
+            achievement: achievement,
+            onTap: () => _showAchievementDetail(context, achievement),
+            onDelete: () => _deleteAchievement(achievement),
           );
         },
       ),
@@ -193,9 +230,7 @@ class _AchievementsScreenState extends ConsumerState<AchievementsScreen> {
 
   void _showAddAchievement(BuildContext context) {
     Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (context) => const AddAchievementScreen(),
-      ),
+      MaterialPageRoute(builder: (context) => const AddAchievementScreen()),
     );
   }
 
@@ -211,31 +246,44 @@ class _AchievementsScreenState extends ConsumerState<AchievementsScreen> {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: AppColors.surface,
-        title: Text('Delete Achievement', style: AppTypography.h4),
+        backgroundColor: _AchievementPalette.paper,
+        title: Text(
+          'Delete Achievement',
+          style: AppTypography.h4.copyWith(color: _AchievementPalette.ink),
+        ),
         content: Text(
           'Are you sure you want to delete "${achievement.title}"?',
-          style: AppTypography.body,
+          style: AppTypography.body.copyWith(color: _AchievementPalette.muted),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: Text('Cancel', style: AppTypography.button.copyWith(color: AppColors.textSecondary)),
+            child: Text(
+              'Cancel',
+              style: AppTypography.button.copyWith(
+                color: _AchievementPalette.muted,
+              ),
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: Text('Delete', style: AppTypography.button.copyWith(color: AppColors.error)),
+            child: Text(
+              'Delete',
+              style: AppTypography.button.copyWith(color: AppColors.error),
+            ),
           ),
         ],
       ),
     );
 
     if (confirm == true && mounted) {
-      final success = await ref.read(achievementsControllerProvider.notifier).deleteAchievement(achievement.id);
+      final success = await ref
+          .read(achievementsControllerProvider.notifier)
+          .deleteAchievement(achievement.id);
       if (success && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Achievement deleted')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Achievement deleted')));
       }
     }
   }
@@ -255,90 +303,71 @@ class _AchievementCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return CmpysCard(
-      padding: AppSpacing.p16,
+    return GestureDetector(
       onTap: onTap,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: _getCategoryColor(achievement.category).withValues(alpha: 0.15),
-                  borderRadius: AppRadii.br12,
-                ),
-                child: Center(
-                  child: SvgPicture.asset(
-                    _getCategoryIcon(achievement.category),
-                    width: 20,
-                    height: 20,
-                    colorFilter: ColorFilter.mode(
-                      _getCategoryColor(achievement.category),
-                      BlendMode.srcIn,
-                    ),
+      onLongPress: onDelete,
+      child: Container(
+        decoration: BoxDecoration(
+          color: _AchievementPalette.paper,
+          borderRadius: AppRadii.br16,
+          border: Border.all(color: _AchievementPalette.line),
+          boxShadow: [
+            BoxShadow(
+              color: _getCategoryColor(
+                achievement.category,
+              ).withValues(alpha: 0.2),
+              blurRadius: 24,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
+        padding: AppSpacing.p16,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                color: _getCategoryColor(
+                  achievement.category,
+                ).withValues(alpha: 0.1),
+                shape: BoxShape.circle,
+              ),
+              child: Center(
+                child: SvgPicture.asset(
+                  _getCategoryIcon(achievement.category),
+                  width: 24,
+                  height: 24,
+                  colorFilter: ColorFilter.mode(
+                    _getCategoryColor(achievement.category),
+                    BlendMode.srcIn,
                   ),
                 ),
               ),
-              const SizedBox(width: AppSpacing.s12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      achievement.title,
-                      style: AppTypography.bodyMedium,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: AppSpacing.s4),
-                    Row(
-                      children: [
-                        CmpysTag(
-                          label: achievement.category.name,
-                          small: true,
-                        ),
-                        if (achievement.achievementDate != null) ...[
-                          const SizedBox(width: AppSpacing.s8),
-                          Text(
-                            DateFormat('MMM d, yyyy').format(achievement.achievementDate!),
-                            style: AppTypography.caption.copyWith(
-                              color: AppColors.textTertiary,
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              if (onDelete != null)
-                IconButton(
-                  icon: SvgPicture.asset(
-                    AppAssets.iconTrash,
-                    width: 18,
-                    height: 18,
-                    colorFilter: const ColorFilter.mode(
-                      AppColors.textTertiary,
-                      BlendMode.srcIn,
-                    ),
-                  ),
-                  onPressed: onDelete,
-                ),
-            ],
-          ),
-          if (achievement.notes != null && achievement.notes!.isNotEmpty) ...[
-            const SizedBox(height: AppSpacing.s12),
+            ),
+            const Spacer(),
             Text(
-              achievement.notes!,
-              style: AppTypography.body.copyWith(color: AppColors.textSecondary),
+              achievement.title,
+              style: AppTypography.label.copyWith(
+                color: _AchievementPalette.ink,
+                fontSize: 13,
+                height: 1.2,
+              ),
+              textAlign: TextAlign.center,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
+            const SizedBox(height: AppSpacing.s8),
+            if (achievement.achievementDate != null)
+              Text(
+                DateFormat('MMM d, yyyy').format(achievement.achievementDate!),
+                style: AppTypography.tiny.copyWith(
+                  color: _AchievementPalette.muted,
+                ),
+              ),
           ],
-        ],
+        ),
       ),
     );
   }
@@ -356,7 +385,7 @@ class _AchievementCard extends StatelessWidget {
       case AchievementCategory.mindset:
         return const Color(0xFF9C27B0);
       case AchievementCategory.other:
-        return AppColors.textSecondary;
+        return _AchievementPalette.muted;
     }
   }
 
@@ -383,7 +412,8 @@ class AddAchievementScreen extends ConsumerStatefulWidget {
   const AddAchievementScreen({super.key});
 
   @override
-  ConsumerState<AddAchievementScreen> createState() => _AddAchievementScreenState();
+  ConsumerState<AddAchievementScreen> createState() =>
+      _AddAchievementScreenState();
 }
 
 class _AddAchievementScreenState extends ConsumerState<AddAchievementScreen> {
@@ -408,24 +438,28 @@ class _AddAchievementScreenState extends ConsumerState<AddAchievementScreen> {
     setState(() => _isSaving = true);
 
     try {
-      final achievement = await ref.read(achievementsControllerProvider.notifier).createAchievement(
-        title: _titleController.text.trim(),
-        category: _selectedCategory,
-        achievementDate: _selectedDate,
-        notes: _notesController.text.trim().isEmpty ? null : _notesController.text.trim(),
-      );
+      final achievement = await ref
+          .read(achievementsControllerProvider.notifier)
+          .createAchievement(
+            title: _titleController.text.trim(),
+            category: _selectedCategory,
+            achievementDate: _selectedDate,
+            notes: _notesController.text.trim().isEmpty
+                ? null
+                : _notesController.text.trim(),
+          );
 
       if (achievement != null && mounted) {
         Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Achievement added!')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Achievement added!')));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to save: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to save: $e')));
       }
     } finally {
       if (mounted) setState(() => _isSaving = false);
@@ -435,8 +469,10 @@ class _AddAchievementScreenState extends ConsumerState<AddAchievementScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: _AchievementPalette.canvas,
       appBar: AppBar(
-        backgroundColor: AppColors.bg,
+        backgroundColor: _AchievementPalette.canvas,
+        scrolledUnderElevation: 0,
         leading: IconButton(
           onPressed: _isSaving ? null : () => Navigator.pop(context),
           icon: SvgPicture.asset(
@@ -444,12 +480,15 @@ class _AddAchievementScreenState extends ConsumerState<AddAchievementScreen> {
             width: 24,
             height: 24,
             colorFilter: ColorFilter.mode(
-              _isSaving ? AppColors.textTertiary : AppColors.textPrimary,
+              _isSaving ? _AchievementPalette.muted : _AchievementPalette.ink,
               BlendMode.srcIn,
             ),
           ),
         ),
-        title: Text('Add Achievement', style: AppTypography.h3),
+        title: Text(
+          'Add Achievement',
+          style: AppTypography.h3.copyWith(color: _AchievementPalette.ink),
+        ),
         actions: [
           TextButton(
             onPressed: _canSave ? _save : null,
@@ -459,137 +498,200 @@ class _AddAchievementScreenState extends ConsumerState<AddAchievementScreen> {
                     height: 20,
                     child: CircularProgressIndicator(
                       strokeWidth: 2,
-                      valueColor: AlwaysStoppedAnimation<Color>(AppColors.accent),
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        AppColors.accent,
+                      ),
                     ),
                   )
                 : Text(
                     'Save',
                     style: AppTypography.button.copyWith(
-                      color: _canSave ? AppColors.accent : AppColors.textTertiary,
+                      color: _canSave
+                          ? _AchievementPalette.coralDark
+                          : _AchievementPalette.muted,
                     ),
                   ),
           ),
         ],
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(AppSpacing.s24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Title
-            Text('Title *', style: AppTypography.label.copyWith(color: AppColors.textSecondary)),
-            const SizedBox(height: AppSpacing.s8),
-            TextField(
-              controller: _titleController,
-              enabled: !_isSaving,
-              decoration: InputDecoration(
-                hintText: 'What did you achieve?',
-                hintStyle: AppTypography.body.copyWith(color: AppColors.textTertiary),
-                filled: true,
-                fillColor: AppColors.surface,
-                border: OutlineInputBorder(
-                  borderRadius: AppRadii.br12,
-                  borderSide: BorderSide.none,
+      body: DecoratedBox(
+        decoration: const BoxDecoration(
+          color: _AchievementPalette.canvas,
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              AppColors.surfaceHighlight,
+              _AchievementPalette.canvas,
+              AppColors.bg,
+            ],
+            stops: [0, 0.52, 1],
+          ),
+        ),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(AppSpacing.s24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Title
+              Text(
+                'Title *',
+                style: AppTypography.label.copyWith(
+                  color: _AchievementPalette.ink,
                 ),
-                contentPadding: AppSpacing.p16,
               ),
-              style: AppTypography.body,
-              onChanged: (_) => setState(() {}),
-            ),
-            const SizedBox(height: AppSpacing.s24),
-
-            // Category
-            Text('Category', style: AppTypography.label.copyWith(color: AppColors.textSecondary)),
-            const SizedBox(height: AppSpacing.s8),
-            Wrap(
-              spacing: AppSpacing.s8,
-              runSpacing: AppSpacing.s8,
-              children: AchievementCategory.values.map((category) {
-                final isSelected = _selectedCategory == category;
-                return GestureDetector(
-                  onTap: _isSaving ? null : () => setState(() => _selectedCategory = category),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: AppSpacing.s12,
-                      vertical: AppSpacing.s8,
-                    ),
-                    decoration: BoxDecoration(
-                      color: isSelected ? AppColors.accent : AppColors.surface,
-                      borderRadius: AppRadii.brFull,
-                      border: Border.all(
-                        color: isSelected ? AppColors.accent : AppColors.border,
-                      ),
-                    ),
-                    child: Text(
-                      category.name[0].toUpperCase() + category.name.substring(1),
-                      style: AppTypography.buttonSmall.copyWith(
-                        color: isSelected ? Colors.white : AppColors.textSecondary,
-                      ),
+              const SizedBox(height: AppSpacing.s8),
+              TextField(
+                controller: _titleController,
+                enabled: !_isSaving,
+                decoration: InputDecoration(
+                  hintText: 'What did you achieve?',
+                  hintStyle: AppTypography.body.copyWith(
+                    color: _AchievementPalette.muted,
+                  ),
+                  filled: true,
+                  fillColor: _AchievementPalette.paper,
+                  border: OutlineInputBorder(
+                    borderRadius: AppRadii.br12,
+                    borderSide: const BorderSide(
+                      color: _AchievementPalette.line,
                     ),
                   ),
-                );
-              }).toList(),
-            ),
-            const SizedBox(height: AppSpacing.s24),
-
-            // Date
-            Text('Date', style: AppTypography.label.copyWith(color: AppColors.textSecondary)),
-            const SizedBox(height: AppSpacing.s8),
-            GestureDetector(
-              onTap: _isSaving ? null : _selectDate,
-              child: Container(
-                padding: AppSpacing.p16,
-                decoration: BoxDecoration(
-                  color: AppColors.surface,
-                  borderRadius: AppRadii.br12,
+                  contentPadding: AppSpacing.p16,
                 ),
-                child: Row(
-                  children: [
-                    SvgPicture.asset(
-                      AppAssets.iconCalendar,
-                      width: 20,
-                      height: 20,
-                      colorFilter: const ColorFilter.mode(
-                        AppColors.textSecondary,
-                        BlendMode.srcIn,
-                      ),
-                    ),
-                    const SizedBox(width: AppSpacing.s12),
-                    Text(
-                      _selectedDate != null
-                          ? DateFormat('MMMM d, yyyy').format(_selectedDate!)
-                          : 'Select date (optional)',
-                      style: AppTypography.body.copyWith(
-                        color: _selectedDate != null ? AppColors.textPrimary : AppColors.textTertiary,
-                      ),
-                    ),
-                  ],
+                style: AppTypography.body.copyWith(
+                  color: _AchievementPalette.ink,
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: AppSpacing.s24),
+
+              // Category
+              Text(
+                'Category',
+                style: AppTypography.label.copyWith(
+                  color: _AchievementPalette.ink,
                 ),
               ),
-            ),
-            const SizedBox(height: AppSpacing.s24),
-
-            // Notes
-            Text('Notes', style: AppTypography.label.copyWith(color: AppColors.textSecondary)),
-            const SizedBox(height: AppSpacing.s8),
-            TextField(
-              controller: _notesController,
-              enabled: !_isSaving,
-              maxLines: 4,
-              decoration: InputDecoration(
-                hintText: 'Add any details about this achievement...',
-                hintStyle: AppTypography.body.copyWith(color: AppColors.textTertiary),
-                filled: true,
-                fillColor: AppColors.surface,
-                border: OutlineInputBorder(
-                  borderRadius: AppRadii.br12,
-                  borderSide: BorderSide.none,
-                ),
-                contentPadding: AppSpacing.p16,
+              const SizedBox(height: AppSpacing.s8),
+              Wrap(
+                spacing: AppSpacing.s8,
+                runSpacing: AppSpacing.s8,
+                children: AchievementCategory.values.map((category) {
+                  final isSelected = _selectedCategory == category;
+                  return GestureDetector(
+                    onTap: _isSaving
+                        ? null
+                        : () => setState(() => _selectedCategory = category),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: AppSpacing.s12,
+                        vertical: AppSpacing.s8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? _AchievementPalette.ink
+                            : _AchievementPalette.paper,
+                        borderRadius: AppRadii.brFull,
+                        border: Border.all(
+                          color: isSelected
+                              ? _AchievementPalette.ink
+                              : _AchievementPalette.line,
+                        ),
+                      ),
+                      child: Text(
+                        category.name[0].toUpperCase() +
+                            category.name.substring(1),
+                        style: AppTypography.buttonSmall.copyWith(
+                          color: isSelected
+                              ? Colors.white
+                              : _AchievementPalette.ink,
+                        ),
+                      ),
+                    ),
+                  );
+                }).toList(),
               ),
-              style: AppTypography.body,
-            ),
-          ],
+              const SizedBox(height: AppSpacing.s24),
+
+              // Date
+              Text(
+                'Date',
+                style: AppTypography.label.copyWith(
+                  color: _AchievementPalette.ink,
+                ),
+              ),
+              const SizedBox(height: AppSpacing.s8),
+              GestureDetector(
+                onTap: _isSaving ? null : _selectDate,
+                child: Container(
+                  padding: AppSpacing.p16,
+                  decoration: BoxDecoration(
+                    color: _AchievementPalette.paper,
+                    borderRadius: AppRadii.br12,
+                    border: Border.all(color: _AchievementPalette.line),
+                  ),
+                  child: Row(
+                    children: [
+                      SvgPicture.asset(
+                        AppAssets.iconCalendar,
+                        width: 20,
+                        height: 20,
+                        colorFilter: const ColorFilter.mode(
+                          _AchievementPalette.muted,
+                          BlendMode.srcIn,
+                        ),
+                      ),
+                      const SizedBox(width: AppSpacing.s12),
+                      Text(
+                        _selectedDate != null
+                            ? DateFormat('MMMM d, yyyy').format(_selectedDate!)
+                            : 'Select date (optional)',
+                        style: AppTypography.body.copyWith(
+                          color: _selectedDate != null
+                              ? _AchievementPalette.ink
+                              : _AchievementPalette.muted,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: AppSpacing.s24),
+
+              // Notes
+              Text(
+                'Notes',
+                style: AppTypography.label.copyWith(
+                  color: _AchievementPalette.ink,
+                ),
+              ),
+              const SizedBox(height: AppSpacing.s8),
+              TextField(
+                controller: _notesController,
+                enabled: !_isSaving,
+                maxLines: 4,
+                decoration: InputDecoration(
+                  hintText: 'Add any details about this achievement...',
+                  hintStyle: AppTypography.body.copyWith(
+                    color: _AchievementPalette.muted,
+                  ),
+                  filled: true,
+                  fillColor: _AchievementPalette.paper,
+                  border: OutlineInputBorder(
+                    borderRadius: AppRadii.br12,
+                    borderSide: const BorderSide(
+                      color: _AchievementPalette.line,
+                    ),
+                  ),
+                  contentPadding: AppSpacing.p16,
+                ),
+                style: AppTypography.body.copyWith(
+                  color: _AchievementPalette.ink,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -604,9 +706,11 @@ class _AddAchievementScreenState extends ConsumerState<AddAchievementScreen> {
       builder: (context, child) {
         return Theme(
           data: Theme.of(context).copyWith(
-            colorScheme: const ColorScheme.dark(
-              primary: AppColors.accent,
-              surface: AppColors.surface,
+            colorScheme: const ColorScheme.light(
+              primary: _AchievementPalette.coral,
+              surface: _AchievementPalette.paper,
+              onSurface: _AchievementPalette.ink,
+              onPrimary: Colors.white,
             ),
           ),
           child: child!,
@@ -622,118 +726,150 @@ class _AddAchievementScreenState extends ConsumerState<AddAchievementScreen> {
 
 /// Screen showing achievement details.
 class AchievementDetailScreen extends ConsumerWidget {
-  const AchievementDetailScreen({
-    super.key,
-    required this.achievement,
-  });
+  const AchievementDetailScreen({super.key, required this.achievement});
 
   final Achievement achievement;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return Scaffold(
+      backgroundColor: _AchievementPalette.canvas,
       appBar: AppBar(
-        backgroundColor: AppColors.bg,
+        backgroundColor: _AchievementPalette.canvas,
+        scrolledUnderElevation: 0,
         leading: IconButton(
           icon: SvgPicture.asset(
             AppAssets.iconArrowLeft,
             width: 24,
             height: 24,
             colorFilter: const ColorFilter.mode(
-              AppColors.textPrimary,
+              _AchievementPalette.ink,
               BlendMode.srcIn,
             ),
           ),
           onPressed: () => Navigator.of(context).pop(),
         ),
-        title: Text('Achievement', style: AppTypography.h3),
+        title: Text(
+          'Achievement',
+          style: AppTypography.h3.copyWith(color: _AchievementPalette.ink),
+        ),
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(AppSpacing.s24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Icon and title
-            Row(
-              children: [
-                Container(
-                  width: 56,
-                  height: 56,
-                  decoration: BoxDecoration(
-                    color: AppColors.accent.withValues(alpha: 0.15),
-                    borderRadius: AppRadii.br16,
-                  ),
-                  child: Center(
-                    child: SvgPicture.asset(
-                      AppAssets.iconTrophy,
-                      width: 28,
-                      height: 28,
-                      colorFilter: const ColorFilter.mode(
-                        AppColors.accent,
-                        BlendMode.srcIn,
+      body: DecoratedBox(
+        decoration: const BoxDecoration(
+          color: _AchievementPalette.canvas,
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              AppColors.surfaceHighlight,
+              _AchievementPalette.canvas,
+              AppColors.bg,
+            ],
+            stops: [0, 0.52, 1],
+          ),
+        ),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(AppSpacing.s24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Icon and title
+              Row(
+                children: [
+                  Container(
+                    width: 56,
+                    height: 56,
+                    decoration: BoxDecoration(
+                      color: _AchievementPalette.mint,
+                      borderRadius: AppRadii.br16,
+                    ),
+                    child: Center(
+                      child: SvgPicture.asset(
+                        AppAssets.iconTrophy,
+                        width: 28,
+                        height: 28,
+                        colorFilter: const ColorFilter.mode(
+                          _AchievementPalette.ink,
+                          BlendMode.srcIn,
+                        ),
                       ),
                     ),
                   ),
-                ),
-                const SizedBox(width: AppSpacing.s16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(achievement.title, style: AppTypography.h3),
-                      const SizedBox(height: AppSpacing.s4),
-                      CmpysTag(label: achievement.category.name),
-                    ],
+                  const SizedBox(width: AppSpacing.s16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          achievement.title,
+                          style: AppTypography.h3.copyWith(
+                            color: _AchievementPalette.ink,
+                          ),
+                        ),
+                        const SizedBox(height: AppSpacing.s4),
+                        CmpysTag(label: achievement.category.name),
+                      ],
+                    ),
                   ),
+                ],
+              ),
+              const SizedBox(height: AppSpacing.s32),
+
+              // Date
+              if (achievement.achievementDate != null) ...[
+                _DetailRow(
+                  icon: AppAssets.iconCalendar,
+                  label: 'Date',
+                  value: DateFormat(
+                    'MMMM d, yyyy',
+                  ).format(achievement.achievementDate!),
+                ),
+                const SizedBox(height: AppSpacing.s16),
+              ],
+
+              // Notes
+              if (achievement.notes != null &&
+                  achievement.notes!.isNotEmpty) ...[
+                Text(
+                  'Notes',
+                  style: AppTypography.label.copyWith(
+                    color: _AchievementPalette.ink,
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.s8),
+                CmpysCard(
+                  padding: AppSpacing.p16,
+                  child: Text(
+                    achievement.notes!,
+                    style: AppTypography.body.copyWith(
+                      color: _AchievementPalette.muted,
+                      height: 1.6,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.s16),
+              ],
+
+              // Evidence link
+              if (achievement.evidenceLink != null) ...[
+                _DetailRow(
+                  icon: AppAssets.iconLink,
+                  label: 'Evidence',
+                  value: achievement.evidenceLink!,
                 ),
               ],
-            ),
-            const SizedBox(height: AppSpacing.s32),
 
-            // Date
-            if (achievement.achievementDate != null) ...[
-              _DetailRow(
-                icon: AppAssets.iconCalendar,
-                label: 'Date',
-                value: DateFormat('MMMM d, yyyy').format(achievement.achievementDate!),
-              ),
-              const SizedBox(height: AppSpacing.s16),
-            ],
-
-            // Notes
-            if (achievement.notes != null && achievement.notes!.isNotEmpty) ...[
-              Text('Notes', style: AppTypography.label.copyWith(color: AppColors.textSecondary)),
-              const SizedBox(height: AppSpacing.s8),
-              CmpysCard(
-                padding: AppSpacing.p16,
-                child: Text(
-                  achievement.notes!,
-                  style: AppTypography.body.copyWith(
-                    color: AppColors.textSecondary,
-                    height: 1.6,
+              // Timestamps
+              const SizedBox(height: AppSpacing.s32),
+              if (achievement.createdAt != null)
+                Text(
+                  'Added ${DateFormat('MMM d, yyyy').format(achievement.createdAt!)}',
+                  style: AppTypography.caption.copyWith(
+                    color: _AchievementPalette.muted,
                   ),
                 ),
-              ),
-              const SizedBox(height: AppSpacing.s16),
             ],
-
-            // Evidence link
-            if (achievement.evidenceLink != null) ...[
-              _DetailRow(
-                icon: AppAssets.iconLink,
-                label: 'Evidence',
-                value: achievement.evidenceLink!,
-              ),
-            ],
-
-            // Timestamps
-            const SizedBox(height: AppSpacing.s32),
-            if (achievement.createdAt != null)
-              Text(
-                'Added ${DateFormat('MMM d, yyyy').format(achievement.createdAt!)}',
-                style: AppTypography.caption.copyWith(color: AppColors.textTertiary),
-              ),
-          ],
+          ),
         ),
       ),
     );
@@ -760,7 +896,7 @@ class _DetailRow extends StatelessWidget {
           width: 18,
           height: 18,
           colorFilter: const ColorFilter.mode(
-            AppColors.textSecondary,
+            _AchievementPalette.muted,
             BlendMode.srcIn,
           ),
         ),
@@ -768,8 +904,18 @@ class _DetailRow extends StatelessWidget {
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(label, style: AppTypography.caption.copyWith(color: AppColors.textTertiary)),
-            Text(value, style: AppTypography.body),
+            Text(
+              label,
+              style: AppTypography.caption.copyWith(
+                color: _AchievementPalette.muted,
+              ),
+            ),
+            Text(
+              value,
+              style: AppTypography.body.copyWith(
+                color: _AchievementPalette.ink,
+              ),
+            ),
           ],
         ),
       ],

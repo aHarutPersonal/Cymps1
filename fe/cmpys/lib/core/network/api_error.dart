@@ -1,10 +1,6 @@
 /// API error representation.
 class ApiError implements Exception {
-  const ApiError({
-    required this.message,
-    this.code,
-    this.statusCode,
-  });
+  const ApiError({required this.message, this.code, this.statusCode});
 
   final String message;
   final String? code;

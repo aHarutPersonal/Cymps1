@@ -1,6 +1,34 @@
 import 'package:freezed_annotation/freezed_annotation.dart';
 
+import '../../../app/env.dart';
+
 part 'chat_models.freezed.dart';
+
+/// Helper to resolve relative backend image URLs to absolute URLs based on environment
+String? _resolveImageUrl(String? url) {
+  if (url == null || url.isEmpty) return null;
+  if (url.startsWith('http')) return url;
+
+  // Format: /api/v1/media/... -> replace with Env.apiBaseUrl + /media/... or whatever
+  // The Env.apiBaseUrl already has /api/v1 so we need to be careful
+  if (url.startsWith('/api/v1')) {
+    final path = url.replaceFirst('/api/v1', '');
+    return '${Env.apiBaseUrl}$path';
+  }
+
+  // If we just got /media/... but the base URL has /api/v1
+  // For safety, let's construct it cleanly based on what Env provides
+  if (url.startsWith('/')) {
+    // Determine if Env.apiBaseUrl already has /api/v1. If it does, we typically strip it
+    // to map directly to the root for media files which FastAPI usually mounts at /media or /api/v1/media.
+    // In our backend, media is mounted at /api/v1/media.
+
+    // Simplest logic: just ensure we don't duplicate host/port
+    final baseUrl = Env.apiBaseUrl.replaceAll(RegExp(r'/api/v1/?$'), '');
+    return '$baseUrl$url';
+  }
+  return url;
+}
 
 /// A chat message.
 @freezed
@@ -20,7 +48,8 @@ class ChatMessage with _$ChatMessage {
       id: (json['id'] ?? '').toString(),
       role: (json['role'] ?? 'user').toString(),
       content: (json['content'] ?? '').toString(),
-      createdAt: _parseDate(json['createdAt'] ?? json['created_at']) ?? DateTime.now(),
+      createdAt:
+          _parseDate(json['createdAt'] ?? json['created_at']) ?? DateTime.now(),
       threadId: (json['threadId'] ?? json['thread_id'])?.toString(),
     );
   }
@@ -61,15 +90,26 @@ class ChatThread with _$ChatThread {
     return ChatThread(
       id: (json['id'] ?? '').toString(),
       idolId: (json['idolId'] ?? json['idol_id'] ?? '').toString(),
-      createdAt: _parseDate(json['createdAt'] ?? json['created_at']) ?? DateTime.now(),
+      createdAt:
+          _parseDate(json['createdAt'] ?? json['created_at']) ?? DateTime.now(),
       updatedAt: _parseDate(json['updatedAt'] ?? json['updated_at']),
       lastMessage: json['lastMessage'] != null || json['last_message'] != null
-          ? ChatMessage.fromJson((json['lastMessage'] ?? json['last_message']) as Map<String, dynamic>)
+          ? ChatMessage.fromJson(
+              (json['lastMessage'] ?? json['last_message'])
+                  as Map<String, dynamic>,
+            )
           : null,
-      messageCount: (json['messageCount'] ?? json['message_count'] as num?)?.toInt() ?? 0,
+      messageCount:
+          (json['messageCount'] ?? json['message_count'] as num?)?.toInt() ?? 0,
       title: json['title']?.toString(),
       idolName: (json['idolName'] ?? json['idol_name'])?.toString(),
-      idolImageUrl: (json['idolImageUrl'] ?? json['idol_image_url'] ?? json['idolImage'] ?? json['idol_image'])?.toString(),
+      idolImageUrl: _resolveImageUrl(
+        (json['idolImageUrl'] ??
+                json['idol_image_url'] ??
+                json['idolImage'] ??
+                json['idol_image'])
+            ?.toString(),
+      ),
       messages: _parseMessagesList(json['messages']),
     );
   }
@@ -131,14 +171,14 @@ class SendMessageResponse with _$SendMessageResponse {
     if (assistantData != null && assistantData is Map<String, dynamic>) {
       assistantMsg = ChatMessage.fromJson(assistantData);
     }
-    
+
     // Parse user message
     ChatMessage? userMsg;
     final userData = json['userMessage'] ?? json['user_message'];
     if (userData != null && userData is Map<String, dynamic>) {
       userMsg = ChatMessage.fromJson(userData);
     }
-    
+
     // Get reply - try 'reply' field first, then fall back to assistantMessage.content
     String reply = '';
     if (json['reply'] != null && json['reply'].toString().isNotEmpty) {
@@ -146,28 +186,37 @@ class SendMessageResponse with _$SendMessageResponse {
     } else if (assistantMsg != null && assistantMsg.content.isNotEmpty) {
       reply = assistantMsg.content;
     }
-    
+
     return SendMessageResponse(
       reply: reply,
       confidence: (json['confidence'] as num?)?.toDouble(),
-      disclaimerIncluded: json['disclaimerIncluded'] == true || json['disclaimer_included'] == true,
-      followUpQuestions: _parseStringList(json['followUpQuestions'] ?? json['follow_up_questions']),
-      suggestedActions: _parseSuggestedActions(json['suggestedActions'] ?? json['suggested_actions']),
-      messageId: (json['messageId'] ?? json['message_id'] ?? assistantMsg?.id)?.toString(),
-      threadId: (json['threadId'] ?? json['thread_id'] ?? assistantMsg?.threadId)?.toString(),
+      disclaimerIncluded:
+          json['disclaimerIncluded'] == true ||
+          json['disclaimer_included'] == true,
+      followUpQuestions: parseStringList(
+        json['followUpQuestions'] ?? json['follow_up_questions'],
+      ),
+      suggestedActions: parseSuggestedActions(
+        json['suggestedActions'] ?? json['suggested_actions'],
+      ),
+      messageId: (json['messageId'] ?? json['message_id'] ?? assistantMsg?.id)
+          ?.toString(),
+      threadId:
+          (json['threadId'] ?? json['thread_id'] ?? assistantMsg?.threadId)
+              ?.toString(),
       userMessage: userMsg,
       assistantMessage: assistantMsg,
       disclaimer: json['disclaimer']?.toString(),
     );
   }
 
-  static List<String>? _parseStringList(dynamic value) {
+  static List<String>? parseStringList(dynamic value) {
     if (value == null) return null;
     if (value is! List) return null;
     return value.map((e) => e.toString()).toList();
   }
 
-  static List<SuggestedAction>? _parseSuggestedActions(dynamic value) {
+  static List<SuggestedAction>? parseSuggestedActions(dynamic value) {
     if (value == null) return null;
     if (value is! List) return null;
     return value
@@ -183,19 +232,14 @@ class SendMessageResponse with _$SendMessageResponse {
 class SendMessageRequest with _$SendMessageRequest {
   const SendMessageRequest._();
 
-  const factory SendMessageRequest({
-    required String content,
-  }) = _SendMessageRequest;
+  const factory SendMessageRequest({required String content}) =
+      _SendMessageRequest;
 
   factory SendMessageRequest.fromJson(Map<String, dynamic> json) {
-    return SendMessageRequest(
-      content: (json['content'] ?? '').toString(),
-    );
+    return SendMessageRequest(content: (json['content'] ?? '').toString());
   }
 
-  Map<String, dynamic> toJson() => {
-    'content': content,
-  };
+  Map<String, dynamic> toJson() => {'content': content};
 }
 
 /// Response for listing messages.
@@ -255,13 +299,18 @@ class ThreadsListResponse with _$ThreadsListResponse {
 /// Event from streaming chat response.
 sealed class StreamChatEvent {
   const StreamChatEvent();
-  
+
   /// A chunk of text content.
   factory StreamChatEvent.chunk(String content) = StreamChatChunk;
-  
+
   /// Streaming completed successfully.
-  factory StreamChatEvent.done({String? messageId, String? userMessageId}) = StreamChatDone;
-  
+  factory StreamChatEvent.done({
+    String? messageId,
+    String? userMessageId,
+    List<SuggestedAction>? suggestedActions,
+    List<String>? followUpQuestions,
+  }) = StreamChatDone;
+
   /// An error occurred.
   factory StreamChatEvent.error(String error) = StreamChatError;
 }
@@ -274,7 +323,15 @@ class StreamChatChunk extends StreamChatEvent {
 class StreamChatDone extends StreamChatEvent {
   final String? messageId;
   final String? userMessageId;
-  const StreamChatDone({this.messageId, this.userMessageId});
+  final List<SuggestedAction>? suggestedActions;
+  final List<String>? followUpQuestions;
+
+  const StreamChatDone({
+    this.messageId,
+    this.userMessageId,
+    this.suggestedActions,
+    this.followUpQuestions,
+  });
 }
 
 class StreamChatError extends StreamChatEvent {

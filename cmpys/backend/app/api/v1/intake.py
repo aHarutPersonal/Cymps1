@@ -436,7 +436,6 @@ async def _apply_profile_patch(
     readiness: "ReadinessByGap",
 ) -> UserProfile:
     """Apply the profile patch to the user's profile."""
-    from app.schemas.intake import UserProfilePatch, ReadinessByGap
     
     # Get or create user profile
     if not user.profile:
@@ -480,7 +479,6 @@ async def _store_structured_achievements(
 ) -> list[UserAchievement]:
     """Store structured achievements as UserAchievement records."""
     from datetime import datetime
-    from app.schemas.intake import StructuredAchievement
     
     stored = []
     for ach in achievements:
@@ -594,7 +592,7 @@ async def finish_intake(
     )
     
     # Step 3 & 4: Persist profile patch and achievements
-    logger.info(f"[INTAKE] Step 3-4: Persisting profile patch and achievements")
+    logger.info("[INTAKE] Step 3-4: Persisting profile patch and achievements")
     await _apply_profile_patch(
         db=db,
         user=current_user,
@@ -667,9 +665,9 @@ async def finish_intake(
     logger.info(f"[INTAKE] Step 5: Generating plan with gaps={gaps}, target_age={target_age}")
     
     # Generate plan (this uses LLM internally)
-    from app.models.plan import Plan, PlanItem, PlanItemType
+    from app.models.plan import Plan, PlanItem
     
-    plan_items = await generate_plan(
+    roadmap = await generate_plan(
         gaps=gaps,
         duration_weeks=12,
         weekly_hours=normalized.user_profile_patch.weekly_hours or 6,
@@ -690,11 +688,15 @@ async def finish_intake(
         target_age=target_age,
         duration_weeks=12,
         weekly_hours=normalized.user_profile_patch.weekly_hours or 6,
+        roadmap_json={
+            "roadmap_thesis": roadmap.roadmap_thesis,
+            "anti_goals": roadmap.anti_goals,
+        }
     )
     db.add(plan)
     await db.flush()
     
-    for item_data in plan_items:
+    for item_data in roadmap.items:
         item = PlanItem(
             plan_id=plan.id,
             title=item_data.title,
@@ -750,3 +752,211 @@ async def get_session(
         created_at=session.created_at,
         updated_at=session.updated_at,
     )
+
+
+# =============================================================================
+# Achievement Intake Endpoints
+# =============================================================================
+
+
+async def _generate_achievement_questions(
+    idol: Idol,
+    idol_profile: IdolProfile | None,
+    milestones: list[IdolTimelineEvent],
+    user_age: int,
+) -> list[Question]:
+    """Generate achievement-specific questions using LLM."""
+    if not settings.llm_configured:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="LLM not configured. Cannot generate achievement questions.",
+        )
+    
+    client = get_llm_client()
+    
+    idol_profile_dict = {}
+    if idol_profile:
+        idol_profile_dict = {
+            "display_name": idol_profile.display_name,
+            "short_description": idol_profile.short_description,
+            "domains": idol_profile.domains,
+            "primary_roles": idol_profile.primary_roles,
+            "notable_themes": idol_profile.notable_themes,
+        }
+    
+    milestones_list = [
+        {
+            "title": m.canonical_title,
+            "age": m.age_at_event,
+            "category": m.category,
+        }
+        for m in milestones[:15]
+        if m.age_at_event is not None
+    ]
+    
+    template = load_prompt("achievement_intake_generate")
+    prompt = render_prompt(
+        template,
+        {
+            "idol_name": idol.name,
+            "idol_profile_json": idol_profile_dict,
+            "milestones_json": milestones_list,
+            "user_age": user_age,
+            "limit": 6,
+        },
+        prompt_name="achievement_intake_generate.txt",
+        strict=True,
+    )
+    
+    system_prompt = load_prompt("extractor_system")
+    
+    logger.info(f"[ACH_INTAKE] Generating achievement questions for idol={idol.name}")
+    
+    validated, response = await client.generate_and_validate(
+        system_prompt=system_prompt,
+        user_prompt=prompt,
+        output_model=QuestionsGenerateResponse,
+        repair_on_failure=True,
+    )
+    
+    if validated:
+        logger.info(f"[ACH_INTAKE] Generated {len(validated.questions)} achievement questions")
+        return validated.questions
+    
+    logger.error(f"[ACH_INTAKE] Failed to generate questions: {response.error}")
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="Failed to generate achievement questions",
+    )
+
+
+@router.post("/achievement-intake", response_model=IntakeStartResponse, status_code=status.HTTP_201_CREATED)
+async def start_achievement_intake(
+    data: IntakeStartRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> IntakeStartResponse:
+    """
+    Start an achievement-specific intake session for an idol.
+    
+    Generates questions focused on the user's existing achievements,
+    mapped to the idol's milestone categories for later comparison.
+    
+    PROMPT FILES USED:
+    - achievement_intake_generate.txt
+    
+    LLM USAGE: REQUIRED
+    """
+    # Load idol
+    idol_stmt = select(Idol).where(Idol.id == data.idol_id)
+    idol_result = await db.execute(idol_stmt)
+    idol = idol_result.scalar_one_or_none()
+    
+    if not idol:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Idol not found",
+        )
+    
+    # Load idol profile
+    profile_stmt = select(IdolProfile).where(IdolProfile.idol_id == data.idol_id)
+    profile_result = await db.execute(profile_stmt)
+    idol_profile = profile_result.scalar_one_or_none()
+    
+    # Load milestones up to user age
+    target_age = data.target_age or 30
+    milestone_stmt = select(IdolTimelineEvent).where(
+        IdolTimelineEvent.idol_id == data.idol_id,
+        IdolTimelineEvent.age_at_event <= target_age,
+    )
+    milestone_result = await db.execute(milestone_stmt)
+    milestones = list(milestone_result.scalars().all())
+    
+    # Generate achievement questions
+    questions = await _generate_achievement_questions(
+        idol=idol,
+        idol_profile=idol_profile,
+        milestones=milestones,
+        user_age=target_age,
+    )
+    
+    # Create session (reuse IntakeSession model with a marker)
+    session = IntakeSession(
+        user_id=current_user.id,
+        idol_id=data.idol_id,
+        status=IntakeStatusEnum.IN_PROGRESS,
+        questions_json={"questions": [q.model_dump() for q in questions]},
+    )
+    db.add(session)
+    await db.commit()
+    await db.refresh(session)
+    
+    logger.info(f"[ACH_INTAKE] Created session {session.id} for user {current_user.id}, idol {idol.name}")
+    
+    return IntakeStartResponse(
+        session_id=session.id,
+        questions=questions,
+    )
+
+
+@router.post("/achievement-intake/{session_id}/finish")
+async def finish_achievement_intake(
+    session_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> dict:
+    """
+    Finish the achievement intake: extract achievements from answers
+    and store them as UserAchievement records.
+    
+    LLM USAGE: NONE (simple extraction from structured answers)
+    """
+    session = await _verify_session_ownership(session_id, current_user, db)
+    
+    if session.status == IntakeStatusEnum.COMPLETED:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This session has already been completed",
+        )
+    
+    # Extract achievements from answers
+    questions = _questions_from_json(session.questions_json)
+    answers_by_qid = {
+        ans.question_id: (
+            ans.answer_json.get("value") if isinstance(ans.answer_json, dict) else ans.answer_json
+        )
+        for ans in session.answers
+    }
+    
+    
+    stored_count = 0
+    for q in questions:
+        answer_text = answers_by_qid.get(q.id)
+        if not answer_text or (isinstance(answer_text, str) and not answer_text.strip()):
+            continue
+        
+        # Determine category from mapping_hint
+        mapping = q.mapping_hint or ""
+        category_str = mapping.split(".")[-1] if "." in mapping else "other"
+        
+        try:
+            category = UserAchievementCategory(category_str)
+        except ValueError:
+            category = UserAchievementCategory.OTHER
+        
+        user_ach = UserAchievement(
+            user_id=current_user.id,
+            title=q.title,
+            category=category,
+            notes=str(answer_text) if answer_text else None,
+        )
+        db.add(user_ach)
+        stored_count += 1
+    
+    # Mark session as completed
+    session.status = IntakeStatusEnum.COMPLETED
+    await db.commit()
+    
+    logger.info(f"[ACH_INTAKE] Stored {stored_count} achievements for user {current_user.id}")
+    
+    return {"ok": True, "achievements_count": stored_count}

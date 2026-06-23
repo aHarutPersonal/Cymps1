@@ -16,9 +16,11 @@ class AuthResponse with _$AuthResponse {
   factory AuthResponse.fromJson(Map<String, dynamic> json) {
     // Handle both camelCase and snake_case from backend
     return AuthResponse(
-      accessToken: (json['accessToken'] ?? json['access_token'] ?? '').toString(),
+      accessToken: (json['accessToken'] ?? json['access_token'] ?? '')
+          .toString(),
       refreshToken: (json['refreshToken'] ?? json['refresh_token'])?.toString(),
-      tokenType: (json['tokenType'] ?? json['token_type'] ?? 'Bearer').toString(),
+      tokenType: (json['tokenType'] ?? json['token_type'] ?? 'Bearer')
+          .toString(),
       expiresIn: (json['expiresIn'] ?? json['expires_in']) as int?,
     );
   }
@@ -40,10 +42,7 @@ class LoginRequest with _$LoginRequest {
     );
   }
 
-  Map<String, dynamic> toJson() => {
-    'email': email,
-    'password': password,
-  };
+  Map<String, dynamic> toJson() => {'email': email, 'password': password};
 }
 
 /// Request for registration.
@@ -87,8 +86,5 @@ class OAuthRequest with _$OAuthRequest {
     );
   }
 
-  Map<String, dynamic> toJson() => {
-    'provider': provider,
-    'id_token': idToken,
-  };
+  Map<String, dynamic> toJson() => {'provider': provider, 'id_token': idToken};
 }

@@ -1,9 +1,12 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../../app/design_tokens.dart';
+import '../../../app/design_tokens.dart';
+import '../../../app/router.dart';
+import '../../../core/ui/ambient_background.dart';
 import '../../../core/ui/loading_state.dart';
 import '../controllers/comparison_controller.dart';
-import 'widgets/mirror_card.dart';
 import '../models/comparison_models.dart';
 
 class ComparisonScreen extends ConsumerStatefulWidget {
@@ -13,8 +16,43 @@ class ComparisonScreen extends ConsumerStatefulWidget {
   ConsumerState<ComparisonScreen> createState() => _ComparisonScreenState();
 }
 
-class _ComparisonScreenState extends ConsumerState<ComparisonScreen> {
-  double _currentAge = 28.0;
+class _ComparisonScreenState extends ConsumerState<ComparisonScreen>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final state = ref.read(comparisonControllerProvider);
+      if (state is ComparisonInitial) {
+        ref.read(comparisonControllerProvider.notifier).load();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // Check if achievements changed while the app was in background
+      ref.read(comparisonControllerProvider.notifier).checkAndRefreshIfNeeded();
+    }
+  }
+
+  /// Called when the tab is re-selected (navigated back to).
+  /// We check eagerly via initState + addPostFrameCallback already,
+  /// but this also fires when switching between tabs.
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Non-blocking check: auto-refresh if achievements changed
+    ref.read(comparisonControllerProvider.notifier).checkAndRefreshIfNeeded();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -22,103 +60,160 @@ class _ComparisonScreenState extends ConsumerState<ComparisonScreen> {
 
     return Scaffold(
       backgroundColor: AppColors.bg,
-      body: SafeArea(
-        bottom: false,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const SizedBox(height: 12),
-            // -- HEADER --
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text('Mirror', style: AppTypography.h1),
-                  IconButton(
-                    onPressed: () {},
-                    icon: const Icon(Icons.tune, color: AppColors.textPrimary),
-                    style: IconButton.styleFrom(
-                      shape: const CircleBorder(side: BorderSide.none),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
-            // -- AGE SLIDER CARD --
-            Container(
-              margin: const EdgeInsets.symmetric(horizontal: 20),
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: AppColors.surface,
-                borderRadius: AppRadii.br16,
-                border: Border.all(color: AppColors.borderLight),
-              ),
-              child: Column(
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'COMPARISON INDEX: AGE',
-                        style: AppTypography.captionUpper,
+      body: AmbientBackground(
+        useSafeArea: false,
+        child: SafeArea(
+          bottom: false,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SizedBox(height: 12),
+              // -- HEADER --
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 8,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Back button (now a push route, not a tab)
+                    GestureDetector(
+                      onTap: () {
+                        if (Navigator.of(context).canPop()) {
+                          Navigator.of(context).pop();
+                        }
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.arrow_back_ios_rounded,
+                              size: 18,
+                              color: AppColors.textPrimary,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              'Back',
+                              style: AppTypography.body.copyWith(
+                                color: AppColors.textPrimary,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
+                    ),
+                    Text(
+                      'Comparative Growth',
+                      style: AppTypography.h2.copyWith(
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Your trajectory vs. your idol',
+                      style: AppTypography.caption.copyWith(
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              // -- REFRESHING INDICATOR --
+              if (comparisonState is ComparisonLoaded &&
+                  comparisonState.isRefreshing)
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  color: AppColors.accent.withValues(alpha: 0.08),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: AppColors.accent,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
                       Text(
-                        _currentAge.toInt().toString(),
-                        style: AppTypography.h2.copyWith(color: AppColors.blue),
+                        'Updating comparison...',
+                        style: AppTypography.caption.copyWith(
+                          color: AppColors.accent,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 12),
-                  SliderTheme(
-                    data: SliderThemeData(
-                      activeTrackColor: AppColors.textPrimary,
-                      inactiveTrackColor: AppColors.surfaceHighlight,
-                      thumbColor: AppColors.textPrimary,
-                      trackHeight: 4,
-                      thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 10),
-                      overlayShape: const RoundSliderOverlayShape(overlayRadius: 20),
-                      overlayColor: AppColors.textPrimary.withOpacity(0.1),
-                    ),
-                    child: Slider(
-                      min: 18,
-                      max: 50,
-                      value: _currentAge,
-                      onChanged: (v) => setState(() => _currentAge = v),
-                    ),
-                  ),
-                ],
-              ),
-            ),
+                ),
 
+              // -- CONTENT --
+              Expanded(
+                child: switch (comparisonState) {
+                  ComparisonInitial() ||
+                  ComparisonLoading() => const LoadingState(
+                    messages: [
+                      'Analyzing your growth trajectory...',
+                      'Aligning historical timelines...',
+                      'Calculating category scores...',
+                    ],
+                  ),
+                  ComparisonError(:final message) => _buildErrorState(message),
+                  ComparisonLoaded(:final comparison) => _buildContent(
+                    comparison,
+                  ),
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildErrorState(String message) {
+    final needsIdol =
+        message.toLowerCase().contains('idol') ||
+        message.toLowerCase().contains('choose an idol');
+
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              needsIdol ? Icons.explore_outlined : Icons.error_outline,
+              color: needsIdol ? AppColors.accent : AppColors.error,
+              size: 44,
+            ),
             const SizedBox(height: 16),
-
-            // -- TIMELINE LABELS --
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text('YOUR TIMELINE', style: AppTypography.captionUpper),
-                  Text('BENCHMARK DATA', style: AppTypography.captionUpper),
-                ],
-              ),
+            Text(
+              needsIdol ? 'Choose Your North Star' : 'Comparison Unavailable',
+              style: AppTypography.h3,
+              textAlign: TextAlign.center,
             ),
-
             const SizedBox(height: 8),
-
-            // -- TIMELINE BODY --
-            Expanded(
-              child: switch (comparisonState) {
-                ComparisonInitial() || ComparisonLoading() => const LoadingState(
-                    message: 'Aligning timelines...',
-                  ),
-                ComparisonError(:final message) => Center(
-                    child: Text(message, style: AppTypography.body.copyWith(color: AppColors.textSecondary)),
-                  ),
-                ComparisonLoaded(:final comparison) => _buildTimeline(comparison),
-              },
+            Text(
+              needsIdol
+                  ? 'Pick a benchmark before comparing your trajectory.'
+                  : message,
+              style: AppTypography.body.copyWith(
+                color: AppColors.textSecondary,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: needsIdol
+                  ? () => context.goToIdolSuggest()
+                  : () =>
+                        ref.read(comparisonControllerProvider.notifier).load(),
+              child: Text(needsIdol ? 'Choose Idol' : 'Retry'),
             ),
           ],
         ),
@@ -126,163 +221,272 @@ class _ComparisonScreenState extends ConsumerState<ComparisonScreen> {
     );
   }
 
-  Widget _buildTimeline(ComparisonResponse comparison) {
-    // Build timeline data from comparison
-    final allEvents = <int, Map<String, dynamic>>{};
-    final sortedAges = allEvents.keys.toList()..sort();
+  Widget _buildContent(ComparisonResponse comparison) {
+    final overallScore = comparison.overallScore.clamp(0, 100);
 
-    // If empty, show demo data
-    if (sortedAges.isEmpty) {
-      return _buildDemoTimeline();
-    }
+    return SingleChildScrollView(
+      padding: const EdgeInsets.only(bottom: 88),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        child: Column(
+          children: [
+            const SizedBox(height: 24),
 
-    return ListView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-      itemCount: sortedAges.length,
-      itemBuilder: (context, index) {
-        final age = sortedAges[index];
-        final data = allEvents[age]!;
-        return MirrorCard(
-          age: age,
-          userEvent: data['user'] as String?,
-          idolEvent: data['idol'] as String? ?? '',
-          isMatched: data['user'] != null,
-        );
-      },
-    );
-  }
-
-  Widget _buildDemoTimeline() {
-    final demoEvents = [
-      _TimelineEvent(24, 'Graduated with dual degrees in Engineering and Economics.', 'Graduated UPenn (Physics & Econ).', true),
-      _TimelineEvent(25, null, 'Started PhD at Stanford, dropped out in 2 days to build Zip2.', false),
-      _TimelineEvent(28, 'Scaled SaaS startup to \$10k MRR. Secured seed funding.', 'Sold Zip2 for \$307 million. Founded X.com.', true),
-    ];
-
-    return ListView.builder(
-      padding: const EdgeInsets.only(left: 20, right: 20, top: 16, bottom: 100),
-      itemCount: demoEvents.length,
-      itemBuilder: (context, index) {
-        final event = demoEvents[index];
-        final isCurrentAge = event.age == _currentAge.toInt();
-
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 32),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Timeline node
-              SizedBox(
-                width: 44,
-                child: Column(
+            // -- OVERALL RING --
+            Center(
+              child: SizedBox(
+                width: 192,
+                height: 192,
+                child: Stack(
+                  alignment: Alignment.center,
                   children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: AppColors.bg,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: event.isMatched
-                              ? AppColors.emerald
-                              : isCurrentAge
-                                  ? AppColors.textPrimary
-                                  : AppColors.borderLight,
-                        ),
-                        boxShadow: event.isMatched
-                            ? [BoxShadow(color: AppColors.emeraldDim, blurRadius: 12)]
-                            : null,
+                    CustomPaint(
+                      size: const Size(192, 192),
+                      painter: _ProgressRingPainter(
+                        progress: overallScore / 100,
+                        strokeWidth: 12,
+                        trackColor: AppColors.surfaceHighlight,
+                        progressColor: AppColors.accent,
                       ),
-                      child: Text(
-                        event.age.toString(),
-                        style: AppTypography.captionUpper.copyWith(
-                          color: event.isMatched
-                              ? AppColors.emerald
-                              : isCurrentAge
-                                  ? AppColors.textPrimary
-                                  : AppColors.textSecondary,
+                    ),
+                    Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          '$overallScore%',
+                          style: AppTypography.h1.copyWith(
+                            fontSize: 40,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        Text(
+                          'OVERALL SYNC',
+                          style: AppTypography.captionUpper.copyWith(
+                            color: AppColors.textSecondary,
+                            letterSpacing: 2,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 32),
+
+            // -- METRICS GRID --
+            Row(
+              children: [
+                Expanded(
+                  child: _MetricCard(
+                    label: 'STRENGTHS',
+                    title: comparison.strengths.isNotEmpty
+                        ? comparison.strengths.first.category
+                        : 'Discipline',
+                    progress: comparison.categoryBreakdown.isNotEmpty
+                        ? comparison.categoryBreakdown.first.userScore / 100
+                        : 0.9,
+                    color: const Color(0xFF16A34A), // green-600
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: _MetricCard(
+                    label: 'GAPS',
+                    title: comparison.gaps.isNotEmpty
+                        ? comparison.gaps.first.category
+                        : 'Social Capital',
+                    progress: comparison.categoryBreakdown.length > 1
+                        ? comparison.categoryBreakdown.last.userScore / 100
+                        : 0.35,
+                    color: const Color(0xFFF87171), // red-400
+                  ),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 24),
+
+            // -- AI INTELLIGENCE SUMMARY --
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: AppColors.surface,
+                borderRadius: BorderRadius.circular(32),
+                border: Border.all(color: AppColors.border),
+                boxShadow: AppShadows.md,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(
+                        Icons.auto_awesome,
+                        color: AppColors.accent,
+                        size: 18,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        'AI INTELLIGENCE SUMMARY',
+                        style: TextStyle(
                           fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.textPrimary,
+                          letterSpacing: 2,
                         ),
                       ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    (comparison.overallAnalysis ?? '').isNotEmpty
+                        ? comparison.overallAnalysis!
+                        : 'You are showing strong potential in personal development. Focus on building your network and strategic partnerships to accelerate your trajectory.',
+                    style: const TextStyle(
+                      fontSize: 14,
+                      color: AppColors.textSecondary,
+                      height: 1.6,
                     ),
-                    if (index < demoEvents.length - 1)
-                      Container(
-                        width: 1,
-                        height: 100,
-                        color: AppColors.borderFocus,
-                      ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 12),
-              // Content
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // User entry
-                    Text('USER', style: AppTypography.captionUpper.copyWith(color: AppColors.emerald)),
-                    const SizedBox(height: 4),
-                    Container(
+                  ),
+                  const SizedBox(height: 16),
+                  GestureDetector(
+                    onTap: () => context.goToComparisonDetail(comparison),
+                    child: Container(
                       width: double.infinity,
-                      padding: const EdgeInsets.all(16),
+                      height: 48,
                       decoration: BoxDecoration(
-                        color: event.userEvent != null ? Colors.white.withOpacity(0.02) : Colors.transparent,
-                        borderRadius: AppRadii.br12,
-                        border: Border.all(
-                          color: event.userEvent != null
-                              ? (isCurrentAge ? AppColors.textPrimary : AppColors.borderFocus)
-                              : AppColors.borderLight,
-                          style: event.userEvent != null ? BorderStyle.solid : BorderStyle.none,
-                        ),
+                        border: Border.all(color: AppColors.border),
+                        borderRadius: AppRadii.br16,
                       ),
-                      child: Text(
-                        event.userEvent ?? 'Data gap. Awaiting entry.',
-                        style: AppTypography.body.copyWith(
-                          color: event.userEvent != null
-                              ? AppColors.textPrimary
-                              : AppColors.textTertiary,
-                          fontSize: 14,
+                      child: Center(
+                        child: Text(
+                          'VIEW DETAILED REPORT',
+                          style: AppTypography.captionUpper.copyWith(
+                            fontSize: 11,
+                            color: AppColors.accent,
+                          ),
                         ),
                       ),
                     ),
-                    const SizedBox(height: 8),
-                    // Idol entry
-                    Text('BENCHMARK', style: AppTypography.captionUpper.copyWith(color: AppColors.blue)),
-                    const SizedBox(height: 4),
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        borderRadius: AppRadii.br12,
-                        border: Border.all(
-                          color: AppColors.borderFocus,
-                          style: BorderStyle.solid,
-                        ),
-                      ),
-                      child: Text(
-                        event.idolEvent,
-                        style: AppTypography.body.copyWith(
-                          color: AppColors.textSecondary,
-                          fontSize: 14,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-            ],
-          ),
-        );
-      },
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
 
-class _TimelineEvent {
-  final int age;
-  final String? userEvent;
-  final String idolEvent;
-  final bool isMatched;
+/// Metric card for strengths/gaps.
+class _MetricCard extends StatelessWidget {
+  const _MetricCard({
+    required this.label,
+    required this.title,
+    required this.progress,
+    required this.color,
+  });
 
-  _TimelineEvent(this.age, this.userEvent, this.idolEvent, this.isMatched);
+  final String label;
+  final String title;
+  final double progress;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: AppRadii.br20,
+        border: Border.all(color: AppColors.glassBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: AppTypography.captionUpper.copyWith(
+              color: AppColors.textSecondary,
+              fontSize: 10,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            title,
+            style: AppTypography.caption.copyWith(
+              color: color,
+              fontWeight: FontWeight.w700,
+              fontSize: 14,
+            ),
+          ),
+          const SizedBox(height: 8),
+          ClipRRect(
+            borderRadius: AppRadii.brFull,
+            child: LinearProgressIndicator(
+              value: progress.clamp(0.0, 1.0),
+              backgroundColor: AppColors.surfaceHighlight,
+              color: color,
+              minHeight: 6,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Custom progress ring painter.
+class _ProgressRingPainter extends CustomPainter {
+  _ProgressRingPainter({
+    required this.progress,
+    required this.strokeWidth,
+    required this.trackColor,
+    required this.progressColor,
+  });
+
+  final double progress;
+  final double strokeWidth;
+  final Color trackColor;
+  final Color progressColor;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = (size.width - strokeWidth) / 2;
+
+    // Track
+    final trackPaint = Paint()
+      ..color = trackColor
+      ..strokeWidth = strokeWidth
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+
+    canvas.drawCircle(center, radius, trackPaint);
+
+    // Progress
+    final progressPaint = Paint()
+      ..color = progressColor
+      ..strokeWidth = strokeWidth
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+
+    final sweepAngle = 2 * pi * progress;
+    canvas.drawArc(
+      Rect.fromCircle(center: center, radius: radius),
+      -pi / 2,
+      sweepAngle,
+      false,
+      progressPaint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _ProgressRingPainter oldDelegate) {
+    return oldDelegate.progress != progress;
+  }
 }

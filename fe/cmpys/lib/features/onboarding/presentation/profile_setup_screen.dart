@@ -7,6 +7,7 @@ import '../../../app/assets.dart';
 import '../../../app/design_tokens.dart';
 import '../../../app/router.dart';
 import '../../../core/data/mock_data.dart';
+import '../../../core/ui/ambient_background.dart';
 import '../../../core/ui/cmpys_app_bar.dart';
 import '../../../core/ui/cmpys_button.dart';
 import '../../../core/ui/cmpys_chip.dart';
@@ -27,7 +28,7 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
   final _nameController = TextEditingController();
   final _scrollController = ScrollController();
   final _nameFocusNode = FocusNode();
-  
+
   DateTime? _birthDate;
   final Set<String> _selectedInterests = {};
   // Combined list of mock + custom interests
@@ -46,7 +47,7 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
     super.initState();
     // Initialize interests
     _allInterests = List.from(mockInterests);
-    
+
     // Delay loading to avoid modifying providers during build
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadUserProfile();
@@ -66,24 +67,24 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
   Future<void> _loadUserProfile() async {
     if (!mounted) return;
     setState(() => _isLoadingProfile = true);
-    
+
     try {
       // First try to get from cached session
       Me? user = ref.read(currentUserProvider);
-      
+
       // If not in cache, fetch from API
       if (user == null) {
         final meRepository = ref.read(meRepositoryProvider);
         user = await meRepository.getMe();
       }
-      
+
       // Prefill form with existing data
       _prefillForm(user);
-      
+
       // Initialize onboarding controller
-      ref.read(onboardingControllerProvider.notifier).startOnboarding(
-        existingUser: user,
-      );
+      ref
+          .read(onboardingControllerProvider.notifier)
+          .startOnboarding(existingUser: user);
     } catch (e) {
       // If fetch fails, continue with empty form
       debugPrint('Failed to load profile: $e');
@@ -98,7 +99,7 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
   void _prefillForm(Me user) {
     _nameController.text = user.fullName ?? '';
     _birthDate = user.birthDate;
-    
+
     // Pre-select existing interests
     _selectedInterests.clear();
     for (final interest in user.interests) {
@@ -122,15 +123,18 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
   Widget build(BuildContext context) {
     // Listen for onboarding state changes
     ref.listen(onboardingControllerProvider, (prev, next) {
-      debugPrint('📋 ProfileSetup: prev=${prev?.runtimeType}, next=${next.runtimeType}');
-      
-      if (next is OnboardingIdolSuggestStep || next is OnboardingIdolSearchStep) {
-        // Profile saved successfully via PATCH /me, navigate to idol suggestions
-        debugPrint('📋 ProfileSetup: Navigating to idol-suggest');
+      debugPrint(
+        '📋 ProfileSetup: prev=${prev?.runtimeType}, next=${next.runtimeType}',
+      );
+
+      if (next is OnboardingIdolSuggestStep ||
+          next is OnboardingIdolSearchStep) {
+        // Profile saved successfully via PATCH /me, start canonical agentic activation.
+        debugPrint('📋 ProfileSetup: Navigating to agentic intake');
         // Use addPostFrameCallback to avoid modifying during build
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) {
-            context.go(AppRoutes.idolSuggest);
+            context.go(AppRoutes.agenticIntake);
           }
         });
       } else if (next is OnboardingError) {
@@ -147,64 +151,72 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
     });
 
     return Scaffold(
+      backgroundColor: AppColors.bg,
       appBar: CmpysAppBar(
         showBackButton: _currentStep > 0,
         onBackPressed: _isLoading ? null : _onBack,
       ),
-      body: SafeArea(
-        child: _isLoadingProfile
-            ? const Center(
-                child: CircularProgressIndicator(
-                  color: AppColors.accent,
-                  strokeWidth: 2,
-                ),
-              )
-            : Column(
-                children: [
-                  // Error banner
-                  _ErrorBanner(
-                    message: _errorMessage,
-                    onDismiss: () => setState(() => _errorMessage = null),
+      body: AmbientBackground(
+        useSafeArea: false,
+        child: SafeArea(
+          child: _isLoadingProfile
+              ? const Center(
+                  child: CircularProgressIndicator(
+                    color: AppColors.accent,
+                    strokeWidth: 2,
                   ),
-                  // Progress indicator
-                  Padding(
-                    padding: AppSpacing.screenH,
-                    child: Row(
-                      children: List.generate(3, (index) {
-                        final isActive = index <= _currentStep;
-                        return Expanded(
-                          child: Container(
-                            height: 4,
-                            margin: EdgeInsets.only(right: index < 2 ? 8 : 0),
-                            decoration: BoxDecoration(
-                              color: isActive ? AppColors.accent : AppColors.surface2,
-                              borderRadius: AppRadii.brFull,
-                            ),
-                          ),
-                        );
-                      }),
+                )
+              : Column(
+                  children: [
+                    // Error banner
+                    _ErrorBanner(
+                      message: _errorMessage,
+                      onDismiss: () => setState(() => _errorMessage = null),
                     ),
-                  ),
-                  const SizedBox(height: AppSpacing.s24),
-                  // Content
-                  Expanded(
-                    child: SingleChildScrollView(
-                      controller: _scrollController,
+                    // Progress indicator
+                    Padding(
                       padding: AppSpacing.screenH,
-                      keyboardDismissBehavior:
-                          ScrollViewKeyboardDismissBehavior.onDrag,
-                      child: _buildStep(),
+                      child: Row(
+                        children: List.generate(3, (index) {
+                          final isActive = index <= _currentStep;
+                          return Expanded(
+                            child: Container(
+                              height: 4,
+                              margin: EdgeInsets.only(right: index < 2 ? 8 : 0),
+                              decoration: BoxDecoration(
+                                color: isActive
+                                    ? AppColors.accent
+                                    : AppColors.surface2,
+                                borderRadius: AppRadii.brFull,
+                              ),
+                            ),
+                          );
+                        }),
+                      ),
                     ),
-                  ),
-                  // Bottom button
-                  _BottomButton(
-                    label: _currentStep < 2 ? 'Continue' : 'Find My Idol',
-                    isEnabled: _canContinue() && !_isLoading,
-                    isLoading: _isLoading,
-                    onPressed: _onContinue,
-                  ),
-                ],
-              ),
+                    const SizedBox(height: AppSpacing.s24),
+                    // Content
+                    Expanded(
+                      child: SingleChildScrollView(
+                        controller: _scrollController,
+                        padding: AppSpacing.screenH,
+                        keyboardDismissBehavior:
+                            ScrollViewKeyboardDismissBehavior.onDrag,
+                        child: _buildStep(),
+                      ),
+                    ),
+                    // Bottom button
+                    _BottomButton(
+                      label: _currentStep < 2
+                          ? 'Continue'
+                          : 'Start Mentor Setup',
+                      isEnabled: _canContinue() && !_isLoading,
+                      isLoading: _isLoading,
+                      onPressed: _onContinue,
+                    ),
+                  ],
+                ),
+        ),
       ),
     );
   }
@@ -321,7 +333,9 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
                   width: 20,
                   height: 20,
                   colorFilter: ColorFilter.mode(
-                    _dateError != null ? AppColors.error : AppColors.textSecondary,
+                    _dateError != null
+                        ? AppColors.error
+                        : AppColors.textSecondary,
                     BlendMode.srcIn,
                   ),
                 ),
@@ -345,7 +359,7 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
                       vertical: AppSpacing.s4,
                     ),
                     decoration: BoxDecoration(
-                      color: AppColors.accent.withOpacity(0.15),
+                      color: AppColors.accent.withValues(alpha: 0.15),
                       borderRadius: AppRadii.brFull,
                     ),
                     child: Text(
@@ -370,9 +384,7 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
         // Age requirement hint
         Text(
           'You must be at least 13 years old',
-          style: AppTypography.caption.copyWith(
-            color: AppColors.textTertiary,
-          ),
+          style: AppTypography.caption.copyWith(color: AppColors.textTertiary),
         ),
       ],
     );
@@ -380,8 +392,18 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
 
   String _formatDate(DateTime date) {
     final months = [
-      'January', 'February', 'March', 'April', 'May', 'June',
-      'July', 'August', 'September', 'October', 'November', 'December'
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December',
     ];
     return '${months[date.month - 1]} ${date.day}, ${date.year}';
   }
@@ -423,9 +445,9 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
             );
           }).toList(),
         ),
-        
+
         const SizedBox(height: AppSpacing.s24),
-        
+
         // Custom interest input
         Text(
           'Add your own',
@@ -449,7 +471,7 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
               variant: CmpysButtonVariant.secondary,
               onPressed: _isLoading ? null : _addCustomInterest,
               isExpanded: false,
-              isLoading: false, 
+              isLoading: false,
               // Making button smaller/compact if possible, or just standard size
             ),
           ],
@@ -473,7 +495,7 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
               ),
               decoration: BoxDecoration(
                 color: _selectedInterests.length >= 3
-                    ? AppColors.success.withOpacity(0.15)
+                    ? AppColors.success.withValues(alpha: 0.15)
                     : AppColors.surface,
                 borderRadius: AppRadii.brFull,
               ),
@@ -521,7 +543,7 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
   /// Validate current step and show errors if invalid
   bool _validateCurrentStep() {
     _clearErrors();
-    
+
     switch (_currentStep) {
       case 0:
         final name = _nameController.text.trim();
@@ -541,7 +563,7 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
           return false;
         }
         return true;
-        
+
       case 1:
         if (_birthDate == null) {
           setState(() => _dateError = 'Please select your birth date');
@@ -558,15 +580,16 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
           return false;
         }
         return true;
-        
+
       case 2:
         if (_selectedInterests.length < 3) {
-          setState(() => _interestsError = 
-              'Please select at least 3 interests');
+          setState(
+            () => _interestsError = 'Please select at least 3 interests',
+          );
           return false;
         }
         return true;
-        
+
       default:
         return false;
     }
@@ -591,16 +614,16 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
   /// Save profile via PATCH /me through onboarding controller
   void _saveProfile() {
     final selectedInterestNames = _selectedInterests.toList();
-    
+
     final controller = ref.read(onboardingControllerProvider.notifier);
-    
+
     // Update profile data in controller
     controller.updateProfile(
       fullName: _nameController.text.trim(),
       birthDate: _birthDate,
       interests: selectedInterestNames,
     );
-    
+
     // Save profile - this calls PATCH /me
     controller.saveProfile();
   }
@@ -608,7 +631,7 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
   Future<void> _selectDate() async {
     // Dismiss keyboard if open
     FocusScope.of(context).unfocus();
-    
+
     final now = DateTime.now();
     final date = await showDatePicker(
       context: context,
@@ -618,18 +641,22 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
       builder: (context, child) {
         return Theme(
           data: Theme.of(context).copyWith(
-            colorScheme: const ColorScheme.dark(
+            colorScheme: const ColorScheme.light(
               primary: AppColors.accent,
               surface: AppColors.surface,
               onSurface: AppColors.textPrimary,
+              onPrimary: Colors.white,
             ),
-            dialogBackgroundColor: AppColors.surface,
+            dialogTheme: const DialogThemeData(
+              backgroundColor: AppColors.surface,
+              surfaceTintColor: Colors.transparent,
+            ),
           ),
           child: child!,
         );
       },
     );
-    
+
     if (date != null) {
       setState(() {
         _birthDate = date;
@@ -655,10 +682,7 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
 
 /// Inline error banner
 class _ErrorBanner extends StatelessWidget {
-  const _ErrorBanner({
-    required this.message,
-    required this.onDismiss,
-  });
+  const _ErrorBanner({required this.message, required this.onDismiss});
 
   final String? message;
   final VoidCallback onDismiss;
@@ -676,10 +700,10 @@ class _ErrorBanner extends StatelessWidget {
                 vertical: AppSpacing.s12,
               ),
               decoration: BoxDecoration(
-                color: AppColors.error.withOpacity(0.1),
+                color: AppColors.error.withValues(alpha: 0.1),
                 border: Border(
                   bottom: BorderSide(
-                    color: AppColors.error.withOpacity(0.3),
+                    color: AppColors.error.withValues(alpha: 0.3),
                   ),
                 ),
               ),
@@ -710,7 +734,7 @@ class _ErrorBanner extends StatelessWidget {
                       width: 16,
                       height: 16,
                       colorFilter: ColorFilter.mode(
-                        AppColors.error.withOpacity(0.7),
+                        AppColors.error.withValues(alpha: 0.7),
                         BlendMode.srcIn,
                       ),
                     ),
@@ -747,8 +771,9 @@ class _BottomButton extends StatelessWidget {
         top: AppSpacing.s16,
       ),
       decoration: BoxDecoration(
-        color: AppColors.bg,
-        border: Border(top: BorderSide(color: AppColors.border)),
+        color: AppColors.surface.withValues(alpha: 0.88),
+        border: const Border(top: BorderSide(color: AppColors.glassBorder)),
+        boxShadow: AppShadows.sm,
       ),
       child: SafeArea(
         top: false,

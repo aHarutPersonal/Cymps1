@@ -27,10 +27,7 @@ class SessionNeedsOnboarding extends SessionState {
 }
 
 class SessionReady extends SessionState {
-  const SessionReady({
-    required this.user,
-    required this.currentIdolId,
-  });
+  const SessionReady({required this.user, required this.currentIdolId});
   final Me user;
   final String currentIdolId;
 }
@@ -49,12 +46,12 @@ abstract class SessionKeys {
 /// Session controller provider.
 final sessionControllerProvider =
     StateNotifierProvider<SessionController, SessionState>((ref) {
-  return SessionController(
-    tokenStore: ref.watch(tokenStoreProvider),
-    meRepository: ref.watch(meRepositoryProvider),
-    authController: ref.watch(authControllerProvider.notifier),
-  );
-});
+      return SessionController(
+        tokenStore: ref.watch(tokenStoreProvider),
+        meRepository: ref.watch(meRepositoryProvider),
+        authController: ref.watch(authControllerProvider.notifier),
+      );
+    });
 
 /// Provider for current user (convenience).
 final currentUserProvider = Provider<Me?>((ref) {
@@ -81,16 +78,33 @@ class SessionController extends StateNotifier<SessionState> {
     required TokenStore tokenStore,
     required MeRepository meRepository,
     required AuthController authController,
-  })  : _tokenStore = tokenStore,
-        _meRepository = meRepository,
-        _authController = authController,
-        super(const SessionInitializing());
+  }) : _tokenStore = tokenStore,
+       _meRepository = meRepository,
+       _authController = authController,
+       super(const SessionInitializing());
 
   final TokenStore _tokenStore;
   final MeRepository _meRepository;
   final AuthController _authController;
 
   SharedPreferences? _prefs;
+
+  bool _isMissingUserError(Object error) {
+    if (error is ApiError) {
+      return error.isAuthError || error.isNotFoundError;
+    }
+
+    final message = error.toString().toLowerCase();
+    return message.contains('401') || message.contains('404');
+  }
+
+  Future<void> _resetToUnauthenticated() async {
+    _prefs ??= await SharedPreferences.getInstance();
+    await _tokenStore.clear();
+    await _prefs?.remove(SessionKeys.currentIdolId);
+    await _prefs?.remove(SessionKeys.onboardingComplete);
+    state = const SessionUnauthenticated();
+  }
 
   /// Initialize session on app start.
   Future<void> initialize() async {
@@ -116,14 +130,8 @@ class SessionController extends StateNotifier<SessionState> {
       debugPrint('🔑 Final state: ${state.runtimeType}');
     } catch (e) {
       debugPrint('🔑 Error fetching profile: $e');
-      if (e is ApiError && e.isAuthError) {
-        // Token is invalid, clear and show auth
-        await _tokenStore.clear();
-        state = const SessionUnauthenticated();
-      } else if (e.toString().contains('401')) {
-        // Also handle raw 401 strings
-        await _tokenStore.clear();
-        state = const SessionUnauthenticated();
+      if (_isMissingUserError(e)) {
+        await _resetToUnauthenticated();
       } else {
         state = SessionError(message: e.toString());
       }
@@ -133,7 +141,7 @@ class SessionController extends StateNotifier<SessionState> {
   /// Determine session state based on user profile.
   Future<void> _determineSessionState(Me user) async {
     debugPrint('🔑 _determineSessionState called');
-    
+
     // Check if onboarding is complete
     final needsOnboarding = _needsOnboarding(user);
     debugPrint('🔑 needsOnboarding: $needsOnboarding');
@@ -188,18 +196,21 @@ class SessionController extends StateNotifier<SessionState> {
       debugPrint('🔑 Final state after auth: ${state.runtimeType}');
     } on ApiError catch (e) {
       debugPrint('🔑 onAuthenticated ApiError: ${e.message}');
-      if (e.isAuthError) {
-        await _tokenStore.clear();
-        state = const SessionUnauthenticated();
+      if (_isMissingUserError(e)) {
+        await _resetToUnauthenticated();
       } else {
         // Still authenticated but error fetching profile - go to onboarding
         debugPrint('🔑 Setting SessionNeedsOnboarding with empty user');
-        state = SessionNeedsOnboarding(user: const Me(id: '', email: ''));
+        state = SessionNeedsOnboarding(
+          user: const Me(id: '', email: ''),
+        );
       }
     } catch (e) {
       debugPrint('🔑 onAuthenticated Error: $e');
       // Still authenticated but error - go to onboarding with empty user
-      state = SessionNeedsOnboarding(user: const Me(id: '', email: ''));
+      state = SessionNeedsOnboarding(
+        user: const Me(id: '', email: ''),
+      );
     }
   }
 
@@ -215,10 +226,10 @@ class SessionController extends StateNotifier<SessionState> {
   Future<void> updateUser(Me user) async {
     debugPrint('🔑 SessionController.updateUser called');
     debugPrint('🔑 Current state: ${state.runtimeType}');
-    
+
     // Ensure prefs is initialized
     _prefs ??= await SharedPreferences.getInstance();
-    
+
     // During onboarding, keep user in SessionNeedsOnboarding
     // Don't call _determineSessionState which would check for idol
     final currentState = state;
@@ -235,6 +246,7 @@ class SessionController extends StateNotifier<SessionState> {
 
   /// Set current idol ID (after onboarding).
   Future<void> setCurrentIdolId(String idolId) async {
+    _prefs ??= await SharedPreferences.getInstance();
     await _prefs?.setString(SessionKeys.currentIdolId, idolId);
 
     // Re-evaluate session state
@@ -246,8 +258,20 @@ class SessionController extends StateNotifier<SessionState> {
     }
   }
 
+  /// Clear stale idol selection and return the user to idol selection.
+  Future<void> clearCurrentIdolId() async {
+    _prefs ??= await SharedPreferences.getInstance();
+    await _prefs?.remove(SessionKeys.currentIdolId);
+
+    final currentState = state;
+    if (currentState is SessionReady) {
+      state = SessionNeedsOnboarding(user: currentState.user);
+    }
+  }
+
   /// Mark onboarding as complete.
   Future<void> completeOnboarding() async {
+    _prefs ??= await SharedPreferences.getInstance();
     await _prefs?.setBool(SessionKeys.onboardingComplete, true);
   }
 
@@ -257,7 +281,9 @@ class SessionController extends StateNotifier<SessionState> {
       final user = await _meRepository.getMe();
       await _determineSessionState(user);
     } catch (e) {
-      // Keep current state on error
+      if (_isMissingUserError(e)) {
+        await _resetToUnauthenticated();
+      }
     }
   }
 

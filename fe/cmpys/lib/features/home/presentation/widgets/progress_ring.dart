@@ -12,7 +12,7 @@ class ProgressRing extends StatelessWidget {
     required this.subLabel,
     this.size = 80,
     this.thickness = 4,
-    this.color = AppColors.emerald,
+    this.color = AppColors.coral,
   });
 
   final double percent; // 0.0 to 1.0
@@ -34,7 +34,7 @@ class ProgressRing extends StatelessWidget {
           CustomPaint(
             painter: _RingPainter(
               percent: 1.0,
-              color: AppColors.surfaceHighlight,
+              color: AppColors.cardTextSecondary.withValues(alpha: 0.15),
               thickness: thickness,
             ),
           ),

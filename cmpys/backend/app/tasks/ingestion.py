@@ -98,7 +98,7 @@ async def _run_ingestion_async(job_id: str) -> dict:
     
     async with async_session_maker() as db:
         # Fetch job with idol and external IDs
-        logger.debug(f"[INGESTION] Fetching job from database...")
+        logger.debug("[INGESTION] Fetching job from database...")
         stmt = (
             select(IdolImportJob)
             .options(
@@ -178,7 +178,7 @@ async def _run_ingestion_async(job_id: str) -> dict:
                 progress=25,
             )
 
-            # Generate natural thinking stream (LLM)
+            # Generate natural thinking stream (LLM) concurrently
             try:
                 import openai
                 from app.core.config import settings as app_settings
@@ -188,66 +188,82 @@ async def _run_ingestion_async(job_id: str) -> dict:
                     idol_name = job.idol.name
                     
                     # Prepare preview of text content for the LLM to "read"
-                    # Take first 3 chunks, truncate to 1500 chars total to avoid huge context costs for simple thinking
                     text_preview = "\n\n".join([c.text[:500] for c in chunks[:3]])
                     
-                    thinking_system = (
-                        f"You are an expert biographer researching {idol_name}. "
-                        "You are reading source material to extract facts. "
-                        "Think out loud about the SPECIFIC FACTS you are finding in the text. "
-                        "Do NOT describe your search strategy (e.g. 'I will look for...'). "
-                        "Instead, say 'I found...' or 'Interesting, the text mentions...'. "
-                        "Use markdown bold (**text**) for key dates, names, and terms."
-                    )
-                    
-                    thinking_prompt = (
-                        f"Here is the text content I am reading:\n\n{text_preview}\n\n"
-                        "Narrate your discovery process based on this text. What specific details jumped out?"
-                    )
-                    
-                    openai_client = openai.AsyncOpenAI(api_key=app_settings.openai_api_key)
-                    accumulated_stream = ""
-                    
-                    logger.info(f"[INGESTION][{job_id}] Starting thinking stream...")
-                    stream = await openai_client.chat.completions.create(
-                        model="gpt-4o-mini",
-                        messages=[
-                            {"role": "system", "content": thinking_system},
-                            {"role": "user", "content": thinking_prompt},
-                        ],
-                        stream=True,
-                        max_tokens=200,
-                        temperature=0.7,
-                    )
-                    
-                    import asyncio
-                    buffer = ""
-                    last_update_time = asyncio.get_event_loop().time()
-
-                    async for chunk in stream:
-                        delta = chunk.choices[0].delta
-                        if delta.content:
-                            content_piece = delta.content
-                            accumulated_stream += content_piece
-                            buffer += content_piece
-                            
-                            current_time = asyncio.get_event_loop().time()
-                            
-                            # Buffer updates (every 20 chars or 200ms)
-                            if len(buffer) >= 20 or (current_time - last_update_time) > 0.2:
-                                sep = "\n" if initial_history else ""
-                                job.thinking_text = f"{initial_history}{sep}{accumulated_stream}"
-                                await db.commit()
-                                buffer = ""
-                                last_update_time = current_time
+                    async def _generate_thinking_stream_concurrently():
+                        try:
+                            # Use an independent DB session to avoid ConcurrentModificationError
+                            async with async_session_maker() as stream_db:
+                                # Fetch a fresh instance for this session
+                                stream_stmt = select(IdolImportJob).where(IdolImportJob.id == job_id)
+                                stream_res = await stream_db.execute(stream_stmt)
+                                stream_job = stream_res.scalar_one_or_none()
                                 
-                    # Final flush
-                    if buffer:
-                        sep = "\n" if initial_history else ""
-                        job.thinking_text = f"{initial_history}{sep}{accumulated_stream}"
-                        await db.commit()
+                                if not stream_job:
+                                    return
+                                    
+                                thinking_system = (
+                                    f"You are an expert biographer researching {idol_name}. "
+                                    "You are reading source material to extract facts. "
+                                    "Think out loud about the SPECIFIC FACTS you are finding in the text. "
+                                    "Do NOT describe your search strategy. "
+                                    "Instead, say 'I found...' or 'Interesting, the text mentions...'. "
+                                    "Use markdown bold (**text**) for key dates, names, and terms."
+                                )
+                                
+                                thinking_prompt = (
+                                    f"Here is the text content I am reading:\n\n{text_preview}\n\n"
+                                    "Narrate your discovery process based on this text. What specific details jumped out?"
+                                )
+                                
+                                openai_client = openai.AsyncOpenAI(api_key=app_settings.openai_api_key)
+                                
+                                stream = await openai_client.chat.completions.create(
+                                    model="gpt-4o-mini",
+                                    messages=[
+                                        {"role": "system", "content": thinking_system},
+                                        {"role": "user", "content": thinking_prompt},
+                                    ],
+                                    stream=True,
+                                    max_tokens=120,
+                                    temperature=0.7,
+                                )
+                                
+                                import asyncio
+                                accumulated_stream = ""
+                                buffer = ""
+                                last_update_time = asyncio.get_event_loop().time()
+
+                                async for chunk in stream:
+                                    delta = chunk.choices[0].delta
+                                    if delta.content:
+                                        content_piece = delta.content
+                                        accumulated_stream += content_piece
+                                        buffer += content_piece
+                                        
+                                        current_time = asyncio.get_event_loop().time()
+                                        
+                                        # Buffer updates (every 20 chars or 200ms)
+                                        if len(buffer) >= 20 or (current_time - last_update_time) > 0.2:
+                                            sep = "\n" if initial_history else ""
+                                            stream_job.thinking_text = f"{initial_history}{sep}{accumulated_stream}"
+                                            await stream_db.commit()
+                                            buffer = ""
+                                            last_update_time = current_time
+                                            
+                                # Final flush
+                                if buffer:
+                                    sep = "\n" if initial_history else ""
+                                    stream_job.thinking_text = f"{initial_history}{sep}{accumulated_stream}"
+                                    await stream_db.commit()
+                        except Exception as e:
+                            logger.warning(f"[INGESTION][{job_id}] Concurrent thinking stream failed: {e}")
+
+                    # Start thinking generation in the background!
+                    logger.info(f"[INGESTION][{job_id}] Starting concurrent thinking stream...")
+                    asyncio.create_task(_generate_thinking_stream_concurrently())
             except Exception as e:
-                logger.warning(f"[INGESTION][{job_id}] Thinking stream failed: {e}")
+                logger.warning(f"[INGESTION][{job_id}] Failed to start thinking stream: {e}")
                 # Fallback to static update if LLM fails
                 await _update_job(
                     db, job, 
@@ -297,52 +313,39 @@ async def _run_ingestion_async(job_id: str) -> dict:
             )
 
             # =================================================================
-            # Step 4: Normalize timeline (55-70%)
+            # Steps 4+5: Normalize timeline AND Generate persona IN PARALLEL
             # =================================================================
-            logger.info(f"[INGESTION][{job_id}] Step 4/6: Normalizing timeline...")
+            logger.info(f"[INGESTION][{job_id}] Steps 4-5/6: Timeline + Persona in parallel...")
             await _update_job(
                 db, job, 
                 step="normalizing_timeline", 
                 progress=60,
-                thought="Building a chronological timeline of their life..."
+                thought="Building timeline and generating persona concurrently..."
             )
 
-            timeline_response = await run_timeline_normalization(
+            timeline_task = run_timeline_normalization(
                 profile=profile_response,
                 candidates=achievements_response,
             )
-
-            if not timeline_response:
-                logger.warning(f"[INGESTION][{job_id}] Timeline normalization failed, using fallback")
-                timeline_response = _create_fallback_timeline(achievements_response)
-            else:
-                logger.info(f"[INGESTION][{job_id}] Normalized {len(timeline_response.timeline)} timeline events")
-
-            await _update_job(
-                db, job, 
-                step="normalizing_timeline", 
-                progress=70,
-                thought=f"Organized {len(timeline_response.timeline)} key events with age calculations."
-            )
-
-            # =================================================================
-            # Step 5: Generate persona (70-85%)
-            # =================================================================
-            logger.info(f"[INGESTION][{job_id}] Step 5/6: Generating persona...")
-            await _update_job(
-                db, job, 
-                step="generating_persona", 
-                progress=75,
-                thought=f"Analyzing {job.idol.name}'s voice and principles to generate a persona..."
-            )
-
-            persona_response = await run_persona_pack(
+            persona_task = run_persona_pack(
                 profile=profile_response,
                 chunks=chunks,
                 source_url=source.url,
                 source_id=source.id,
             )
 
+            timeline_response, persona_response = await asyncio.gather(
+                timeline_task, persona_task
+            )
+
+            # Handle timeline result
+            if not timeline_response:
+                logger.warning(f"[INGESTION][{job_id}] Timeline normalization failed, using fallback")
+                timeline_response = _create_fallback_timeline(achievements_response)
+            else:
+                logger.info(f"[INGESTION][{job_id}] Normalized {len(timeline_response.timeline)} timeline events")
+
+            # Handle persona result
             if persona_response:
                 logger.info(f"[INGESTION][{job_id}] Persona generated: {persona_response.persona.voice_style[:50] if persona_response.persona.voice_style else 'N/A'}...")
             else:
@@ -352,7 +355,7 @@ async def _run_ingestion_async(job_id: str) -> dict:
                 db, job, 
                 step="generating_persona", 
                 progress=85,
-                thought=f"Persona generated. Voice style: {persona_response.persona.voice_style if persona_response else 'Default'}."
+                thought=f"Timeline: {len(timeline_response.timeline)} events. Persona: {persona_response.persona.voice_style if persona_response else 'Default'}."
             )
 
             # =================================================================
@@ -402,6 +405,19 @@ async def _run_ingestion_async(job_id: str) -> dict:
                 "persona_generated": persona_response is not None,
             }
             logger.info(f"[INGESTION][{job_id}] Final result: {result}")
+            
+            # --- Pre-generate first batch of IdeaCards in the background ---
+            # Enqueue Celery task for generating IdeaCards so Daily Ideas tab opens instantly
+            user_id = getattr(job, "user_id", None)
+            if user_id:
+                logger.info(f"[INGESTION][{job_id}] Enqueuing IdeaCards pre-generation background task...")
+                run_generate_idea_cards.delay(job.idol_id, user_id)
+            else:
+                logger.info(
+                    f"[INGESTION][{job_id}] Skipping IdeaCards pre-generation: "
+                    "job has no user_id"
+                )
+            
             return result
 
         except Exception as e:
@@ -832,36 +848,96 @@ def _validate_plan_item_details_schema(details: dict) -> list[str]:
 
 def _normalize_plan_item_details(details: dict) -> dict:
     """
-    Normalize plan item details:
-    - Map prompt schema fields to expected fields (instruction -> description, kind -> type)
-    - Ensure all steps have unique IDs
-    - Clean up any malformed data
+    Normalize plan item details from `plan_item_details.txt` output schema.
+
+    New schema (plan_item_details.txt):
+      { steps: [{id, title, description, estimate_minutes, substeps: [str...]}],
+        materials: [{title, type, url, reason}],
+        definition_of_done, mental_model }
+
+    Legacy schema (micro_steps):
+      { mental_model, micro_steps: [str...], definition_of_done, common_trap }
+
+    Output storage schema:
+      { steps: [{id, title, description, estimate_minutes, substeps, completed}],
+        materials: [{title, type, url, reason}],
+        meta: {mental_model, definition_of_done, ...} }
     """
-    # Normalize steps
+    import re
+
+    # --- Handle legacy micro_steps schema ---
+    if "micro_steps" in details and "steps" not in details:
+        micro_steps: list = details.get("micro_steps", [])
+        steps = []
+        for i, step_text in enumerate(micro_steps):
+            step_str = str(step_text).strip()
+            match = re.match(r"^step\s*\d+[:\-]\s*(.+)$", step_str, re.IGNORECASE)
+            title = match.group(1)[:80] if match else step_str[:80]
+            steps.append({
+                "id": f"step_{i + 1}",
+                "title": title,
+                "description": step_str,
+                "substeps": [],
+            })
+        details["steps"] = steps
+        details.pop("micro_steps", None)
+
+    # --- Normalize `steps` array ---
     if "steps" in details:
         for i, step in enumerate(details["steps"]):
-            # Ensure ID exists
+            # Ensure ID
             if "id" not in step or not step["id"]:
                 step["id"] = f"step_{i + 1}"
-            
-            # Map 'instruction' -> 'description' if needed
+            # Map instruction -> description
             if "description" not in step and "instruction" in step:
                 step["description"] = step.pop("instruction")
             elif "description" not in step:
-                # Fallback: use title or empty
                 step["description"] = step.get("expected_output", "")
-            
-            # Keep additional useful fields from prompt schema
-            # expected_output, estimate_minutes, order, resources are preserved
-    
-    # Ensure materials array exists
+            # Preserve substeps — normalize bare strings to descriptive objects if needed
+            if "substeps" not in step:
+                step["substeps"] = []
+            # Normalize estimate_minutes
+            if "estimate_minutes" in step and "estimateMinutes" not in step:
+                step["estimateMinutes"] = step.pop("estimate_minutes")
+            # Ensure completion state defaults to false (never trust LLM on this)
+            step.setdefault("completed", False)
+
+    # --- Validate content depth ---
+    min_lesson_words = 500
+    min_material_words = 600
+
+    # Flag steps with thin lesson_content (should be 500+ words per prompt)
+    for step in details.get("steps", []):
+        lesson = step.get("lesson_content", "")
+        if lesson and len(lesson.split()) < min_lesson_words:
+            logger.warning(
+                f"[PLAN_DETAILS] Step '{step.get('title', '?')}' has thin lesson_content: "
+                f"{len(lesson.split())} words (minimum {min_lesson_words})"
+            )
+
+    # --- Validate materials content depth ---
+    for mat in details.get("materials", []):
+        md = mat.get("content_markdown", "")
+        if md and len(md.split()) < min_material_words:
+            logger.warning(
+                f"[PLAN_DETAILS] Material '{mat.get('title', '?')}' has thin content_markdown: "
+                f"{len(md.split())} words (minimum {min_material_words})"
+            )
+
+    # --- Store meta fields ---
+    meta = details.setdefault("meta", {})
+    for key in ("mental_model", "definition_of_done", "common_trap"):
+        if key in details:
+            meta[key] = details.pop(key)
+
+    # --- Ensure materials array exists ---
     if "materials" not in details:
         details["materials"] = []
-    
-    # Normalize materials
-    # Map 'kind' values: in_app_lesson -> article, search -> article, link -> article
+
+    # --- Normalize materials ---
+    valid_types = {"book", "article", "video", "tool", "course", "template", "in_app_lesson"}
     kind_to_type = {
-        "in_app_lesson": "article",
+        "in_app_lesson": "in_app_lesson",
         "search": "article",
         "link": "article",
         "book": "book",
@@ -870,22 +946,59 @@ def _normalize_plan_item_details(details: dict) -> dict:
         "tool": "tool",
         "template": "template",
     }
-    
-    valid_types = {"book", "article", "video", "tool", "course", "template"}
-    
+
+    normalized_materials = []
     for material in details.get("materials", []):
-        # Map 'kind' -> 'type' if needed
         if "type" not in material:
             kind = material.get("kind", "article")
             material["type"] = kind_to_type.get(kind, "article")
-        
-        # Ensure type is valid
         if material.get("type") not in valid_types:
             material["type"] = "article"
-        
-        # Keep useful fields: content_markdown, duration_minutes, reason
-    
+        # Drop materials with no title (malformed)
+        if not material.get("title"):
+            continue
+        # Preserve content_markdown for in-app lessons
+        # (no need to strip — frontend handles it)
+        normalized_materials.append(material)
+    details["materials"] = normalized_materials
+
     return details
 
 
+# =============================================================================
+# IdeaCards Pre-generation Task
+# =============================================================================
 
+@celery_app.task(bind=True)
+def run_generate_idea_cards(self, idol_id: str, user_id: str) -> dict:
+    """
+    Pre-generate the first batch of IdeaCards in the background.
+    Called immediately after successful Idol Ingestion.
+    """
+    logger.info(f"[IDEA_CARDS_TASK] Starting background generation for idol={idol_id}")
+    try:
+        result = asyncio.get_event_loop().run_until_complete(
+            _run_generate_idea_cards_async(idol_id, user_id)
+        )
+        return result
+    except Exception as e:
+        logger.exception(f"[IDEA_CARDS_TASK] Fatal error generating cards: {e}")
+        raise
+
+async def _run_generate_idea_cards_async(idol_id: str, user_id: str) -> dict:
+    from app.api.v1.idea_cards import _generate_idea_cards
+    from app.models.user import User
+    
+    logger.info(f"[IDEA_CARDS_TASK] Async generation started for idol={idol_id}")
+    async with async_session_maker() as db:
+        idol = await db.get(Idol, idol_id)
+        user = await db.get(User, user_id)
+        
+        if not idol or not user:
+             logger.error(f"[IDEA_CARDS_TASK] Idol or user not found. idol_id={idol_id}, user_id={user_id}")
+             return {"error": "Idol or user not found"}
+        
+        # Pre-generate 24 cards (2 pages of 12)
+        saved = await _generate_idea_cards(idol=idol, user=user, db=db, count=24)
+        logger.info(f"[IDEA_CARDS_TASK] Finished generation. Created {len(saved)} cards.")
+        return {"status": "completed", "cards_generated": len(saved)}

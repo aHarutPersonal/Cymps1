@@ -1,0 +1,12 @@
+Generate {count} bite-sized insights (Idea Cards) inspired by {idol_name} that apply to the user's life.
+
+User Profile:
+{user_profile_json}
+
+Constraints for each insight:
+1. Must be less than 150 words.
+2. Must contain a clear, actionable takeaway or profound realization.
+3. Must be written in the first person as {idol_name}.
+4. Return ONLY a JSON array of objects with keys: "title" (short catchy title), "content" (the insight text), and "category" (e.g., "Productivity", "Leadership", "Mindset").
+
+Do NOT wrap the output in markdown code blocks. Output pure JSON.

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../../../app/design_tokens.dart';
 import '../../models/idol_models.dart';
+import '../idol_visuals.dart';
 
 class IdolGridCard extends StatelessWidget {
   const IdolGridCard({
@@ -18,86 +19,120 @@ class IdolGridCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onTap,
-      child: Container(
+      child: AnimatedContainer(
+        duration: AppDurations.fast,
+        padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          borderRadius: AppRadii.br16,
-          border: isSelected 
-             ? Border.all(color: AppColors.primary, width: 2)
-             : Border.all(color: AppColors.cardBorder),
-          boxShadow: isSelected ? AppShadows.glowLime : null,
+          color: AppColors.surface.withValues(alpha: 0.72),
+          borderRadius: AppRadii.br20,
+          border: Border.all(
+            color: isSelected ? AppColors.mint : AppColors.border,
+            width: isSelected ? 2 : 1,
+          ),
+          boxShadow: isSelected
+              ? [
+                  BoxShadow(
+                    color: AppColors.mint.withValues(alpha: 0.10),
+                    blurRadius: 24,
+                    offset: const Offset(0, 8),
+                  ),
+                ]
+              : null,
         ),
-        clipBehavior: Clip.antiAlias,
-        child: Stack(
-          fit: StackFit.expand,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Image
-            if (idol.avatarThumbUrl != null)
-              Image.network(
-                idol.avatarThumbUrl!,
-                fit: BoxFit.cover,
-                color: isSelected ? null : Colors.black.withOpacity(0.2), // Less dim
-                colorBlendMode: isSelected ? null : BlendMode.darken,
-              )
-            else
-              Container(color: AppColors.surfaceHighlight),
-            
-            // Gradient Overlay
-            Container(
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.transparent,
-                    Colors.black54,
-                    Colors.black87,
-                  ],
-                  stops: [0.5, 0.8, 1.0],
-                ),
-              ),
-            ),
-
-            // Text content
-            Positioned(
-              bottom: 12,
-              left: 12,
-              right: 12,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    idol.name,
-                    style: AppTypography.h4.copyWith(fontSize: 14),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  if (idol.occupations.isNotEmpty) ...[
-                    const SizedBox(height: 2),
-                    Text(
-                      idol.occupations.first,
-                      style: AppTypography.caption.copyWith(color: AppColors.secondary), // Purple
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+            Expanded(
+              child: ClipRRect(
+                borderRadius: AppRadii.br16,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    ColorFiltered(
+                      colorFilter: const ColorFilter.matrix(<double>[
+                        0.2126,
+                        0.7152,
+                        0.0722,
+                        0,
+                        0,
+                        0.2126,
+                        0.7152,
+                        0.0722,
+                        0,
+                        0,
+                        0.2126,
+                        0.7152,
+                        0.0722,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        1,
+                        0,
+                      ]),
+                      child: Image.network(
+                        imageUrlForIdolCandidate(idol),
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) => Image.network(
+                          kPrototypeDefaultPortrait,
+                          fit: BoxFit.cover,
+                        ),
+                      ),
                     ),
+                    Positioned.fill(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Colors.transparent,
+                              AppColors.mint.withValues(alpha: 0.16),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    if (isSelected)
+                      Positioned(
+                        top: 8,
+                        right: 8,
+                        child: Container(
+                          width: 24,
+                          height: 24,
+                          decoration: const BoxDecoration(
+                            color: AppColors.mint,
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.check_rounded,
+                            size: 14,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
                   ],
-                ],
-              ),
-            ),
-            
-            // Selection Indicator
-            if (isSelected)
-              Positioned(
-                top: 8,
-                right: 8,
-                child: Container(
-                  padding: const EdgeInsets.all(4),
-                  decoration: const BoxDecoration(
-                    color: AppColors.primary,
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(Icons.check, size: 12, color: Colors.black),
                 ),
               ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              idol.name,
+              style: AppTypography.h4.copyWith(fontSize: 14),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 3),
+            Text(
+              idolDomainLabel(idol).toUpperCase(),
+              style: AppTypography.captionUpper.copyWith(
+                color: AppColors.textTertiary,
+                fontSize: 9,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
           ],
         ),
       ),

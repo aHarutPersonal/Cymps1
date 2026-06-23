@@ -2,6 +2,7 @@ from datetime import date
 from typing import TYPE_CHECKING
 
 from sqlalchemy import Date, String
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, UUIDMixin, TimestampMixin
@@ -17,6 +18,7 @@ if TYPE_CHECKING:
     from app.models.idol_tag_link import IdolTagLink
     from app.models.idol_timeline import IdolTimelineEvent
     from app.models.intake import IntakeSession
+    from app.models.idea_card import IdeaCard
 
 
 class Idol(Base, UUIDMixin, TimestampMixin):
@@ -26,6 +28,9 @@ class Idol(Base, UUIDMixin, TimestampMixin):
     birth_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     domain: Mapped[str] = mapped_column(String(255), nullable=False)
     image_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    image_source_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    image_license: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    image_attribution_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     # Relationships
     aliases: Mapped[list["IdolAlias"]] = relationship(
@@ -63,4 +68,9 @@ class Idol(Base, UUIDMixin, TimestampMixin):
     # Intake sessions
     intake_sessions: Mapped[list["IntakeSession"]] = relationship(
         "IntakeSession", back_populates="idol", cascade="all, delete-orphan"
+    )
+
+    # Idea cards (atomic insights)
+    idea_cards: Mapped[list["IdeaCard"]] = relationship(
+        "IdeaCard", back_populates="idol", cascade="all, delete-orphan"
     )

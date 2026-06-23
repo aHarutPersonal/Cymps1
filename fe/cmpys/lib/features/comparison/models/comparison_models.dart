@@ -66,8 +66,10 @@ class ComparisonStrength with _$ComparisonStrength {
     return ComparisonStrength(
       category: (json['category'] ?? '').toString(),
       description: (json['description'] ?? '').toString(),
-      achievementId: (json['achievementId'] ?? json['achievement_id'])?.toString(),
-      achievementTitle: (json['achievementTitle'] ?? json['achievement_title'])?.toString(),
+      achievementId: (json['achievementId'] ?? json['achievement_id'])
+          ?.toString(),
+      achievementTitle: (json['achievementTitle'] ?? json['achievement_title'])
+          ?.toString(),
     );
   }
 }
@@ -89,8 +91,11 @@ class ComparisonGap with _$ComparisonGap {
       category: (json['category'] ?? '').toString(),
       description: (json['description'] ?? '').toString(),
       milestoneId: (json['milestoneId'] ?? json['milestone_id'])?.toString(),
-      milestoneTitle: (json['milestoneTitle'] ?? json['milestone_title'])?.toString(),
-      idolAgeAtEvent: _parseInt(json['idolAgeAtEvent'] ?? json['idol_age_at_event']),
+      milestoneTitle: (json['milestoneTitle'] ?? json['milestone_title'])
+          ?.toString(),
+      idolAgeAtEvent: _parseInt(
+        json['idolAgeAtEvent'] ?? json['idol_age_at_event'],
+      ),
       suggestion: json['suggestion']?.toString(),
     );
   }
@@ -117,7 +122,9 @@ class MissingMilestone with _$MissingMilestone {
       category: json['category']?.toString(),
       ageAtEvent: _parseInt(json['ageAtEvent'] ?? json['age_at_event']),
       eventDate: (json['eventDate'] ?? json['event_date'])?.toString(),
-      importanceScore: _parseDouble(json['importanceScore'] ?? json['importance_score']),
+      importanceScore: _parseDouble(
+        json['importanceScore'] ?? json['importance_score'],
+      ),
     );
   }
 }
@@ -153,17 +160,44 @@ class ComparisonResponse with _$ComparisonResponse {
 
   factory ComparisonResponse.fromJson(Map<String, dynamic> json) {
     return ComparisonResponse(
-      overallScore: _parseDouble(json['overallScore'] ?? json['overall_score']) ?? 0,
-      categoryBreakdown: _parseCategoryBreakdown(json['categoryBreakdown'] ?? json['category_breakdown']) ?? [],
+      overallScore:
+          _parseDouble(json['overallScore'] ?? json['overall_score']) ?? 0,
+      categoryBreakdown:
+          _parseCategoryBreakdown(
+            json['categoryBreakdown'] ?? json['category_breakdown'],
+          ) ??
+          [],
       strengths: _parseStrengths(json['strengths']) ?? [],
       gaps: _parseGaps(json['gaps']) ?? [],
-      missingVsIdol: _parseMissingMilestones(json['missingVsIdol'] ?? json['missing_vs_idol']) ?? [],
+      missingVsIdol:
+          _parseMissingMilestones(
+            json['missingVsIdol'] ?? json['missing_vs_idol'],
+          ) ??
+          [],
       completeness: _parseDouble(json['completeness']) ?? 0,
-      countedUserAchievements: _parseInt(json['countedUserAchievements'] ?? json['counted_user_achievements']) ?? 0,
-      idolMilestonesAtAge: _parseInt(json['idolMilestonesAtAge'] ?? json['idol_milestones_at_age']) ?? 0,
-      totalIdolMilestones: _parseInt(json['totalIdolMilestones'] ?? json['total_idol_milestones']) ?? 0,
-      totalUserAchievements: _parseInt(json['totalUserAchievements'] ?? json['total_user_achievements']) ?? 0,
-      matchedCount: _parseInt(json['matchedCount'] ?? json['matched_count']) ?? 0,
+      countedUserAchievements:
+          _parseInt(
+            json['countedUserAchievements'] ??
+                json['counted_user_achievements'],
+          ) ??
+          0,
+      idolMilestonesAtAge:
+          _parseInt(
+            json['idolMilestonesAtAge'] ?? json['idol_milestones_at_age'],
+          ) ??
+          0,
+      totalIdolMilestones:
+          _parseInt(
+            json['totalIdolMilestones'] ?? json['total_idol_milestones'],
+          ) ??
+          0,
+      totalUserAchievements:
+          _parseInt(
+            json['totalUserAchievements'] ?? json['total_user_achievements'],
+          ) ??
+          0,
+      matchedCount:
+          _parseInt(json['matchedCount'] ?? json['matched_count']) ?? 0,
       userAge: _parseInt(json['userAge'] ?? json['user_age']),
       targetAge: _parseInt(json['targetAge'] ?? json['target_age']),
       mode: json['mode']?.toString(),
@@ -171,11 +205,18 @@ class ComparisonResponse with _$ComparisonResponse {
       idolName: (json['idolName'] ?? json['idol_name'])?.toString(),
       generatedAt: _parseDate(json['generatedAt'] ?? json['generated_at']),
       // AI-enhanced fields
-      overallAnalysis: (json['overallAnalysis'] ?? json['overall_analysis'])?.toString(),
-      realisticPerspective: (json['realisticPerspective'] ?? json['realistic_perspective'])?.toString(),
+      overallAnalysis: (json['overallAnalysis'] ?? json['overall_analysis'])
+          ?.toString(),
+      realisticPerspective:
+          (json['realisticPerspective'] ?? json['realistic_perspective'])
+              ?.toString(),
       encouragement: json['encouragement']?.toString(),
-      nextMilestone: json['nextMilestone'] != null || json['next_milestone'] != null
-          ? NextMilestone.fromJson((json['nextMilestone'] ?? json['next_milestone']) as Map<String, dynamic>)
+      nextMilestone:
+          json['nextMilestone'] != null || json['next_milestone'] != null
+          ? NextMilestone.fromJson(
+              (json['nextMilestone'] ?? json['next_milestone'])
+                  as Map<String, dynamic>,
+            )
           : null,
       aiEnhanced: json['aiEnhanced'] == true || json['ai_enhanced'] == true,
     );
@@ -227,8 +268,9 @@ class NextMilestone with _$NextMilestone {
     return NextMilestone(
       title: (json['title'] ?? '').toString(),
       description: (json['description'] ?? '').toString(),
-      estimatedTimeframe: (json['estimatedTimeframe'] ?? json['estimated_timeframe'])?.toString(),
+      estimatedTimeframe:
+          (json['estimatedTimeframe'] ?? json['estimated_timeframe'])
+              ?.toString(),
     );
   }
 }
-

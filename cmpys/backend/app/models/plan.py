@@ -3,7 +3,7 @@ from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, Enum as SQLEnum, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import DateTime, Enum as SQLEnum, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -12,6 +12,7 @@ from app.models.base import Base, UUIDMixin, TimestampMixin, TimestampUpdateMixi
 if TYPE_CHECKING:
     from app.models.user import User
     from app.models.idol import Idol
+    from app.models.content_resource import ContentResource
 
 
 class PlanItemType(str, Enum):
@@ -51,6 +52,10 @@ class Plan(Base, UUIDMixin, TimestampMixin):
     target_age: Mapped[int] = mapped_column(Integer, nullable=False)
     duration_weeks: Mapped[int] = mapped_column(Integer, nullable=False, default=12)
     weekly_hours: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
+    
+    # New: stores roadmap_thesis and anti_goals from plan_generate.txt
+    # Structure: { "roadmap_thesis": "...", "anti_goals": ["..."] }
+    roadmap_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="plans", lazy="selectin")
@@ -115,6 +120,49 @@ class PlanItem(Base, UUIDMixin, TimestampUpdateMixin):
     completions: Mapped[list["PlanItemCompletion"]] = relationship(
         "PlanItemCompletion", back_populates="plan_item", cascade="all, delete-orphan"
     )
+    content_resource_links: Mapped[list["PlanItemContentResource"]] = relationship(
+        "PlanItemContentResource",
+        back_populates="plan_item",
+        cascade="all, delete-orphan",
+    )
+
+
+class PlanItemContentResource(Base, UUIDMixin, TimestampMixin):
+    """Plan material link pointing at a shared reusable content resource."""
+
+    __tablename__ = "plan_item_content_resources"
+    __table_args__ = (
+        UniqueConstraint(
+            "plan_item_id",
+            "content_resource_id",
+            "material_index",
+            name="uq_plan_item_content_resource_material",
+        ),
+        Index("ix_plan_item_content_resources_plan_item", "plan_item_id"),
+        Index("ix_plan_item_content_resources_resource", "content_resource_id"),
+    )
+
+    plan_item_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("plan_items.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    content_resource_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("content_resources.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    material_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    material_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    title: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    canonical_key: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    metadata_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+    plan_item: Mapped["PlanItem"] = relationship(
+        "PlanItem",
+        back_populates="content_resource_links",
+    )
+    content_resource: Mapped["ContentResource"] = relationship("ContentResource")
 
 class PlanItemStepCompletion(Base, UUIDMixin):
     """

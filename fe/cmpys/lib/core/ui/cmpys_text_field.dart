@@ -91,9 +91,7 @@ class _CmpysTextFieldState extends State<CmpysTextField> {
         if (widget.label != null) ...[
           Text(
             widget.label!,
-            style: AppTypography.label.copyWith(
-              color: AppColors.textSecondary,
-            ),
+            style: AppTypography.label.copyWith(color: AppColors.textSecondary),
           ),
           const SizedBox(height: AppSpacing.s8),
         ],

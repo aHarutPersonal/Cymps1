@@ -3,9 +3,8 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import and_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.api.dependencies import get_current_user
 from app.core.db import get_db
@@ -138,7 +137,6 @@ async def compare_to_idol(
     
     # Load idol milestones at target age
     # Strategy: First try to get milestones with known ages, then consider NULL ages
-    from sqlalchemy import or_
     from app.models.idol_achievement import IdolAchievement
     
     milestone_stmt = select(IdolTimelineEvent).where(
@@ -161,7 +159,7 @@ async def compare_to_idol(
     
     # If no milestones with known ages, try IdolAchievement table
     if not idol_milestones:
-        logger.info(f"[COMPARISON] No timeline events with age, trying IdolAchievement table")
+        logger.info("[COMPARISON] No timeline events with age, trying IdolAchievement table")
         
         ach_stmt = select(IdolAchievement).where(
             IdolAchievement.idol_id == idolId
@@ -198,7 +196,7 @@ async def compare_to_idol(
         else:
             # Last resort: include early-career categories with NULL ages
             # Filter to categories likely to be early-career: learning, career starts
-            logger.info(f"[COMPARISON] No age-based data, using early-career heuristic")
+            logger.info("[COMPARISON] No age-based data, using early-career heuristic")
             
             early_career_categories = ["learning", "career", "finance"]
             
@@ -351,9 +349,8 @@ async def compare_to_idol(
 
 from app.core.config import settings
 from app.schemas.comparison import ComparisonStrength, ComparisonGap, NextMilestone
-import json
-import openai
-import os
+from app.services.llm import get_llm_client
+from app.services.llm.prompt_loader import load_prompt, render_prompt
 
 
 async def _run_ai_comparison(
@@ -367,54 +364,38 @@ async def _run_ai_comparison(
     target_age: int,
 ) -> dict:
     """
-    Run AI comparison using OpenAI.
+    Run AI comparison using the configured LLM client.
     
     Returns parsed JSON response from the LLM.
     """
-    # Read prompt template
-    prompt_path = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
-        "..", "prompts", "comparison_analyze.txt"
-    )
-    prompt_path = os.path.abspath(prompt_path)
-    
-    with open(prompt_path, "r") as f:
-        prompt_template = f.read()
-    
-    # Fill in the template
-    prompt = prompt_template.replace("{{idol_name}}", idol_name)
-    prompt = prompt.replace("{{idol_field}}", idol_field or "Various")
-    prompt = prompt.replace("{{idol_bio}}", idol_bio or "No biography available")
-    prompt = prompt.replace("{{target_age}}", str(target_age))
-    prompt = prompt.replace("{{idol_milestones}}", idol_milestones_text)
-    prompt = prompt.replace("{{user_age}}", str(user_age))
-    prompt = prompt.replace("{{user_background}}", user_background or "Not specified")
-    prompt = prompt.replace("{{user_achievements}}", user_achievements_text)
-    
-    # Call OpenAI
-    client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
-    
-    response = await client.chat.completions.create(
-        model=settings.openai_model,
-        messages=[
-            {
-                "role": "system",
-                "content": "You are an expert life coach. Return only valid JSON, no markdown code blocks."
-            },
-            {"role": "user", "content": prompt}
-        ],
-        temperature=0.7,
-        max_tokens=4000,
+    # Render prompt template with unified system
+    prompt = render_prompt(
+        load_prompt("comparison_analyze"),
+        {
+            "idol_name": idol_name,
+            "idol_field": idol_field or "Various",
+            "idol_bio": idol_bio or "No biography available",
+            "target_age": str(target_age),
+            "idol_milestones": idol_milestones_text,
+            "user_age": str(user_age),
+            "user_background": user_background or "Not specified",
+            "user_achievements": user_achievements_text,
+        },
+        prompt_name="comparison_analyze.txt",
     )
     
-    content = response.choices[0].message.content.strip()
+    # Use the unified LLM client
+    client = get_llm_client(timeout=90.0)
     
-    # Clean up response - remove markdown code blocks if present
-    if content.startswith("```"):
-        lines = content.split("\n")
-        content = "\n".join(lines[1:-1])
+    response = await client.generate_json(
+        system_prompt="You are an expert life coach. Return only valid JSON, no markdown code blocks.",
+        user_prompt=prompt,
+    )
     
-    return json.loads(content)
+    if response.error:
+        raise ValueError(f"LLM error: {response.error}")
+    
+    return response.data
 
 
 @router.get("/ai", response_model=ComparisonResponse)
@@ -434,7 +415,7 @@ async def compare_to_idol_ai(
     logger.info(f"[AI_COMPARISON] Request: idolId={idolId}, age={age}, mode={mode.value}")
     
     # Check if LLM is configured
-    if not settings.llm_configured or settings.llm_provider != "openai":
+    if not settings.llm_configured:
         logger.warning("[AI_COMPARISON] LLM not configured, falling back to basic comparison")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -490,22 +471,22 @@ async def compare_to_idol_ai(
     
     # Get user background
     user_background = ""
-    if current_user.interests:
-        user_background = f"Interests: {', '.join(current_user.interests)}"
+    if current_user.profile and current_user.profile.interests:
+        user_background = f"Interests: {', '.join(current_user.profile.interests)}"
     
     # Calculate user age
     user_age = age  # Use the target age for comparison
-    if current_user.birth_date:
+    if current_user.profile and current_user.profile.birth_date:
         from datetime import date
         today = date.today()
-        user_age = today.year - current_user.birth_date.year
+        user_age = today.year - current_user.profile.birth_date.year
     
     try:
         # Run AI comparison
         ai_result = await _run_ai_comparison(
             idol_name=idol.name,
-            idol_field=idol.primary_field or "",
-            idol_bio=idol.ai_summary or idol.core_identity or "",
+            idol_field=getattr(idol, 'primary_field', None) or idol.domain or "",
+            idol_bio=getattr(idol, 'ai_summary', None) or getattr(idol, 'core_identity', None) or "",
             idol_milestones_text=milestones_text,
             user_age=user_age,
             user_background=user_background,

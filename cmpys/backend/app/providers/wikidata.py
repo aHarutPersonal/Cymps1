@@ -4,6 +4,7 @@ Wikidata provider for idol discovery.
 Uses the Wikidata API to search for entities and fetch their details.
 """
 from datetime import date
+from urllib.parse import quote
 
 import httpx
 
@@ -22,6 +23,7 @@ HEADERS = {
 P_INSTANCE_OF = "P31"
 P_DATE_OF_BIRTH = "P569"
 P_OCCUPATION = "P106"
+P_IMAGE = "P18"
 
 # Wikidata entity IDs
 Q_HUMAN = "Q5"
@@ -123,6 +125,7 @@ async def fetch_entity_by_id(qid: str) -> dict | None:
         # Parse claims
         claims = entity.get("claims", {})
         birth_date = _get_birth_date(claims)
+        image_url = _get_image_url(claims)
 
         # Get Wikipedia URL from sitelinks
         sitelinks = entity.get("sitelinks", {})
@@ -136,8 +139,13 @@ async def fetch_entity_by_id(qid: str) -> dict | None:
             "name": name,
             "birth_date": birth_date,
             "wikipedia_url": wikipedia_url,
+            "image_url": image_url,
         }
 
+import time
+
+_SEARCH_CACHE = {}
+_SEARCH_CACHE_TTL = 3600  # 1 hour
 
 async def search_candidates(query: str, limit: int = 10) -> list[DiscoveryCandidate]:
     """
@@ -149,6 +157,16 @@ async def search_candidates(query: str, limit: int = 10) -> list[DiscoveryCandid
     """
     if not query.strip():
         return []
+        
+    cache_key = f"{query.lower().strip()}_{limit}"
+    
+    # Check cache
+    if cache_key in _SEARCH_CACHE:
+        entry, timestamp = _SEARCH_CACHE[cache_key]
+        if time.time() - timestamp < _SEARCH_CACHE_TTL:
+            return entry
+        else:
+            del _SEARCH_CACHE[cache_key]
 
     async with httpx.AsyncClient(timeout=30.0, headers=HEADERS) as client:
         # Step 1: Search for entities
@@ -169,6 +187,7 @@ async def search_candidates(query: str, limit: int = 10) -> list[DiscoveryCandid
                 if candidate:
                     candidates.append(candidate)
 
+        _SEARCH_CACHE[cache_key] = (candidates, time.time())
         return candidates
 
 
@@ -246,6 +265,7 @@ def _parse_entity(entity: dict, query: str) -> DiscoveryCandidate | None:
     # Get occupations (P106) - returns QIDs for now
     # TODO: Resolve occupation QIDs to human-readable labels
     occupations = _get_occupations(claims)
+    image_url = _get_image_url(claims)
 
     # Get Wikipedia URL from sitelinks
     sitelinks = entity.get("sitelinks", {})
@@ -270,6 +290,13 @@ def _parse_entity(entity: dict, query: str) -> DiscoveryCandidate | None:
         description=description,
         birthDate=birth_date,
         wikipediaUrl=wikipedia_url,
+        imageUrl=image_url,
+        imageSourceUrl=_commons_file_url_from_image_url(image_url),
+        imageLicense="wikimedia_commons",
+        imageAttribution={
+            "credit": "Wikimedia Commons",
+            "wikidata_qid": qid,
+        } if image_url else None,
         occupations=occupations,
         confidence=confidence,
     )
@@ -356,6 +383,33 @@ def _get_occupations(claims: dict) -> list[str]:
                 occupations.append(qid)
 
     return occupations
+
+
+def _get_image_url(claims: dict) -> str | None:
+    """Extract a Wikimedia Commons image URL from P18."""
+    image_claims = claims.get(P_IMAGE, [])
+    for claim in image_claims:
+        mainsnak = claim.get("mainsnak", {})
+        datavalue = mainsnak.get("datavalue", {})
+        if datavalue.get("type") == "string":
+            filename = datavalue.get("value")
+            if filename:
+                return _commons_file_url(str(filename))
+    return None
+
+
+def _commons_file_url(filename: str) -> str:
+    encoded = quote(filename.replace(" ", "_"), safe="")
+    return f"https://commons.wikimedia.org/wiki/Special:FilePath/{encoded}"
+
+
+def _commons_file_url_from_image_url(image_url: str | None) -> str | None:
+    if not image_url:
+        return None
+    filename = image_url.rsplit("/", 1)[-1]
+    if not filename:
+        return None
+    return f"https://commons.wikimedia.org/wiki/File:{filename}"
 
 
 def _compute_confidence(

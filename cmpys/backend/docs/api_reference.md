@@ -931,19 +931,37 @@ GET /plan-items/{item_id}/detailed
       {
         "id": "step_1",
         "title": "Read Part 1: Investment vs. Speculation",
-        "description": "Understand the core philosophy"
-      },
-      {
-        "id": "step_2",
-        "title": "Complete Part 2: The Investor and Inflation",
-        "description": "Learn about protecting investments"
+        "description": "Understand the core philosophy",
+        "expected_output": "A one-page margin-of-safety note",
+        "estimate_minutes": 45,
+        "order": 1,
+        "resources": ["resource-uuid"],
+        "substeps": [
+          "Read the assigned section and underline every definition of investment versus speculation.",
+          "Write three examples of decisions that would violate Graham's rule."
+        ],
+        "lesson_content": "500+ words of teaching content with context, real example, practice guide, and reflection prompt."
       }
     ],
     "materials": [
       {
-        "title": "The Intelligent Investor (PDF)",
-        "url": "https://example.com/book.pdf",
-        "type": "book"
+        "title": "The Intelligent Investor",
+        "url": "https://example.com/book",
+        "type": "in_app_lesson",
+        "content_resource_id": "resource-uuid",
+        "canonical_key": "book:benjamin_graham:the_intelligent_investor",
+        "author_or_creator": "Benjamin Graham",
+        "license_status": "llm_summary",
+        "content_markdown": "600+ words for in-app lesson material, or 2,500+ words for reusable book modules.",
+        "duration_minutes": 13,
+        "reason": "Builds the foundation for Week 1 value-investing analysis.",
+        "ideas": [
+          {
+            "title": "Margin of Safety",
+            "content": "A specific, actionable idea card with an example.",
+            "category": "Investing"
+          }
+        ]
       }
     ],
     "generated_from_prompt_version": "v1.0",
@@ -1371,6 +1389,141 @@ POST /chat/threads/{thread_id}/messages
 
 **Errors:**
 - `503 Service Unavailable` - LLM not configured
+
+---
+
+## Content Resources
+
+### List Content Library
+
+Get all content resources accessible to the user (vault + plan-linked + public domain).
+
+```
+GET /content-resources/library
+```
+
+**Auth Required:** Yes
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `kind` | string | null | Filter by kind: `public_domain_book`, `llm_book_summary`, `video`, `article`, `in_app_lesson` |
+| `q` | string | null | Search in title/author |
+| `sort` | string | "recent" | Sort: "recent", "title" |
+
+**Response:** `200 OK`
+```json
+{
+  "resources": [
+    {
+      "id": "uuid",
+      "kind": "llm_book_summary",
+      "canonicalKey": "book:benjamin_graham:intelligent_investor",
+      "title": "The Intelligent Investor",
+      "authorOrCreator": "Benjamin Graham",
+      "sourceUrl": null,
+      "thumbnailUrl": null,
+      "licenseStatus": "llm_summary",
+      "durationMinutes": 13,
+      "progressPercent": 45,
+      "createdAt": "2025-01-01T00:00:00Z"
+    }
+  ],
+  "total": 12
+}
+```
+
+**Note:** `durationMinutes` is calculated from actual word count (words / 200 reading speed), not hardcoded.
+
+---
+
+### Continue Reading
+
+Get the user's most recent in-progress content resource.
+
+```
+GET /content-resources/continue-reading
+```
+
+**Auth Required:** Yes
+
+**Response:** `200 OK`
+```json
+{
+  "resource": {
+    "id": "uuid",
+    "kind": "llm_book_summary",
+    "title": "The Intelligent Investor",
+    "authorOrCreator": "Benjamin Graham",
+    "durationMinutes": 13,
+    "progressPercent": 45
+  },
+  "hasResource": true
+}
+```
+
+**Response (no in-progress resource):** `200 OK`
+```json
+{
+  "resource": null,
+  "hasResource": false
+}
+```
+
+---
+
+## Streak
+
+### Get Streak
+
+Get the user's current and longest reading/engagement streak.
+
+```
+GET /streak
+```
+
+**Auth Required:** Yes
+
+**Response:** `200 OK`
+```json
+{
+  "currentStreak": 5,
+  "longestStreak": 12,
+  "lastActiveDate": "2025-01-15"
+}
+```
+
+---
+
+## Daily Focus
+
+### Get Daily Focus
+
+Get today's focus task, a reflection prompt, and current streak count.
+
+```
+GET /daily-focus
+```
+
+**Auth Required:** Yes
+
+**Response:** `200 OK`
+```json
+{
+  "focusItem": {
+    "id": "uuid",
+    "title": "Read chapters 1-3 of 'The Intelligent Investor'",
+    "type": "practice",
+    "estimatedHours": 0.5,
+    "dailyInstructions": "Open 'The Intelligent Investor' to Chapter 1. Read pages 3-25, focusing on Graham's distinction between investment and speculation. After each chapter, write a 2-sentence summary of the key argument. You're done when you have summaries for all three chapters."
+  },
+  "reflectionPrompt": "What's one thing you learned today that changed how you think about risk?",
+  "streak": 5
+}
+```
+
+**Note:** `dailyInstructions` is now a 40-80 word paragraph with specific, measurable actions — not a vague 2-sentence hint.
+The backend reads it from `PlanItem.meta_json.daily_instructions` first, then falls back to `PlanItem.details_json.daily_instructions`.
 
 ---
 

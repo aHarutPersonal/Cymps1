@@ -7,9 +7,8 @@ PROMPT MAPPING:
 When PLAN_GENERATOR_MODE=llm and LLM is configured, uses LLM to generate plan items.
 Otherwise, generates deterministic template-based items.
 """
-import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from app.core.config import settings
 from app.models.plan import PlanItemType
@@ -36,104 +35,63 @@ class PlanItemData:
     meta_json: dict | None = None
 
 
+@dataclass
+class PlanRoadmap:
+    """Top-level roadmap data from the new prompt schema."""
+    roadmap_thesis: str = ""
+    anti_goals: list[str] = field(default_factory=list)
+    items: list[PlanItemData] = field(default_factory=list)
+
+
 # =============================================================================
 # Deterministic Plan Generation (no LLM)
 # =============================================================================
 
 
-# Template items by category
-PLAN_TEMPLATES = {
-    "career": PlanItemData(
-        title="Build Professional Portfolio",
-        type=PlanItemType.PROJECT,
-        description="Create or update your professional portfolio showcasing key projects and achievements",
-        week_start=1,
-        week_end=4,
-        success_metric="Portfolio live and shared with network",
-        estimated_hours=20,
-    ),
-    "learning": PlanItemData(
-        title="Deep Study Session",
-        type=PlanItemType.READING,
-        description="Dedicate focused time to studying your field's fundamentals and recent developments",
-        week_start=1,
-        week_end=6,
-        success_metric="Complete study notes and key takeaways document",
-        estimated_hours=25,
-    ),
-    "finance": PlanItemData(
-        title="Financial Analysis Practice",
-        type=PlanItemType.PRACTICE,
-        description="Practice analyzing financial statements or investment opportunities",
-        week_start=3,
-        week_end=8,
-        success_metric="Complete 3 detailed analyses with written conclusions",
-        estimated_hours=20,
-    ),
-    "impact": PlanItemData(
-        title="Community Contribution",
-        type=PlanItemType.PROJECT,
-        description="Contribute to your community or professional network in a meaningful way",
-        week_start=5,
-        week_end=10,
-        success_metric="Complete one significant contribution with documented impact",
-        estimated_hours=15,
-    ),
-    "mindset": PlanItemData(
-        title="Weekly Reflection Habit",
-        type=PlanItemType.HABIT,
-        description="Establish a weekly reflection practice to track progress and learnings",
-        week_start=1,
-        week_end=12,
-        success_metric="12 weekly reflection entries completed",
-        estimated_hours=6,
-    ),
-    "other": PlanItemData(
-        title="Skill Development",
-        type=PlanItemType.COURSE,
-        description="Focus on developing a new skill relevant to your goals",
-        week_start=2,
-        week_end=8,
-        success_metric="Demonstrate new skill through a practical project",
-        estimated_hours=30,
-    ),
-}
-
-
 def _generate_deterministic_items(
-    gaps: list[str],
-    duration_weeks: int,
     weekly_hours: int,
-) -> list[PlanItemData]:
+    duration_weeks: int = 12,
+) -> PlanRoadmap:
     """
-    Generate deterministic plan items based on missing categories.
-    
+    Generate deterministic plan items as fallback.
+
     NO LLM USED - pure template-based generation.
     """
     items = []
-    total_hours = duration_weeks * weekly_hours
-    
-    # Scale hours proportionally
-    hours_per_item = total_hours // max(1, len(gaps))
-    
-    for category in gaps[:6]:  # Max 6 items
-        template = PLAN_TEMPLATES.get(category, PLAN_TEMPLATES["other"])
-        
-        # Adjust weeks to fit duration
-        week_start = min(template.week_start, duration_weeks)
-        week_end = min(template.week_end, duration_weeks)
-        
-        items.append(PlanItemData(
-            title=template.title,
-            type=template.type,
-            description=template.description,
-            week_start=week_start,
-            week_end=week_end,
-            success_metric=template.success_metric,
-            estimated_hours=min(template.estimated_hours, hours_per_item),
-        ))
-    
-    return items
+
+    # Week-based deterministic plan (3-phase approach)
+    phases = [
+        # Phase 1: Foundation (Weeks 1-4)
+        {"weeks": range(1, 5), "theme": "Foundation & Research"},
+        # Phase 2: Build (Weeks 5-8)
+        {"weeks": range(5, 9), "theme": "Execution & Building"},
+        # Phase 3: Scale (Weeks 9-12)
+        {"weeks": range(9, 13), "theme": "Refinement & Consolidation"},
+    ]
+
+    for phase in phases:
+        for w in phase["weeks"]:
+            if w > duration_weeks:
+                break
+            items.append(PlanItemData(
+                title=f"Week {w}: {phase['theme']}",
+                type=PlanItemType.PROJECT,
+                description=f"Execute the highest-leverage task for {phase['theme'].lower()} this week.",
+                week_start=w,
+                week_end=w,
+                success_metric="All binary tasks completed for this week",
+                estimated_hours=weekly_hours,
+                meta_json={
+                    "predicted_friction": "Procrastination or overthinking",
+                    "friction_solution": "Start with the smallest possible action",
+                },
+            ))
+
+    return PlanRoadmap(
+        roadmap_thesis="Focus on the critical 20% of actions that drive 80% of results.",
+        anti_goals=["Avoid busywork disguised as productivity"],
+        items=items,
+    )
 
 
 # =============================================================================
@@ -143,94 +101,95 @@ def _generate_deterministic_items(
 
 
 async def _generate_llm_items(
-    gaps: list[str],
-    duration_weeks: int,
-    weekly_hours: int,
-    target_age: int = 25,
-    user_profile: dict | None = None,
-    idol_profile: dict | None = None,
-    idol_name: str = "the idol",
-    idol_milestones: list[dict] | None = None,
-    idol_persona: dict | None = None,
-    readiness_by_gap: dict | None = None,
-    allowed_resources: list[dict] | None = None,
-) -> list[PlanItemData]:
+    idol_name: str,
+    user_goal: str,
+    hours_per_week: int,
+    target_age: int | None = None,
+    user_context: str = "",
+    idol_profile: dict | list | str | None = None,
+    idol_persona: dict | list | str | None = None,
+    idol_milestones: dict | list | str | None = None,
+    gaps: dict | list | str | None = None,
+    readiness_by_gap: dict | list | str | None = None,
+) -> PlanRoadmap:
     """
     Generate plan items using LLM.
-    
+
     PROMPTS USED:
     - System: extractor_system.txt
     - User: plan_generate.txt
-    
+
     Falls back to deterministic if LLM fails.
     """
-    client = get_llm_client()
-    
+    client = get_llm_client(fast=True)
+
     try:
         # Load prompt templates
         system_prompt = load_prompt("extractor_system")
         user_template = load_prompt("plan_generate")
-        
-        # Prepare variables (render_prompt handles json.dumps for dict/list)
-        user_profile_data = user_profile or {"weekly_hours": weekly_hours}
-        
-        # Render user prompt with strict validation
+
+        # Render user prompt with the full plan contract.
         user_prompt = render_prompt(user_template, {
+            "user_goal": user_goal,
             "idol_name": idol_name,
-            "user_profile_json": user_profile_data,
+            "hours_per_week": str(hours_per_week),
+            "target_age": str(target_age or "null"),
+            "user_context": user_context,
             "idol_profile_json": idol_profile or {},
             "idol_persona_json": idol_persona or {},
             "idol_milestones_json": idol_milestones or [],
-            "target_age": str(target_age),
-            "gaps_json": gaps,
+            "gaps_json": gaps or [],
             "readiness_by_gap_json": readiness_by_gap or {},
-            "allowed_resources_json": allowed_resources or [],
         }, prompt_name="plan_generate.txt", strict=True)
-        
+
         validated, response = await client.generate_and_validate(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             output_model=PlanGenerationResponse,
             repair_on_failure=True,
         )
-        
-        if validated and validated.plan.items:
+
+        if validated and validated.weeks:
             result_items = []
-            for item in validated.plan.items:
-                # Build meta_json from extra LLM fields (for detail generation)
-                meta = {}
-                if item.detail_tags:
-                    meta["detail_tags"] = item.detail_tags
-                if item.primary_gap:
-                    meta["primary_gap"] = item.primary_gap
-                if item.suggested_queries:
-                    meta["suggested_queries"] = item.suggested_queries
-                if item.idol_parallel:
-                    meta["idol_parallel"] = item.idol_parallel
-                if item.difficulty:
-                    meta["difficulty"] = item.difficulty.value
-                if item.confidence:
-                    meta["confidence"] = item.confidence
-                
-                result_items.append(PlanItemData(
-                    title=item.title,
-                    type=PlanItemType(item.type.value),
-                    description=item.description,
-                    week_start=item.week_start,
-                    week_end=item.week_end,
-                    success_metric=item.success_metric,
-                    estimated_hours=item.estimated_hours,
-                    resource_title=item.resource.title if item.resource.kind.value != "none" else None,
-                    resource_url=item.resource.url if item.resource.kind.value != "none" else None,
-                    meta_json=meta if meta else None,
-                ))
-            return result_items
-            
+            type_map = {
+                "project": PlanItemType.PROJECT,
+                "course": PlanItemType.COURSE,
+                "habit": PlanItemType.HABIT,
+                "practice": PlanItemType.PRACTICE,
+                "reading": PlanItemType.READING,
+                "reflection": PlanItemType.REFLECTION,
+            }
+            for week in validated.weeks:
+                for task in week.binary_tasks:
+                    item_type = type_map.get(task.type.lower(), PlanItemType.PROJECT)
+                    estimated_hours = task.estimated_hours or max(1, hours_per_week // max(1, len(week.binary_tasks)))
+                    result_items.append(PlanItemData(
+                        title=task.title,
+                        type=item_type,
+                        description=task.description,
+                        week_start=week.week_number,
+                        week_end=week.week_number,
+                        success_metric=f"Task completed: {task.title}",
+                        estimated_hours=estimated_hours,
+                        meta_json={
+                            "primary_mission": week.primary_mission,
+                            "predicted_friction": week.predicted_friction,
+                            "friction_solution": week.friction_solution,
+                            "daily_instructions": task.daily_instructions,
+                        },
+                    ))
+
+            return PlanRoadmap(
+                roadmap_thesis=validated.roadmap_thesis,
+                anti_goals=validated.anti_goals,
+                items=result_items,
+            )
+
     except Exception as e:
         logger.exception(f"LLM plan generation failed: {e}, falling back to deterministic")
-    
+
     # Fall back to deterministic
-    return _generate_deterministic_items(gaps, duration_weeks, weekly_hours)
+    return _generate_deterministic_items(hours_per_week)
 
 
 # =============================================================================
@@ -239,73 +198,53 @@ async def _generate_llm_items(
 
 
 async def generate_plan(
-    gaps: list[str],
-    duration_weeks: int = 12,
-    weekly_hours: int = 10,
-    target_age: int = 25,
-    user_profile: dict | None = None,
-    idol_profile: dict | None = None,
     idol_name: str = "the idol",
-    idol_milestones: list[dict] | None = None,
-    idol_persona: dict | None = None,
-    readiness_by_gap: dict | None = None,
-    allowed_resources: list[dict] | None = None,
+    user_goal: str = "personal and professional growth",
+    weekly_hours: int = 10,
+    duration_weeks: int = 12,
     force_llm: bool = False,
-) -> list[PlanItemData]:
+    user_context: str = "",
+    # Legacy params kept for backward compat (ignored by new prompt)
+    **kwargs,
+) -> PlanRoadmap:
     """
-    Generate plan items to close gaps vs idol.
-    
+    Generate a strategic 12-week plan.
+
     PROMPTS USED (when LLM mode):
     - System: extractor_system.txt
     - User: plan_generate.txt
-    
+
     LLM is used if:
     - PLAN_GENERATOR_MODE=llm AND LLM_PROVIDER=openai AND API key is set
     - OR force_llm=True
-    
+
     Otherwise generates deterministic template-based items.
-    
-    Args:
-        gaps: List of category gaps (e.g., ["career", "finance"])
-        duration_weeks: Plan duration in weeks
-        weekly_hours: Weekly time commitment in hours
-        target_age: User's target age for plan
-        user_profile: User profile data for LLM context (enriched after intake)
-        idol_profile: Idol profile data for LLM context
-        idol_name: Name of the idol for personalized plans
-        idol_milestones: List of idol's milestones for context
-        idol_persona: Idol persona for era/worldview context
-        readiness_by_gap: User readiness levels per category (from intake normalization)
-        allowed_resources: List of allowed resources for plan items
-        force_llm: Force LLM usage (raises error if not configured)
-        
+
     Returns:
-        List of PlanItemData objects
+        PlanRoadmap with roadmap_thesis, anti_goals, and items
     """
     use_llm = (
-        settings.plan_generator_mode == "llm" and 
-        settings.llm_provider == "openai" and 
+        settings.plan_generator_mode == "llm" and
         settings.llm_configured
     ) or force_llm
-    
+
     if use_llm:
         if force_llm and not settings.llm_configured:
             raise ValueError("LLM not configured but force_llm=True")
-        
+
         logger.info(f"Generating plan using LLM for {idol_name}")
         return await _generate_llm_items(
-            gaps=gaps,
-            duration_weeks=duration_weeks,
-            weekly_hours=weekly_hours,
-            target_age=target_age,
-            user_profile=user_profile,
-            idol_profile=idol_profile,
             idol_name=idol_name,
-            idol_milestones=idol_milestones,
-            idol_persona=idol_persona,
-            readiness_by_gap=readiness_by_gap,
-            allowed_resources=allowed_resources,
+            user_goal=user_goal,
+            hours_per_week=weekly_hours,
+            target_age=kwargs.get("target_age"),
+            user_context=user_context,
+            idol_profile=kwargs.get("idol_profile"),
+            idol_persona=kwargs.get("idol_persona"),
+            idol_milestones=kwargs.get("idol_milestones"),
+            gaps=kwargs.get("gaps"),
+            readiness_by_gap=kwargs.get("readiness_by_gap"),
         )
     else:
         logger.info("Generating plan using deterministic templates")
-        return _generate_deterministic_items(gaps, duration_weeks, weekly_hours)
+        return _generate_deterministic_items(weekly_hours, duration_weeks)

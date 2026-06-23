@@ -1,4 +1,3 @@
-import random
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -8,7 +7,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.db import get_db
-from app.models.idol import Idol
 from app.models.idol_job import IdolImportJob
 from app.models.plan_job import PlanGenerationJob
 from app.models.item_detail_job import PlanItemDetailJob
@@ -33,12 +31,10 @@ THINKING_NARRATIVES = {
     ],
     "collecting_sources": [
         "Searching for reliable sources about {idol_name}...",
-        "Found their Wikipedia page. Reading through it now...",
-        "There's quite a lot of information here.",
-        "Scanning through their early life section...",
-        "Now looking at their career highlights...",
-        "Collecting quotes and key moments...",
-        "Almost done gathering the raw information.",
+        "Checking source sections for dates, roles, and early domain signals.",
+        "Collecting cited milestones that can support age-matched comparison.",
+        "Separating concrete events from vague reputation claims.",
+        "Saving source-backed details for the comparison and mentor persona.",
     ],
     "extracting_profile": [
         "Now I'm piecing together {idol_name}'s profile...",
@@ -49,14 +45,10 @@ THINKING_NARRATIVES = {
         "Got the basics down. Moving on to the good stuff.",
     ],
     "extracting_achievements": [
-        "This is the exciting part - finding their achievements...",
-        "I'm looking for concrete milestones, not just fame...",
-        "Found something interesting from their early career...",
-        "There's a pattern here - they built up gradually.",
-        "Noting down the key decisions they made...",
-        "Some of these achievements are quite impressive.",
-        "I'm focusing on things you could actually learn from.",
-        "Almost done extracting the important milestones.",
+        "Extracting dated achievements, publications, roles, launches, and awards.",
+        "Keeping milestones only when they are concrete enough to compare.",
+        "Looking for repeatable methods behind the achievement, not just the headline.",
+        "Tagging milestones that can become lessons, habits, or practice tasks.",
     ],
     "normalizing_timeline": [
         "Now let me organize everything chronologically...",
@@ -91,14 +83,14 @@ THINKING_NARRATIVES = {
     ],
     # Plan generation narratives
     "analyzing_gaps": [
-        "Comparing your achievements with {idol_name}'s journey...",
-        "Identifying key skills and milestones you're missing...",
-        "Looking for parallel growth patterns in your careers...",
+        "Comparing your current profile with {idol_name}'s age-matched milestones...",
+        "Identifying domain gaps that can become specific weekly missions.",
+        "Prioritizing the gaps that should drive today, week one, and the 12-week plan.",
     ],
     "structuring_curriculum": [
-        "Designing a weekly step-by-step roadmap for you...",
-        "Breaking down long-term goals into manageable habits...",
-        "Selecting the most impactful projects to work on...",
+        "Translating the mentor verdict into a 12-week execution path.",
+        "Balancing major missions with daily rhythm tasks you can actually complete.",
+        "Selecting resources and practice loops tied to the idol's real domain.",
     ],
     "balancing_workload": [
         "Fitting these goals into your {weekly_hours}h weekly schedule...",
@@ -129,14 +121,14 @@ THINKING_NARRATIVES = {
     ],
     # Plan Item Detail narratives
     "loading_context": [
-        "Loading your goals and current progress...",
-        "Consulting {idol_name}'s path for this specific area...",
-        "Preparing to generate detailed steps for {task_title}...",
+        "Loading your goals, current week, and plan metadata.",
+        "Connecting {task_title} back to {idol_name}'s domain and methods.",
+        "Preparing lessons, materials, and completion criteria for this task.",
     ],
     "generating_curriculum": [
-        "Designing specific, actionable steps for you...",
-        "Looking for the best resources to help you learn...",
-        "Structuring the curriculum for maximum impact...",
+        "Writing teach-first steps with examples, practice, and reflection.",
+        "Selecting resources that connect directly to this week's mission.",
+        "Checking that each step has a concrete definition of done.",
     ],
     "finalizing_steps": [
         "Finalizing your personalized tasks...",

@@ -28,8 +28,16 @@ class TimelineSlider extends StatelessWidget {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('AGE ${currentAge.toInt()}', style: AppTypography.monoNum.copyWith(color: AppColors.primary)),
-              Text('MAX ${maxAge.toInt()}', style: AppTypography.monoLabel.copyWith(color: AppColors.textSecondary)),
+              Text(
+                'AGE ${currentAge.toInt()}',
+                style: AppTypography.monoNum.copyWith(color: AppColors.primary),
+              ),
+              Text(
+                'MAX ${maxAge.toInt()}',
+                style: AppTypography.monoLabel.copyWith(
+                  color: AppColors.textSecondary,
+                ),
+              ),
             ],
           ),
         ),
@@ -38,7 +46,7 @@ class TimelineSlider extends StatelessWidget {
             activeTrackColor: AppColors.primary,
             inactiveTrackColor: AppColors.cardBorder,
             thumbColor: AppColors.primary,
-            overlayColor: AppColors.primary.withOpacity(0.2),
+            overlayColor: AppColors.primary.withValues(alpha: 0.2),
             trackHeight: 4,
             thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
             overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),

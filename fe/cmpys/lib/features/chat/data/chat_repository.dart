@@ -35,10 +35,7 @@ class ChatRepository {
   /// [limit] - Maximum number of threads to return.
   /// [offset] - Pagination offset.
   /// Returns a [ThreadsListResponse] with threads.
-  Future<ThreadsListResponse> getThreads({
-    int? limit,
-    int? offset,
-  }) async {
+  Future<ThreadsListResponse> getThreads({int? limit, int? offset}) async {
     final queryParams = <String, dynamic>{};
     if (limit != null) queryParams['limit'] = limit;
     if (offset != null) queryParams['offset'] = offset;
@@ -106,7 +103,7 @@ class ChatRepository {
   /// [threadId] - The thread's unique identifier.
   /// [message] - The message content.
   /// Returns a [SendMessageResponse] with the reply.
-  /// 
+  ///
   /// API: POST /chat/threads/{thread_id}/messages
   Future<SendMessageResponse> sendMessage(
     String threadId,
@@ -122,7 +119,7 @@ class ChatRepository {
     );
 
     debugPrint('💬 Chat response: ${response.data}');
-    
+
     final parsed = SendMessageResponse.fromJson(response.data);
     debugPrint('💬 Parsed reply: "${parsed.reply}"');
     debugPrint('💬 Assistant message: ${parsed.assistantMessage?.content}');
@@ -142,10 +139,12 @@ class ChatRepository {
     String message,
   ) async* {
     debugPrint('💬 Streaming message to thread: $threadId');
-    
+
     // Helper to make the stream request
     Future<HttpClientResponse> makeRequest(String? authToken) async {
-      final uri = Uri.parse('${_dioClient.baseUrl}/chat/threads/$threadId/messages/stream');
+      final uri = Uri.parse(
+        '${_dioClient.baseUrl}/chat/threads/$threadId/messages/stream',
+      );
       debugPrint('💬 Making request to: $uri');
       final request = await HttpClient().postUrl(uri);
       request.headers.set('Content-Type', 'application/json; charset=utf-8');
@@ -162,12 +161,14 @@ class ChatRepository {
       debugPrint('💬 Request body written, calling close()...');
       return request.close();
     }
-    
+
     try {
       // First attempt
       var token = await _dioClient.getAuthToken();
-      debugPrint('💬 Got token: ${token != null ? "${token.substring(0, 20)}..." : "NULL"}');
-      
+      debugPrint(
+        '💬 Got token: ${token != null ? "${token.substring(0, 20)}..." : "NULL"}',
+      );
+
       HttpClientResponse response;
       try {
         response = await makeRequest(token);
@@ -177,7 +178,7 @@ class ChatRepository {
         yield StreamChatEvent.error('Connection failed: $e');
         return;
       }
-      
+
       // If 401, trigger a token refresh via a dummy Dio call and retry
       if (response.statusCode == 401) {
         debugPrint('💬 Got 401, refreshing token...');
@@ -189,7 +190,7 @@ class ChatRepository {
           // Ignore - we just want to trigger refresh
           debugPrint('💬 Refresh trigger call error (expected): $e');
         }
-        
+
         // Get the fresh token (may have been refreshed by the interceptor)
         token = await _dioClient.getAuthToken();
         debugPrint('💬 Retrying stream with refreshed token...');
@@ -202,13 +203,13 @@ class ChatRepository {
           return;
         }
       }
-      
+
       if (response.statusCode != 200) {
         debugPrint('💬 Non-200 status: ${response.statusCode}');
         yield StreamChatEvent.error('HTTP ${response.statusCode}');
         return;
       }
-      
+
       debugPrint('💬 Starting to read SSE stream...');
       await for (final chunk in response.transform(utf8.decoder)) {
         // Parse SSE format: "data: {...}\n\n"
@@ -217,7 +218,7 @@ class ChatRepository {
             try {
               final jsonStr = line.substring(6);
               final data = jsonDecode(jsonStr) as Map<String, dynamic>;
-              
+
               final type = data['type'] as String?;
               if (type == 'chunk') {
                 yield StreamChatEvent.chunk(data['content'] as String? ?? '');
@@ -226,10 +227,18 @@ class ChatRepository {
                 yield StreamChatEvent.done(
                   messageId: data['messageId'] as String?,
                   userMessageId: data['userMessageId'] as String?,
+                  suggestedActions: SendMessageResponse.parseSuggestedActions(
+                    data['suggestedActions'] ?? data['suggested_actions'],
+                  ),
+                  followUpQuestions: SendMessageResponse.parseStringList(
+                    data['followUpQuestions'] ?? data['follow_up_questions'],
+                  ),
                 );
               } else if (type == 'error') {
                 debugPrint('💬 Server sent error: ${data['error']}');
-                yield StreamChatEvent.error(data['error'] as String? ?? 'Unknown error');
+                yield StreamChatEvent.error(
+                  data['error'] as String? ?? 'Unknown error',
+                );
               }
             } catch (e) {
               debugPrint('💬 Failed to parse SSE: $e');

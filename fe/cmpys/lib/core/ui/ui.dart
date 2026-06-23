@@ -4,6 +4,7 @@
 /// ```dart
 /// import 'package:cmpys/core/ui/ui.dart';
 /// ```
+library;
 
 export 'app_shell.dart';
 export 'cmpys_app_bar.dart';
@@ -20,3 +21,5 @@ export 'progress_bar.dart';
 export 'progress_ring.dart';
 export 'thinking_stream.dart';
 export 'typewriter_text.dart';
+export 'ambient_background.dart';
+export 'glass_card.dart';

@@ -1,15 +1,16 @@
 import 'dart:async';
-
+import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:intl/intl.dart';
 
 import '../../../app/assets.dart';
 import '../../../app/design_tokens.dart';
+import '../../../core/ui/ambient_background.dart';
 import '../../../core/ui/cmpys_button.dart';
 import '../../../core/ui/cmpys_card.dart';
-import '../../../core/ui/cmpys_chip.dart';
 import '../../../core/ui/cmpys_text_field.dart';
 import '../../../core/ui/empty_state.dart';
 import '../../../core/ui/loading_state.dart';
@@ -25,6 +26,7 @@ class NotesScreen extends ConsumerStatefulWidget {
 
 class _NotesScreenState extends ConsumerState<NotesScreen> {
   final _searchController = TextEditingController();
+  bool _oldestFirst = false;
 
   @override
   void initState() {
@@ -51,47 +53,56 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
 
     return Scaffold(
       backgroundColor: AppColors.bg,
-      body: SafeArea(
-        bottom: false,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Header
-            Padding(
-              padding: AppSpacing.screenH,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const SizedBox(height: AppSpacing.s8),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text('Data Ledger', style: AppTypography.h1),
-                      CmpysIconButton(
-                        icon: AppAssets.iconFilter,
-                        onPressed: () {},
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: AppSpacing.s4),
-                  _buildSubtitle(notesState),
-                  const SizedBox(height: AppSpacing.s16),
-                  CmpysSearchField(
-                    controller: _searchController,
-                    hint: 'Search notes...',
-                    onChanged: (value) {
-                      ref.read(notesControllerProvider.notifier).search(value);
-                    },
-                  ),
-                ],
+      body: AmbientBackground(
+        useSafeArea: false,
+        child: SafeArea(
+          bottom: false,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Header
+              Padding(
+                padding: AppSpacing.screenH,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const SizedBox(height: AppSpacing.s8),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'Studio',
+                          style: AppTypography.h1.copyWith(
+                            letterSpacing: -1.5,
+                            fontSize: 36,
+                          ),
+                        ),
+                        CmpysIconButton(
+                          icon: AppAssets.iconFilter,
+                          onPressed: _showSortSheet,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: AppSpacing.s4),
+                    _buildSubtitle(notesState),
+                    const SizedBox(height: AppSpacing.s16),
+                    CmpysSearchField(
+                      controller: _searchController,
+                      hint: 'Search notes...',
+                      onChanged: (value) {
+                        ref
+                            .read(notesControllerProvider.notifier)
+                            .search(value);
+                      },
+                    ),
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(height: AppSpacing.s16),
-            // Content
-            Expanded(
-              child: _buildBody(notesState),
-            ),
-          ],
+              const SizedBox(height: AppSpacing.s16),
+              // Content
+              Expanded(child: _buildBody(notesState)),
+            ],
+          ),
         ),
       ),
       floatingActionButton: CmpysFab(
@@ -109,17 +120,14 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
 
     return Text(
       '$count notes',
-      style: AppTypography.caption.copyWith(
-        color: AppColors.textSecondary,
-      ),
+      style: AppTypography.caption.copyWith(color: AppColors.textSecondary),
     );
   }
 
   Widget _buildBody(NotesState state) {
     return switch (state) {
-      NotesInitial() || NotesLoading() => const LoadingState(
-          message: 'Loading your notes...',
-        ),
+      NotesInitial() ||
+      NotesLoading() => const LoadingState(message: 'Loading your notes...'),
       NotesError(:final message) => _buildErrorState(message),
       NotesLoaded(:final notes, :final query) => _buildNotesList(notes, query),
     };
@@ -142,10 +150,7 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
               ),
             ),
             const SizedBox(height: AppSpacing.s16),
-            Text(
-              'Failed to load notes',
-              style: AppTypography.h3,
-            ),
+            Text('Failed to load notes', style: AppTypography.h3),
             const SizedBox(height: AppSpacing.s8),
             Text(
               message,
@@ -157,7 +162,8 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
             const SizedBox(height: AppSpacing.s24),
             CmpysButton(
               label: 'Try Again',
-              onPressed: () => ref.read(notesControllerProvider.notifier).load(),
+              onPressed: () =>
+                  ref.read(notesControllerProvider.notifier).load(),
             ),
           ],
         ),
@@ -180,6 +186,13 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
       return _buildEmptyState();
     }
 
+    final displayNotes = [...notes]
+      ..sort(
+        (a, b) => _oldestFirst
+            ? a.createdAt.compareTo(b.createdAt)
+            : b.createdAt.compareTo(a.createdAt),
+      );
+
     return RefreshIndicator(
       onRefresh: _onRefresh,
       color: AppColors.accent,
@@ -189,17 +202,64 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
         padding: EdgeInsets.only(
           left: AppSpacing.s24,
           right: AppSpacing.s24,
-          bottom: AppSpacing.s100,
+          bottom: 88,
         ),
-        itemCount: notes.length,
-        separatorBuilder: (_, __) => const SizedBox(height: AppSpacing.s12),
+        itemCount: displayNotes.length,
+        separatorBuilder: (_, _) => const SizedBox(height: AppSpacing.s12),
         itemBuilder: (context, index) {
           return _NoteCard(
-            note: notes[index],
-            onTap: () => _openNoteDetail(notes[index]),
+            note: displayNotes[index],
+            onTap: () => _openNoteDetail(displayNotes[index]),
           );
         },
       ),
+    );
+  }
+
+  void _showSortSheet() {
+    HapticFeedback.selectionClick();
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return Container(
+          margin: const EdgeInsets.all(AppSpacing.s16),
+          padding: const EdgeInsets.all(AppSpacing.s20),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: AppRadii.br24,
+            border: Border.all(color: AppColors.borderLight),
+            boxShadow: AppShadows.lg,
+          ),
+          child: SafeArea(
+            top: false,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Sort notes', style: AppTypography.h3),
+                const SizedBox(height: AppSpacing.s12),
+                _SortOption(
+                  label: 'Newest first',
+                  selected: !_oldestFirst,
+                  onTap: () {
+                    setState(() => _oldestFirst = false);
+                    Navigator.pop(context);
+                  },
+                ),
+                _SortOption(
+                  label: 'Oldest first',
+                  selected: _oldestFirst,
+                  onTap: () {
+                    setState(() => _oldestFirst = true);
+                    Navigator.pop(context);
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -215,7 +275,7 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
               height: 72,
               decoration: BoxDecoration(
                 color: AppColors.surface,
-                borderRadius: AppRadii.br16,
+                borderRadius: AppRadii.br24, // prototype rounded
               ),
               child: Center(
                 child: SvgPicture.asset(
@@ -230,13 +290,10 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
               ),
             ),
             const SizedBox(height: AppSpacing.s20),
-            Text(
-              'No notes yet',
-              style: AppTypography.h3,
-            ),
+            Text('The canvas is empty', style: AppTypography.h3),
             const SizedBox(height: AppSpacing.s8),
             Text(
-              'Capture your thoughts, reflections,\nand learnings',
+              'Capture your reflections and\nideas in zen mode.',
               style: AppTypography.body.copyWith(
                 color: AppColors.textSecondary,
               ),
@@ -256,10 +313,13 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
   }
 
   void _showAddNote(BuildContext context) {
+    HapticFeedback.lightImpact();
     Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (context) => const AddNoteScreen(),
-        fullscreenDialog: true,
+      PageRouteBuilder(
+        opaque: false,
+        pageBuilder: (_, _, _) => const AddNoteScreen(),
+        transitionsBuilder: (_, animation, _, child) =>
+            FadeTransition(opacity: animation, child: child),
       ),
     );
   }
@@ -273,11 +333,32 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
   }
 }
 
-class _NoteCard extends StatelessWidget {
-  const _NoteCard({
-    required this.note,
+class _SortOption extends StatelessWidget {
+  const _SortOption({
+    required this.label,
+    required this.selected,
     required this.onTap,
   });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      title: Text(label, style: AppTypography.bodyMedium),
+      trailing: selected
+          ? const Icon(Icons.check, color: AppColors.accent)
+          : null,
+      onTap: onTap,
+    );
+  }
+}
+
+class _NoteCard extends StatelessWidget {
+  const _NoteCard({required this.note, required this.onTap});
 
   final Note note;
   final VoidCallback onTap;
@@ -291,35 +372,46 @@ class _NoteCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
+              Container(
+                width: 4,
+                height: 16,
+                decoration: BoxDecoration(
+                  color: AppColors.brandAccent,
+                  borderRadius: AppRadii.brFull,
+                ),
+              ),
+              const SizedBox(width: AppSpacing.s8),
               Expanded(
                 child: Text(
-                  note.title ?? 'Untitled',
-                  style: AppTypography.bodyMedium,
+                  note.title ?? 'Untitled Reflection',
+                  style: AppTypography.h4,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
               Text(
-                _formatDate(note.createdAt),
-                style: AppTypography.caption.copyWith(
-                  color: AppColors.textTertiary,
+                _formatDate(note.createdAt).toUpperCase(),
+                style: AppTypography.captionUpper.copyWith(
+                  color: AppColors.brandAccent,
                 ),
               ),
             ],
           ),
-          const SizedBox(height: AppSpacing.s8),
+          const SizedBox(height: AppSpacing.s12),
           Text(
             note.content,
-            style: AppTypography.body.copyWith(
+            style: AppTypography.ideaCardBody.copyWith(
               color: AppColors.textSecondary,
+              fontSize: 16,
             ),
-            maxLines: 2,
+            maxLines: 3,
             overflow: TextOverflow.ellipsis,
           ),
           if (note.attachments.isNotEmpty) ...[
-            const SizedBox(height: AppSpacing.s12),
-            _buildAttachmentBadge(note.attachments!.first),
+            const SizedBox(height: AppSpacing.s16),
+            _buildAttachmentBadge(note.attachments.first),
           ],
         ],
       ),
@@ -352,9 +444,7 @@ class _NoteCard extends StatelessWidget {
         const SizedBox(width: AppSpacing.s4),
         Text(
           label,
-          style: AppTypography.caption.copyWith(
-            color: AppColors.accent,
-          ),
+          style: AppTypography.caption.copyWith(color: AppColors.accent),
         ),
       ],
     );
@@ -392,8 +482,7 @@ class _AddNoteScreenState extends ConsumerState<AddNoteScreen> {
     super.dispose();
   }
 
-  bool get _canSave =>
-      _contentController.text.trim().isNotEmpty && !_isSaving;
+  bool get _canSave => _contentController.text.trim().isNotEmpty && !_isSaving;
 
   Future<void> _saveNote() async {
     if (!_canSave) return;
@@ -404,7 +493,9 @@ class _AddNoteScreenState extends ConsumerState<AddNoteScreen> {
     });
 
     try {
-      await ref.read(notesControllerProvider.notifier).createNote(
+      await ref
+          .read(notesControllerProvider.notifier)
+          .createNote(
             title: _titleController.text.trim().isEmpty
                 ? null
                 : _titleController.text.trim(),
@@ -422,76 +513,82 @@ class _AddNoteScreenState extends ConsumerState<AddNoteScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        backgroundColor: AppColors.bg,
-        leading: IconButton(
-          onPressed: _isSaving ? null : () => Navigator.pop(context),
-          icon: SvgPicture.asset(
-            AppAssets.iconX,
-            width: 24,
-            height: 24,
-            colorFilter: ColorFilter.mode(
-              _isSaving ? AppColors.textTertiary : AppColors.textPrimary,
-              BlendMode.srcIn,
+    return BackdropFilter(
+      filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+      child: Scaffold(
+        backgroundColor: AppColors.brandBg.withValues(alpha: 0.85),
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          leading: IconButton(
+            onPressed: _isSaving ? null : () => Navigator.pop(context),
+            icon: SvgPicture.asset(
+              AppAssets.iconX,
+              width: 24,
+              height: 24,
+              colorFilter: ColorFilter.mode(
+                _isSaving ? AppColors.textTertiary : AppColors.textPrimary,
+                BlendMode.srcIn,
+              ),
             ),
           ),
+          title: Text('New Note', style: AppTypography.h3),
+          actions: [
+            Padding(
+              padding: const EdgeInsets.only(right: AppSpacing.s16),
+              child: CmpysButton(
+                label: 'Save',
+                size: CmpysButtonSize.small,
+                isExpanded: false,
+                isLoading: _isSaving,
+                onPressed: _canSave ? _saveNote : null,
+              ),
+            ),
+          ],
         ),
-        title: Text('New Note', style: AppTypography.h3),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: AppSpacing.s16),
-            child: CmpysButton(
-              label: 'Save',
-              size: CmpysButtonSize.small,
-              isExpanded: false,
-              isLoading: _isSaving,
-              onPressed: _canSave ? _saveNote : null,
-            ),
-          ),
-        ],
-      ),
-      body: SafeArea(
-        child: GestureDetector(
-          onTap: () => FocusScope.of(context).unfocus(),
-          child: SingleChildScrollView(
-            padding: EdgeInsets.only(
-              left: AppSpacing.s24,
-              right: AppSpacing.s24,
-              bottom: MediaQuery.of(context).viewInsets.bottom + AppSpacing.s32,
-            ),
-            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Error banner
-                if (_errorMessage != null) ...[
-                  _ErrorBanner(
-                    message: _errorMessage!,
-                    onDismiss: () => setState(() => _errorMessage = null),
-                  ),
+        body: SafeArea(
+          child: GestureDetector(
+            onTap: () => FocusScope.of(context).unfocus(),
+            child: SingleChildScrollView(
+              padding: EdgeInsets.only(
+                left: AppSpacing.s24,
+                right: AppSpacing.s24,
+                bottom:
+                    MediaQuery.of(context).viewInsets.bottom + AppSpacing.s32,
+              ),
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Error banner
+                  if (_errorMessage != null) ...[
+                    _ErrorBanner(
+                      message: _errorMessage!,
+                      onDismiss: () => setState(() => _errorMessage = null),
+                    ),
+                    const SizedBox(height: AppSpacing.s16),
+                  ],
                   const SizedBox(height: AppSpacing.s16),
+                  CmpysTextField(
+                    controller: _titleController,
+                    label: 'Title (optional)',
+                    hint: 'Enter note title...',
+                    enabled: !_isSaving,
+                    onChanged: (_) => setState(() {}),
+                  ),
+                  const SizedBox(height: AppSpacing.s20),
+                  CmpysTextArea(
+                    controller: _contentController,
+                    label: 'Content',
+                    hint: 'Write your thoughts...',
+                    minLines: 8,
+                    maxLines: 12,
+                    enabled: !_isSaving,
+                    onChanged: (_) => setState(() {}),
+                  ),
+                  const SizedBox(height: AppSpacing.s32),
                 ],
-                const SizedBox(height: AppSpacing.s16),
-                CmpysTextField(
-                  controller: _titleController,
-                  label: 'Title (optional)',
-                  hint: 'Enter note title...',
-                  enabled: !_isSaving,
-                  onChanged: (_) => setState(() {}),
-                ),
-                const SizedBox(height: AppSpacing.s20),
-                CmpysTextArea(
-                  controller: _contentController,
-                  label: 'Content',
-                  hint: 'Write your thoughts...',
-                  minLines: 8,
-                  maxLines: 12,
-                  enabled: !_isSaving,
-                  onChanged: (_) => setState(() {}),
-                ),
-                const SizedBox(height: AppSpacing.s32),
-              ],
+              ),
             ),
           ),
         ),
@@ -525,11 +622,19 @@ class _NoteDetailScreenState extends ConsumerState<NoteDetailScreen> {
     return noteAsync.when(
       loading: () => Scaffold(
         appBar: _buildAppBar(null),
-        body: const LoadingState(message: 'Loading note...'),
+        backgroundColor: AppColors.bg,
+        body: const AmbientBackground(
+          useSafeArea: false,
+          child: LoadingState(message: 'Loading note...'),
+        ),
       ),
       error: (error, _) => Scaffold(
         appBar: _buildAppBar(null),
-        body: _buildErrorBody(error.toString()),
+        backgroundColor: AppColors.bg,
+        body: AmbientBackground(
+          useSafeArea: false,
+          child: _buildErrorBody(error.toString()),
+        ),
       ),
       data: (note) => _buildContent(note),
     );
@@ -544,13 +649,17 @@ class _NoteDetailScreenState extends ConsumerState<NoteDetailScreen> {
 
     return Scaffold(
       appBar: _buildAppBar(note),
-      body: _isEditing ? _buildEditMode(note) : _buildViewMode(note),
+      backgroundColor: AppColors.bg,
+      body: AmbientBackground(
+        useSafeArea: false,
+        child: _isEditing ? _buildEditMode(note) : _buildViewMode(note),
+      ),
     );
   }
 
   AppBar _buildAppBar(Note? note) {
     return AppBar(
-      backgroundColor: AppColors.bg,
+      backgroundColor: Colors.transparent,
       leading: IconButton(
         onPressed: () {
           if (_isEditing) {
@@ -670,7 +779,7 @@ class _NoteDetailScreenState extends ConsumerState<NoteDetailScreen> {
           // Attachments
           if (note.attachments.isNotEmpty) ...[
             const SizedBox(height: AppSpacing.s32),
-            _buildAttachments(note.attachments!),
+            _buildAttachments(note.attachments),
           ],
           const SizedBox(height: AppSpacing.s48),
         ],
@@ -723,7 +832,9 @@ class _NoteDetailScreenState extends ConsumerState<NoteDetailScreen> {
           style: AppTypography.label.copyWith(color: AppColors.textSecondary),
         ),
         const SizedBox(height: AppSpacing.s12),
-        ...attachments.map((attachment) => _AttachmentCard(attachment: attachment)),
+        ...attachments.map(
+          (attachment) => _AttachmentCard(attachment: attachment),
+        ),
       ],
     );
   }
@@ -749,7 +860,9 @@ class _NoteDetailScreenState extends ConsumerState<NoteDetailScreen> {
             const SizedBox(height: AppSpacing.s8),
             Text(
               message,
-              style: AppTypography.body.copyWith(color: AppColors.textSecondary),
+              style: AppTypography.body.copyWith(
+                color: AppColors.textSecondary,
+              ),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: AppSpacing.s24),
@@ -767,7 +880,9 @@ class _NoteDetailScreenState extends ConsumerState<NoteDetailScreen> {
     setState(() => _isSaving = true);
 
     try {
-      await ref.read(notesControllerProvider.notifier).updateNote(
+      await ref
+          .read(notesControllerProvider.notifier)
+          .updateNote(
             note.id,
             title: _titleController.text.trim().isEmpty
                 ? null
@@ -879,9 +994,7 @@ class _AttachmentCard extends StatelessWidget {
           const SizedBox(width: AppSpacing.s8),
           Text(
             label,
-            style: AppTypography.bodyMedium.copyWith(
-              color: AppColors.accent,
-            ),
+            style: AppTypography.bodyMedium.copyWith(color: AppColors.accent),
           ),
         ],
       ),
@@ -891,10 +1004,7 @@ class _AttachmentCard extends StatelessWidget {
 
 /// Error banner widget
 class _ErrorBanner extends StatelessWidget {
-  const _ErrorBanner({
-    required this.message,
-    required this.onDismiss,
-  });
+  const _ErrorBanner({required this.message, required this.onDismiss});
 
   final String message;
   final VoidCallback onDismiss;
@@ -986,10 +1096,7 @@ class _DeleteConfirmDialog extends StatelessWidget {
               ),
             ),
             const SizedBox(height: AppSpacing.s20),
-            Text(
-              'Delete Note?',
-              style: AppTypography.h3,
-            ),
+            Text('Delete Note?', style: AppTypography.h3),
             const SizedBox(height: AppSpacing.s8),
             Text(
               'Are you sure you want to delete "$noteTitle"? This action cannot be undone.',

@@ -30,9 +30,12 @@ class IdolExternalIdResponse(BaseModel):
 class IdolResponse(BaseModel):
     id: str
     name: str
-    birthDate: date | None = None
+    birth_date: date | None = None
     domain: str
-    imageUrl: str | None = None
+    image_url: str | None = None
+    imageSourceUrl: str | None = None
+    imageLicense: str | None = None
+    imageAttribution: dict | None = None
     aliases: list[IdolAliasResponse] = []
     tags: list[IdolTagResponse] = []
 
@@ -42,13 +45,16 @@ class IdolResponse(BaseModel):
 class IdolDetailResponse(BaseModel):
     id: str
     name: str
-    birthDate: date | None = None
+    birth_date: date | None = None
     domain: str
-    imageUrl: str | None = None
-    createdAt: datetime
+    image_url: str | None = None
+    imageSourceUrl: str | None = None
+    imageLicense: str | None = None
+    imageAttribution: dict | None = None
+    created_at: datetime
     aliases: list[IdolAliasResponse] = []
     tags: list[IdolTagResponse] = []
-    externalIds: list[IdolExternalIdResponse] = []
+    external_ids: list[IdolExternalIdResponse] = []
 
     model_config = {"from_attributes": True}
 
@@ -75,6 +81,10 @@ class LocalIdolSuggestion(BaseModel):
     name: str
     birthDate: date | None = None
     domain: str
+    imageUrl: str | None = None
+    imageSourceUrl: str | None = None
+    imageLicense: str | None = None
+    imageAttribution: dict | None = None
     aliases: list[IdolAliasResponse] = []
     tags: list[IdolTagResponse] = []
     relevanceScore: float = Field(
@@ -93,6 +103,10 @@ class WebIdolSuggestion(BaseModel):
     description: str | None = None
     birthDate: date | None = None
     wikipediaUrl: str | None = None
+    imageUrl: str | None = None
+    imageSourceUrl: str | None = None
+    imageLicense: str | None = None
+    imageAttribution: dict | None = None
     occupations: list[str] = []
     confidence: float = 0.5
 

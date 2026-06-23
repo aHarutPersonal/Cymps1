@@ -116,13 +116,25 @@ Prompts are stored as `.txt` files in the `/prompts` directory. The backend rend
 **Placeholders:**
 | Placeholder | Type | Description |
 |-------------|------|-------------|
+| `{user_goal}` | string | User's primary goal |
+| `{hours_per_week}` | string | Weekly time commitment |
+| `{target_age}` | string | User's target age |
+| `{user_context}` | string | User context (age, interests, achievements) |
 | `{idol_name}` | string | Name of the idol |
 | `{idol_profile_json}` | JSON string | Idol profile data |
+| `{idol_persona_json}` | JSON string | Idol persona (voice, principles) |
 | `{idol_milestones_json}` | JSON string | Idol's milestones at target age |
-| `{user_profile_json}` | JSON string | User profile data |
-| `{target_age}` | string | User's target age |
 | `{gaps_json}` | JSON string | Array of category gaps |
-| `{allowed_resources_json}` | JSON string | Array of allowed resources (or "[]") |
+| `{readiness_by_gap_json}` | JSON string | User readiness per gap category |
+
+**Content Depth Requirements (P0-C):**
+- Mission task descriptions must be >= 50 words with specific books, chapters, exercises
+- Daily rhythm descriptions must be >= 30 words with specific, measurable actions
+- `primary_mission` must be >= 30 words referencing specific skill/deliverable
+- `daily_instructions` must be 3-5 sentences (40-80 words)
+- `estimated_hours` and `daily_instructions` are now preserved in the schema (not dropped)
+
+**Schema:** `BinaryTask` now includes `estimated_hours: float` and `daily_instructions: str | None`
 
 **Used by:**
 - `_generate_llm_items()` in `app/services/planning/generator.py`
@@ -130,9 +142,64 @@ Prompts are stored as `.txt` files in the `/prompts` directory. The backend rend
 **Endpoint mapping:**
 - `POST /api/v1/plans/generate` (when PLAN_GENERATOR_MODE=llm)
 
+**Contract:** Production rendering is strict. If any required variable is missing or an unresolved `{placeholder}` remains after rendering, plan generation falls back instead of sending a broken prompt to the LLM.
+
 ---
 
-### 7. `chat_system.txt`
+### 7. `plan_item_details.txt`
+
+**Purpose:** Generate detailed steps, lessons, and materials for a specific plan item.
+
+**Placeholders:**
+| Placeholder | Type | Description |
+|-------------|------|-------------|
+| `{task_title}` | string | Plan item title |
+| `{user_goal}` | string | User's primary goal |
+| `{learning_preferences}` | string | User's learning preferences |
+| `{idol_name}` | string | Idol/mentor name |
+| `{idol_domain}` | string | Idol/mentor field or domain |
+
+**Content Depth Requirements (P0-B):**
+- Each step's `lesson_content` must be 500-1,200 words (800+ if step claims 60+ min)
+- Each material's `content_markdown` must be 600-1,000 words (for book and in_app_lesson types)
+- Steps must TEACH, not advise — no "practice regularly" or "read this book"
+- Anti-filler-language rule: no "Let's dive in", "It's important to note"
+- Each step includes: opening context, core concept explanation, real-world example, practice guide, reflection
+
+**Endpoint mapping:**
+- `Job: regenerate_plan_item_details` (Celery background task)
+
+**Storage and UI consumers:** The normalized details are stored in `PlanItem.details_json` and rendered by task detail, in-app lessons, materials, and Library links.
+
+---
+
+### 8. `book_module_generate.txt`
+
+**Purpose:** Generate a reusable 15-minute book summary module with substantial learning content.
+
+**Placeholders:**
+| Placeholder | Type | Description |
+|-------------|------|-------------|
+| `{book_title}` | string | Book title |
+| `{author}` | string | Author name |
+| `{user_goal}` | string | User's primary goal |
+| `{source_context}` | string | Source context or "No source context available." |
+
+**Content Depth Requirements (P0-A):**
+- `content_markdown` must be 2,500-4,000 words
+- Each section must have `summary` of 80-150 words and `exercise` of 40-80 words
+- Each idea card must have `content` of 40-80 words with specific example + actionable takeaway
+- Content must include: opening hook, ## headings, ### exercise subheadings, **bold** key terms, concrete examples per section, closing synthesis
+- Quality rule: "Every claim must reference a specific event, quote, or decision from {author}'s life"
+
+**Validation:** Backend validates word count >= 1,500 and retries once with stronger prompt if too thin.
+
+**Endpoint mapping:**
+- `services.content_resources.generate_book_module()` (called during content resource creation)
+
+---
+
+### 9. `chat_system.txt`
 
 **Purpose:** System prompt for idol persona chat simulation.
 

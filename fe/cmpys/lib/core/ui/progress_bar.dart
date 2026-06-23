@@ -117,9 +117,7 @@ class SegmentedProgressBar extends StatelessWidget {
         final isCompleted = index < completedSegments;
         return Expanded(
           child: Container(
-            margin: EdgeInsets.only(
-              right: index < totalSegments - 1 ? gap : 0,
-            ),
+            margin: EdgeInsets.only(right: index < totalSegments - 1 ? gap : 0),
             height: height,
             decoration: BoxDecoration(
               color: isCompleted

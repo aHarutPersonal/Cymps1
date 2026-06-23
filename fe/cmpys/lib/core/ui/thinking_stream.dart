@@ -10,11 +10,7 @@ import 'typewriter_text.dart';
 /// Widget that displays the AI thinking stream during idol import.
 /// Shows completed lines with checkmarks and the current line with typewriter effect.
 class ThinkingStreamWidget extends StatelessWidget {
-  const ThinkingStreamWidget({
-    super.key,
-    required this.stream,
-    this.idolName,
-  });
+  const ThinkingStreamWidget({super.key, required this.stream, this.idolName});
 
   final ThinkingStream stream;
   final String? idolName;
@@ -61,7 +57,7 @@ class _CompletedLineWidget extends StatelessWidget {
             width: 16,
             height: 16,
             colorFilter: ColorFilter.mode(
-              AppColors.accent.withOpacity(0.7),
+              AppColors.accent.withValues(alpha: 0.7),
               BlendMode.srcIn,
             ),
           ),
@@ -69,15 +65,16 @@ class _CompletedLineWidget extends StatelessWidget {
           Expanded(
             child: MarkdownBody(
               data: line,
-              styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
-                 p: AppTypography.body.copyWith(
-                   color: AppColors.textTertiary,
-                 ),
-                 strong: AppTypography.body.copyWith(
-                   fontWeight: FontWeight.bold,
-                   color: AppColors.textSecondary,
-                 ),
-              ),
+              styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context))
+                  .copyWith(
+                    p: AppTypography.body.copyWith(
+                      color: AppColors.textTertiary,
+                    ),
+                    strong: AppTypography.body.copyWith(
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
             ),
           ),
         ],
@@ -153,7 +150,7 @@ class _InsightWidget extends StatelessWidget {
           color: AppColors.accentMuted,
           borderRadius: AppRadii.br8,
           border: Border.all(
-            color: AppColors.accent.withOpacity(0.2),
+            color: AppColors.accent.withValues(alpha: 0.2),
             width: 1,
           ),
         ),
@@ -212,27 +209,28 @@ class PreviewAchievementsWidget extends StatelessWidget {
           ),
         ),
         const SizedBox(height: AppSpacing.s8),
-        ...achievements.take(maxItems).map((achievement) => Padding(
-              padding: const EdgeInsets.only(bottom: AppSpacing.s4),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    '⭐',
-                    style: TextStyle(fontSize: 12),
-                  ),
-                  const SizedBox(width: AppSpacing.s8),
-                  Expanded(
-                    child: Text(
-                      achievement,
-                      style: AppTypography.body.copyWith(
-                        color: AppColors.textPrimary,
+        ...achievements
+            .take(maxItems)
+            .map(
+              (achievement) => Padding(
+                padding: const EdgeInsets.only(bottom: AppSpacing.s4),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('⭐', style: TextStyle(fontSize: 12)),
+                    const SizedBox(width: AppSpacing.s8),
+                    Expanded(
+                      child: Text(
+                        achievement,
+                        style: AppTypography.body.copyWith(
+                          color: AppColors.textPrimary,
+                        ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            )),
+            ),
       ],
     );
   }
@@ -240,10 +238,7 @@ class PreviewAchievementsWidget extends StatelessWidget {
 
 /// Domain tags widget shown after 25% progress
 class PreviewDomainsWidget extends StatelessWidget {
-  const PreviewDomainsWidget({
-    super.key,
-    required this.domains,
-  });
+  const PreviewDomainsWidget({super.key, required this.domains});
 
   final List<String> domains;
 
@@ -263,10 +258,7 @@ class PreviewDomainsWidget extends StatelessWidget {
           decoration: BoxDecoration(
             color: AppColors.surface2,
             borderRadius: AppRadii.brFull,
-            border: Border.all(
-              color: AppColors.border,
-              width: 1,
-            ),
+            border: Border.all(color: AppColors.border, width: 1),
           ),
           child: Text(
             domain,

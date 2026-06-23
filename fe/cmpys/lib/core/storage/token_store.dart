@@ -1,5 +1,8 @@
+import 'dart:io' show Platform;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// Token storage provider.
 final tokenStoreProvider = Provider<TokenStore>((ref) {
@@ -10,26 +13,19 @@ final tokenStoreProvider = Provider<TokenStore>((ref) {
 ///
 /// - iOS: Keychain
 /// - Android: EncryptedSharedPreferences
-///
-/// Usage:
-/// ```dart
-/// final tokenStore = ref.read(tokenStoreProvider);
-/// await tokenStore.saveAccessToken('your_token');
-/// final token = await tokenStore.readAccessToken();
-/// await tokenStore.clear();
-/// ```
+/// - macOS/Web: SharedPreferences (Fallback due to local keychain limits)
 class TokenStore {
   TokenStore()
-      : _storage = const FlutterSecureStorage(
-          aOptions: AndroidOptions(
-            encryptedSharedPreferences: true,
-            resetOnError: true,
-          ),
-          iOptions: IOSOptions(
-            accessibility: KeychainAccessibility.first_unlock_this_device,
-            synchronizable: false,
-          ),
-        );
+    : _storage = const FlutterSecureStorage(
+        aOptions: AndroidOptions(
+          encryptedSharedPreferences: true,
+          resetOnError: true,
+        ),
+        iOptions: IOSOptions(
+          accessibility: KeychainAccessibility.first_unlock_this_device,
+          synchronizable: false,
+        ),
+      );
 
   final FlutterSecureStorage _storage;
 
@@ -39,24 +35,59 @@ class TokenStore {
   static const _keyTokenExpiry = 'cmpys_token_expiry';
   static const _keyUserId = 'cmpys_user_id';
 
+  bool get _usePrefs {
+    if (kIsWeb) return true;
+    try {
+      if (Platform.isMacOS) return true;
+    } catch (_) {}
+    return false;
+  }
+
+  Future<void> _write(String key, String value) async {
+    if (_usePrefs) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(key, value);
+    } else {
+      await _storage.write(key: key, value: value);
+    }
+  }
+
+  Future<String?> _read(String key) async {
+    if (_usePrefs) {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getString(key);
+    } else {
+      return await _storage.read(key: key);
+    }
+  }
+
+  Future<void> _delete(String key) async {
+    if (_usePrefs) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(key);
+    } else {
+      await _storage.delete(key: key);
+    }
+  }
+
   // ============================================
   // ACCESS TOKEN
   // ============================================
 
   /// Save access token to secure storage.
   Future<void> saveAccessToken(String token) async {
-    await _storage.write(key: _keyAccessToken, value: token);
+    await _write(_keyAccessToken, token);
   }
 
   /// Read access token from secure storage.
   /// Returns null if not found.
   Future<String?> readAccessToken() async {
-    return _storage.read(key: _keyAccessToken);
+    return _read(_keyAccessToken);
   }
 
   /// Delete access token.
   Future<void> deleteAccessToken() async {
-    await _storage.delete(key: _keyAccessToken);
+    await _delete(_keyAccessToken);
   }
 
   // ============================================
@@ -65,17 +96,17 @@ class TokenStore {
 
   /// Save refresh token to secure storage.
   Future<void> saveRefreshToken(String token) async {
-    await _storage.write(key: _keyRefreshToken, value: token);
+    await _write(_keyRefreshToken, token);
   }
 
   /// Read refresh token from secure storage.
   Future<String?> readRefreshToken() async {
-    return _storage.read(key: _keyRefreshToken);
+    return _read(_keyRefreshToken);
   }
 
   /// Delete refresh token.
   Future<void> deleteRefreshToken() async {
-    await _storage.delete(key: _keyRefreshToken);
+    await _delete(_keyRefreshToken);
   }
 
   // ============================================
@@ -84,15 +115,12 @@ class TokenStore {
 
   /// Save token expiry timestamp.
   Future<void> saveTokenExpiry(DateTime expiry) async {
-    await _storage.write(
-      key: _keyTokenExpiry,
-      value: expiry.millisecondsSinceEpoch.toString(),
-    );
+    await _write(_keyTokenExpiry, expiry.millisecondsSinceEpoch.toString());
   }
 
   /// Read token expiry timestamp.
   Future<DateTime?> readTokenExpiry() async {
-    final value = await _storage.read(key: _keyTokenExpiry);
+    final value = await _read(_keyTokenExpiry);
     if (value == null) return null;
     return DateTime.fromMillisecondsSinceEpoch(int.parse(value));
   }
@@ -110,12 +138,12 @@ class TokenStore {
 
   /// Save user ID.
   Future<void> saveUserId(String userId) async {
-    await _storage.write(key: _keyUserId, value: userId);
+    await _write(_keyUserId, userId);
   }
 
   /// Read user ID.
   Future<String?> readUserId() async {
-    return _storage.read(key: _keyUserId);
+    return _read(_keyUserId);
   }
 
   // ============================================
@@ -159,15 +187,20 @@ class TokenStore {
   /// Clear all stored tokens and user data.
   Future<void> clear() async {
     await Future.wait([
-      _storage.delete(key: _keyAccessToken),
-      _storage.delete(key: _keyRefreshToken),
-      _storage.delete(key: _keyTokenExpiry),
-      _storage.delete(key: _keyUserId),
+      _delete(_keyAccessToken),
+      _delete(_keyRefreshToken),
+      _delete(_keyTokenExpiry),
+      _delete(_keyUserId),
     ]);
   }
 
   /// Clear all data from secure storage (full reset).
   Future<void> clearAll() async {
-    await _storage.deleteAll();
+    if (_usePrefs) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.clear();
+    } else {
+      await _storage.deleteAll();
+    }
   }
 }

@@ -36,7 +36,7 @@ class CmpysChip extends StatelessWidget {
         ),
         decoration: BoxDecoration(
           color: isSelected
-              ? accentColor.withOpacity(0.15)
+              ? accentColor.withValues(alpha: 0.15)
               : AppColors.surface,
           borderRadius: AppRadii.brFull,
           border: Border.all(
@@ -118,21 +118,19 @@ class CmpysChipGroup extends StatelessWidget {
     }).toList();
 
     if (wrap) {
-      return Wrap(
-        spacing: spacing,
-        runSpacing: spacing,
-        children: children,
-      );
+      return Wrap(spacing: spacing, runSpacing: spacing, children: children);
     }
 
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: Row(
         children: children
-            .map((chip) => Padding(
-                  padding: EdgeInsets.only(right: spacing),
-                  child: chip,
-                ))
+            .map(
+              (chip) => Padding(
+                padding: EdgeInsets.only(right: spacing),
+                child: chip,
+              ),
+            )
             .toList(),
       ),
     );
@@ -164,7 +162,7 @@ class CmpysTag extends StatelessWidget {
         vertical: small ? AppSpacing.s4 : AppSpacing.s6,
       ),
       decoration: BoxDecoration(
-        color: tagColor.withOpacity(0.15),
+        color: tagColor.withValues(alpha: 0.15),
         borderRadius: AppRadii.brFull,
       ),
       child: Row(

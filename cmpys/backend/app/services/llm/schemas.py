@@ -190,55 +190,32 @@ class MilestonesByAgeResponse(BaseModel):
 # =============================================================================
 
 
-class PlanResource(BaseModel):
-    """Resource associated with a plan item."""
-    
-    kind: ResourceKind = ResourceKind.NONE
-    title: str | None = None
-    url: str | None = None
+class BinaryTask(BaseModel):
+    """A single binary (done/not-done) task within a week."""
+
+    title: str = Field(max_length=300)
+    description: str = Field(min_length=10, max_length=1000)
+    type: str = Field(default="project", max_length=50)  # project|course|habit|practice|reading|reflection
+    estimated_hours: float = Field(default=1.0, ge=0.1, le=40.0)
+    daily_instructions: str | None = Field(default=None, max_length=2000)
 
 
-class PlanItemDifficulty(str, Enum):
-    EASY = "easy"
-    MEDIUM = "medium"
-    HARD = "hard"
+class PlanWeek(BaseModel):
+    """One week of the strategic roadmap."""
 
-
-class PlanItem(BaseModel):
-    """Single item in a development plan."""
-    
-    title: str = Field(max_length=200)
-    type: PlanItemType
-    description: str = Field(max_length=1000)
-    idol_parallel: str | None = Field(default=None, max_length=500, description="Specific idol achievement this item emulates")
-    week_start: int = Field(ge=1, le=52)
-    week_end: int = Field(ge=1, le=52)
-    success_metric: str = Field(max_length=300)
-    estimated_hours: int = Field(ge=0, le=168)
-    resource: PlanResource = Field(default_factory=PlanResource)
-    difficulty: PlanItemDifficulty = PlanItemDifficulty.MEDIUM
-    confidence: float = Field(ge=0.0, le=1.0)
-    # Extra fields for detail generation (stored in meta_json, not exposed to frontend)
-    detail_tags: list[str] = Field(default_factory=list, description="Keywords for detail generation")
-    primary_gap: str | None = Field(default=None, description="Which gap this item addresses")
-    suggested_queries: list[str] = Field(default_factory=list, description="Search queries for materials")
-
-
-class Plan(BaseModel):
-    """Development plan to close gaps."""
-    
-    idol_name: str | None = Field(default=None, max_length=200)
-    duration_weeks: int = Field(ge=1, le=52)
-    weekly_hours: int = Field(ge=0, le=168)
-    focus: list[str] = Field(default_factory=list)
-    rationale: str | None = Field(default=None, max_length=1000, description="Why this plan follows the idol's path")
-    items: list[PlanItem] = Field(default_factory=list)
+    week_number: int = Field(ge=1, le=52)
+    primary_mission: str = Field(max_length=500)
+    binary_tasks: list[BinaryTask] = Field(default_factory=list)
+    predicted_friction: str = Field(default="", max_length=500)
+    friction_solution: str = Field(default="", max_length=500)
 
 
 class PlanGenerationResponse(BaseModel):
-    """Response from plan generation."""
-    
-    plan: Plan
+    """Response from the new plan_generate.txt prompt."""
+
+    roadmap_thesis: str = Field(default="", max_length=1000)
+    anti_goals: list[str] = Field(default_factory=list)
+    weeks: list[PlanWeek] = Field(default_factory=list)
 
 
 # =============================================================================
@@ -327,3 +304,79 @@ class IdolDiscoverResponse(BaseModel):
     """Response from idol discovery LLM call."""
     
     candidates: list[LLMDiscoveryCandidate] = Field(default_factory=list)
+
+
+# =============================================================================
+# Agentic Workflow — Interview, Comparison, Blueprint
+# =============================================================================
+
+
+class InterviewQuestionResponse(BaseModel):
+    """LLM output for a single interview turn."""
+    
+    question: str = Field(max_length=2000, description="The idol's in-character question")
+    emotional_reaction: str = Field(
+        max_length=1000,
+        description="The idol's emotional reaction to the user's previous answer"
+    )
+    should_continue: bool = Field(
+        default=True,
+        description="False when the idol signals the interview is complete"
+    )
+
+
+class CitedAchievement(BaseModel):
+    """A specific idol achievement cited in the comparison."""
+    
+    achievement: str = Field(max_length=500)
+    age_at_achievement: int | None = Field(None, ge=0, le=150)
+    source_hint: str | None = Field(None, max_length=500)
+
+
+class ComparisonResponse(BaseModel):
+    """LLM output for the brutal reality comparison."""
+    
+    comparison_text: str = Field(description="Full comparison prose in idol's voice")
+    cited_achievements: list[CitedAchievement] = Field(
+        default_factory=list,
+        description="Structured list of idol achievements referenced"
+    )
+
+
+class CitedResource(BaseModel):
+    """A real resource recommended in the blueprint."""
+    
+    title: str = Field(max_length=300)
+    url: str | None = Field(None, max_length=2000)
+    resource_type: str = Field(default="book", max_length=50)  # book, course, article, platform
+
+
+class BlueprintResponse(BaseModel):
+    """LLM output for the Q1–Q4 quarterly blueprint."""
+    
+    blueprint_markdown: str = Field(description="Full Q1–Q4 blueprint in Markdown format")
+    resources_cited: list[CitedResource] = Field(
+        default_factory=list,
+        description="Structured list of resources recommended across all quarters"
+    )
+
+
+class IdolSuggestion(BaseModel):
+    """A single idol suggestion for the session-based flow."""
+    
+    name: str = Field(max_length=200)
+    era: str = Field(max_length=100, description="Life dates or era label")
+    relevance_summary: str = Field(max_length=500)
+    wikidata_id: str | None = Field(None, max_length=20)
+    domains: list[str] = Field(default_factory=list)
+    confidence: float = Field(ge=0.0, le=1.0, default=0.8)
+
+
+class IdolSuggestionsResponse(BaseModel):
+    """Response from the session-based idol suggestion flow (exactly 3)."""
+    
+    suggestions: list[IdolSuggestion] = Field(
+        min_length=1,
+        max_length=3,
+    )
+

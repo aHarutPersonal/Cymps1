@@ -18,7 +18,8 @@ class NoteAttachment with _$NoteAttachment {
       id: json['id']?.toString(),
       idolId: (json['idolId'] ?? json['idol_id'])?.toString(),
       planItemId: (json['planItemId'] ?? json['plan_item_id'])?.toString(),
-      achievementId: (json['achievementId'] ?? json['achievement_id'])?.toString(),
+      achievementId: (json['achievementId'] ?? json['achievement_id'])
+          ?.toString(),
     );
   }
 }
@@ -43,8 +44,10 @@ class Note with _$Note {
       userId: (json['userId'] ?? json['user_id'])?.toString(),
       title: json['title']?.toString(),
       content: (json['content'] ?? '').toString(),
-      createdAt: _parseDate(json['createdAt'] ?? json['created_at']) ?? DateTime.now(),
-      updatedAt: _parseDate(json['updatedAt'] ?? json['updated_at']) ?? DateTime.now(),
+      createdAt:
+          _parseDate(json['createdAt'] ?? json['created_at']) ?? DateTime.now(),
+      updatedAt:
+          _parseDate(json['updatedAt'] ?? json['updated_at']) ?? DateTime.now(),
       attachments: _parseAttachments(json['attachments']) ?? [],
     );
   }
@@ -62,12 +65,6 @@ class Note with _$Note {
     return value
         .map((e) => NoteAttachment.fromJson(e as Map<String, dynamic>))
         .toList();
-  }
-
-  static List<String>? _parseStringList(dynamic value) {
-    if (value == null) return null;
-    if (value is! List) return null;
-    return value.map((e) => e.toString()).toList();
   }
 }
 
@@ -92,9 +89,7 @@ class CreateNoteRequest with _$CreateNoteRequest {
   }
 
   Map<String, dynamic> toJson() {
-    final Map<String, dynamic> data = {
-      'content': content,
-    };
+    final Map<String, dynamic> data = {'content': content};
     if (title != null) {
       data['title'] = title;
     }
@@ -190,8 +185,6 @@ class NotesListResponse with _$NotesListResponse {
   static List<Note>? _parseNotes(dynamic value) {
     if (value == null) return null;
     if (value is! List) return null;
-    return value
-        .map((e) => Note.fromJson(e as Map<String, dynamic>))
-        .toList();
+    return value.map((e) => Note.fromJson(e as Map<String, dynamic>)).toList();
   }
 }

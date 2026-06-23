@@ -27,15 +27,13 @@ class ActiveProtocolCard extends StatelessWidget {
         padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
           color: AppColors.surface,
-          borderRadius: AppRadii.br16,
-          border: Border.all(color: AppColors.borderLight),
-          // Blue left accent border
+          borderRadius: AppRadii.br24,
+          boxShadow: AppShadows.sm,
+          border: Border.all(color: AppColors.glassBorder),
         ),
         child: Container(
           decoration: const BoxDecoration(
-            border: Border(
-              left: BorderSide(color: AppColors.blue, width: 2),
-            ),
+            border: Border(left: BorderSide(color: AppColors.accent, width: 3)),
           ),
           padding: const EdgeInsets.only(left: 16),
           child: Column(
@@ -44,13 +42,8 @@ class ActiveProtocolCard extends StatelessWidget {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Expanded(
-                    child: Text(
-                      title,
-                      style: AppTypography.h3,
-                    ),
-                  ),
-                  Icon(
+                  Expanded(child: Text(title, style: AppTypography.h4)),
+                  const Icon(
                     Icons.chevron_right,
                     color: AppColors.textSecondary,
                     size: 20,
@@ -70,30 +63,19 @@ class ActiveProtocolCard extends StatelessWidget {
               Row(
                 children: [
                   Expanded(
-                    child: Container(
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: AppColors.surfaceHighlight,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                      child: FractionallySizedBox(
-                        alignment: Alignment.centerLeft,
-                        widthFactor: progress.clamp(0.0, 1.0),
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: AppColors.textPrimary,
-                            borderRadius: BorderRadius.circular(2),
-                          ),
-                        ),
+                    child: ClipRRect(
+                      borderRadius: AppRadii.brFull,
+                      child: LinearProgressIndicator(
+                        value: progress.clamp(0.0, 1.0),
+                        backgroundColor: AppColors.surfaceHighlight,
+                        color: AppColors.accent,
+                        minHeight: 4,
                       ),
                     ),
                   ),
                   if (progressLabel != null) ...[
                     const SizedBox(width: 12),
-                    Text(
-                      progressLabel!,
-                      style: AppTypography.captionUpper,
-                    ),
+                    Text(progressLabel!, style: AppTypography.captionUpper),
                   ],
                 ],
               ),

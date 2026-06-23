@@ -2,17 +2,16 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
 import '../../../app/design_tokens.dart';
 import '../../../app/router.dart';
-import '../../../core/ui/cmpys_app_bar.dart';
 import '../../../core/ui/cmpys_text_field.dart';
 import '../../../core/ui/empty_state.dart';
 import '../../../core/ui/list_tile_card.dart';
-import '../../../core/ui/loading_state.dart';
+import '../../../core/ui/prototype_grid_background.dart';
 import '../../onboarding/controllers/onboarding_controller.dart';
 import '../models/idol_models.dart';
+import 'idol_visuals.dart';
 
 class IdolSearchScreen extends ConsumerStatefulWidget {
   const IdolSearchScreen({super.key});
@@ -44,8 +43,8 @@ class _IdolSearchScreenState extends ConsumerState<IdolSearchScreen> {
 
   void _onSearch(String query) {
     _debounce?.cancel();
-    // 300ms debounce for API calls (GET /idols/discover?q=)
-    _debounce = Timer(const Duration(milliseconds: 300), () {
+    // 600ms debounce for API calls (GET /idols/discover?q=)
+    _debounce = Timer(const Duration(milliseconds: 600), () {
       if (query.trim().isNotEmpty) {
         setState(() => _hasSearched = true);
         ref.read(onboardingControllerProvider.notifier).searchIdols(query);
@@ -72,24 +71,38 @@ class _IdolSearchScreenState extends ConsumerState<IdolSearchScreen> {
     });
 
     return Scaffold(
-      appBar: const CmpysAppBar(title: 'Search Idols'),
-      body: SafeArea(
-        child: Column(
-          children: [
-            Padding(
-              padding: AppSpacing.screenH,
-              child: CmpysSearchField(
-                controller: _searchController,
-                hint: 'Search by name or profession...',
-                onChanged: _onSearch,
-                autofocus: true,
+      backgroundColor: AppColors.bg,
+      body: PrototypeGridBackground(
+        gridSize: 20,
+        child: SafeArea(
+          bottom: false,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 18, 24, 18),
+                child: Row(
+                  children: [
+                    IconButton(
+                      onPressed: () => Navigator.of(context).maybePop(),
+                      icon: const Icon(Icons.chevron_left_rounded),
+                      color: AppColors.textPrimary,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: CmpysSearchField(
+                        controller: _searchController,
+                        hint: 'Search titan, domain, or era...',
+                        onChanged: _onSearch,
+                        autofocus: true,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(height: AppSpacing.s16),
-            Expanded(
-              child: _buildResults(onboardingState),
-            ),
-          ],
+              Expanded(child: _buildResults(onboardingState)),
+            ],
+          ),
         ),
       ),
     );
@@ -98,11 +111,13 @@ class _IdolSearchScreenState extends ConsumerState<IdolSearchScreen> {
   Widget _buildResults(OnboardingState state) {
     // Show loading
     if (state is OnboardingIdolSearchStep && state.isLoading) {
-      return const LoadingState(message: 'Searching...');
+      return const _SearchThinking();
     }
 
     // Get results from state
-    final results = state is OnboardingIdolSearchStep ? state.results : <IdolCandidate>[];
+    final results = state is OnboardingIdolSearchStep
+        ? state.results
+        : <IdolCandidate>[];
 
     // Not searched yet - show suggestions
     if (!_hasSearched) {
@@ -128,16 +143,10 @@ class _IdolSearchScreenState extends ConsumerState<IdolSearchScreen> {
         bottom: AppSpacing.s24,
       ),
       itemCount: results.length,
-      separatorBuilder: (_, __) => const SizedBox(height: AppSpacing.s12),
+      separatorBuilder: (_, _) => const SizedBox(height: AppSpacing.s12),
       itemBuilder: (context, index) {
         final idol = results[index];
-        return IdolCard(
-          name: idol.name,
-          initials: _getInitials(idol.name),
-          subtitle: idol.occupations.isNotEmpty ? idol.occupations.first : null,
-          imageUrl: idol.avatarThumbUrl,
-          onTap: () => _onSelectIdol(idol),
-        );
+        return _SearchResultCard(idol: idol, onTap: () => _onSelectIdol(idol));
       },
     );
   }
@@ -158,35 +167,35 @@ class _IdolSearchScreenState extends ConsumerState<IdolSearchScreen> {
           Wrap(
             spacing: AppSpacing.s8,
             runSpacing: AppSpacing.s8,
-            children: [
-              'Entrepreneurs',
-              'Scientists',
-              'Athletes',
-              'Artists',
-              'Leaders',
-            ]
-                .map((term) => GestureDetector(
-                      onTap: () {
-                        _searchController.text = term;
-                        _onSearch(term);
-                      },
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: AppSpacing.s16,
-                          vertical: AppSpacing.s8,
-                        ),
-                        decoration: BoxDecoration(
-                          color: AppColors.surface,
-                          borderRadius: AppRadii.brFull,
-                          border: Border.all(color: AppColors.border),
-                        ),
-                        child: Text(
-                          term,
-                          style: AppTypography.caption,
+            children:
+                [
+                      'Entrepreneurs',
+                      'Scientists',
+                      'Athletes',
+                      'Artists',
+                      'Leaders',
+                    ]
+                    .map(
+                      (term) => GestureDetector(
+                        onTap: () {
+                          _searchController.text = term;
+                          _onSearch(term);
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: AppSpacing.s16,
+                            vertical: AppSpacing.s8,
+                          ),
+                          decoration: BoxDecoration(
+                            color: AppColors.surface,
+                            borderRadius: AppRadii.brFull,
+                            border: Border.all(color: AppColors.border),
+                          ),
+                          child: Text(term, style: AppTypography.caption),
                         ),
                       ),
-                    ))
-                .toList(),
+                    )
+                    .toList(),
           ),
           const SizedBox(height: AppSpacing.s32),
           Text(
@@ -196,35 +205,174 @@ class _IdolSearchScreenState extends ConsumerState<IdolSearchScreen> {
             ),
           ),
           const SizedBox(height: AppSpacing.s12),
-          ...['Elon Musk', 'Steve Jobs', 'Albert Einstein'].map((term) => Padding(
-                padding: const EdgeInsets.only(bottom: AppSpacing.s8),
-                child: ListTileCard(
-                  title: term,
-                  leading: const ListTileAvatar(
-                    icon: 'assets/icons/clock.svg',
-                    size: 36,
-                  ),
-                  onTap: () {
-                    _searchController.text = term;
-                    _onSearch(term);
-                  },
+          ...['Elon Musk', 'Steve Jobs', 'Albert Einstein'].map(
+            (term) => Padding(
+              padding: const EdgeInsets.only(bottom: AppSpacing.s8),
+              child: ListTileCard(
+                title: term,
+                leading: const ListTileAvatar(
+                  icon: 'assets/icons/clock.svg',
+                  size: 36,
                 ),
-              )),
+                onTap: () {
+                  _searchController.text = term;
+                  _onSearch(term);
+                },
+              ),
+            ),
+          ),
         ],
       ),
     );
   }
 
-  String _getInitials(String name) {
-    final parts = name.split(' ');
-    if (parts.length >= 2) {
-      return '${parts.first[0]}${parts.last[0]}'.toUpperCase();
-    }
-    return parts.first.substring(0, 2).toUpperCase();
-  }
-
   void _onSelectIdol(IdolCandidate idol) {
     ref.read(onboardingControllerProvider.notifier).selectIdol(idol);
     context.goToIdolConfirm(idol);
+  }
+}
+
+class _SearchThinking extends StatelessWidget {
+  const _SearchThinking();
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: AppSpacing.p24,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 96,
+              height: 96,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: AppColors.mint.withValues(alpha: 0.3),
+                ),
+              ),
+              padding: AppSpacing.p12,
+              child: ClipOval(
+                child: Image.network(
+                  kPrototypeThinkingAsset,
+                  fit: BoxFit.cover,
+                ),
+              ),
+            ),
+            const SizedBox(height: AppSpacing.s20),
+            Text(
+              'QUERYING_MENTOR_MATCHES',
+              style: AppTypography.captionUpper.copyWith(
+                color: AppColors.mint,
+                letterSpacing: 1.4,
+              ),
+            ),
+            const SizedBox(height: AppSpacing.s8),
+            Text(
+              'Searching reliable sources...',
+              style: AppTypography.body.copyWith(
+                color: AppColors.textSecondary,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SearchResultCard extends StatelessWidget {
+  const _SearchResultCard({required this.idol, required this.onTap});
+
+  final IdolCandidate idol;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: AppSpacing.p12,
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          border: Border.all(color: AppColors.border),
+          borderRadius: AppRadii.br16,
+        ),
+        child: Row(
+          children: [
+            ClipRRect(
+              borderRadius: AppRadii.br12,
+              child: ColorFiltered(
+                colorFilter: const ColorFilter.matrix(<double>[
+                  0.2126,
+                  0.7152,
+                  0.0722,
+                  0,
+                  0,
+                  0.2126,
+                  0.7152,
+                  0.0722,
+                  0,
+                  0,
+                  0.2126,
+                  0.7152,
+                  0.0722,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                ]),
+                child: Image.network(
+                  imageUrlForIdolCandidate(idol),
+                  width: 64,
+                  height: 76,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) => Image.network(
+                    kPrototypeDefaultPortrait,
+                    width: 64,
+                    height: 76,
+                    fit: BoxFit.cover,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: AppSpacing.s12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(idol.name, style: AppTypography.h4),
+                  const SizedBox(height: 4),
+                  Text(
+                    idolDomainLabel(idol),
+                    style: AppTypography.caption.copyWith(
+                      color: AppColors.textSecondary,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'MATCH ${(idol.confidence ?? idol.relevanceScore ?? 0.84) * 100 ~/ 1}%',
+                    style: AppTypography.captionUpper.copyWith(
+                      color: AppColors.mint,
+                      fontSize: 9,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(
+              Icons.chevron_right_rounded,
+              color: AppColors.textTertiary,
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }

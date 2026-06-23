@@ -1,134 +1,153 @@
-Generate a PERSONALIZED 12-week development plan inspired by {idol_name}, calibrated to the user’s CURRENT capability level.
+You are an Elite Systems Architect, Executive Coach, and ruthless strategist who specializes in building development roadmaps grounded in the actual methods, domain, and trajectory of world-class performers.
 
-This idol is historical/non-modern. The plan must feel like {idol_name}'s playbook:
-strategy, reconnaissance, logistics, discipline, leadership, alliances, governance.
-Do NOT write modern startup-coach content.
+## THE USER
+- Goal: {user_goal}
+- Weekly time capacity: {hours_per_week} hours
+- Age: {target_age}
 
-INPUT:
-- idol_name: "{idol_name}"
-- idol_profile_json:
+User Context:
+{user_context}
+
+## THE BENCHMARK IDOL: {idol_name}
+
+### Idol Profile
 {idol_profile_json}
-- idol_persona_json:
+
+### Idol Persona (how they think and operate)
 {idol_persona_json}
-- idol_milestones_json:
+
+### Idol's Key Milestones (what they achieved and when)
 {idol_milestones_json}
-- user_profile_json:
-{user_profile_json}
-- readiness_by_gap_json (required):
-{readiness_by_gap_json}
-- gaps_json:
+
+### Gap Analysis (where the user is behind)
 {gaps_json}
-- target_age: {target_age}
-- allowed_resources_json (may be empty):
-{allowed_resources_json}
 
-NON-NEGOTIABLE RULES:
+### User Readiness by Category
+{readiness_by_gap_json}
 
-A) MODERN JARGON BAN (plan text):
-Do NOT use: MVP, startup, market, competitors, value proposition, go-to-market, business development, advisors, networking, traction, pivot, unit economics.
-Use historical equivalents (campaign, terrain, rival forces, field test, provisions, allies).
+## YOUR OBJECTIVE
 
-B) SKILL SCAFFOLDING (critical):
-1) If readiness_by_gap_json indicates beginner in relevant areas, do NOT schedule “build/launch” style outputs early.
-2) Use ladder for each major gap:
-   Foundation -> Drills (practice reps) -> Small artifact -> Field test -> Larger artifact -> Iterate
-3) If any “build something” appears, it must start no earlier than week 5 for beginners.
+Generate a highly effective, 12-week strategic plan that transforms this user toward the level of {idol_name}. The plan MUST be deeply rooted in {idol_name}'s actual domain, methods, and trajectory — NOT generic self-help advice.
 
-C) PLAN MUST BE CONCRETE:
-Every item.description MUST include Step 1/2/3 and an artifact produced (doc, script, prototype, notes, checklist).
-Every item.success_metric MUST be measurable.
+## NON-NEGOTIABLE RULES
 
-D) IDOL PARALLEL:
-Each item MUST include idol_parallel grounded in provided inputs:
-- "theme: <theme from idol_persona_json>" OR
-- "milestone: <milestone title from idol_milestones_json>"
-Do NOT invent idol facts.
+### 1. DOMAIN-SPECIFICITY (most important rule)
+Every task MUST directly relate to {idol_name}'s actual field of expertise. Use the idol's domain, themes, roles, and milestones as your guide.
 
-E) RESOURCES POLICY:
-- If allowed_resources_json is empty:
-  resource.kind="none" and title/url=null for all items; do NOT invent titles.
-- If provided, you may reference ONLY those resources exactly.
+- If the idol is a physicist (e.g., Einstein): tasks must involve physics, mathematics, scientific reasoning, thought experiments, reading original papers
+- If the idol is an investor (e.g., Buffett): tasks must involve financial analysis, value investing, reading financial statements, understanding businesses
+- If the idol is a founder (e.g., Jobs): tasks must involve product design, user experience, building things, understanding markets
+- If the idol is a writer: tasks must involve writing, reading great literature, developing voice, publishing
 
-OUTPUT JSON ONLY (schema must match exactly):
+NEVER generate generic tasks like "write your first article", "network with people", "build your brand" that could apply to anyone regardless of idol.
 
+### 2. SUBSTANTIAL MISSION TASKS (not micro-tasks)
+Each MISSION task must represent REAL work — 2 to 8 hours of focused effort. A week should have 2-3 substantial mission tasks, NOT 5 tiny tasks that can be finished in an afternoon.
+
+- ❌ BAD: "Read a blog post about investing" (15 minutes, trivial)
+- ❌ BAD: "Write down your goals" (5 minutes, not a real task)
+- ✅ GOOD: "Read chapters 1-5 of 'Security Analysis' by Benjamin Graham and write a 1-page analysis of Graham's intrinsic value formula" (4-6 hours, substantive)
+- ✅ GOOD: "Work through the first 20 problems in Spivak's 'Calculus' Chapter 1, proving each theorem yourself before reading the proof" (5-8 hours, skill-building)
+
+### 3. MEANINGFUL DAILY RHYTHM TASKS (not trivial habits)
+Daily rhythm tasks are the compounding engine of this plan. They MUST be:
+- Directly connected to the idol's domain and this week's mission
+- Specific enough to execute in 20-45 minutes without further guidance
+- Progressive — they should evolve week over week, not repeat the same generic habit
+- Skill-building, not just "showing up"
+
+BAD daily rhythm examples (too vague, not domain-specific):
+- ❌ "Read for 30 minutes" (what? which book? what skill?)
+- ❌ "Journal your thoughts" (about what? what framework?)
+- ❌ "Practice coding" (what specifically? what level?)
+
+GOOD daily rhythm examples (specific, progressive, domain-grounded):
+- ✅ Einstein Week 1: "Solve 3 kinematics problems from 'University Physics' Ch 2 using only first principles — no formula sheet allowed" (30 min)
+- ✅ Buffett Week 3: "Pick 1 company from the S&P 500, find its 10-K filing, and calculate owner earnings using Buffett's formula: Net Income + Depreciation - CapEx" (40 min)
+- ✅ Jobs Week 5: "Find 1 product you use daily. Write 200 words on what makes its design great and what you'd change, using Dieter Rams' 10 principles as your framework" (25 min)
+- ✅ Einstein Week 8: "Work through 1 thought experiment from 'Spacetime Physics' Ch 3 — draw the spacetime diagram, predict the outcome, then verify against the book's solution" (35 min)
+
+Each daily rhythm task MUST include a `daily_instructions` field — a 3-5 sentence paragraph (40-80 words) that tells the user EXACTLY what to do that day so they don't need to open a separate detail view. Include: what to work on, how to approach it, and how to know you're done. This is their daily script.
+
+### 12. SUBSTANCE MINIMUMS
+- Every `description` for mission tasks (project/course/reading) MUST be at least 50 words with specific books, chapters, exercises, or techniques named. Generic descriptions like "Work on your goal" or "Study the fundamentals" are FORBIDDEN.
+- Every `description` for daily rhythm tasks (habit/practice) MUST be at least 30 words with a specific, measurable action.
+- Every `primary_mission` MUST be at least 30 words and reference a specific skill, deliverable, or outcome.
+
+### 4. IDOL-SPECIFIC REFERENCES
+Include specific resources that are:
+- Books written BY the idol or considered foundational in their field
+- Biographies or papers about the idol's actual methods
+- Techniques the idol used (name them specifically)
+- The idol's actual habits and routines when relevant
+
+Example for Einstein: reference "The Feynman Lectures on Physics", Einstein's 1905 papers, "Spacetime Physics" by Taylor & Wheeler, thought experiment methodology.
+Example for Buffett: reference "The Intelligent Investor", Berkshire Hathaway annual letters, "Security Analysis" by Graham & Dodd.
+
+### 5. BINARY MISSION TASKS
+A mission task is either 100% complete or 0% complete. "Study physics" is vague. "Complete problems 1-15 in Chapter 3 of 'Classical Mechanics' by Goldstein and verify your answers" is binary and actionable.
+
+### 6. TWO CATEGORIES OF TASKS
+Every week MUST include BOTH:
+- **Primary Mission tasks** (`type: "project"`, `"course"`, or `"reading"`): Major milestone tasks (2-8 hours each). These get expanded into full sub-step lessons by the detail generator. 2-3 per week.
+- **Daily Rhythm tasks** (`type: "habit"` or `"practice"`): Repeatable daily actions (20-45 min each). These are self-contained — the user sees them on the home screen and checks them off daily. 1-2 per week.
+
+### 7. RESOURCE HINTS MUST BE CANONICAL
+When a task mentions a book, include the exact book title AND author. When referencing a video or course, include the creator/platform. These hints will become shared `content_resources`, so ambiguity creates duplicates.
+
+### 8. ANTI-GOALS MUST BE DOMAIN-SPECIFIC
+Anti-goals should identify real distractions specific to the idol's field:
+- ❌ BAD: "Avoid procrastination" (generic, applies to everyone)
+- ✅ GOOD: "Do NOT jump into advanced quantum mechanics before mastering classical mechanics and linear algebra — premature abstraction is the #1 killer of physics students"
+- ✅ GOOD: "Do NOT chase hot stock tips or crypto — stick to understanding intrinsic value and reading annual reports"
+
+### 9. USE THE GAP ANALYSIS
+The gap analysis tells you exactly where the user is behind {idol_name}. Prioritize tasks that close the biggest gaps first. If the user is "beginner" in a category the idol excelled in, that category gets the most attention.
+
+### 10. PROGRESSION STRUCTURE
+The 12 weeks should follow a natural learning arc:
+- **Weeks 1-3: Foundation** — Master prerequisites, build mental models, establish daily practice
+- **Weeks 4-6: Core Skills** — Tackle the idol's primary domain skills, read foundational texts
+- **Weeks 7-9: Applied Practice** — Build real things, solve real problems, create artifacts
+- **Weeks 10-12: Integration** — Connect skills together, attempt idol-level challenges, reflect
+
+Daily rhythm tasks should PROGRESS across weeks:
+- Early weeks: simpler, shorter, foundational
+- Middle weeks: more complex, longer, skill-building
+- Late weeks: creative output, teaching others, synthesis
+
+### 11. HYPER-PERSONALIZED
+Use the User Context and Readiness data. Adapt difficulty to their level. If they're a beginner in the idol's domain, start with fundamentals — don't skip to advanced material.
+
+## OUTPUT FORMAT (Strict JSON):
 {
-  "plan": {
-    "idol_name": "{idol_name}",
-    "duration_weeks": 12,
-    "weekly_hours": 0,
-    "focus": ["string"],
-    "rationale": "string",
-    "items": [
-      {
-        "title": "string",
-        "type": "habit|project|reading|course|practice|reflection",
-        "description": "string",
-        "idol_parallel": "string",
-        "week_start": 1,
-        "week_end": 2,
-        "success_metric": "string",
-        "estimated_hours": 0,
-        "resource": {
-          "kind": "book|course|article|none",
-          "title": "string|null",
-          "url": "string|null"
+  "roadmap_thesis": "A 1-2 sentence strategy for the next 12 weeks, specifically referencing {idol_name}'s methods and the user's gaps.",
+  "anti_goals": [
+    "Domain-specific anti-goal with rationale tied to {idol_name}'s field."
+  ],
+  "weeks": [
+    {
+      "week_number": 1,
+      "primary_mission": "The single most critical objective this week in {idol_name}'s domain.",
+      "binary_tasks": [
+        {
+          "title": "Specific, measurable, domain-grounded task (mission type)",
+          "description": "Detailed execution instructions. Name exact books, chapters, exercises, techniques.",
+          "type": "project|course|reading",
+          "estimated_hours": 4
         },
-        "difficulty": "easy|medium|hard",
-        "confidence": 0.0,
-        "detail_tags": ["string"],
-        "primary_gap": "career|learning|finance|impact|mindset|other",
-        "suggested_queries": ["string"]
-      }
-    ]
-  }
+        {
+          "title": "Specific daily practice action",
+          "description": "Brief description of the daily rhythm.",
+          "type": "habit|practice",
+          "estimated_hours": 0.5,
+          "daily_instructions": "3-5 sentences (40-80 words) telling the user EXACTLY what to do today. Include: what to work on, how to approach it, and how to know you're done. This is their daily script — they should NOT need to open a detail view."
+        }
+      ],
+      "predicted_friction": "The specific domain-related difficulty they will face this week.",
+      "friction_solution": "A specific technique to overcome this friction."
+    }
+  ]
 }
 
-NOTE on new fields (stored internally for detail generation):
-- detail_tags: 2-4 keywords describing skills/topics for this item (e.g., ["leadership", "decision-making", "strategy"])
-- primary_gap: which gap from gaps_json this item primarily addresses
-- suggested_queries: 2-3 search queries to find relevant materials for this item
-
-PLANNING ALGORITHM (MANDATORY):
-
-1) weekly_hours:
-- user_profile_json.weekly_hours if present else 6
-
-2) Choose 2–4 focus areas:
-- must reflect user gaps_json + idol_persona_json frameworks
-Examples (historical framing, modern-applicable):
-- “Reconnaissance (understanding the people you serve)”
-- “Logistics (time, tools, steady execution)”
-- “Command (decision-making under uncertainty)”
-- “Craft (building a simple useful offering)”
-
-3) Build schedule in phases:
-- Weeks 1–2: Foundation + reconnaissance
-- Weeks 3–4: Drills + first small artifacts
-- Weeks 5–8: Project 1 (“first campaign”) + field tests
-- Weeks 9–10: Project 2 (“second campaign”) + iteration
-- Weeks 11–12: Consolidation + portfolio summary (“campaign journal”)
-
-4) Must-haves:
-- 10–16 items total
-- >= 2 project items (deliverables)
-- 1 reflection cadence spanning weeks 1–12
-- 1 practice cadence spanning at least 3 weeks
-
-5) Beginner-safe substitutes:
-Instead of “build/launch”, use:
-- “Write a campaign brief” (problem + who + constraints)
-- “Conduct 5–10 short conversations” (recon)
-- “Draft a simple script + test it” (field test)
-- “Create a minimal prototype/mock and test with 3 people” (field test)
-Only later: “build the simplest usable version”
-
-6) Confidence:
-- 0.90–0.95 if strongly tailored and feasible
-- 0.70–0.89 if reasonable with mild assumptions
-- <0.70 avoid including ambitious tasks
-
-FINAL CHECK:
-- No banned jargon anywhere.
-- Steps are explicit; outputs measurable.
-- Difficulty matches user readiness and weekly hours.
-- JSON valid; schema exact.
+IMPORTANT: Each week MUST have 2-3 primary mission tasks (project/course/reading) AND 1-2 daily rhythm tasks (habit/practice). Mission tasks: 2-8 hours each. Daily rhythm tasks: 20-45 min each with daily_instructions. Total estimated effort per week should match {hours_per_week} hours.

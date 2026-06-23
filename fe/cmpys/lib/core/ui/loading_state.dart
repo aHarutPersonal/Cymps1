@@ -1,43 +1,85 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../app/design_tokens.dart';
 
-/// Loading state with spinner.
-class LoadingState extends StatelessWidget {
+/// Loading state with spinner and optional rotating messages.
+class LoadingState extends StatefulWidget {
   const LoadingState({
     super.key,
     this.message,
+    this.messages,
     this.compact = false,
   });
 
   final String? message;
+  final List<String>? messages;
   final bool compact;
 
   @override
+  State<LoadingState> createState() => _LoadingStateState();
+}
+
+class _LoadingStateState extends State<LoadingState> {
+  int _currentIndex = 0;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.messages != null && widget.messages!.isNotEmpty) {
+      _timer = Timer.periodic(const Duration(seconds: 3), (timer) {
+        if (mounted) {
+          setState(() {
+            _currentIndex = (_currentIndex + 1) % widget.messages!.length;
+          });
+        }
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final displayMessage =
+        widget.messages != null && widget.messages!.isNotEmpty
+        ? widget.messages![_currentIndex]
+        : widget.message;
+
     return Center(
       child: Padding(
-        padding: compact ? AppSpacing.p16 : AppSpacing.p24,
+        padding: widget.compact ? AppSpacing.p16 : AppSpacing.p24,
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           mainAxisSize: MainAxisSize.min,
           children: [
             SizedBox(
-              width: compact ? 32 : 48,
-              height: compact ? 32 : 48,
+              width: widget.compact ? 32 : 48,
+              height: widget.compact ? 32 : 48,
               child: CircularProgressIndicator(
-                strokeWidth: compact ? 2 : 3,
+                strokeWidth: widget.compact ? 2 : 3,
                 color: AppColors.accent,
               ),
             ),
-            if (message != null) ...[
-              SizedBox(height: compact ? AppSpacing.s12 : AppSpacing.s16),
-              Text(
-                message!,
-                style: AppTypography.body.copyWith(
-                  color: AppColors.textSecondary,
+            if (displayMessage != null) ...[
+              SizedBox(
+                height: widget.compact ? AppSpacing.s12 : AppSpacing.s16,
+              ),
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 300),
+                child: Text(
+                  displayMessage,
+                  key: ValueKey<String>(displayMessage),
+                  style: AppTypography.body.copyWith(
+                    color: AppColors.textSecondary,
+                  ),
+                  textAlign: TextAlign.center,
                 ),
-                textAlign: TextAlign.center,
               ),
             ],
           ],
@@ -75,12 +117,7 @@ class InlineLoader extends StatelessWidget {
 
 /// Skeleton loading placeholder.
 class SkeletonBox extends StatefulWidget {
-  const SkeletonBox({
-    super.key,
-    this.width,
-    this.height,
-    this.borderRadius,
-  });
+  const SkeletonBox({super.key, this.width, this.height, this.borderRadius});
 
   final double? width;
   final double? height;
@@ -103,9 +140,10 @@ class _SkeletonBoxState extends State<SkeletonBox>
       duration: const Duration(milliseconds: 1500),
     )..repeat();
 
-    _animation = Tween<double>(begin: 0.3, end: 0.6).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
-    );
+    _animation = Tween<double>(
+      begin: 0.3,
+      end: 0.6,
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
   }
 
   @override
@@ -123,7 +161,7 @@ class _SkeletonBoxState extends State<SkeletonBox>
           width: widget.width,
           height: widget.height,
           decoration: BoxDecoration(
-            color: AppColors.surface2.withOpacity(_animation.value),
+            color: AppColors.surface2.withValues(alpha: _animation.value),
             borderRadius: widget.borderRadius ?? AppRadii.br8,
           ),
         );
@@ -134,11 +172,7 @@ class _SkeletonBoxState extends State<SkeletonBox>
 
 /// Skeleton text line.
 class SkeletonLine extends StatelessWidget {
-  const SkeletonLine({
-    super.key,
-    this.width,
-    this.height = 14,
-  });
+  const SkeletonLine({super.key, this.width, this.height = 14});
 
   final double? width;
   final double height;
@@ -155,10 +189,7 @@ class SkeletonLine extends StatelessWidget {
 
 /// Skeleton card placeholder.
 class SkeletonCard extends StatelessWidget {
-  const SkeletonCard({
-    super.key,
-    this.height = 100,
-  });
+  const SkeletonCard({super.key, this.height = 100});
 
   final double height;
 
@@ -187,9 +218,13 @@ class SkeletonCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    SkeletonLine(width: MediaQuery.of(context).size.width * 0.4),
+                    SkeletonLine(
+                      width: MediaQuery.of(context).size.width * 0.4,
+                    ),
                     const SizedBox(height: AppSpacing.s8),
-                    SkeletonLine(width: MediaQuery.of(context).size.width * 0.25),
+                    SkeletonLine(
+                      width: MediaQuery.of(context).size.width * 0.25,
+                    ),
                   ],
                 ),
               ),
@@ -222,8 +257,8 @@ class SkeletonList extends StatelessWidget {
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
       itemCount: itemCount,
-      separatorBuilder: (_, __) => SizedBox(height: spacing),
-      itemBuilder: (_, __) => SkeletonCard(height: itemHeight),
+      separatorBuilder: (_, _) => SizedBox(height: spacing),
+      itemBuilder: (_, _) => SkeletonCard(height: itemHeight),
     );
   }
 }

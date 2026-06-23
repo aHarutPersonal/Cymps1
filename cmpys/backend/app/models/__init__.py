@@ -20,15 +20,30 @@ from app.models.plan import (
     PlanItem,
     PlanItemType,
     PlanItemStatus,
+    PlanItemContentResource,
     PlanItemStepCompletion,
     PlanItemCompletion,
 )
+from app.models.daily_task_completion import DailyTaskCompletion
 from app.models.note import Note, NoteAttachment
 from app.models.chat import ChatThread, ChatMessage, MessageRole
 from app.models.intake import IntakeSession, IntakeAnswer, IntakeSessionStatus
 from app.models.plan_job import PlanGenerationJob
 from app.models.item_detail_job import PlanItemDetailJob
 from app.models.suggest_job import IdolSuggestJob
+from app.models.feed_post import FeedPost
+from app.models.feed_like import FeedLike
+from app.models.feed_comment import FeedComment
+from app.models.idea_card import IdeaCard
+from app.models.stashed_idea import StashedIdea
+from app.models.content_resource import (
+    ContentResource,
+    ContentResourceKind,
+    LicenseStatus,
+    UserContentHighlight,
+    UserContentProgress,
+    UserContentSave,
+)
 
 __all__ = [
     "Base",
@@ -54,8 +69,10 @@ __all__ = [
     "PlanItem",
     "PlanItemType",
     "PlanItemStatus",
+    "PlanItemContentResource",
     "PlanItemStepCompletion",
     "PlanItemCompletion",
+    "DailyTaskCompletion",
     "Note",
     "NoteAttachment",
     "ChatThread",
@@ -67,4 +84,15 @@ __all__ = [
     "PlanGenerationJob",
     "PlanItemDetailJob",
     "IdolSuggestJob",
+    "FeedPost",
+    "FeedLike",
+    "FeedComment",
+    "IdeaCard",
+    "StashedIdea",
+    "ContentResource",
+    "ContentResourceKind",
+    "LicenseStatus",
+    "UserContentHighlight",
+    "UserContentProgress",
+    "UserContentSave",
 ]

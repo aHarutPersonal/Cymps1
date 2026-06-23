@@ -145,11 +145,7 @@ class LabeledProgressRing extends StatelessWidget {
           progressColor: color,
         ),
         const SizedBox(height: AppSpacing.s8),
-        Text(
-          label,
-          style: AppTypography.caption,
-          textAlign: TextAlign.center,
-        ),
+        Text(label, style: AppTypography.caption, textAlign: TextAlign.center),
       ],
     );
   }

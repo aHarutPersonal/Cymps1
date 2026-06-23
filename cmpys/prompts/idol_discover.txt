@@ -31,6 +31,9 @@ RETURN JSON EXACTLY MATCHING THIS SCHEMA:
       "domains": ["business|technology|science|politics|arts|sports|military|philanthropy|entertainment|writing|medicine|law|finance|investing|leadership|entrepreneurship|engineering|other"],
       "era": "historical|modern|contemporary",
       "why_fit": "string",
+      "wikidata_id": "Q-number if known, otherwise null",
+      "wikipedia_url": "Canonical English Wikipedia URL if known, otherwise null",
+      "photo_lookup_hints": ["string"],
       "search_hints": ["string"],
       "confidence": 0.0
     }
@@ -83,6 +86,8 @@ CANDIDATE FIELD RULES:
   - at least one unique keyword (company, book, field, title)
   Examples:
   ["Warren Buffett investor Berkshire Hathaway", "value investing", "American philanthropist"]
+- wikidata_id / wikipedia_url / photo_lookup_hints:
+  Provide these whenever you know them. For photo hints, include lookup paths that help the backend cache one reusable real idol image with attribution, such as "Wikidata P18 image", "Wikipedia infobox portrait", and "Wikimedia Commons [name] portrait".
 
 CONFIDENCE (0.0–1.0) — CONSERVATIVE:
 Use confidence to reflect how likely it is that:

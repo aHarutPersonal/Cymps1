@@ -2,32 +2,29 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../../app/assets.dart';
 import '../../../app/design_tokens.dart';
 import '../../../app/router.dart';
+import '../../../core/ui/ambient_background.dart';
 import '../../../core/ui/cmpys_button.dart';
-import '../../../core/ui/progress_bar.dart';
 import '../../idols/data/jobs_repository.dart';
 import '../../idols/models/job_models.dart';
 import '../controllers/plans_controller.dart';
+import 'widgets/path_design_helpers.dart';
 
 /// Screen shown while a plan is being generated in the background.
 ///
 /// Polls /jobs/{jobId} every 1-2 seconds and shows animated progress.
 /// On success, navigates to PlanScreen. On failure, shows retry options.
 class GeneratingPlanScreen extends ConsumerStatefulWidget {
-  const GeneratingPlanScreen({
-    super.key,
-    required this.jobId,
-  });
+  const GeneratingPlanScreen({super.key, required this.jobId});
 
   final String jobId;
 
   @override
-  ConsumerState<GeneratingPlanScreen> createState() => _GeneratingPlanScreenState();
+  ConsumerState<GeneratingPlanScreen> createState() =>
+      _GeneratingPlanScreenState();
 }
 
 class _GeneratingPlanScreenState extends ConsumerState<GeneratingPlanScreen>
@@ -77,7 +74,7 @@ class _GeneratingPlanScreenState extends ConsumerState<GeneratingPlanScreen>
         );
       });
     }
-    
+
     // Navigate to home after completion
     await Future.delayed(const Duration(milliseconds: 500));
     _onJobComplete();
@@ -103,7 +100,8 @@ class _GeneratingPlanScreenState extends ConsumerState<GeneratingPlanScreen>
       _stopPolling();
       setState(() {
         _hasError = true;
-        _errorMessage = 'Plan generation is taking longer than expected. Please try again.';
+        _errorMessage =
+            'Plan generation is taking longer than expected. Please try again.';
       });
     });
   }
@@ -118,39 +116,41 @@ class _GeneratingPlanScreenState extends ConsumerState<GeneratingPlanScreen>
     // Poll every 1.5 seconds (between 1-2s as requested)
     _jobSubscription = jobsRepository
         .watchJob(
-      widget.jobId,
-      pollInterval: const Duration(milliseconds: 1500),
-    )
+          widget.jobId,
+          pollInterval: const Duration(milliseconds: 1500),
+        )
         .listen(
-      (status) {
-        if (!mounted) return;
+          (status) {
+            if (!mounted) return;
 
-        setState(() => _jobStatus = status);
+            setState(() => _jobStatus = status);
 
-        // Stop polling when status is terminal (done/failed)
-        if (status.isCompleted) {
-          _stopPolling();
-          _timeoutTimer?.cancel();
-          _onJobComplete();
-        } else if (status.isFailed) {
-          _stopPolling();
-          _timeoutTimer?.cancel();
-          setState(() {
-            _hasError = true;
-            _errorMessage = status.errorMessage ?? 'Plan generation failed. Please try again.';
-          });
-        }
-      },
-      onError: (error) {
-        if (!mounted) return;
-        _stopPolling();
-        _timeoutTimer?.cancel();
-        setState(() {
-          _hasError = true;
-          _errorMessage = error.toString();
-        });
-      },
-    );
+            // Stop polling when status is terminal (done/failed)
+            if (status.isCompleted) {
+              _stopPolling();
+              _timeoutTimer?.cancel();
+              _onJobComplete();
+            } else if (status.isFailed) {
+              _stopPolling();
+              _timeoutTimer?.cancel();
+              setState(() {
+                _hasError = true;
+                _errorMessage =
+                    status.errorMessage ??
+                    'Plan generation failed. Please try again.';
+              });
+            }
+          },
+          onError: (error) {
+            if (!mounted) return;
+            _stopPolling();
+            _timeoutTimer?.cancel();
+            setState(() {
+              _hasError = true;
+              _errorMessage = error.toString();
+            });
+          },
+        );
   }
 
   /// Called when job completes successfully
@@ -242,60 +242,25 @@ class _GeneratingPlanScreenState extends ConsumerState<GeneratingPlanScreen>
 
     return Scaffold(
       backgroundColor: AppColors.bg,
-      body: SafeArea(
-        child: Padding(
-          padding: AppSpacing.screenH,
-          child: Column(
-            children: [
-              const SizedBox(height: AppSpacing.s24),
-
-              // Back button (only show when there's an error)
-              if (_hasError)
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: IconButton(
-                    onPressed: _onGoBack,
-                    icon: SvgPicture.asset(
-                      AppAssets.iconArrowLeft,
-                      width: 24,
-                      height: 24,
-                      colorFilter: const ColorFilter.mode(
-                        AppColors.textPrimary,
-                        BlendMode.srcIn,
-                      ),
-                    ),
+      body: AmbientBackground(
+        useSafeArea: false,
+        child: SafeArea(
+          child: Padding(
+            padding: AppSpacing.screenH,
+            child: _hasError
+                ? _GenerationErrorContent(
+                    errorMessage: _errorMessage,
+                    isRetrying: _isRetrying,
+                    onRetry: _onRetry,
+                    onGoBack: _onGoBack,
+                  )
+                : _GenerationPathContent(
+                    pulseController: _pulseController,
+                    progress: progress,
+                    stepLabel: stepLabel,
+                    isRetrying: _isRetrying,
+                    currentStep: _calculateStep(progress),
                   ),
-                ),
-
-              const Spacer(),
-
-              // Main content
-              if (_hasError)
-                _ErrorContent(
-                  errorMessage: _errorMessage,
-                  isRetrying: _isRetrying,
-                  onRetry: _onRetry,
-                  onGoBack: _onGoBack,
-                )
-              else
-                _LoadingContent(
-                  pulseController: _pulseController,
-                  progress: progress,
-                  stepLabel: stepLabel,
-                  isRetrying: _isRetrying,
-                ),
-
-              const Spacer(),
-
-              // Step indicators
-              if (!_hasError)
-                _StepIndicators(
-                  totalSteps: 4,
-                  currentStep: _calculateStep(progress),
-                ),
-
-              const SizedBox(height: AppSpacing.s48),
-            ],
           ),
         ),
       ),
@@ -307,253 +272,133 @@ class _GeneratingPlanScreenState extends ConsumerState<GeneratingPlanScreen>
   }
 }
 
-/// Loading content with animated icon and progress
-class _LoadingContent extends StatelessWidget {
-  const _LoadingContent({
+class _GenerationPathContent extends StatelessWidget {
+  const _GenerationPathContent({
     required this.pulseController,
     required this.progress,
     required this.stepLabel,
     required this.isRetrying,
+    required this.currentStep,
   });
 
   final AnimationController pulseController;
   final double progress;
   final String stepLabel;
   final bool isRetrying;
+  final int currentStep;
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        // Animated icon
-        _AnimatedPlanIcon(animation: pulseController),
-        const SizedBox(height: AppSpacing.s32),
+    final stages = ['Weeks', 'Plan items', 'Steps', 'Materials'];
 
-        // Title
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: AppSpacing.s32),
         Text(
-          isRetrying ? 'Regenerating Plan...' : 'Generating Your Plan',
-          style: AppTypography.h2,
-          textAlign: TextAlign.center,
+          isRetrying ? 'Rebuilding Plan' : 'Building Plan',
+          style: AppTypography.h1,
         ),
         const SizedBox(height: AppSpacing.s8),
-
-        // Subtitle
         Text(
-          'Creating a personalized plan based on\nyour idol\'s journey',
-          style: AppTypography.body.copyWith(
-            color: AppColors.textSecondary,
-          ),
-          textAlign: TextAlign.center,
+          'Opening the 12-week plan down into learning sections.',
+          style: AppTypography.body.copyWith(color: AppColors.textSecondary),
         ),
-        const SizedBox(height: AppSpacing.s32),
-
-        // Progress bar
-        Padding(
-          padding: AppSpacing.ph16,
-          child: Column(
-            children: [
-              ProgressBar(
-                progress: progress,
-                height: 6,
-                animated: true,
-              ),
-              const SizedBox(height: AppSpacing.s12),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    '${(progress * 100).round()}%',
-                    style: AppTypography.caption.copyWith(
-                      color: AppColors.accent,
-                      fontFeatures: [const FontFeature.tabularFigures()],
-                    ),
-                  ),
-                  Flexible(
-                    child: Text(
-                      stepLabel,
-                      style: AppTypography.caption.copyWith(
-                        color: AppColors.textTertiary,
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
+        const Spacer(),
+        Center(
+          child: AnimatedBuilder(
+            animation: pulseController,
+            builder: (context, child) {
+              final scale = 0.96 + (pulseController.value * 0.08);
+              return Transform.scale(scale: scale, child: child);
+            },
+            child: Container(
+              width: 108,
+              height: 108,
+              decoration: BoxDecoration(
+                color: AppColors.brandAccent.withValues(alpha: 0.16),
+                borderRadius: AppRadii.br32,
+                border: Border.all(
+                  color: AppColors.brandAccent.withValues(alpha: 0.35),
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: AppColors.brandAccent.withValues(alpha: 0.25),
+                    blurRadius: 48,
                   ),
                 ],
+              ),
+              child: const Icon(
+                Icons.route_rounded,
+                size: 48,
+                color: AppColors.brandAccent,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: AppSpacing.s32),
+        PathGlassPanel(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  PathPill(label: '${(progress * 100).round()}%'),
+                  const Spacer(),
+                  Text(
+                    stepLabel,
+                    style: AppTypography.caption.copyWith(
+                      color: AppColors.textSecondary,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+              const SizedBox(height: AppSpacing.s16),
+              PathProgressStrip(progress: progress),
+              const SizedBox(height: AppSpacing.s20),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: stages.asMap().entries.map((entry) {
+                  final active = entry.key <= currentStep;
+                  return Column(
+                    children: [
+                      AnimatedContainer(
+                        duration: AppDurations.fast,
+                        width: active ? 28 : 10,
+                        height: 10,
+                        decoration: BoxDecoration(
+                          color: active
+                              ? AppColors.brandAccent
+                              : AppColors.textTertiary.withValues(alpha: 0.35),
+                          borderRadius: AppRadii.brFull,
+                        ),
+                      ),
+                      const SizedBox(height: AppSpacing.s8),
+                      Text(
+                        entry.value,
+                        style: AppTypography.caption.copyWith(
+                          color: active
+                              ? AppColors.textPrimary
+                              : AppColors.textTertiary,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
+                  );
+                }).toList(),
               ),
             ],
           ),
         ),
-        const SizedBox(height: AppSpacing.s24),
-
-        // Tips
-        _PlanTip(),
+        const Spacer(),
       ],
     );
   }
 }
 
-/// Animated plan generation icon
-class _AnimatedPlanIcon extends StatelessWidget {
-  const _AnimatedPlanIcon({required this.animation});
-
-  final Animation<double> animation;
-
-  @override
-  Widget build(BuildContext context) {
-    return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 0, end: 1),
-      duration: const Duration(milliseconds: 600),
-      builder: (context, value, child) {
-        return Transform.scale(
-          scale: 0.8 + (0.2 * value),
-          child: Opacity(opacity: value, child: child),
-        );
-      },
-      child: AnimatedBuilder(
-        animation: animation,
-        builder: (context, child) {
-          return Container(
-            width: 96,
-            height: 96,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [AppColors.accent, AppColors.accentLight],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                transform: GradientRotation(animation.value * 6.28),
-              ),
-              borderRadius: AppRadii.br24,
-              boxShadow: [
-                BoxShadow(
-                  color: AppColors.accent.withValues(alpha: 0.3),
-                  blurRadius: 20,
-                  offset: const Offset(0, 6),
-                ),
-              ],
-            ),
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                // Main icon
-                SvgPicture.asset(
-                  AppAssets.iconListChecks,
-                  width: 40,
-                  height: 40,
-                  colorFilter: const ColorFilter.mode(
-                    AppColors.textPrimary,
-                    BlendMode.srcIn,
-                  ),
-                ),
-                // Sparkle overlay
-                Positioned(
-                  top: 12,
-                  right: 12,
-                  child: AnimatedBuilder(
-                    animation: animation,
-                    builder: (context, _) {
-                      final scale = 0.8 + 0.4 * ((animation.value * 2) % 1);
-                      return Transform.scale(
-                        scale: scale,
-                        child: SvgPicture.asset(
-                          AppAssets.iconSparkles,
-                          width: 16,
-                          height: 16,
-                          colorFilter: const ColorFilter.mode(
-                            AppColors.textPrimary,
-                            BlendMode.srcIn,
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-              ],
-            ),
-          );
-        },
-      ),
-    );
-  }
-}
-
-/// Tip shown during generation
-class _PlanTip extends StatefulWidget {
-  @override
-  State<_PlanTip> createState() => _PlanTipState();
-}
-
-class _PlanTipState extends State<_PlanTip> {
-  int _tipIndex = 0;
-  Timer? _tipTimer;
-
-  static const _tips = [
-    'Your plan will include weekly tasks and milestones',
-    'Track your progress and stay motivated',
-    'Adjust tasks to fit your schedule',
-    'Complete tasks to level up your journey',
-  ];
-
-  @override
-  void initState() {
-    super.initState();
-    _tipTimer = Timer.periodic(const Duration(seconds: 4), (_) {
-      if (mounted) {
-        setState(() => _tipIndex = (_tipIndex + 1) % _tips.length);
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _tipTimer?.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.s16,
-        vertical: AppSpacing.s12,
-      ),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: AppRadii.br16,
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Row(
-        children: [
-          SvgPicture.asset(
-            AppAssets.iconInfo,
-            width: 18,
-            height: 18,
-            colorFilter: const ColorFilter.mode(
-              AppColors.accent,
-              BlendMode.srcIn,
-            ),
-          ),
-          const SizedBox(width: AppSpacing.s12),
-          Expanded(
-            child: AnimatedSwitcher(
-              duration: AppDurations.normal,
-              child: Text(
-                _tips[_tipIndex],
-                key: ValueKey(_tipIndex),
-                style: AppTypography.caption.copyWith(
-                  color: AppColors.textSecondary,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Error content with retry options
-class _ErrorContent extends StatelessWidget {
-  const _ErrorContent({
+class _GenerationErrorContent extends StatelessWidget {
+  const _GenerationErrorContent({
     required this.errorMessage,
     required this.isRetrying,
     required this.onRetry,
@@ -568,142 +413,30 @@ class _ErrorContent extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Column(
-      mainAxisSize: MainAxisSize.min,
       children: [
-        // Error icon
-        Container(
-          width: 80,
-          height: 80,
-          decoration: BoxDecoration(
-            color: AppColors.error.withValues(alpha: 0.1),
-            borderRadius: AppRadii.br24,
-          ),
-          child: Center(
-            child: SvgPicture.asset(
-              AppAssets.iconAlertCircle,
-              width: 40,
-              height: 40,
-              colorFilter: const ColorFilter.mode(
-                AppColors.error,
-                BlendMode.srcIn,
-              ),
-            ),
-          ),
-        ),
         const SizedBox(height: AppSpacing.s24),
-
-        // Title
-        Text(
-          'Generation Failed',
-          style: AppTypography.h2,
-          textAlign: TextAlign.center,
+        Align(
+          alignment: Alignment.centerLeft,
+          child: IconButton(
+            tooltip: 'Back',
+            onPressed: onGoBack,
+            icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
+            color: AppColors.textSecondary,
+          ),
         ),
-        const SizedBox(height: AppSpacing.s8),
-
-        // Error message
-        Padding(
-          padding: AppSpacing.ph16,
-          child: Text(
-            errorMessage ?? 'An unexpected error occurred',
-            style: AppTypography.body.copyWith(
-              color: AppColors.textSecondary,
+        Expanded(
+          child: PathEmptyState(
+            title: 'Plan Generation Failed',
+            message:
+                errorMessage ??
+                'The plan could not be generated. Try again when ready.',
+            action: CmpysButton(
+              label: isRetrying ? 'Retrying...' : 'Try Again',
+              onPressed: isRetrying ? null : onRetry,
             ),
-            textAlign: TextAlign.center,
-          ),
-        ),
-        const SizedBox(height: AppSpacing.s32),
-
-        // Retry button
-        CmpysButton(
-          label: 'Try Again',
-          onPressed: isRetrying ? null : onRetry,
-          isLoading: isRetrying,
-          icon: AppAssets.iconRefreshCw,
-        ),
-        const SizedBox(height: AppSpacing.s12),
-
-        // Go back button
-        CmpysButton(
-          label: 'Go Back',
-          variant: CmpysButtonVariant.ghost,
-          onPressed: isRetrying ? null : onGoBack,
-        ),
-        const SizedBox(height: AppSpacing.s24),
-
-        // Support message
-        Container(
-          padding: const EdgeInsets.all(AppSpacing.s16),
-          decoration: BoxDecoration(
-            color: AppColors.surface,
-            borderRadius: AppRadii.br16,
-            border: Border.all(color: AppColors.border),
-          ),
-          child: Row(
-            children: [
-              SvgPicture.asset(
-                AppAssets.iconCircleHelp,
-                width: 20,
-                height: 20,
-                colorFilter: const ColorFilter.mode(
-                  AppColors.textSecondary,
-                  BlendMode.srcIn,
-                ),
-              ),
-              const SizedBox(width: AppSpacing.s12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Need help?',
-                      style: AppTypography.bodyMedium,
-                    ),
-                    const SizedBox(height: AppSpacing.s2),
-                    Text(
-                      'If the problem persists, please contact support.',
-                      style: AppTypography.caption.copyWith(
-                        color: AppColors.textTertiary,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
           ),
         ),
       ],
-    );
-  }
-}
-
-/// Step indicators at bottom
-class _StepIndicators extends StatelessWidget {
-  const _StepIndicators({
-    required this.totalSteps,
-    required this.currentStep,
-  });
-
-  final int totalSteps;
-  final int currentStep;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: List.generate(totalSteps, (index) {
-        final isActive = index <= currentStep;
-        final isCurrent = index == currentStep;
-        return AnimatedContainer(
-          duration: AppDurations.fast,
-          width: isCurrent ? 24 : 8,
-          height: 8,
-          margin: const EdgeInsets.symmetric(horizontal: 4),
-          decoration: BoxDecoration(
-            color: isActive ? AppColors.accent : AppColors.surface2,
-            borderRadius: AppRadii.brFull,
-          ),
-        );
-      }),
     );
   }
 }

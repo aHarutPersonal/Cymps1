@@ -19,25 +19,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.dependencies import get_current_user
-from app.core.config import settings
 from app.core.db import get_db
-from app.models.idol import Idol
-from app.models.idol_persona import IdolPersona
 from app.models.item_detail_job import PlanItemDetailJob
-from app.models.idol_profile import IdolProfile
-from app.models.idol_timeline import IdolTimelineEvent
 from app.models.plan import (
     Plan,
     PlanItem,
     PlanItemStatus,
-    PlanItemType,
     PlanItemCompletion,
     PlanItemStepCompletion,
 )
 from app.models.plan_job import PlanGenerationJob
 from app.models.user import User
-from app.models.user_achievement import UserAchievement
 from app.schemas.plan import (
+    BookIdeaDetail,
     DetailsStatus,
     ItemDetails,
     ItemProgress,
@@ -55,7 +49,6 @@ from app.schemas.plan import (
     WeekSummaryResponse,
 )
 from app.schemas.idol import IdolImportResponse
-from app.services.planning import generate_plan
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +83,9 @@ def _plan_to_response(plan: Plan, idol_name: str | None = None) -> PlanResponse:
     completed = sum(1 for i in plan.items if i.status == PlanItemStatus.COMPLETED)
     total = len(plan.items)
     
+    # Extract roadmap data from JSONB
+    roadmap = plan.roadmap_json or {}
+    
     return PlanResponse(
         id=plan.id,
         userId=plan.user_id,
@@ -100,6 +96,8 @@ def _plan_to_response(plan: Plan, idol_name: str | None = None) -> PlanResponse:
         weeklyHours=plan.weekly_hours,
         items=items,
         createdAt=plan.created_at,
+        roadmapThesis=roadmap.get("roadmap_thesis"),
+        antiGoals=roadmap.get("anti_goals", []),
         totalItems=total,
         completedItems=completed,
         overallProgress=(completed / total * 100) if total > 0 else 0,
@@ -449,9 +447,11 @@ def _parse_item_details(details_json: dict | None) -> ItemDetails | None:
             title=s.get("title", ""),
             description=s.get("description"),
             expected_output=s.get("expected_output"),
-            estimate_minutes=s.get("estimate_minutes"),
+            estimate_minutes=s.get("estimate_minutes") or s.get("estimateMinutes"),
             order=s.get("order"),
             resources=s.get("resources"),
+            substeps=s.get("substeps"),
+            lesson_content=s.get("lesson_content"),
         )
         for i, s in enumerate(details_json.get("steps", []))
     ]
@@ -461,9 +461,23 @@ def _parse_item_details(details_json: dict | None) -> ItemDetails | None:
             title=m.get("title", ""),
             url=m.get("url"),
             type=m.get("type"),
+            content_resource_id=m.get("content_resource_id") or m.get("contentResourceId"),
+            canonical_key=m.get("canonical_key") or m.get("canonicalKey"),
+            author_or_creator=m.get("author_or_creator") or m.get("authorOrCreator"),
+            thumbnail_url=m.get("thumbnail_url") or m.get("thumbnailUrl"),
+            license_status=m.get("license_status") or m.get("licenseStatus"),
+            search_query=m.get("search_query") or m.get("searchQuery"),
             content_markdown=m.get("content_markdown"),
             duration_minutes=m.get("duration_minutes"),
             reason=m.get("reason"),
+            ideas=[
+                BookIdeaDetail(
+                    title=idea.get("title", ""),
+                    content=idea.get("content", ""),
+                    category=idea.get("category", "Mindset"),
+                )
+                for idea in m.get("ideas", [])
+            ] if m.get("ideas") else None,
         )
         for m in details_json.get("materials", [])
     ]
@@ -504,7 +518,34 @@ async def get_plan_item_detailed(
             job_id=None,
         )
     
-    # No details - enqueue generation job
+    # No details - check if a job is ALREADY in progress
+    active_job_stmt = (
+        select(PlanItemDetailJob)
+        .where(
+            and_(
+                PlanItemDetailJob.plan_item_id == item_id,
+                PlanItemDetailJob.user_id == current_user.id,
+                PlanItemDetailJob.status.in_(["queued", "running", "pending"]),
+            )
+        )
+        .order_by(PlanItemDetailJob.created_at.desc())
+        .limit(1)
+    )
+    result = await db.execute(active_job_stmt)
+    existing_job = result.scalar_one_or_none()
+    
+    if existing_job:
+        logger.info(f"[PLAN_ITEM] Active job already exists for item_id={item_id}, job_id={existing_job.id}")
+        return PlanItemDetailedResponse(
+            item=_item_to_response(item),
+            details=None,
+            progress=existing_job.progress_percent,
+            completed=is_completed,
+            details_status=DetailsStatus.PENDING,
+            job_id=existing_job.id,
+        )
+
+    # No details and no active job - enqueue generation job
     from app.tasks.plans import regenerate_plan_item_details
     
     # Create job
@@ -519,9 +560,9 @@ async def get_plan_item_detailed(
     await db.commit()
     await db.refresh(job)
 
-    # Queue the regeneration task
-    regenerate_plan_item_details.delay(job.id)
-    logger.info(f"[PLAN_ITEM] Enqueued automatic details generation for item_id={item_id}, job_id={job.id}")
+    # Queue the regeneration task on high priority since user is waiting
+    regenerate_plan_item_details.apply_async(args=[job.id], queue="high_priority")
+    logger.info(f"[PLAN_ITEM] Enqueued high_priority details generation for item_id={item_id}, job_id={job.id}")
     
     return PlanItemDetailedResponse(
         item=_item_to_response(item),
@@ -767,8 +808,8 @@ async def regenerate_item_details(
     # Import here to avoid circular imports
     from app.tasks.plans import regenerate_plan_item_details
     
-    # Queue the regeneration task
-    regenerate_plan_item_details.delay(job.id)
+    # Queue the regeneration task on high priority
+    regenerate_plan_item_details.apply_async(args=[job.id], queue="high_priority")
     
     return RegenerateDetailsResponse(job_id=job.id)
 

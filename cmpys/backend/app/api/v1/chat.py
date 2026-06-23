@@ -30,7 +30,9 @@ from app.models.idol_timeline import IdolTimelineEvent
 from app.models.user import User
 from app.models.user_profile import UserProfile
 from app.models.user_achievement import UserAchievement
-from app.models.plan import Plan, PlanItem
+from app.models.plan import Plan, PlanItem, PlanItemCompletion
+from app.models.stashed_idea import StashedIdea
+from app.models.content_resource import ContentResource, UserContentProgress
 from app.schemas.chat import (
     AssistantReplyResponse,
     MessageCreate,
@@ -43,7 +45,7 @@ from app.schemas.chat import (
 from app.services.chat import generate_reply
 import json as json_lib
 import openai
-from app.services.chat.responder import LLMNotConfiguredError, _persona_to_json, _profile_to_json, _grounding_facts_to_json, _user_context_to_json, _milestones_to_json, _conversation_to_json
+from app.services.chat.responder import LLMNotConfiguredError
 
 logger = logging.getLogger(__name__)
 
@@ -135,10 +137,10 @@ async def list_threads(
     count_result = await db.execute(count_stmt)
     total = count_result.scalar() or 0
     
-    # Get threads with idol info
+    # Get threads with idol info (do not eager load all messages)
     stmt = (
         select(ChatThread)
-        .options(selectinload(ChatThread.idol), selectinload(ChatThread.messages))
+        .options(selectinload(ChatThread.idol))
         .where(ChatThread.user_id == current_user.id)
         .order_by(ChatThread.created_at.desc())
         .offset(offset)
@@ -148,13 +150,39 @@ async def list_threads(
     threads = result.scalars().unique().all()
     
     thread_responses = []
+    if threads:
+        thread_ids = [t.id for t in threads]
+
+        # 1. Fetch message counts
+        count_stmt = (
+            select(ChatMessage.thread_id, func.count())
+            .where(ChatMessage.thread_id.in_(thread_ids))
+            .group_by(ChatMessage.thread_id)
+        )
+        count_result = await db.execute(count_stmt)
+        counts_by_thread = dict(count_result.all())
+
+        # 2. Fetch last message for each thread
+        last_msg_stmt = (
+            select(ChatMessage)
+            .where(ChatMessage.thread_id.in_(thread_ids))
+            .distinct(ChatMessage.thread_id)
+            .order_by(ChatMessage.thread_id, ChatMessage.created_at.desc())
+        )
+        last_msg_result = await db.execute(last_msg_stmt)
+        last_msgs = last_msg_result.scalars().all()
+        last_msg_by_thread = {m.thread_id: m for m in last_msgs}
+    else:
+        counts_by_thread = {}
+        last_msg_by_thread = {}
+
     for thread in threads:
-        last_msg = thread.messages[-1] if thread.messages else None
+        last_msg = last_msg_by_thread.get(thread.id)
         thread_responses.append(_thread_to_response(
             thread,
             idol_name=thread.idol.name if thread.idol else None,
             idol_image_url=thread.idol.image_url if thread.idol else None,
-            message_count=len(thread.messages),
+            message_count=counts_by_thread.get(thread.id, 0),
             last_message=last_msg,
         ))
     
@@ -476,6 +504,44 @@ async def send_message_stream(
     plan_result = await db.execute(plan_stmt)
     active_plan = plan_result.scalar_one_or_none()
 
+    # Load recently completed tasks for context
+    recent_completions: list = []
+    if active_plan:
+        comp_stmt = (
+            select(PlanItemCompletion)
+            .join(PlanItem)
+            .where(PlanItem.plan_id == active_plan.id)
+            .order_by(PlanItemCompletion.completed_at.desc())
+            .limit(3)
+        )
+        comp_result = await db.execute(comp_stmt)
+        recent_completions = list(comp_result.scalars().all())
+
+    # Load recently stashed ideas for context
+    stash_stmt = (
+        select(StashedIdea)
+        .where(StashedIdea.user_id == current_user.id)
+        .order_by(StashedIdea.created_at.desc())
+        .limit(3)
+    )
+    stash_result = await db.execute(stash_stmt)
+    recent_stash = list(stash_result.scalars().all())
+
+    # Load current reading progress for context
+    reading_stmt = (
+        select(ContentResource, UserContentProgress)
+        .join(UserContentProgress, UserContentProgress.content_resource_id == ContentResource.id)
+        .where(
+            UserContentProgress.user_id == current_user.id,
+            UserContentProgress.progress_percent > 0,
+            UserContentProgress.progress_percent < 100,
+        )
+        .order_by(UserContentProgress.updated_at.desc())
+        .limit(1)
+    )
+    reading_result = await db.execute(reading_stmt)
+    reading_row = reading_result.first()
+
     # Store user message first
     user_msg = ChatMessage(
         thread_id=thread.id,
@@ -488,27 +554,21 @@ async def send_message_stream(
     user_msg_id = user_msg.id
     
     async def generate_stream():
-        """Generator for SSE stream."""
-        import asyncio
-        
+        """Generator for SSE stream with intent-based model routing."""
         try:
             if not settings.llm_configured:
                 yield f"data: {json_lib.dumps({'type': 'error', 'error': 'LLM not configured'})}\n\n"
                 return
             
-            # Format user context
+            # Build shared context
             user_context_str = f"User Age: {user_age or 'Unknown'}\n"
-            
             if user_profile:
                 if user_profile.goals:
                     user_context_str += f"Goals: {', '.join(user_profile.goals)}\n"
                 if user_profile.interests:
                     user_context_str += f"Interests: {', '.join(user_profile.interests)}\n"
-            
             if achievements:
-                ach_list = [a.title for a in achievements[:5]]
-                user_context_str += f"Recent Achievements: {', '.join(ach_list)}\n"
-            
+                user_context_str += f"Recent Achievements: {', '.join(a.title for a in achievements[:5])}\n"
             if active_plan:
                 total_items = len(active_plan.items)
                 avg_progress = int(sum(i.progress_percent for i in active_plan.items) / total_items) if total_items > 0 else 0
@@ -516,11 +576,21 @@ async def send_message_stream(
                 pending = [i.title for i in active_plan.items if i.status in ('pending', 'in_progress', 'not_started')][:3]
                 if pending:
                     user_context_str += f"Focus items: {', '.join(pending)}\n"
+            if recent_completions:
+                completed_titles = [c.plan_item.title for c in recent_completions if hasattr(c, 'plan_item') and c.plan_item]
+                if completed_titles:
+                    user_context_str += f"Recently completed: {', '.join(completed_titles)}\n"
+            if recent_stash:
+                stash_titles = [s.title for s in recent_stash if s.title]
+                if stash_titles:
+                    user_context_str += f"Recently stashed ideas: {', '.join(stash_titles)}\n"
+            if reading_row:
+                resource, progress = reading_row
+                user_context_str += f"Currently reading: {resource.title} ({progress.progress_percent}% complete)\n"
 
-            # Build prompts
             voice_style = persona.voice_style if persona else "Thoughtful and informative"
             principles = "\n".join(persona.principles) if persona and persona.principles else "Be helpful and honest."
-            
+
             system_prompt = f"""You are {idol_name}, a simulated AI persona based on public information.
 
 Voice Style: {voice_style}
@@ -540,39 +610,80 @@ Instructions:
 - DO NOT include disclaimers or meta-commentary about being an AI
 - To suggest a concrete action for their plan, add: [SUGGESTION: Action Title] at the end."""
 
-            # Simple user prompt for streaming
             conversation_history = ""
-            for msg in list(thread.messages)[-10:]:  # Last 10 messages for context
+            for msg in list(thread.messages)[-10:]:
                 role = "User" if msg.role.value == "user" else idol_name
                 conversation_history += f"{role}: {msg.content}\n"
-            
-            user_prompt = f"""Previous conversation:
+
+            # --- Intent-based model routing ---
+            accumulated_content = ""
+            gemini_available = bool(settings.gemini_api_key)
+
+            if gemini_available:
+                from app.services.gemini import detect_intent, stream_with_grounding, stream_learnlm
+                intent = detect_intent(data.content)
+                logger.info(f"[CHAT_ROUTE] intent={intent}, gemini_available={gemini_available}")
+            else:
+                intent = "general"
+                logger.info("[CHAT_ROUTE] Gemini not configured, using OpenAI for all messages")
+
+            if intent == "tutor" and gemini_available:
+                # --- LearnLM: Socratic tutoring for study/comprehension questions ---
+                logger.info("[CHAT_ROUTE] → LearnLM (tutoring)")
+                idol_persona_context = f"Voice: {voice_style}\nPrinciples: {principles}\nUser: {user_context_str}"
+                try:
+                    async for chunk in stream_learnlm(
+                        idol_name=idol_name,
+                        idol_persona_context=idol_persona_context,
+                        user_message=data.content,
+                        conversation_history=conversation_history,
+                    ):
+                        accumulated_content += chunk
+                        yield f"data: {json_lib.dumps({'type': 'chunk', 'content': chunk})}\n\n"
+                except Exception as learnlm_err:
+                    logger.warning(f"[CHAT_ROUTE] LearnLM failed, falling back to OpenAI: {learnlm_err}")
+                    intent = "general"  # fall through to OpenAI below
+
+            if intent == "resource" and gemini_available:
+                # --- Gemini + Google Search Grounding: real URLs for resource questions ---
+                logger.info("[CHAT_ROUTE] → Gemini Search Grounding (resources)")
+                try:
+                    async for chunk in stream_with_grounding(
+                        system_prompt=system_prompt,
+                        user_message=data.content,
+                        conversation_history=conversation_history,
+                    ):
+                        accumulated_content += chunk
+                        yield f"data: {json_lib.dumps({'type': 'chunk', 'content': chunk})}\n\n"
+                except Exception as grounding_err:
+                    logger.warning(f"[CHAT_ROUTE] Grounding failed, falling back to OpenAI: {grounding_err}")
+                    intent = "general"  # fall through to OpenAI below
+
+            if intent == "general" or not accumulated_content:
+                # --- OpenAI: default for general questions ---
+                logger.info("[CHAT_ROUTE] → OpenAI GPT (general)")
+                user_prompt = f"""Previous conversation:
 {conversation_history}
 
 User: {data.content}
 
 Respond as {idol_name}:"""
-            
-            # Stream from OpenAI
-            openai_client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
-            
-            accumulated_content = ""
-            stream = await openai_client.chat.completions.create(
-                model=settings.openai_model or "gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                stream=True,
-                temperature=0.7,
-            )
-            
-            async for chunk in stream:
-                delta = chunk.choices[0].delta
-                if delta.content:
-                    accumulated_content += delta.content
-                    yield f"data: {json_lib.dumps({'type': 'chunk', 'content': delta.content})}\n\n"
-            
+                openai_client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
+                stream = await openai_client.chat.completions.create(
+                    model=settings.openai_model or "gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    stream=True,
+                    temperature=0.7,
+                )
+                async for chunk in stream:
+                    delta = chunk.choices[0].delta
+                    if delta.content:
+                        accumulated_content += delta.content
+                        yield f"data: {json_lib.dumps({'type': 'chunk', 'content': delta.content})}\n\n"
+
             # Store complete assistant message
             async with async_session_maker() as save_db:
                 assistant_msg = ChatMessage(
@@ -583,7 +694,6 @@ Respond as {idol_name}:"""
                 save_db.add(assistant_msg)
                 await save_db.commit()
                 await save_db.refresh(assistant_msg)
-                
                 yield f"data: {json_lib.dumps({'type': 'done', 'messageId': str(assistant_msg.id), 'userMessageId': str(user_msg_id)})}\n\n"
                 
         except Exception as e:
@@ -591,7 +701,6 @@ Respond as {idol_name}:"""
             yield f"data: {json_lib.dumps({'type': 'error', 'error': str(e)})}\n\n"
     
     # Import session maker for saving
-    from app.core.db import async_session_maker
     
     await db.commit()  # Commit user message before streaming
     

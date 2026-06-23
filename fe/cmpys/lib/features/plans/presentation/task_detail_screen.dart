@@ -2,31 +2,26 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../../../app/assets.dart';
 import '../../../app/design_tokens.dart';
 import '../../../app/router.dart';
 import '../../../core/ui/cmpys_button.dart';
 import '../../../core/ui/cmpys_card.dart';
-import '../../../core/ui/cmpys_chip.dart';
 import '../../../core/ui/loading_state.dart';
-import '../../../core/ui/progress_bar.dart';
+import '../../../core/ui/prototype_grid_background.dart';
 import '../../../core/ui/thinking_stream.dart';
 import '../../idols/data/jobs_repository.dart';
 import '../../idols/models/job_models.dart';
 import '../controllers/plans_controller.dart';
 import '../data/plans_repository.dart';
 import '../models/plan_models.dart';
-import 'widgets/news_feed_widget.dart';
+import 'book_ideas_screen.dart';
+import 'widgets/path_design_helpers.dart';
 
 /// Screen to display task/plan item details with steps and materials.
 class TaskDetailScreen extends ConsumerStatefulWidget {
-  const TaskDetailScreen({
-    super.key,
-    required this.itemId,
-  });
+  const TaskDetailScreen({super.key, required this.itemId});
 
   final String itemId;
 
@@ -40,13 +35,8 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   bool _isRegenerating = false;
   bool _isPollingJob = false;
   String? _error;
-  String? _currentJobId;
   JobStatus? _jobStatus;
   Timer? _pollTimer;
-  int _jobPollFailCount = 0;
-
-  // Track expanded steps
-  final Set<String> _expandedSteps = {};
 
   @override
   void initState() {
@@ -69,7 +59,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
     try {
       final repository = ref.read(plansRepositoryProvider);
       final details = await repository.getPlanItem(widget.itemId);
-      
+
       if (mounted) {
         setState(() {
           _details = details;
@@ -82,12 +72,9 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
           if (details.jobId != null) {
             _startJobPolling(details.jobId!);
           }
-        } else if ((details.details == null || details.details!.steps.isEmpty) && 
-                   details.detailsStatus != DetailsStatus.failed &&
-                   details.jobId == null) {
-          // Auto-generate details if missing
-          _regenerateDetails();
         }
+        // NOTE: Never auto-call _regenerateDetails() here — the API handles
+        // job creation automatically. Calling it here caused an infinite loop.
       }
     } catch (e) {
       if (mounted) {
@@ -100,9 +87,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   }
 
   void _startJobPolling(String jobId) {
-    _currentJobId = jobId;
     _isPollingJob = true;
-    _jobPollFailCount = 0;
     _pollTimer?.cancel();
 
     // Use a separate async function to handle the stream
@@ -130,7 +115,9 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
           } else if (status.isFailed) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text('Failed to generate details: ${status.errorMessage ?? "Unknown error"}'),
+                content: Text(
+                  'Failed to generate details: ${status.errorMessage ?? "Unknown error"}',
+                ),
                 backgroundColor: AppColors.error,
               ),
             );
@@ -165,16 +152,18 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
         final item = _details!.item;
         final weekNumber = item.weekStart;
         if (weekNumber != null) {
-          ref.read(plansControllerProvider.notifier).refreshWeekSummary(weekNumber);
+          ref
+              .read(plansControllerProvider.notifier)
+              .refreshWeekSummary(weekNumber);
         }
         // Refresh the local plan state too
         ref.read(plansControllerProvider.notifier).refresh();
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to update: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to update: $e')));
       }
     }
   }
@@ -204,14 +193,16 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
         final item = _details!.item;
         final weekNumber = item.weekStart;
         if (weekNumber != null) {
-          ref.read(plansControllerProvider.notifier).refreshWeekSummary(weekNumber);
+          ref
+              .read(plansControllerProvider.notifier)
+              .refreshWeekSummary(weekNumber);
         }
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to update step: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to update step: $e')));
       }
     }
   }
@@ -223,12 +214,14 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
 
     try {
       final repository = ref.read(plansRepositoryProvider);
-      final response = await repository.regeneratePlanItemDetails(widget.itemId);
-      
+      final response = await repository.regeneratePlanItemDetails(
+        widget.itemId,
+      );
+
       if (mounted) {
         // Start polling the job
         _startJobPolling(response.jobId);
-        
+
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Regenerating details...'),
@@ -251,27 +244,67 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
     }
   }
 
-  void _toggleStepExpansion(String stepId) {
-    setState(() {
-      if (_expandedSteps.contains(stepId)) {
-        _expandedSteps.remove(stepId);
-      } else {
-        _expandedSteps.add(stepId);
-      }
-    });
-  }
-
   Future<void> _openMaterial(PlanMaterial material) async {
+    // Reusable book modules are 15-minute reads inside CMPYS.
+    if (material.isBook && material.contentMarkdown != null) {
+      context.goToInAppLesson(
+        title: material.title,
+        markdown: material.contentMarkdown!,
+        materialId: material.id,
+        durationMinutes: material.durationMinutes ?? 15,
+        initialProgressPercent: 0,
+        initialIsCompleted: false,
+      );
+      return;
+    }
+
+    // prototype-style ideas — open swipeable card reader
+    if (material.hasIdeas) {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) =>
+              BookIdeasScreen(bookTitle: material.title, ideas: material.ideas),
+        ),
+      );
+      return;
+    }
+
+    // Fallback: markdown content in lesson screen
     if (material.isInAppLesson && material.contentMarkdown != null) {
-      // Navigate to in-app lesson screen
       context.goToInAppLesson(
         title: material.title,
         markdown: material.contentMarkdown!,
         materialId: material.id,
         durationMinutes: material.durationMinutes,
+        initialProgressPercent: 0,
+        initialIsCompleted: false,
       );
-    } else if (material.url != null) {
-      // Open external URL
+      return;
+    }
+
+    // Video — play in-app with YouTube player
+    if (material.isVideo && material.url != null) {
+      context.goToPlanVideo(
+        title: material.title,
+        url: material.url!,
+        materialId: material.id,
+        source: null,
+        reason: material.reason,
+      );
+      return;
+    }
+
+    if (material.isVideo && material.url == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('This video is not available in-app yet.'),
+        ),
+      );
+      return;
+    }
+
+    // External URL
+    if (material.url != null) {
       final uri = Uri.tryParse(material.url!);
       if (uri != null) {
         try {
@@ -291,29 +324,10 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.bg,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        leading: IconButton(
-          icon: SvgPicture.asset(
-            AppAssets.iconArrowLeft,
-            width: 24,
-            height: 24,
-            colorFilter: const ColorFilter.mode(
-              AppColors.textPrimary,
-              BlendMode.srcIn,
-            ),
-          ),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-        title: _details != null
-            ? Text(
-                'Task Details',
-                style: AppTypography.bodyMedium,
-              )
-            : null,
+      body: PrototypeGridBackground(
+        gridSize: 20,
+        child: SafeArea(bottom: false, child: _buildBody()),
       ),
-      body: _buildBody(),
     );
   }
 
@@ -327,9 +341,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
     }
 
     if (_details == null) {
-      return const Center(
-        child: Text('No details available'),
-      );
+      return const Center(child: Text('No details available'));
     }
 
     // Show loading state only while actively polling for details
@@ -338,58 +350,156 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
       return _buildPendingDetailsState();
     }
 
-    return RefreshIndicator(
-      onRefresh: _loadDetails,
-      color: AppColors.accent,
-      backgroundColor: AppColors.surface,
-      child: SingleChildScrollView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.s24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Header with title, week, estimated hours
-            _buildHeader(),
-            const SizedBox(height: AppSpacing.s20),
+    return _buildPathDetail();
+  }
 
-  // Progress section with progress bar
-            _buildProgressSection(),
-            const SizedBox(height: AppSpacing.s24),
+  Widget _buildPathDetail() {
+    final item = _details!.item;
+    final details = _details!.details;
+    final actualSteps = details?.steps ?? [];
+    final actualMaterials = details?.materials ?? [];
+    final syntheticSteps = pathSyntheticSteps(item);
+    final syntheticMaterials = pathSyntheticMaterials(item);
 
-            // News Feed Section
-            if (_shouldShowNewsFeed(_details!.item)) ...[
-              NewsFeedWidget(query: _details!.item.title),
-              const SizedBox(height: AppSpacing.s24),
-            ],
-
-            // Regenerate button
-            _buildRegenerateButton(),
-            const SizedBox(height: AppSpacing.s24),
-
-            // Steps section with expandable cards
-            if (_details!.details?.steps.isNotEmpty ?? false) ...[
-              _buildStepsSection(),
-              const SizedBox(height: AppSpacing.s24),
-            ],
-
-            // Materials section
-            if (_details!.details?.materials.isNotEmpty ?? false) ...[
-              _buildMaterialsSection(),
-              const SizedBox(height: AppSpacing.s24),
-            ],
-
-            // Generating state indicator
-            if (_details!.isGenerating || _isRegenerating) ...[
-              _buildGeneratingState(),
-              const SizedBox(height: AppSpacing.s24),
-            ],
-
-            // Mark complete button
-            _buildCompleteButton(),
-            const SizedBox(height: AppSpacing.s48),
-          ],
+    return Column(
+      children: [
+        _TaskPrototypeHeader(
+          taskCode: item.weekStart != null
+              ? 'TASK_${item.weekStart}.${item.id.hashCode.abs() % 9}.B'
+              : 'TASK_DETAIL',
+          onBack: () => Navigator.of(context).pop(),
+          onRegenerate: _isRegenerating || _isPollingJob
+              ? null
+              : _regenerateDetails,
         ),
-      ),
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: _loadDetails,
+            color: AppColors.mint,
+            backgroundColor: AppColors.surface,
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(24, 32, 24, 112),
+              physics: const AlwaysScrollableScrollPhysics(),
+              children: [
+                Text(
+                  item.title,
+                  style: AppTypography.h1.copyWith(
+                    fontSize: 30,
+                    fontWeight: FontWeight.w800,
+                    height: 1.08,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  pathItemSubtitle(item),
+                  style: AppTypography.body.copyWith(
+                    color: AppColors.textSecondary,
+                    height: 1.5,
+                  ),
+                ),
+                if (item.weekStart != null) ...[
+                  const SizedBox(height: 14),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppColors.mint.withValues(alpha: 0.16),
+                        borderRadius: AppRadii.brFull,
+                        border: Border.all(
+                          color: AppColors.mint.withValues(alpha: 0.35),
+                        ),
+                      ),
+                      child: Text(
+                        'Relevant to Week ${item.weekStart}',
+                        style: AppTypography.captionUpper.copyWith(
+                          color: AppColors.textPrimary,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+                if (_details!.isGenerating || _isRegenerating) ...[
+                  const SizedBox(height: 20),
+                  _buildPathGeneratingState(),
+                ],
+                const SizedBox(height: 34),
+                const _PrototypeSectionLabel('Required_Absorption'),
+                const SizedBox(height: 16),
+                if (actualMaterials.isNotEmpty)
+                  ...actualMaterials.map(
+                    (material) => Padding(
+                      padding: const EdgeInsets.only(bottom: 14),
+                      child: _PrototypePlanMaterialCard(
+                        material: material,
+                        onTap: () => _openMaterial(material),
+                      ),
+                    ),
+                  )
+                else
+                  ...syntheticMaterials.map(
+                    (material) => Padding(
+                      padding: const EdgeInsets.only(bottom: 14),
+                      child: _PrototypeSyntheticMaterialCard(
+                        material: material,
+                      ),
+                    ),
+                  ),
+                const SizedBox(height: 22),
+                const _PrototypeSectionLabel('Execution_Log'),
+                const SizedBox(height: 16),
+                if (actualSteps.isNotEmpty)
+                  ...actualSteps.asMap().entries.map(
+                    (entry) => _ExecutionStepCard(
+                      step: entry.value,
+                      index: entry.key + 1,
+                      onToggle: () => _toggleStep(entry.value.id),
+                    ),
+                  )
+                else
+                  ...syntheticSteps.asMap().entries.map(
+                    (entry) => _ExecutionSyntheticStepCard(
+                      step: entry.value,
+                      index: entry.key + 1,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        Container(
+          padding: const EdgeInsets.fromLTRB(32, 16, 32, 40),
+          decoration: const BoxDecoration(
+            color: AppColors.surface,
+            border: Border(top: BorderSide(color: AppColors.borderLight)),
+          ),
+          child: SizedBox(
+            width: double.infinity,
+            height: 60,
+            child: ElevatedButton(
+              onPressed: _toggleItemComplete,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.textPrimary,
+                foregroundColor: Colors.white,
+                elevation: 0,
+                shape: RoundedRectangleBorder(borderRadius: AppRadii.br12),
+              ),
+              child: Text(
+                _details!.completed ? 'Reopen Task' : 'Complete Task',
+                style: AppTypography.h3.copyWith(
+                  color: Colors.white,
+                  fontSize: 18,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -413,10 +523,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                 ),
               ),
               const SizedBox(height: AppSpacing.s24),
-              Text(
-                'Generating Task Details',
-                style: AppTypography.h3,
-              ),
+              Text('Generating Task Details', style: AppTypography.h3),
               const SizedBox(height: AppSpacing.s8),
               Text(
                 'AI is creating personalized steps and resources for this task...',
@@ -434,10 +541,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      _details!.item.title,
-                      style: AppTypography.bodyMedium,
-                    ),
+                    Text(_details!.item.title, style: AppTypography.bodyMedium),
                     if (_details!.item.description != null) ...[
                       const SizedBox(height: AppSpacing.s8),
                       Text(
@@ -458,292 +562,23 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   }
 
   Widget _buildErrorState() {
-    return Center(
-      child: Padding(
-        padding: AppSpacing.screenH,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            SvgPicture.asset(
-              AppAssets.iconAlertCircle,
-              width: 48,
-              height: 48,
-              colorFilter: const ColorFilter.mode(
-                AppColors.error,
-                BlendMode.srcIn,
-              ),
-            ),
-            const SizedBox(height: AppSpacing.s16),
-            Text('Unable to load task', style: AppTypography.h3),
-            const SizedBox(height: AppSpacing.s8),
-            Text(
-              _error!,
-              style: AppTypography.body.copyWith(color: AppColors.textSecondary),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: AppSpacing.s24),
-            CmpysButton(
-              label: 'Try Again',
-              onPressed: _loadDetails,
-            ),
-          ],
-        ),
-      ),
+    return PathEmptyState(
+      title: 'Unable to Load Section',
+      message: _error!,
+      action: CmpysButton(label: 'Try Again', onPressed: _loadDetails),
     );
   }
 
-  Widget _buildHeader() {
-    final item = _details!.item;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Category chip and week badge
-        Row(
-          children: [
-            if (item.category != null)
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: AppSpacing.s12,
-                  vertical: AppSpacing.s4,
-                ),
-                decoration: BoxDecoration(
-                  color: AppColors.accent.withOpacity(0.15),
-                  borderRadius: AppRadii.brFull,
-                ),
-                child: Text(
-                  item.category!,
-                  style: AppTypography.caption.copyWith(
-                    color: AppColors.accent,
-                  ),
-                ),
-              ),
-            if (item.weekStart != null) ...[
-              const SizedBox(width: AppSpacing.s8),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: AppSpacing.s12,
-                  vertical: AppSpacing.s4,
-                ),
-                decoration: BoxDecoration(
-                  color: AppColors.surface2,
-                  borderRadius: AppRadii.brFull,
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    SvgPicture.asset(
-                      AppAssets.iconCalendar,
-                      width: 12,
-                      height: 12,
-                      colorFilter: const ColorFilter.mode(
-                        AppColors.textSecondary,
-                        BlendMode.srcIn,
-                      ),
-                    ),
-                    const SizedBox(width: AppSpacing.s4),
-                    Text(
-                      item.weekEnd != null && item.weekEnd != item.weekStart
-                          ? 'Week ${item.weekStart}-${item.weekEnd}'
-                          : 'Week ${item.weekStart}',
-                      style: AppTypography.caption.copyWith(
-                        color: AppColors.textSecondary,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ],
-        ),
-        const SizedBox(height: AppSpacing.s16),
-
-        // Title
-        Text(
-          item.title,
-          style: AppTypography.h2.copyWith(
-            decoration: _details!.completed ? TextDecoration.lineThrough : null,
-            color: _details!.completed
-                ? AppColors.textSecondary
-                : AppColors.textPrimary,
-          ),
-        ),
-
-        // Description
-        if (item.description != null && item.description!.isNotEmpty) ...[
-          const SizedBox(height: AppSpacing.s8),
-          Text(
-            item.description!,
-            style: AppTypography.body.copyWith(
-              color: AppColors.textSecondary,
-            ),
-          ),
-        ],
-
-        // Estimated hours
-        if (item.estimatedHours != null) ...[
-          const SizedBox(height: AppSpacing.s12),
-          Row(
-            children: [
-              SvgPicture.asset(
-                AppAssets.iconClock,
-                width: 16,
-                height: 16,
-                colorFilter: const ColorFilter.mode(
-                  AppColors.textTertiary,
-                  BlendMode.srcIn,
-                ),
-              ),
-              const SizedBox(width: AppSpacing.s6),
-              Text(
-                '${item.estimatedHours}h estimated',
-                style: AppTypography.body.copyWith(
-                  color: AppColors.textTertiary,
-                ),
-              ),
-            ],
-          ),
-        ],
-      ],
-    );
-  }
-
-  Widget _buildProgressSection() {
-    final progressPercent = _details!.progressPercent;
-    final progressFraction = progressPercent / 100;
-    final details = _details!.details;
-    final completedSteps = _details!.progress?.completedSteps ?? details?.completedStepsCount ?? 0;
-    final totalSteps = _details!.progress?.totalSteps ?? details?.steps.length ?? 0;
-
-    return CmpysCard(
-      padding: AppSpacing.p16,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text('Progress', style: AppTypography.bodyMedium),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: AppSpacing.s10,
-                  vertical: AppSpacing.s4,
-                ),
-                decoration: BoxDecoration(
-                  color: _details!.completed
-                      ? AppColors.success.withValues(alpha: 0.15)
-                      : AppColors.accent.withValues(alpha: 0.15),
-                  borderRadius: AppRadii.brFull,
-                ),
-                child: Text(
-                  '${progressPercent.toStringAsFixed(0)}%',
-                  style: AppTypography.buttonSmall.copyWith(
-                    color: _details!.completed ? AppColors.success : AppColors.accent,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: AppSpacing.s12),
-          ProgressBar(
-            progress: progressFraction,
-            height: 8,
-            backgroundColor: AppColors.surface2,
-            progressColor: _details!.completed ? AppColors.success : AppColors.accent,
-          ),
-          if (totalSteps > 0) ...[
-            const SizedBox(height: AppSpacing.s8),
-            Text(
-              '$completedSteps of $totalSteps steps completed',
-              style: AppTypography.caption.copyWith(
-                color: AppColors.textSecondary,
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildRegenerateButton() {
-    return CmpysButton(
-      label: 'Regenerate Details',
-      icon: AppAssets.iconRefreshCw,
-      variant: CmpysButtonVariant.secondary,
-      onPressed: _isRegenerating || _isPollingJob ? null : _regenerateDetails,
-      isExpanded: true,
-      isLoading: _isRegenerating || _isPollingJob,
-    );
-  }
-
-  Widget _buildStepsSection() {
-    final steps = _details!.details!.steps;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text('Steps', style: AppTypography.h4),
-            Text(
-              '${steps.where((s) => s.completed).length}/${steps.length}',
-              style: AppTypography.caption.copyWith(
-                color: AppColors.textSecondary,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: AppSpacing.s12),
-        ...steps.asMap().entries.map((entry) {
-          final index = entry.key;
-          final step = entry.value;
-          final isExpanded = _expandedSteps.contains(step.id);
-          return Padding(
-            padding: const EdgeInsets.only(bottom: AppSpacing.s8),
-            child: _ExpandableStepCard(
-              step: step,
-              index: index + 1,
-              isExpanded: isExpanded,
-              onToggleComplete: () => _toggleStep(step.id),
-              onToggleExpand: () => _toggleStepExpansion(step.id),
-              materials: _details!.details!.materials,
-            ),
-          );
-        }),
-      ],
-    );
-  }
-
-  Widget _buildMaterialsSection() {
-    final materials = _details!.details!.materials;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('Resources', style: AppTypography.h4),
-        const SizedBox(height: AppSpacing.s12),
-        ...materials.map((material) => Padding(
-              padding: const EdgeInsets.only(bottom: AppSpacing.s8),
-              child: _MaterialCard(
-                material: material,
-                onTap: () => _openMaterial(material),
-              ),
-            )),
-      ],
-    );
-  }
-
-  Widget _buildGeneratingState() {
-    return CmpysCard(
-      padding: AppSpacing.p20,
-      backgroundColor: AppColors.info.withOpacity(0.05),
-      borderColor: AppColors.info.withOpacity(0.2),
+  Widget _buildPathGeneratingState() {
+    return PathGlassPanel(
       child: Row(
         children: [
-          SizedBox(
+          const SizedBox(
             width: 24,
             height: 24,
             child: CircularProgressIndicator(
               strokeWidth: 2,
-              valueColor: AlwaysStoppedAnimation(AppColors.info),
+              valueColor: AlwaysStoppedAnimation(AppColors.brandAccent),
             ),
           ),
           const SizedBox(width: AppSpacing.s16),
@@ -751,15 +586,10 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  'Regenerating Details',
-                  style: AppTypography.bodyMedium.copyWith(
-                    color: AppColors.info,
-                  ),
-                ),
+                Text('Generating sections', style: AppTypography.bodyMedium),
                 const SizedBox(height: AppSpacing.s4),
                 Text(
-                  'AI is creating updated steps and resources...',
+                  'Creating steps and materials for this plan item.',
                   style: AppTypography.caption.copyWith(
                     color: AppColors.textSecondary,
                   ),
@@ -771,289 +601,106 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
       ),
     );
   }
-
-  Widget _buildCompleteButton() {
-    return CmpysButton(
-      label: _details!.completed ? 'Mark Incomplete' : 'Mark Complete',
-      icon: _details!.completed ? AppAssets.iconX : AppAssets.iconCheck,
-      variant: _details!.completed
-          ? CmpysButtonVariant.secondary
-          : CmpysButtonVariant.primary,
-      onPressed: _toggleItemComplete,
-      isExpanded: true,
-    );
-  }
-
-  bool _shouldShowNewsFeed(PlanItem item) {
-    // Check type or title
-    final isReading = item.type.toLowerCase() == 'reading';
-    final hasNewsKeyword = item.title.toLowerCase().contains('news') || 
-                          item.title.toLowerCase().contains('market') ||
-                          item.title.toLowerCase().contains('trend');
-    
-    return isReading && hasNewsKeyword;
-  }
 }
 
-/// Expandable card widget for a step.
-class _ExpandableStepCard extends StatelessWidget {
-  const _ExpandableStepCard({
-    required this.step,
-    required this.index,
-    required this.isExpanded,
-    required this.onToggleComplete,
-    required this.onToggleExpand,
-    required this.materials,
+class _TaskPrototypeHeader extends StatelessWidget {
+  const _TaskPrototypeHeader({
+    required this.taskCode,
+    required this.onBack,
+    required this.onRegenerate,
   });
 
-  final PlanStep step;
-  final int index;
-  final bool isExpanded;
-  final VoidCallback onToggleComplete;
-  final VoidCallback onToggleExpand;
-  final List<PlanMaterial> materials;
+  final String taskCode;
+  final VoidCallback onBack;
+  final VoidCallback? onRegenerate;
 
   @override
   Widget build(BuildContext context) {
-    // Get materials that are linked to this step
-    final linkedMaterials = materials
-        .where((m) => step.resources.contains(m.id))
-        .toList();
-
-    final hasExpandableContent = step.displayInstruction.isNotEmpty ||
-        step.expectedOutput != null ||
-        linkedMaterials.isNotEmpty;
-
-    return CmpysCard(
-      padding: EdgeInsets.zero,
-      child: Column(
-        children: [
-          // Header row - always visible
-          InkWell(
-            onTap: hasExpandableContent ? onToggleExpand : null,
-            borderRadius: AppRadii.br16,
-            child: Padding(
-              padding: AppSpacing.p16,
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Checkbox
-                  GestureDetector(
-                    onTap: onToggleComplete,
-                    behavior: HitTestBehavior.opaque,
-                    child: AnimatedContainer(
-                      duration: AppDurations.fast,
-                      width: 28,
-                      height: 28,
-                      decoration: BoxDecoration(
-                        color: step.completed ? AppColors.accent : Colors.transparent,
-                        shape: BoxShape.circle,
-                        border: step.completed
-                            ? null
-                            : Border.all(color: AppColors.border, width: 2),
-                      ),
-                      child: step.completed
-                          ? const Icon(Icons.check, size: 16, color: AppColors.textPrimary)
-                          : Center(
-                              child: Text(
-                                '$index',
-                                style: AppTypography.caption.copyWith(
-                                  color: AppColors.textSecondary,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ),
-                    ),
-                  ),
-                  const SizedBox(width: AppSpacing.s12),
-                  // Title and meta
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          step.title,
-                          style: AppTypography.bodyMedium.copyWith(
-                            decoration: step.completed ? TextDecoration.lineThrough : null,
-                            color: step.completed
-                                ? AppColors.textSecondary
-                                : AppColors.textPrimary,
-                          ),
-                        ),
-                        if (step.estimateMinutes != null) ...[
-                          const SizedBox(height: AppSpacing.s4),
-                          Row(
-                            children: [
-                              SvgPicture.asset(
-                                AppAssets.iconClock,
-                                width: 12,
-                                height: 12,
-                                colorFilter: const ColorFilter.mode(
-                                  AppColors.textTertiary,
-                                  BlendMode.srcIn,
-                                ),
-                              ),
-                              const SizedBox(width: AppSpacing.s4),
-                              Text(
-                                '${step.estimateMinutes} min',
-                                style: AppTypography.caption.copyWith(
-                                  color: AppColors.textTertiary,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                  // Expand/collapse icon
-                  if (hasExpandableContent)
-                    AnimatedRotation(
-                      turns: isExpanded ? 0.5 : 0,
-                      duration: AppDurations.fast,
-                      child: SvgPicture.asset(
-                        AppAssets.iconChevronDown,
-                        width: 20,
-                        height: 20,
-                        colorFilter: const ColorFilter.mode(
-                          AppColors.textTertiary,
-                          BlendMode.srcIn,
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ),
-          // Expanded content
-          AnimatedCrossFade(
-            firstChild: const SizedBox.shrink(),
-            secondChild: _buildExpandedContent(context, linkedMaterials),
-            crossFadeState:
-                isExpanded ? CrossFadeState.showSecond : CrossFadeState.showFirst,
-            duration: AppDurations.normal,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildExpandedContent(BuildContext context, List<PlanMaterial> linkedMaterials) {
     return Container(
-      padding: const EdgeInsets.only(
-        left: AppSpacing.s16,
-        right: AppSpacing.s16,
-        bottom: AppSpacing.s16,
-      ),
-      decoration: BoxDecoration(
-        color: AppColors.surface2.withOpacity(0.5),
-        borderRadius: const BorderRadius.vertical(
-          bottom: Radius.circular(16),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      color: AppColors.surface,
+      padding: const EdgeInsets.fromLTRB(24, 58, 24, 24),
+      child: Row(
         children: [
-          // Instruction
-          if (step.displayInstruction.isNotEmpty) ...[
-            const SizedBox(height: AppSpacing.s12),
-            Text(
-              'Instructions',
-              style: AppTypography.caption.copyWith(
-                color: AppColors.textSecondary,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(height: AppSpacing.s4),
-            Text(
-              step.displayInstruction,
-              style: AppTypography.body.copyWith(
-                color: AppColors.textPrimary,
-              ),
-            ),
-          ],
-          // Expected Output
-          if (step.expectedOutput != null) ...[
-            const SizedBox(height: AppSpacing.s16),
-            Text(
-              'Expected Output',
-              style: AppTypography.caption.copyWith(
-                color: AppColors.textSecondary,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(height: AppSpacing.s4),
-            Container(
-              padding: AppSpacing.p12,
-              decoration: BoxDecoration(
-                color: AppColors.success.withOpacity(0.1),
-                borderRadius: AppRadii.br12,
-                border: Border.all(
-                  color: AppColors.success.withOpacity(0.2),
+          _IconFrame(icon: Icons.chevron_left_rounded, onTap: onBack),
+          Expanded(
+            child: Column(
+              children: [
+                Text(
+                  'Module.Action_Detail',
+                  style: AppTypography.captionUpper.copyWith(
+                    color: AppColors.textTertiary,
+                    fontSize: 9,
+                    letterSpacing: 1.4,
+                  ),
                 ),
-              ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SvgPicture.asset(
-                    AppAssets.iconCheckCircle,
-                    width: 16,
-                    height: 16,
-                    colorFilter: const ColorFilter.mode(
-                      AppColors.success,
-                      BlendMode.srcIn,
-                    ),
+                const SizedBox(height: 4),
+                Text(
+                  taskCode,
+                  style: AppTypography.captionUpper.copyWith(
+                    color: AppColors.mint,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
                   ),
-                  const SizedBox(width: AppSpacing.s8),
-                  Expanded(
-                    child: Text(
-                      step.expectedOutput!,
-                      style: AppTypography.caption.copyWith(
-                        color: AppColors.textPrimary,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
-          ],
-          // Linked resources
-          if (linkedMaterials.isNotEmpty) ...[
-            const SizedBox(height: AppSpacing.s16),
-            Text(
-              'Resources',
-              style: AppTypography.caption.copyWith(
-                color: AppColors.textSecondary,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(height: AppSpacing.s8),
-            Wrap(
-              spacing: AppSpacing.s8,
-              runSpacing: AppSpacing.s8,
-              children: linkedMaterials.map((material) {
-                return CmpysTag(
-                  label: material.title,
-                  small: true,
-                  color: material.isInAppLesson
-                      ? AppColors.accent
-                      : AppColors.info,
-                  icon: material.isInAppLesson
-                      ? AppAssets.iconBookOpen
-                      : AppAssets.iconExternalLink,
-                );
-              }).toList(),
-            ),
-          ],
+          ),
+          _IconFrame(icon: Icons.bookmark_border_rounded, onTap: onRegenerate),
         ],
       ),
     );
   }
 }
 
-/// Card widget for a material/resource.
-class _MaterialCard extends StatelessWidget {
-  const _MaterialCard({
+class _IconFrame extends StatelessWidget {
+  const _IconFrame({required this.icon, this.onTap});
+
+  final IconData icon;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: AppColors.surface,
+      borderRadius: AppRadii.br12,
+      child: InkWell(
+        borderRadius: AppRadii.br12,
+        onTap: onTap,
+        child: Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            border: Border.all(color: AppColors.border),
+            borderRadius: AppRadii.br12,
+          ),
+          child: Icon(icon, color: AppColors.textSecondary, size: 24),
+        ),
+      ),
+    );
+  }
+}
+
+class _PrototypeSectionLabel extends StatelessWidget {
+  const _PrototypeSectionLabel(this.label);
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      label,
+      style: AppTypography.captionUpper.copyWith(
+        color: AppColors.textTertiary,
+        fontSize: 10,
+        fontWeight: FontWeight.w800,
+        letterSpacing: 1.5,
+      ),
+    );
+  }
+}
+
+class _PrototypePlanMaterialCard extends StatelessWidget {
+  const _PrototypePlanMaterialCard({
     required this.material,
     required this.onTap,
   });
@@ -1063,165 +710,432 @@ class _MaterialCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return CmpysCard(
-      onTap: onTap,
-      padding: AppSpacing.p16,
-      child: Row(
-        children: [
-          // Icon
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: _getIconBackgroundColor(),
-              borderRadius: AppRadii.br12,
-            ),
-            child: Center(
-              child: SvgPicture.asset(
-                _getIcon(),
-                width: 22,
-                height: 22,
-                colorFilter: ColorFilter.mode(
-                  _getIconColor(),
-                  BlendMode.srcIn,
+    final isVideo = material.isVideo;
+    final isBook = material.isBook || material.contentMarkdown != null;
+    final accent = isVideo ? AppColors.brandAccent : AppColors.mint;
+    final label = isVideo
+        ? 'VIDEO BRIEF'
+        : isBook
+        ? '15-MIN BOOK'
+        : material.kindLabel.toUpperCase();
+    final action = isVideo
+        ? 'WATCH SESSION'
+        : isBook
+        ? 'READ NOW'
+        : 'OPEN MODULE';
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: AppRadii.br16,
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: AppRadii.br16,
+            border: Border.all(color: AppColors.border),
+          ),
+          child: Row(
+            children: [
+              _MaterialThumb(isVideo: isVideo, accent: accent),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      label,
+                      style: AppTypography.captionUpper.copyWith(
+                        color: accent,
+                        fontSize: 8,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      material.title,
+                      style: AppTypography.h4.copyWith(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 7),
+                    Text(
+                      action,
+                      style: AppTypography.captionUpper.copyWith(
+                        color: accent,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-            ),
+              const Icon(
+                Icons.chevron_right_rounded,
+                color: AppColors.textTertiary,
+              ),
+            ],
           ),
-          const SizedBox(width: AppSpacing.s12),
-          // Content
+        ),
+      ),
+    );
+  }
+}
+
+class _PrototypeSyntheticMaterialCard extends StatelessWidget {
+  const _PrototypeSyntheticMaterialCard({required this.material});
+
+  final PathSyntheticMaterial material;
+
+  @override
+  Widget build(BuildContext context) {
+    final isVideo = material.kindLabel.toLowerCase().contains('video');
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: AppRadii.br16,
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Row(
+        children: [
+          _MaterialThumb(isVideo: isVideo, accent: material.color),
+          const SizedBox(width: 16),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        material.title,
-                        style: AppTypography.bodyMedium,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    const SizedBox(width: AppSpacing.s8),
-                    _buildKindBadge(),
-                  ],
+                Text(
+                  material.kindLabel.toUpperCase(),
+                  style: AppTypography.captionUpper.copyWith(
+                    color: material.color,
+                    fontSize: 8,
+                    fontWeight: FontWeight.w900,
+                  ),
                 ),
-                if (material.reason != null) ...[
-                  const SizedBox(height: AppSpacing.s4),
-                  Text(
-                    material.reason!,
-                    style: AppTypography.caption.copyWith(
-                      color: AppColors.textSecondary,
-                    ),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
+                const SizedBox(height: 4),
+                Text(
+                  material.subtitle,
+                  style: AppTypography.h4.copyWith(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
                   ),
-                ],
-                if (material.durationMinutes != null) ...[
-                  const SizedBox(height: AppSpacing.s6),
-                  Row(
-                    children: [
-                      SvgPicture.asset(
-                        AppAssets.iconClock,
-                        width: 12,
-                        height: 12,
-                        colorFilter: const ColorFilter.mode(
-                          AppColors.textTertiary,
-                          BlendMode.srcIn,
-                        ),
-                      ),
-                      const SizedBox(width: AppSpacing.s4),
-                      Text(
-                        '${material.durationMinutes} min',
-                        style: AppTypography.caption.copyWith(
-                          color: AppColors.textTertiary,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ],
             ),
           ),
-          const SizedBox(width: AppSpacing.s8),
-          // Arrow
-          SvgPicture.asset(
-            AppAssets.iconChevronRight,
-            width: 20,
-            height: 20,
-            colorFilter: const ColorFilter.mode(
-              AppColors.textTertiary,
-              BlendMode.srcIn,
+          const Icon(
+            Icons.chevron_right_rounded,
+            color: AppColors.textTertiary,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MaterialThumb extends StatelessWidget {
+  const _MaterialThumb({required this.isVideo, required this.accent});
+
+  final bool isVideo;
+  final Color accent;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: isVideo ? 56 : 56,
+      height: isVideo ? 56 : 80,
+      decoration: BoxDecoration(
+        color: AppColors.surfaceHighlight,
+        borderRadius: AppRadii.br8,
+        boxShadow: isVideo ? null : AppShadows.sm,
+      ),
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          Icon(
+            isVideo
+                ? Icons.play_circle_outline_rounded
+                : Icons.menu_book_rounded,
+            color: accent,
+            size: isVideo ? 28 : 24,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ExecutionStepCard extends StatelessWidget {
+  const _ExecutionStepCard({
+    required this.step,
+    required this.index,
+    required this.onToggle,
+  });
+
+  final PlanStep step;
+  final int index;
+  final VoidCallback onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    final detail = step.displayInstruction.trim();
+    final expected = step.expectedOutput?.trim();
+
+    return _ExecutionCardShell(
+      completed: step.completed,
+      onTap: onToggle,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _ExecutionHeader(
+            index: index,
+            title: step.title,
+            completed: step.completed,
+            meta: step.estimateMinutes == null
+                ? null
+                : '${step.estimateMinutes} MIN',
+          ),
+          if (detail.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Text(
+              detail,
+              style: AppTypography.caption.copyWith(
+                color: AppColors.textSecondary,
+                fontSize: 12,
+                height: 1.45,
+              ),
+            ),
+          ],
+          if (step.substeps.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            ...step.substeps.asMap().entries.map(
+              (entry) => _SubstepLine(number: entry.key + 1, text: entry.value),
+            ),
+          ],
+          if (expected?.isNotEmpty ?? false) ...[
+            const SizedBox(height: 12),
+            _ExpectedOutput(text: expected!),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _ExecutionSyntheticStepCard extends StatelessWidget {
+  const _ExecutionSyntheticStepCard({required this.step, required this.index});
+
+  final PathSyntheticStep step;
+  final int index;
+
+  @override
+  Widget build(BuildContext context) {
+    return _ExecutionCardShell(
+      completed: step.completed,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _ExecutionHeader(
+            index: index,
+            title: step.title,
+            completed: step.completed,
+          ),
+          if (step.subtitle?.trim().isNotEmpty ?? false) ...[
+            const SizedBox(height: 10),
+            Text(
+              step.subtitle!.trim(),
+              style: AppTypography.caption.copyWith(
+                color: AppColors.textSecondary,
+                fontSize: 12,
+                height: 1.45,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _ExecutionCardShell extends StatelessWidget {
+  const _ExecutionCardShell({
+    required this.completed,
+    required this.child,
+    this.onTap,
+  });
+
+  final bool completed;
+  final Widget child;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: AppRadii.br12,
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: completed ? AppColors.surfaceHighlight : AppColors.surface,
+              borderRadius: AppRadii.br12,
+              border: Border.all(color: AppColors.borderLight),
+            ),
+            child: child,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ExecutionHeader extends StatelessWidget {
+  const _ExecutionHeader({
+    required this.index,
+    required this.title,
+    required this.completed,
+    this.meta,
+  });
+
+  final int index;
+  final String title;
+  final bool completed;
+  final String? meta;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 20,
+          height: 20,
+          decoration: BoxDecoration(
+            border: Border.all(
+              color: completed ? AppColors.mint : AppColors.border,
+            ),
+            borderRadius: AppRadii.br8,
+          ),
+          child: completed
+              ? const Icon(Icons.check_rounded, size: 13, color: AppColors.mint)
+              : null,
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            title,
+            style: AppTypography.caption.copyWith(
+              color: completed
+                  ? AppColors.textSecondary
+                  : AppColors.textPrimary,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              height: 1.35,
+            ),
+          ),
+        ),
+        if (meta != null) ...[
+          const SizedBox(width: 8),
+          Text(
+            meta!,
+            style: AppTypography.captionUpper.copyWith(
+              color: AppColors.textTertiary,
+              fontSize: 9,
+            ),
+          ),
+        ] else
+          Text(
+            index.toString().padLeft(2, '0'),
+            style: AppTypography.captionUpper.copyWith(
+              color: AppColors.mint,
+              fontSize: 10,
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _SubstepLine extends StatelessWidget {
+  const _SubstepLine({required this.number, required this.text});
+
+  final int number;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 7),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '$number.',
+            style: AppTypography.captionUpper.copyWith(
+              color: AppColors.brandAccent,
+              fontSize: 10,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              style: AppTypography.caption.copyWith(
+                color: AppColors.textSecondary,
+                fontSize: 12,
+              ),
             ),
           ),
         ],
       ),
     );
   }
+}
 
-  Widget _buildKindBadge() {
-    final (label, color) = switch (material.type) {
-      PlanMaterialType.inAppLesson => ('Lesson', AppColors.accent),
-      PlanMaterialType.search => ('Search', AppColors.info),
-      PlanMaterialType.book => ('Book', AppColors.info),
-      PlanMaterialType.article => ('Article', AppColors.info),
-      PlanMaterialType.video => ('Video', AppColors.warning),
-      PlanMaterialType.course => ('Course', AppColors.success),
-      _ => ('Link', AppColors.textSecondary),
-    };
+class _ExpectedOutput extends StatelessWidget {
+  const _ExpectedOutput({required this.text});
 
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.s8,
-        vertical: AppSpacing.s2,
-      ),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.15),
-        borderRadius: AppRadii.brFull,
+        color: AppColors.mint.withValues(alpha: 0.08),
+        borderRadius: AppRadii.br12,
+        border: Border.all(color: AppColors.mint.withValues(alpha: 0.18)),
       ),
-      child: Text(
-        label,
-        style: AppTypography.caption.copyWith(
-          color: color,
-          fontSize: 10,
-          fontWeight: FontWeight.w600,
-        ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(
+            Icons.check_circle_outline_rounded,
+            size: 18,
+            color: AppColors.mint,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              text,
+              style: AppTypography.caption.copyWith(
+                color: AppColors.textSecondary,
+                fontSize: 12,
+              ),
+            ),
+          ),
+        ],
       ),
     );
-  }
-
-  String _getIcon() {
-    return switch (material.type) {
-      PlanMaterialType.inAppLesson => AppAssets.iconBookOpen,
-      PlanMaterialType.search => AppAssets.iconSearch,
-      PlanMaterialType.book => AppAssets.iconBookOpen,
-      PlanMaterialType.video => AppAssets.iconPlay,
-      PlanMaterialType.article => AppAssets.iconFileText,
-      _ => AppAssets.iconExternalLink,
-    };
-  }
-
-  Color _getIconColor() {
-    return switch (material.type) {
-      PlanMaterialType.inAppLesson => AppColors.accent,
-      PlanMaterialType.search => AppColors.info,
-      PlanMaterialType.book => AppColors.info,
-      PlanMaterialType.video => AppColors.warning,
-      PlanMaterialType.course => AppColors.success,
-      _ => AppColors.textSecondary,
-    };
-  }
-
-  Color _getIconBackgroundColor() {
-    return switch (material.type) {
-      PlanMaterialType.inAppLesson => AppColors.accent.withValues(alpha: 0.15),
-      PlanMaterialType.search => AppColors.info.withValues(alpha: 0.15),
-      PlanMaterialType.book => AppColors.info.withValues(alpha: 0.15),
-      PlanMaterialType.video => AppColors.warning.withValues(alpha: 0.15),
-      PlanMaterialType.course => AppColors.success.withValues(alpha: 0.15),
-      _ => AppColors.surface2,
-    };
   }
 }

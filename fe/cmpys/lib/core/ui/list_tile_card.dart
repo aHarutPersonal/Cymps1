@@ -38,7 +38,8 @@ class ListTileCard extends StatelessWidget {
     return CmpysCard(
       onTap: onTap,
       backgroundColor: backgroundColor,
-      padding: padding ??
+      padding:
+          padding ??
           const EdgeInsets.symmetric(
             horizontal: AppSpacing.s16,
             vertical: AppSpacing.s12,
@@ -64,7 +65,8 @@ class ListTileCard extends StatelessWidget {
                   const SizedBox(height: AppSpacing.s4),
                   Text(
                     subtitle!,
-                    style: subtitleStyle ??
+                    style:
+                        subtitleStyle ??
                         AppTypography.caption.copyWith(
                           color: AppColors.textSecondary,
                         ),
@@ -179,22 +181,22 @@ class ListTileAvatar extends StatelessWidget {
                 ),
               )
             : initials != null && initials!.isNotEmpty
-                ? Text(
-                    initials!,
-                    style: AppTypography.bodyMedium.copyWith(
-                      color: foregroundColor ?? AppColors.textPrimary,
-                      fontSize: size * 0.35,
-                    ),
-                  )
-                : SvgPicture.asset(
-                    AppAssets.iconUser,
-                    width: size * 0.5,
-                    height: size * 0.5,
-                    colorFilter: ColorFilter.mode(
-                      foregroundColor ?? AppColors.textSecondary,
-                      BlendMode.srcIn,
-                    ),
-                  ),
+            ? Text(
+                initials!,
+                style: AppTypography.bodyMedium.copyWith(
+                  color: foregroundColor ?? AppColors.textPrimary,
+                  fontSize: size * 0.35,
+                ),
+              )
+            : SvgPicture.asset(
+                AppAssets.iconUser,
+                width: size * 0.5,
+                height: size * 0.5,
+                colorFilter: ColorFilter.mode(
+                  foregroundColor ?? AppColors.textSecondary,
+                  BlendMode.srcIn,
+                ),
+              ),
       ),
     );
   }
@@ -229,7 +231,8 @@ class GradientAvatar extends StatelessWidget {
           height: size,
           fit: BoxFit.cover,
           placeholder: (context, url) => _buildGradientAvatar(borderRadius),
-          errorWidget: (context, url, error) => _buildGradientAvatar(borderRadius),
+          errorWidget: (context, url, error) =>
+              _buildGradientAvatar(borderRadius),
         ),
       );
     }
@@ -242,7 +245,8 @@ class GradientAvatar extends StatelessWidget {
       width: size,
       height: size,
       decoration: BoxDecoration(
-        gradient: gradient ??
+        gradient:
+            gradient ??
             const LinearGradient(
               colors: [AppColors.accent, AppColors.accentLight],
               begin: Alignment.topLeft,
@@ -251,7 +255,7 @@ class GradientAvatar extends StatelessWidget {
         borderRadius: borderRadius,
         boxShadow: [
           BoxShadow(
-            color: AppColors.accent.withOpacity(0.3),
+            color: AppColors.accent.withValues(alpha: 0.3),
             blurRadius: 8,
             offset: const Offset(0, 2),
           ),
@@ -272,6 +276,13 @@ class GradientAvatar extends StatelessWidget {
 }
 
 /// Settings list tile with icon.
+abstract final class _SettingsTilePalette {
+  static const ink = AppColors.textPrimary;
+  static const muted = AppColors.textSecondary;
+  static const line = AppColors.border;
+  static const coral = AppColors.brandAccent;
+}
+
 class SettingsTile extends StatelessWidget {
   const SettingsTile({
     super.key,
@@ -312,7 +323,8 @@ class SettingsTile extends StatelessWidget {
                     width: 40,
                     height: 40,
                     decoration: BoxDecoration(
-                      color: (iconColor ?? AppColors.accent).withOpacity(0.1),
+                      color: (iconColor ?? _SettingsTilePalette.coral)
+                          .withValues(alpha: 0.1),
                       borderRadius: AppRadii.br12,
                     ),
                     child: Center(
@@ -321,7 +333,7 @@ class SettingsTile extends StatelessWidget {
                         width: 20,
                         height: 20,
                         colorFilter: ColorFilter.mode(
-                          iconColor ?? AppColors.accent,
+                          iconColor ?? _SettingsTilePalette.coral,
                           BlendMode.srcIn,
                         ),
                       ),
@@ -333,8 +345,10 @@ class SettingsTile extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          title, 
-                          style: AppTypography.bodyMedium,
+                          title,
+                          style: AppTypography.bodyMedium.copyWith(
+                            color: _SettingsTilePalette.ink,
+                          ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -342,7 +356,7 @@ class SettingsTile extends StatelessWidget {
                           Text(
                             subtitle!,
                             style: AppTypography.caption.copyWith(
-                              color: AppColors.textSecondary,
+                              color: _SettingsTilePalette.muted,
                             ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -356,7 +370,7 @@ class SettingsTile extends StatelessWidget {
                         width: 20,
                         height: 20,
                         colorFilter: const ColorFilter.mode(
-                          AppColors.textTertiary,
+                          _SettingsTilePalette.muted,
                           BlendMode.srcIn,
                         ),
                       ),
@@ -369,7 +383,7 @@ class SettingsTile extends StatelessWidget {
           const Divider(
             height: 1,
             indent: 52,
-            color: AppColors.border,
+            color: _SettingsTilePalette.line,
           ),
       ],
     );
@@ -407,18 +421,14 @@ class IdolCard extends StatelessWidget {
       child: Row(
         children: [
           // Always use GradientAvatar which now supports images with fallback
-          GradientAvatar(
-            initials: initials,
-            imageUrl: imageUrl,
-            size: 48,
-          ),
+          GradientAvatar(initials: initials, imageUrl: imageUrl, size: 48),
           const SizedBox(width: AppSpacing.s12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  name, 
+                  name,
                   style: AppTypography.bodyMedium,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,

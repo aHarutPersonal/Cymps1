@@ -2,6 +2,8 @@ from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+import os
 
 from app.api.router import router as api_router
 from app.core.config import settings
@@ -45,6 +47,18 @@ app.add_middleware(
 # This logs all HTTP requests in curl format and responses with timing
 app.add_middleware(ResponseBodyLoggerMiddleware)
 
+from app.api.v1.media import router as media_router
+
 # Include routers
 app.include_router(health_router)
 app.include_router(api_router)
+
+# Mount media directory for static files (e.g. generated avatars)
+# Create media directory if it doesn't exist to prevent StaticFiles exception on startup
+os.makedirs("media", exist_ok=True)
+
+# Important: Add the media router BEFORE StaticFiles so it intercepts 404s
+app.include_router(media_router, prefix="/media", tags=["media"])
+
+# Fallback to StaticFiles for anything not captured by the router (though the router handles /{filename})
+app.mount("/media", StaticFiles(directory="media"), name="media")
