@@ -174,14 +174,12 @@ class TokenStore {
   /// `currentApiBase`. Prevents the cross-environment auth loop where a token
   /// from a local backend (different JWT secret) keeps 401'ing prod and never
   /// gets cleaned up.
+  ///
+  /// An unbound token (saved before this guard existed, or written by an
+  /// older app version) is treated as untrusted and wiped — better one
+  /// re-login than a loop nobody can recover from.
   Future<void> ensureTokenBoundTo(String currentApiBase) async {
     final saved = await _read(_keyTokenApiBase);
-    if (saved == null) {
-      // Legacy install — bind the existing token to the current base so we
-      // don't wipe a valid token unnecessarily.
-      await _write(_keyTokenApiBase, currentApiBase);
-      return;
-    }
     if (saved != currentApiBase) {
       await clear();
       await _write(_keyTokenApiBase, currentApiBase);
