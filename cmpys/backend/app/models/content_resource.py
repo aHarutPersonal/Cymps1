@@ -3,11 +3,13 @@ from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, Enum as SQLEnum, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from pgvector.sqlalchemy import Vector
+from sqlalchemy import Boolean, DateTime, Enum as SQLEnum, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampUpdateMixin, UUIDMixin
+from app.models.idol import CatalogStatus
 
 if TYPE_CHECKING:
     from app.models.user import User
@@ -61,6 +63,18 @@ class ContentResource(Base, UUIDMixin, TimestampUpdateMixin):
     summary_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     duration_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     metadata_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+    status: Mapped[CatalogStatus] = mapped_column(
+        SQLEnum(CatalogStatus, name="catalog_status", create_type=False),
+        nullable=False,
+        default=CatalogStatus.PENDING,
+        index=True,
+    )
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(1024), nullable=True)
+    is_public_domain: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    source_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    source_external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    read_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     saves: Mapped[list["UserContentSave"]] = relationship(
         "UserContentSave",

@@ -8,10 +8,6 @@ PROMPT MAPPING:
   - Worker prompts: extractor_system.txt + profile_extract.txt, 
     achievements_extract.txt, timeline_normalize.txt, persona_pack.txt
 
-- GET /idols/suggest (LLM when configured)
-  - Prompts: idol_discover.txt
-  - Uses LLM to suggest notable people based on interests
-    
 - GET /idols/discover (Wikidata only, no LLM)
   - Uses Wikidata API for exact name searches
 """
@@ -32,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.db import get_db
-from app.models.idol import Idol
+from app.models.idol import CatalogStatus, Idol
 from app.models.idol_alias import IdolAlias
 from app.models.idol_external_id import IdolExternalId
 from app.models.idol_job import IdolImportJob
@@ -43,6 +39,7 @@ from app.models.idol_tag import IdolTag
 from app.models.idol_tag_link import IdolTagLink
 from app.models.idol_timeline import IdolTimelineEvent
 from app.models.user import User
+from app.core.validation import is_valid_uuid
 from app.providers import DiscoveryResponse, search_candidates
 from app.providers.wikidata import fetch_entity_by_id
 from app.schemas.idol import (
@@ -63,6 +60,25 @@ from app.schemas.idol import (
 )
 
 router = APIRouter(prefix="/idols", tags=["idols"])
+
+
+def _published_only(stmt):
+    """Restrict an Idol select to published catalog entries."""
+    return stmt.where(Idol.status == CatalogStatus.PUBLISHED)
+
+
+def _validate_idol_id(idol_id: str) -> str:
+    """Path-param dependency: reject malformed idol ids with a clean 404.
+
+    The id is queried against a UUID-typed column; a non-UUID string would
+    otherwise raise inside the driver and surface as HTTP 500.
+    """
+    if not is_valid_uuid(idol_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Idol not found",
+        )
+    return idol_id
 
 
 def _timeline_date_precision(value: object) -> str:
@@ -141,7 +157,7 @@ async def search_idols(
 ) -> IdolSearchResponse:
     """Search idols by name or alias."""
     # Build base query with eager loading
-    base_query = (
+    base_query = _published_only(
         select(Idol)
         .options(
             selectinload(Idol.aliases),
@@ -166,7 +182,7 @@ async def search_idols(
         )
 
     # Get total count
-    count_query = select(func.count(func.distinct(Idol.id)))
+    count_query = _published_only(select(func.count(func.distinct(Idol.id))))
     if q.strip():
         search_term = f"%{q.strip()}%"
         count_query = (
@@ -193,36 +209,6 @@ async def search_idols(
     )
 
 
-@router.get("/suggest", response_model=IdolImportResponse)
-async def suggest_idols(
-    db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(get_current_user)],
-    interests: str = Query("", description="Comma-separated interests (e.g., 'business,investing')"),
-    limit: int = Query(20, ge=1, le=50),
-    source: str = Query("auto", description="Source: 'local', 'llm', or 'auto' (local first, then LLM)"),
-) -> IdolImportResponse:
-    # In the new async flow, we just create a job and return its ID
-    job = IdolSuggestJob(
-        user_id=current_user.id,
-        interests=interests,
-        status="queued",
-        step="analyzing_interests",
-        progress_percent=0,
-    )
-    
-    db.add(job)
-    await db.commit()
-    
-    from app.tasks.idols import run_idol_suggestions
-    run_idol_suggestions.delay(job.id)
-    
-    return IdolImportResponse(
-        idolId="", # No idol yet
-        jobId=job.id,
-        status="queued",
-    )
-
-
 @router.get("/suggest-legacy", response_model=IdolSuggestResponse)
 async def suggest_idols_legacy(
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -237,7 +223,7 @@ async def suggest_idols_legacy(
     # Parse focus areas
     focus_areas = [f.strip().lower() for f in focus.split(",") if f.strip()]
 
-    query = (
+    query = _published_only(
         select(Idol)
         .options(
             selectinload(Idol.aliases),
@@ -520,7 +506,7 @@ async def get_my_idols(
 
 @router.post("/{idol_id}/select", status_code=status.HTTP_204_NO_CONTENT)
 async def select_current_idol(
-    idol_id: str,
+    idol_id: Annotated[str, Depends(_validate_idol_id)],
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> None:
@@ -555,11 +541,11 @@ async def select_current_idol(
 
 @router.get("/{idol_id}", response_model=IdolDetailResponse)
 async def get_idol(
-    idol_id: str,
+    idol_id: Annotated[str, Depends(_validate_idol_id)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> IdolDetailResponse:
     """Get detailed information about an idol."""
-    stmt = (
+    stmt = _published_only(
         select(Idol)
         .options(
             selectinload(Idol.aliases),
@@ -614,7 +600,7 @@ async def get_idol(
 
 @router.get("/{idol_id}/profile", response_model=IdolProfileResponse)
 async def get_idol_profile(
-    idol_id: str,
+    idol_id: Annotated[str, Depends(_validate_idol_id)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> IdolProfileResponse:
     """
@@ -645,7 +631,7 @@ async def get_idol_profile(
 
 @router.get("/{idol_id}/timeline", response_model=TimelineResponse)
 async def get_idol_timeline(
-    idol_id: str,
+    idol_id: Annotated[str, Depends(_validate_idol_id)],
     db: Annotated[AsyncSession, Depends(get_db)],
     age: int | None = Query(None, ge=0, le=150, description="Filter by age at event"),
     mode: str = Query("up_to", pattern="^(exact|up_to)$", description="Filter mode: 'exact' or 'up_to'"),
@@ -767,7 +753,7 @@ async def get_idol_timeline(
 
 @router.get("/{idol_id}/persona", response_model=IdolPersonaResponse)
 async def get_idol_persona(
-    idol_id: str,
+    idol_id: Annotated[str, Depends(_validate_idol_id)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> IdolPersonaResponse:
     """
@@ -827,7 +813,7 @@ class ImageGenerationResponse(BaseModel):
 
 @router.post("/{idol_id}/generate-image", response_model=ImageGenerationResponse)
 async def generate_idol_image(
-    idol_id: str,
+    idol_id: Annotated[str, Depends(_validate_idol_id)],
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
     age: int | None = Query(None, description="Age to depict the idol at (defaults to current age or 30)"),

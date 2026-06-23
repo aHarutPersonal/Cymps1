@@ -44,6 +44,7 @@ from app.models.content_resource import (
     UserContentProgress,
     UserContentSave,
 )
+from app.models.ingest_job import IngestJob, IngestKind, IngestState
 
 __all__ = [
     "Base",
@@ -95,4 +96,7 @@ __all__ = [
     "UserContentHighlight",
     "UserContentProgress",
     "UserContentSave",
+    "IngestJob",
+    "IngestKind",
+    "IngestState",
 ]
