@@ -198,6 +198,7 @@ class BinaryTask(BaseModel):
     type: str = Field(default="project", max_length=50)  # project|course|habit|practice|reading|reflection
     estimated_hours: float = Field(default=1.0, ge=0.1, le=40.0)
     daily_instructions: str | None = Field(default=None, max_length=2000)
+    success_metric: str | None = Field(default=None, max_length=300)
 
 
 class PlanWeek(BaseModel):

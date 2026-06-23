@@ -1,196 +1,89 @@
-# cmpys Backend
+# CMPYS Backend
 
-FastAPI backend service for cmpys.
+FastAPI service that powers CMPYS: authentication, the agentic mentorship
+session state machine, and all LLM generation (mentor suggestions, the
+idol-led interview, the comparison verdict, the growth blueprint, Socratic
+chat, and idea-card quotes).
 
-## Requirements
+## Stack
 
-- Python 3.11+
-- PostgreSQL
-- Redis
+- **Python 3.11 · FastAPI** (async)
+- **PostgreSQL** via SQLAlchemy (async) + **Alembic** migrations
+- **Redis** + Celery for background work
+- **LLM**: Google **Gemini** (`gemini-2.5-flash`) and/or **OpenAI**, selected by
+  `LLM_PROVIDER`; **Tavily** for web-grounded search
 
 ## Setup
 
-1. Create a virtual environment:
+```bash
+cd cmpys/backend
+python3.11 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+cp .env.example .env        # then fill in the keys below
+.venv/bin/alembic upgrade heads
+.venv/bin/uvicorn app.main:app --port 8000 --reload
+```
+
+Health check: `curl http://localhost:8000/health` → `{"status":"ok"}`
+
+### Environment (`.env`)
+
+| Key | Purpose |
+|---|---|
+| `DATABASE_URL` | Async Postgres URL (`postgresql+psycopg://…`) |
+| `REDIS_URL` | Redis for Celery |
+| `LLM_PROVIDER` | `gemini` or `openai` |
+| `GEMINI_API_KEY` | Gemini key |
+| `OPENAI_API_KEY` / `OPENAI_MODEL` | OpenAI key + model |
+| `TAVILY_API_KEY` | Web search grounding |
+| `PLAN_GENERATOR_MODE` | Plan generation strategy |
+
+> **Migrations note:** the migration graph has multiple heads, so use
+> `alembic upgrade heads` (plural). A missing migration is the usual cause of a
+> 500 from `/feed` (the `generated_by_user_id` column) — running `heads` fixes it.
+
+## The agentic session
+
+A session is a small state machine. Phases:
+
+```
+intake → idol_selection → interview → comparison → blueprint
+                                                  ↘ guided_learning → completed
+```
+
+Each phase is driven by an endpoint; the LLM-heavy ones stream over SSE.
+
+| Step | Endpoint | What it does |
+|---|---|---|
+| Create | `POST /api/v1/sessions` | New session from `{age, financial_status, interests}`; auto-advances to `idol_selection`. 409 if an active session already exists. |
+| Suggest | `POST /api/v1/sessions/{id}/suggest-idols` | **LLM** + search → 3 mentors with `relevance_summary`, `confidence`, `wikidata_id`. |
+| Select | `POST /api/v1/sessions/{id}/select-idol` | Sets the mentor, opens the interview thread → `interview`. |
+| Interview | `POST /api/v1/sessions/{id}/interview` (SSE) | The mentor asks the next question **in persona**, adapting to prior answers. `done` carries `turn`, `max_turns`, `phase_transition`. |
+| Results | `POST /api/v1/sessions/{id}/generate-results` (SSE) | Streams two sections: `comparison` (the verdict) then `blueprint`. → `completed`. |
+| Chat | `POST /api/v1/sessions/{id}/guided-learning` (SSE) | Socratic mentor chat — used by the app's Chat tab. |
+| Feed | `GET /api/v1/feed` | LLM idea-card quotes tuned to interests/goals/mentor. |
+| Latest | `GET /api/v1/sessions/latest` | Most recent session **including completed** — the client's source of truth for "who is my mentor / what did they write". |
+| Current | `GET /api/v1/sessions/current` | Most recent **non-completed** session (resume). |
+| Abandon | `DELETE /api/v1/sessions/current` | Force-completes any active session so a fresh onboarding starts clean. |
+
+All `/sessions/*` endpoints require a Bearer token (`get_current_user`).
+A fuller endpoint list is in [docs/API.md](docs/API.md).
+
+## Layout
+
+```
+app/
+  main.py            app wiring, middleware, /media mount
+  api/v1/            routers: auth, sessions, feed, idols, plans, …
+  services/          LLM clients (gemini.py), tavily, content resources
+  models/            SQLAlchemy models (intake session, idol, chat, feed, …)
+  core/              config, db, middleware, celery
+migrations/          Alembic revisions
+tests/               pytest suite
+```
+
+## Tests
 
 ```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+.venv/bin/pytest
 ```
-
-2. Install dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
-3. Set environment variables (or create a `.env` file):
-
-```bash
-export DATABASE_URL=postgresql+psycopg://cmpys:cmpys@localhost:5432/cmpys
-export REDIS_URL=redis://localhost:6379/0
-```
-
-Or create a `.env` file in the backend directory:
-
-```env
-DATABASE_URL=postgresql+psycopg://cmpys:cmpys@localhost:5432/cmpys
-REDIS_URL=redis://localhost:6379/0
-DEBUG=false
-```
-
-## Database Migrations
-
-Run migrations to set up the database schema:
-
-```bash
-alembic upgrade head
-```
-
-Create a new migration after model changes:
-
-```bash
-alembic revision --autogenerate -m "description of changes"
-```
-
-Rollback the last migration:
-
-```bash
-alembic downgrade -1
-```
-
-## Running the Server
-
-Development mode with auto-reload:
-
-```bash
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-```
-
-Production mode:
-
-```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
-```
-
-## API Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/health` | GET | Basic health check |
-| `/ready` | GET | Readiness check (verifies DB connection) |
-| `/api/v1/` | GET | API v1 root |
-
-### Authentication
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/v1/auth/register` | POST | Register new user |
-| `/api/v1/auth/login` | POST | Login and get token |
-| `/api/v1/me` | GET | Get current user |
-| `/api/v1/me` | PATCH | Update profile |
-
-### Idols
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/v1/idols/search` | GET | Search idols |
-| `/api/v1/idols/suggest` | GET | Get idol suggestions |
-| `/api/v1/idols/discover` | GET | Discover from Wikidata |
-| `/api/v1/idols/import` | POST | Import idol |
-| `/api/v1/idols/{id}` | GET | Get idol details |
-| `/api/v1/idols/{id}/profile` | GET | Get extracted profile |
-| `/api/v1/idols/{id}/timeline` | GET | Get timeline |
-| `/api/v1/idols/{id}/persona` | GET | Get chat persona |
-
-### User Achievements
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/v1/achievements` | POST | Create achievement |
-| `/api/v1/achievements` | GET | List achievements |
-| `/api/v1/achievements/{id}` | GET | Get achievement |
-| `/api/v1/achievements/{id}` | PATCH | Update achievement |
-| `/api/v1/achievements/{id}` | DELETE | Delete achievement |
-
-### Comparison
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/v1/comparison` | GET | Compare user vs idol |
-
-### Plans
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/v1/plans/generate` | POST | Generate plan (LLM optional) |
-| `/api/v1/plans/current` | GET | Get current plan |
-| `/api/v1/plan-items/{id}` | GET | Get plan item |
-| `/api/v1/plan-items/{id}` | PATCH | Update plan item |
-
-### Notes
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/v1/notes` | POST | Create note |
-| `/api/v1/notes` | GET | List notes |
-| `/api/v1/notes/{id}` | GET | Get note |
-| `/api/v1/notes/{id}` | PATCH | Update note |
-| `/api/v1/notes/{id}` | DELETE | Delete note |
-
-### Chat
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/v1/chat/threads` | POST | Create thread |
-| `/api/v1/chat/threads` | GET | List threads |
-| `/api/v1/chat/threads/{id}` | GET | Get thread |
-| `/api/v1/chat/threads/{id}/messages` | POST | Send message (LLM required) |
-
-### Agentic Sessions
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/v1/sessions` | POST | Create session (Phase 1) |
-| `/api/v1/sessions/current` | GET | Get active session |
-| `/api/v1/sessions/{id}` | GET | Get session state |
-| `/api/v1/sessions/{id}/suggest-idols` | POST | Get idol suggestions (Phase 2) |
-| `/api/v1/sessions/{id}/select-idol` | POST | Select an idol (Phase 2->3) |
-| `/api/v1/sessions/{id}/interview` | POST | Live Interview SSE stream (Phase 3) |
-| `/api/v1/sessions/{id}/generate-results` | POST | Comparison & Blueprint SSE stream (Phase 4->5) |
-
-### Debug
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/v1/debug/llm` | GET | Check LLM config status |
-
-## LLM Usage
-
-The following endpoints use LLM:
-
-| Endpoint | LLM Usage |
-|----------|-----------|
-| `POST /api/v1/idols/import` | **Indirect** - triggers background worker that uses LLM for extraction |
-| `POST /api/v1/plans/generate` | **Optional** - uses LLM if `PLAN_GENERATOR_MODE=llm`, otherwise deterministic |
-| `POST /api/v1/chat/threads/{id}/messages` | **Required** - returns 503 if LLM not configured |
-
-All other endpoints are **database/public-API only** and do not require LLM.
-
-### LLM Configuration
-
-Set the following environment variables:
-
-```env
-# Provider: "dummy" (default) or "openai"
-LLM_PROVIDER=openai
-
-# Required for OpenAI
-OPENAI_API_KEY=sk-your-key-here
-OPENAI_MODEL=gpt-4o
-
-# Plan generation: "deterministic" (default) or "llm"
-PLAN_GENERATOR_MODE=deterministic
-```
-
-Verify configuration:
-```bash
-curl http://localhost:8000/api/v1/debug/llm
-```
-
-## API Documentation
-
-Once the server is running, access the interactive API docs at:
-
-- Swagger UI: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc

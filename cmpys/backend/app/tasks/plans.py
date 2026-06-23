@@ -21,6 +21,63 @@ logger = logging.getLogger(__name__)
 MIN_PLAN_DETAIL_LESSON_WORDS = 500
 MIN_PLAN_DETAIL_MATERIAL_WORDS = 600
 
+
+def _blueprint_phase_for_week(week: int | None) -> str:
+    """Map a plan week number to its blueprint phase label.
+
+    The 12-week blueprint is split into four three-week phases. Used to thread
+    the right phase context into per-item detail generation. Defaults to the
+    Foundation phase when the week is unknown.
+    """
+    if week is None or week <= 3:
+        return "Weeks 1-3: Foundation"
+    if week <= 6:
+        return "Weeks 4-6: Core Skills"
+    if week <= 9:
+        return "Weeks 7-9: Applied Practice"
+    return "Weeks 10-12: Integration"
+
+
+async def _load_session_context(db, session_id: str | None) -> dict:
+    """Load agentic-session context (interview transcript, comparison summary,
+    blueprint) for threading into plan generation.
+
+    Returns an empty dict for legacy ``/plans`` jobs that carry no session_id,
+    so the database is never touched in that path.
+    """
+    if not session_id or db is None:
+        return {}
+
+    from app.models.intake import IntakeSession
+
+    result = await db.execute(
+        select(IntakeSession).where(IntakeSession.id == session_id)
+    )
+    session = result.scalar_one_or_none()
+    if session is None:
+        return {}
+
+    ctx: dict = {}
+    transcript = (
+        getattr(session, "interview_transcript", None)
+        or getattr(session, "transcript", None)
+    )
+    if transcript:
+        ctx["interview_transcript_json"] = transcript
+    comparison = (
+        getattr(session, "comparison_output", None)
+        or getattr(session, "comparison_summary", None)
+    )
+    if comparison:
+        ctx["comparison_summary"] = comparison
+    blueprint = (
+        getattr(session, "blueprint_output", None)
+        or getattr(session, "blueprint_markdown", None)
+    )
+    if blueprint:
+        ctx["blueprint_markdown"] = blueprint
+    return ctx
+
 @celery_app.task(bind=True)
 def run_plan_generation(self, job_id: str) -> dict:
     """

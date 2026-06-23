@@ -3,14 +3,11 @@ from fastapi import APIRouter
 from app.api.v1 import (
     achievements,
     auth,
-    chat,
     comparison,
     content_resources,
     debug,
     feed,
-    idea_cards,
     idols,
-    intake,
     jobs,
     me,
     notes,
@@ -34,9 +31,6 @@ router.include_router(plans.router)
 router.include_router(plans.items_router)  # /plan-items
 router.include_router(notes.router)
 router.include_router(feed.router)
-router.include_router(idea_cards.router)
-router.include_router(chat.router)
-router.include_router(intake.router)
 router.include_router(sessions.router)
 router.include_router(debug.router)
 router.include_router(tools.router, prefix="/tools", tags=["tools"])

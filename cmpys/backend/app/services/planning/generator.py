@@ -44,6 +44,48 @@ class PlanRoadmap:
 
 
 # =============================================================================
+# QA Fix Helpers
+# =============================================================================
+
+
+def _resolve_estimated_hours(task_hours, hours_per_week, num_tasks) -> int:
+    """Never truncate a real task to 0h. Round sub-hour tasks up to 1;
+    derive a positive share when the model gave 0/None."""
+    if task_hours and task_hours > 0:
+        return max(1, round(task_hours))
+    return max(1, hours_per_week // max(1, num_tasks))
+
+
+def _resolve_success_metric(task) -> str:
+    """Use the model's success_metric; fall back to something derived from the
+    description — never the useless 'Task completed: <title>' placeholder."""
+    metric = (getattr(task, "success_metric", None) or "").strip()
+    if metric:
+        return metric
+    description = (getattr(task, "description", "") or "").strip()
+    if description:
+        return f"Delivered: {description.split('. ')[0].rstrip('.')}"
+    return f"Delivered the outcome of: {task.title}"
+
+
+def validate_roadmap_structure(roadmap, duration_weeks) -> list[str]:
+    """Return human-readable warnings if the roadmap misses weeks or has empty
+    weeks in the requested 1..duration_weeks range."""
+    warnings: list[str] = []
+    tasks_per_week: dict[int, int] = {}
+    for item in roadmap.items:
+        for week in range(item.week_start, item.week_end + 1):
+            tasks_per_week[week] = tasks_per_week.get(week, 0) + 1
+    missing = sorted(set(range(1, duration_weeks + 1)) - set(tasks_per_week))
+    if missing:
+        warnings.append(f"Plan is missing week(s) {missing} of {duration_weeks} requested.")
+    for week in range(1, duration_weeks + 1):
+        if tasks_per_week.get(week, 0) == 0 and week not in missing:
+            warnings.append(f"Week {week} has no tasks.")
+    return warnings
+
+
+# =============================================================================
 # Deterministic Plan Generation (no LLM)
 # =============================================================================
 
@@ -162,14 +204,16 @@ async def _generate_llm_items(
             for week in validated.weeks:
                 for task in week.binary_tasks:
                     item_type = type_map.get(task.type.lower(), PlanItemType.PROJECT)
-                    estimated_hours = task.estimated_hours or max(1, hours_per_week // max(1, len(week.binary_tasks)))
+                    estimated_hours = _resolve_estimated_hours(
+                        task.estimated_hours, hours_per_week, len(week.binary_tasks)
+                    )
                     result_items.append(PlanItemData(
                         title=task.title,
                         type=item_type,
                         description=task.description,
                         week_start=week.week_number,
                         week_end=week.week_number,
-                        success_metric=f"Task completed: {task.title}",
+                        success_metric=_resolve_success_metric(task),
                         estimated_hours=estimated_hours,
                         meta_json={
                             "primary_mission": week.primary_mission,

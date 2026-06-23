@@ -310,6 +310,19 @@ class PromptRenderError(Exception):
         )
 
 
+_UNTRUSTED_OPEN = "<<<USER_INPUT"
+_UNTRUSTED_CLOSE = "USER_INPUT>>>"
+
+
+def sanitize_untrusted_input(text: str | None) -> str:
+    """Wrap untrusted user text in delimiters and neutralise any attempt to
+    break out of the block (so it can be safely embedded in an LLM prompt)."""
+    raw = "" if text is None else str(text)
+    neutralised = re.sub(r"[<>]{3,}", "…", raw)
+    neutralised = neutralised.replace("USER_INPUT", "user input")
+    return f"{_UNTRUSTED_OPEN}\n{neutralised}\n{_UNTRUSTED_CLOSE}"
+
+
 def get_prompts_dir() -> Path:
     """Get the prompts directory path."""
     return PROMPTS_DIR
