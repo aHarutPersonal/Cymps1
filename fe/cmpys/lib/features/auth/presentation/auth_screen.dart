@@ -67,11 +67,11 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
           if (!mounted) return;
           final sessionState = ref.read(sessionControllerProvider);
           if (sessionState is SessionNeedsOnboarding) {
-            context.go(AppRoutes.profileSetup);
+            context.go(AppRoutes.cmpysOnboarding);
           } else if (sessionState is SessionReady) {
             context.go(AppRoutes.home);
           } else {
-            context.go(AppRoutes.profileSetup);
+            context.go(AppRoutes.cmpysOnboarding);
           }
         });
       } else if (next is AuthError) {

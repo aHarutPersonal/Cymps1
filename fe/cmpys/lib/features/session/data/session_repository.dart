@@ -13,6 +13,9 @@ final sessionRepositoryProvider = Provider<SessionRepository>((ref) {
   return SessionRepository(dioClient: ref.watch(dioClientProvider));
 });
 
+/// The agentic-session flow refers to the repository by this name.
+typedef AgenticSessionRepository = SessionRepository;
+
 /// Repository for the 5-phase agentic session workflow.
 ///
 /// Handles all API communication for:
@@ -69,6 +72,25 @@ class SessionRepository {
     } catch (e) {
       debugPrint('🔍 No active session (error: $e)');
       return null;
+    }
+  }
+
+  /// Get the user's latest resumable session (most recent non-completed).
+  /// Alias over [getCurrentSession] — the backend's `/sessions/current`
+  /// already returns the newest non-completed session.
+  Future<Session?> getLatestSession() => getCurrentSession();
+
+  /// Abandon the user's current in-progress session so a fresh one can start.
+  /// Best-effort: the backend rejects a second active session, so we clear the
+  /// current one server-side when the endpoint is available and ignore the
+  /// absence of one (older backends supersede on next create).
+  Future<void> abandonCurrentSession() async {
+    final session = await getCurrentSession();
+    if (session == null) return;
+    try {
+      await _dioClient.post('/sessions/${session.id}/abandon');
+    } catch (e) {
+      debugPrint('🗑️ abandonCurrentSession best-effort: $e');
     }
   }
 

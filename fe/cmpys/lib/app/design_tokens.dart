@@ -102,6 +102,48 @@ abstract final class AppColors {
   static const Color cardAmber = Color(0x26FFC27A);
   static const Color cardTextPrimary = textPrimary;
   static const Color cardTextSecondary = textSecondary;
+
+  // ── CMPYS 2026 palette (Deepstash/Wiser design system) ──
+  static const Color paper = Color(0xFFF2F3F5);
+  static const Color paper2 = Color(0xFFE9EAEE);
+  static const Color card = Color(0xFFFFFFFF);
+  static const Color ink = Color(0xFF16161C);
+  static const Color ink2 = Color(0xFF5B5C66);
+  static const Color ink3 = Color(0xFF9A9BA6);
+  static const Color hair = Color(0xFFECECEF);
+  static const Color hair2 = Color(0xFFDDDDE3);
+  static const Color green = Color(0xFF10B36B);
+  static const Color green2 = Color(0xFF0B9156);
+  static const Color greenSoft = Color(0xFFD9F5E7);
+  static const Color ochre = Color(0xFFF59E0B);
+  static const Color ochre2 = Color(0xFFB45309);
+  static const Color ochreSoft = Color(0xFFFCEBC9);
+  static const Color clay = Color(0xFFFF6B5E);
+  static const Color claySoft = Color(0xFFFFE1DD);
+  static const Color blueSoft = Color(0xFFDBE8FE);
+  static const Color lilac = Color(0xFF6D5EF6);
+  static const Color lilacSoft = Color(0xFFE6E3FE);
+  static const Color pink = Color(0xFFFF5DA2);
+  static const Color pinkSoft = Color(0xFFFFDEEC);
+  static const Color mintSoft = Color(0xFFD2F6EC);
+  static const Color blkInk = Color(0xFF18181F);
+  static const Color danger = Color(0xFFE23B2E);
+
+  static const LinearGradient gradGreen = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [Color(0xFF14C779), Color(0xFF0A9D5A)],
+  );
+  static const LinearGradient gradViolet = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [Color(0xFF7C6CFF), Color(0xFF5A4AEE)],
+  );
+  static const LinearGradient gradInk = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [Color(0xFF26262F), Color(0xFF16161C)],
+  );
 }
 
 /// Border radii tokens.
@@ -121,6 +163,11 @@ abstract final class AppRadii {
   static const BorderRadius br24 = BorderRadius.all(Radius.circular(r24));
   static const BorderRadius br32 = BorderRadius.all(Radius.circular(r32));
   static const BorderRadius brFull = BorderRadius.all(Radius.circular(rFull));
+
+  // ── CMPYS 2026 radii (--r-btn / --r-card / --r-lg) ──
+  static const BorderRadius button = BorderRadius.all(Radius.circular(999));
+  static const BorderRadius card = BorderRadius.all(Radius.circular(26));
+  static const BorderRadius lg = BorderRadius.all(Radius.circular(32));
 }
 
 /// Spacing tokens
@@ -352,6 +399,37 @@ abstract final class AppTypography {
     height: 1.65,
     color: AppColors.textPrimary,
   );
+
+  // ═══════════════════════════════════════════════
+  // CMPYS 2026 — Bricolage Grotesque display, Plus Jakarta body,
+  // JetBrains Mono kicker (per the design system).
+  // ═══════════════════════════════════════════════
+
+  /// Big editorial headline ("Who were they, at your age?").
+  static TextStyle get display => GoogleFonts.bricolageGrotesque(
+    fontSize: 34,
+    fontWeight: FontWeight.w800,
+    height: 1.05,
+    letterSpacing: -0.5,
+    color: AppColors.ink,
+  );
+
+  /// Small uppercase mono label above sections (letter-spacing 0.14em).
+  static TextStyle get kicker => GoogleFonts.jetBrainsMono(
+    fontSize: 11,
+    fontWeight: FontWeight.w500,
+    letterSpacing: 1.5,
+    height: 1.2,
+    color: AppColors.ink3,
+  );
+
+  /// Dimmed body copy (secondary ink).
+  static TextStyle get bodyDim => GoogleFonts.plusJakartaSans(
+    fontSize: 15,
+    fontWeight: FontWeight.w500,
+    height: 1.5,
+    color: AppColors.ink2,
+  );
 }
 
 /// Animation durations & curves
@@ -368,6 +446,9 @@ abstract final class AppCurves {
 
   /// Smooth editorial entrance
   static const Curve editorialIn = Cubic(0.65, 0, 0.35, 1);
+
+  /// Springy overshoot for the active nav pill (--ease cubic-bezier(.34,1.5,.5,1)).
+  static const Curve spring = Cubic(0.34, 1.5, 0.5, 1);
 }
 
 /// Common shadows — Ultra-soft editorial style.
@@ -391,6 +472,12 @@ abstract final class AppShadows {
 
   static const List<BoxShadow> card = sm;
   static const List<BoxShadow> pop = md;
+
+  /// Floating five-tab nav pill shadow (CMPYS 2026 dock).
+  static const List<BoxShadow> tabPill = [
+    BoxShadow(color: Color(0x1A16161C), blurRadius: 28, offset: Offset(0, 12)),
+    BoxShadow(color: Color(0x0F16161C), blurRadius: 6, offset: Offset(0, 2)),
+  ];
 
   static List<BoxShadow> glowAccent = [
     BoxShadow(

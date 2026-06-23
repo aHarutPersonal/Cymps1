@@ -53,7 +53,7 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
 
     final route = switch (ref.read(sessionControllerProvider)) {
       SessionReady() => AppRoutes.home,
-      SessionNeedsOnboarding() => AppRoutes.profileSetup,
+      SessionNeedsOnboarding() => AppRoutes.cmpysOnboarding,
       _ => AppRoutes.auth,
     };
     context.go(route);
