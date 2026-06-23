@@ -1,0 +1,84 @@
+name: deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "cmpys/backend/**"
+      - "cmpys/infra/**"
+      - ".github/workflows/deploy.yml"
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: cmpys/backend/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r cmpys/backend/requirements.txt
+
+      - name: Run tests
+        run: |
+          cd cmpys/backend
+          python -m pytest -q --ignore=tests/test_catalog_migration.py
+        # test_catalog_migration.py requires a live pgvector DB — skipped in CI
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        env:
+          ECR_URL: ${{ secrets.ECR_URL }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_URL:$IMAGE_TAG -t $ECR_URL:latest cmpys/backend
+          docker push $ECR_URL:$IMAGE_TAG
+          docker push $ECR_URL:latest
+
+      - name: Deploy to EC2
+        env:
+          ECR_URL: ${{ secrets.ECR_URL }}
+          IMAGE_TAG: ${{ github.sha }}
+          SERVER_IP: ${{ secrets.SERVER_IP }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          echo "$SSH_PRIVATE_KEY" > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
+
+          # Copy updated compose file and deploy script to server
+          scp -i /tmp/deploy_key -o StrictHostKeyChecking=no \
+            cmpys/infra/docker-compose.prod.yml \
+            cmpys/infra/deploy.sh \
+            ec2-user@$SERVER_IP:/opt/cmpys/
+
+          # Run the deploy script on the server
+          ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no \
+            ec2-user@$SERVER_IP \
+            "chmod +x /opt/cmpys/deploy.sh && \
+             /opt/cmpys/deploy.sh $ECR_URL $IMAGE_TAG ${{ env.AWS_REGION }}"
+
+          rm -f /tmp/deploy_key
