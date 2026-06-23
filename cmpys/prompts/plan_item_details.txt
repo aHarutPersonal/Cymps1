@@ -6,6 +6,14 @@ Their preferred learning style: {learning_preferences}
 Mentor/idol context: {idol_name}
 Mentor/idol domain: {idol_domain}
 
+SESSION CONTEXT (from the user's diagnostic interview and strategic blueprint — may be empty):
+{session_context}
+
+If the session context is non-empty, personalize this module with it: choose examples and
+exercises that speak to what the user revealed in their interview, target the gaps named in
+the comparison verdict, and keep every step consistent with the blueprint phase this mission
+belongs to. The user must recognize themselves in this lesson.
+
 IMPORTANT CONTEXT: This task is a MISSION task (weekly project/course/reading), NOT a daily habit. The user will spend 2-8 hours on this. Design a substantial learning module — not a quick checklist.
 
 Design an **immediately actionable**, 100% useful execution protocol with rich sub-steps and curated learning resources that will help the user achieve this specific mission as fast and effectively as possible.

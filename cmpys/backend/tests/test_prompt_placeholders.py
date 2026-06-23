@@ -53,6 +53,9 @@ class TestPlanGeneratePlaceholders:
             "idol_milestones_json": [{"age": 30, "title": "ran partnership"}],
             "gaps_json": [{"category": "finance", "gap": "analysis"}],
             "readiness_by_gap_json": {"finance": "beginner"},
+            "interview_transcript_json": '[{"role": "user", "content": "I read annual reports"}]',
+            "comparison_summary": "By 30 Buffett ran a partnership; you are starting out.",
+            "blueprint_markdown": "## Weeks 1-3: Foundation\nLearn balance sheets.",
         }
         
         # Should not raise
@@ -93,6 +96,9 @@ class TestPlanGeneratePlaceholders:
                 "idol_milestones_json": [{"age": 30, "title": "ran partnership"}],
                 "gaps_json": [{"category": "finance", "gap": "analysis"}],
                 "readiness_by_gap_json": {"finance": "beginner"},
+                "interview_transcript_json": '[{"role": "user", "content": "I read annual reports"}]',
+                "comparison_summary": "By 30 Buffett ran a partnership; you are starting out.",
+                "blueprint_markdown": "## Weeks 1-3: Foundation\nLearn balance sheets.",
             },
             strict=True,
         )
@@ -139,6 +145,9 @@ class TestValidatePromptParams:
             "idol_milestones_json": [],
             "gaps_json": [],
             "readiness_by_gap_json": {},
+            "interview_transcript_json": "[]",
+            "comparison_summary": "",
+            "blueprint_markdown": "",
         }
         missing = validate_prompt_params("plan_generate", params)
         
@@ -162,12 +171,8 @@ class TestPromptPlaceholderRegistry:
         """Registry should include all key prompt files."""
         key_prompts = [
             "plan_generate.txt",
-            "chat_system.txt",
-            "chat_reply.txt",
             "profile_extract.txt",
             "achievements_extract.txt",
-            "intake_questions_generate.txt",
-            "intake_answers_normalize.txt",
             "interview_system.xml",
             "interview_question.txt",
             "comparison_generate.txt",

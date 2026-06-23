@@ -13,6 +13,7 @@ Provides two capabilities:
 Both return async generators that yield text chunks for SSE streaming.
 """
 
+import inspect
 import logging
 from typing import AsyncGenerator
 
@@ -188,7 +189,7 @@ async def interview_stream(
     logger.info("[GEMINI] Starting interview stream (persona + Google Search)")
 
     try:
-        response = await client.aio.models.generate_content(
+        stream = client.aio.models.generate_content_stream(
             model="gemini-2.5-flash",
             contents=contents,
             config=types.GenerateContentConfig(
@@ -197,11 +198,15 @@ async def interview_stream(
                 temperature=0.8,
             ),
         )
-        if response.text:
-            text = response.text
-            chunk_size = 8
-            for i in range(0, len(text), chunk_size):
-                yield text[i:i + chunk_size]
+        # The async SDK may return the iterator directly or a coroutine that
+        # resolves to it, depending on version — support both. True streaming
+        # (not waiting for the full response) is what lets the SSE start fast.
+        if inspect.iscoroutine(stream):
+            stream = await stream
+        async for chunk in stream:
+            text = getattr(chunk, "text", None)
+            if text:
+                yield text
     except Exception as e:
         logger.error(f"[GEMINI] Interview stream error: {e}")
         raise

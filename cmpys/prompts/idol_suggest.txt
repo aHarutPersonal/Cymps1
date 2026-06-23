@@ -52,3 +52,6 @@ FINAL CHECK:
 - Each has verified achievements near age {user_age}
 - Each includes Wikidata/Wikipedia/photo hints so the app can cache a licensed idol photo once and reuse it
 - JSON is valid, no trailing commas, no markdown wrapping
+
+OUTPUT CONTRACT: Your entire output is the JSON object above and nothing else. It begins with {{
+and ends with }}. No prose before or after, no markdown code fences.

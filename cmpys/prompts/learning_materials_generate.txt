@@ -1,0 +1,9 @@
+Find 3 highly educational, beginner-friendly resources (a mix of articles and videos) to help someone learn about: '{topic}'.
+
+REQUIREMENTS:
+- Every resource must be real and currently available. Use Google Search results — do not invent titles or URLs.
+- Prefer renowned, industry-standard sources over obscure ones.
+- Include at least one video when a high-quality one exists.
+- 'summary' is 1–2 sentences on what the learner gets from the resource and why it fits this topic.
+
+Return ONLY a JSON array of objects with keys: 'title', 'url', 'type' (must be 'article' or 'video'), and 'summary'. The output begins with [ and ends with ]. No prose, no markdown fences.
