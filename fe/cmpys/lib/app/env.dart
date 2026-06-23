@@ -51,8 +51,8 @@ abstract final class Env {
     if (defaultTargetPlatform == TargetPlatform.android) {
       return apiBaseUrlAndroidEmulator;
     }
-    // iOS, macOS, and other platforms use localhost
-    return apiBaseUrlIosSimulator;
+    // Physical devices and other platforms use production
+    return apiBaseUrlProduction;
   }
 
   /// API base URL for iOS Simulator (localhost works directly).
@@ -62,7 +62,7 @@ abstract final class Env {
   static const String apiBaseUrlAndroidEmulator = 'http://10.0.2.2:8000/api/v1';
 
   /// Production API base URL.
-  static const String apiBaseUrlProduction = 'https://api.cmpys.app/api/v1';
+  static const String apiBaseUrlProduction = 'http://54.158.122.215/api/v1';
 
   /// Whether the app is running in debug mode.
   static const bool isDebug = bool.fromEnvironment('DEBUG', defaultValue: true);
