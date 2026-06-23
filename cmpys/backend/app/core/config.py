@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     
     # Plan generation
     plan_generator_mode: str = "deterministic"  # "deterministic" or "llm"
+
+    # Local LLM (Spec 2 — inert until then)
+    local_llm_base_url: str | None = None   # e.g. http://gpu-box:8000/v1 (Spec 2)
+    local_llm_model: str | None = None       # e.g. qwen2.5-32b-instruct (Spec 2)
+    embedding_model: str = "bge-m3"           # used by Spec 2 ingestion
     
     @property
     def llm_configured(self) -> bool:
