@@ -1120,7 +1120,9 @@ class CmpysTaskDetailScreen extends ConsumerWidget {
                         Icon(_kindIcon(item.kind), size: 15, color: pillar.accent),
                         const SizedBox(width: 6),
                         Text(
-                          '$repeatLabel · ${item.minutes} min',
+                          item.minutes > 0
+                              ? '$repeatLabel · ${item.minutes} min'
+                              : repeatLabel,
                           style: AppTypography.captionMedium.copyWith(
                               color: pillar.accent, fontWeight: FontWeight.w600),
                         ),

@@ -159,8 +159,11 @@ class _CmpysPersonalizeStepState extends State<CmpysPersonalizeStep> {
           padding: const EdgeInsets.only(bottom: 12),
           child: Text(
             'What should we call you?',
-            style: AppTypography.h1
-                .copyWith(fontSize: 30, letterSpacing: -0.3, height: 1.4),
+            style: AppTypography.display.copyWith(
+                fontSize: 30,
+                fontWeight: FontWeight.w500,
+                letterSpacing: -0.3,
+                height: 1.4),
           ),
         ),
         const SizedBox(height: 20),
@@ -301,8 +304,11 @@ class _CmpysPersonalizeStepState extends State<CmpysPersonalizeStep> {
           padding: const EdgeInsets.only(bottom: 12),
           child: Text(
             'Pick what you care about.',
-            style: AppTypography.h1
-                .copyWith(fontSize: 30, letterSpacing: -0.3, height: 1.4),
+            style: AppTypography.display.copyWith(
+                fontSize: 30,
+                fontWeight: FontWeight.w500,
+                letterSpacing: -0.3,
+                height: 1.4),
           ),
         ),
         const SizedBox(height: 8),
@@ -345,8 +351,11 @@ class _CmpysPersonalizeStepState extends State<CmpysPersonalizeStep> {
           padding: const EdgeInsets.only(bottom: 12),
           child: Text(
             'What matters most right now?',
-            style: AppTypography.h1
-                .copyWith(fontSize: 30, letterSpacing: -0.3, height: 1.4),
+            style: AppTypography.display.copyWith(
+                fontSize: 30,
+                fontWeight: FontWeight.w500,
+                letterSpacing: -0.3,
+                height: 1.4),
           ),
         ),
         const SizedBox(height: 8),

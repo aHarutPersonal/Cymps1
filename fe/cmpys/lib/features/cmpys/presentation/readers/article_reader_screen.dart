@@ -66,13 +66,13 @@ class _CmpysArticleReaderScreenState extends State<CmpysArticleReaderScreen> {
                       padding: const EdgeInsets.symmetric(
                           horizontal: 10, vertical: 5),
                       decoration: BoxDecoration(
-                        color: AppColors.greenSoft,
+                        color: AppColors.blue.withValues(alpha: 0.16),
                         borderRadius: BorderRadius.circular(999),
                       ),
                       child: Text(
                         widget.reading.tag.toUpperCase(),
                         style: AppTypography.kicker.copyWith(
-                          color: AppColors.green2,
+                          color: AppColors.blue,
                           fontSize: 10.5,
                         ),
                       ),

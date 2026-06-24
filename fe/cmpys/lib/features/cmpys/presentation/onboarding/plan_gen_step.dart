@@ -244,8 +244,11 @@ class _CmpysPlanGenStepState extends ConsumerState<CmpysPlanGenStep>
             const SizedBox(height: 10),
             Text(
               'Written by ${widget.idol.short}, for you.',
-              style: AppTypography.h1
-                  .copyWith(fontSize: 28, letterSpacing: -0.4, height: 1.3),
+              style: AppTypography.display.copyWith(
+                  fontSize: 30,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -0.4,
+                  height: 1.3),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 8),

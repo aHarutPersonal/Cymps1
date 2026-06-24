@@ -213,7 +213,7 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
               const SizedBox(height: 10),
               Text(
                 'Thinking…',
-                style: AppTypography.h1.copyWith(
+                style: AppTypography.display.copyWith(
                   color: Colors.white,
                   fontSize: 34,
                   letterSpacing: -0.4,
@@ -269,8 +269,9 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
                   padding: const EdgeInsets.only(bottom: 10),
                   child: Text(
                     'Who do you want to measure against?',
-                    style: AppTypography.h1.copyWith(
+                    style: AppTypography.display.copyWith(
                       fontSize: 28,
+                      fontWeight: FontWeight.w500,
                       letterSpacing: -0.3,
                       height: 1.32,
                     ),

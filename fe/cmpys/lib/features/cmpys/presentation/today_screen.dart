@@ -90,7 +90,7 @@ class CmpysTodayScreen extends ConsumerWidget {
           children: [
             _topBar(context, st, idol, name),
             const SizedBox(height: 18),
-            _heroCard(pct, doneToday, totalToday),
+            _heroCard(pct, doneToday, totalToday, st.streak),
             ..._planGeneratingHint(context, ref),
             const SizedBox(height: 16),
             if (nextBackendItem != null)
@@ -349,8 +349,8 @@ class CmpysTodayScreen extends ConsumerWidget {
               CmpysKicker('Day ${st.dayNum} · with ${idol.short}'),
               const SizedBox(height: 6),
               Text('${_greeting()}, $name.',
-                  style: AppTypography.h1.copyWith(
-                      fontSize: 28, letterSpacing: -0.4, height: 1.25)),
+                  style: AppTypography.display.copyWith(
+                      fontSize: 30, letterSpacing: -0.6, height: 1.08)),
             ],
           ),
         ),
@@ -371,13 +371,13 @@ class CmpysTodayScreen extends ConsumerWidget {
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(999),
+        borderRadius: BorderRadius.circular(12),
         child: Container(
           width: 40,
           height: 40,
           decoration: BoxDecoration(
             color: AppColors.card,
-            shape: BoxShape.circle,
+            borderRadius: BorderRadius.circular(12),
             border: Border.all(color: AppColors.hair),
           ),
           child: Icon(icon, color: AppColors.ink2, size: 20),
@@ -386,7 +386,7 @@ class CmpysTodayScreen extends ConsumerWidget {
     );
   }
 
-  Widget _heroCard(double pct, int doneToday, int total) {
+  Widget _heroCard(double pct, int doneToday, int total, int streak) {
     final left = total - doneToday;
     return Container(
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 22),
@@ -442,6 +442,30 @@ class CmpysTodayScreen extends ConsumerWidget {
                       color: Colors.white.withValues(alpha: 0.85),
                       fontSize: 13.5),
                 ),
+                if (streak > 0) ...[
+                  const SizedBox(height: 11),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.16),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(PhosphorIconsFill.flame,
+                            size: 16, color: const Color(0xFFEBC24A)),
+                        const SizedBox(width: 6),
+                        Text('$streak-day streak',
+                            style: AppTypography.captionMedium.copyWith(
+                                color: Colors.white,
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.w600)),
+                      ],
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -602,7 +626,7 @@ class CmpysTodayScreen extends ConsumerWidget {
                             decoration:
                                 done ? TextDecoration.lineThrough : null)),
                     const SizedBox(height: 2),
-                    Text('Daily · ${item.minutes} min',
+                    Text('Task · Daily · ${item.minutes} min',
                         style: AppTypography.caption
                             .copyWith(color: AppColors.ink3, fontSize: 12)),
                   ],

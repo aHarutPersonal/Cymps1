@@ -144,22 +144,55 @@ class _CmpysVideoLessonScreenState extends State<CmpysVideoLessonScreen>
               const DecoratedBox(
                 decoration: BoxDecoration(gradient: AppColors.gradInk),
               ),
-              Center(
+              // Tap anywhere to toggle playback.
+              Positioned.fill(
                 child: GestureDetector(
                   onTap: _toggle,
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 220),
-                    width: 64,
-                    height: 64,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.18),
-                      shape: BoxShape.circle,
+                  behavior: HitTestBehavior.opaque,
+                ),
+              ),
+              // Center control — only a dimming scrim + white play disc while
+              // paused, mirroring the design's never-overlap-the-scrubber rule.
+              if (!_playing)
+                Positioned.fill(
+                  child: GestureDetector(
+                    onTap: _toggle,
+                    child: Container(
+                      color: Colors.black.withValues(alpha: 0.25),
+                      alignment: Alignment.center,
+                      child: Container(
+                        width: 60,
+                        height: 60,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.94),
+                          shape: BoxShape.circle,
+                          boxShadow: const [
+                            BoxShadow(
+                              color: Color(0x59000000),
+                              blurRadius: 24,
+                              offset: Offset(0, 8),
+                            ),
+                          ],
+                        ),
+                        child: const Icon(
+                          Icons.play_arrow_rounded,
+                          color: AppColors.ink,
+                          size: 32,
+                        ),
+                      ),
                     ),
-                    child: Icon(
-                      _playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                      color: Colors.white,
-                      size: 32,
-                    ),
+                  ),
+                ),
+              // Brand watermark — top-right, faint mono label.
+              Positioned(
+                top: 10,
+                right: 12,
+                child: Text(
+                  'CMPYS LEARN',
+                  style: AppTypography.kicker.copyWith(
+                    color: Colors.white.withValues(alpha: 0.55),
+                    fontSize: 9.5,
+                    letterSpacing: 1.6,
                   ),
                 ),
               ),
@@ -248,7 +281,7 @@ class _CmpysVideoLessonScreenState extends State<CmpysVideoLessonScreen>
             style: AppTypography.bodyDim.copyWith(fontSize: 14.5),
           ),
           const SizedBox(height: 22),
-          const CmpysKicker('Chapters'),
+          const CmpysKicker('Chapters — tap to jump'),
           const SizedBox(height: 10),
           for (var i = 0; i < widget.video.chapters.length; i++)
             Padding(

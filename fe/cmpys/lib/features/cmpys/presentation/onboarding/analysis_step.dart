@@ -239,8 +239,11 @@ class _CmpysAnalysisStepState extends ConsumerState<CmpysAnalysisStep>
                   padding: const EdgeInsets.only(bottom: 14),
                   child: Text(
                     'You vs ${widget.idol.short}, in plain terms.',
-                    style: AppTypography.h1
-                        .copyWith(fontSize: 27, letterSpacing: -0.4, height: 1.3),
+                    style: AppTypography.display.copyWith(
+                        fontSize: 28,
+                        fontWeight: FontWeight.w500,
+                        letterSpacing: -0.4,
+                        height: 1.3),
                   ),
                 ),
                 CmpysCardSurface(

@@ -44,8 +44,8 @@ class CmpysYouScreen extends ConsumerWidget {
                       CmpysKicker('Profile'),
                       const SizedBox(height: 4),
                       Text('You',
-                          style: AppTypography.h1.copyWith(
-                              fontSize: 30, letterSpacing: -0.4, height: 1.3)),
+                          style: AppTypography.display.copyWith(
+                              fontSize: 30, letterSpacing: -0.5, height: 1.1)),
                     ],
                   ),
                 ),
@@ -63,12 +63,17 @@ class CmpysYouScreen extends ConsumerWidget {
             const SizedBox(height: 18),
             Row(
               children: [
-                Expanded(child: _stat('${st.streak}', 'Day streak', AppColors.ochre)),
-                const SizedBox(width: 10),
-                Expanded(child: _stat('$planPct%', 'Plan done', AppColors.green)),
+                Expanded(
+                    child: _stat('${st.streak}', 'Day streak',
+                        PhosphorIconsRegular.flame, AppColors.ochre)),
                 const SizedBox(width: 10),
                 Expanded(
-                    child: _stat('${st.notes.length}', 'Notes', AppColors.blue)),
+                    child: _stat('$planPct%', 'Plan done',
+                        PhosphorIconsRegular.target, AppColors.green)),
+                const SizedBox(width: 10),
+                Expanded(
+                    child: _stat('${st.notes.length}', 'Notes',
+                        PhosphorIconsRegular.note, AppColors.blue)),
               ],
             ),
             const SizedBox(height: 22),
@@ -79,7 +84,7 @@ class CmpysYouScreen extends ConsumerWidget {
               pad: const EdgeInsets.symmetric(horizontal: 14),
               child: Column(
                 children: [
-                  _row(context, PhosphorIconsRegular.trophy, 'Your record',
+                  _row(context, PhosphorIconsFill.sparkle, 'Your record',
                       '${st.achievements.length}',
                       () => Navigator.of(context).push(MaterialPageRoute(
                           builder: (_) => const CmpysRecordScreen())),
@@ -92,7 +97,7 @@ class CmpysYouScreen extends ConsumerWidget {
                       '${st.saved.length}',
                       () => Navigator.of(context).push(MaterialPageRoute(
                           builder: (_) => const CmpysSavedScreen()))),
-                  _row(context, PhosphorIconsRegular.playCircle, 'Idea reels',
+                  _row(context, PhosphorIconsRegular.quotes, 'Idea reels',
                       null, () => context.goToIdeas(),
                       last: true),
                 ],
@@ -168,24 +173,17 @@ class CmpysYouScreen extends ConsumerWidget {
       pad: const EdgeInsets.fromLTRB(18, 24, 18, 22),
       child: Column(
         children: [
-          Container(
-            width: 84,
-            height: 84,
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                colors: [AppColors.ochre, Color(0xFFE57C00)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              shape: BoxShape.circle,
-            ),
-            alignment: Alignment.center,
-            child: Text(initial,
-                style: AppTypography.h1.copyWith(color: Colors.white, fontSize: 30)),
+          CmpysMonogram(
+            initials: initial,
+            size: 84,
+            color: AppColors.ochre2,
+            tint: AppColors.ochreSoft,
           ),
-          const SizedBox(height: 14),
-          Text(name, style: AppTypography.h2.copyWith(fontSize: 24)),
-          const SizedBox(height: 2),
+          const SizedBox(height: 12),
+          Text(name,
+              style: AppTypography.display.copyWith(
+                  fontSize: 24, fontWeight: FontWeight.w700, height: 1.1)),
+          const SizedBox(height: 3),
           Text('Age ${st.user.age} · Day ${st.dayNum} on CMPYS',
               style: AppTypography.caption
                   .copyWith(color: AppColors.ink2, fontSize: 13.5)),
@@ -222,22 +220,28 @@ class CmpysYouScreen extends ConsumerWidget {
     );
   }
 
-  Widget _stat(String n, String label, Color color) {
+  Widget _stat(String n, String label, IconData icon, Color color) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
+      padding: const EdgeInsets.all(13),
       decoration: BoxDecoration(
         color: AppColors.card,
         borderRadius: AppRadii.card,
         border: Border.all(color: AppColors.hair),
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Icon(icon, size: 19, color: color),
+          const SizedBox(height: 5),
           Text(n,
-              style: AppTypography.h2
-                  .copyWith(color: color, fontSize: 22, letterSpacing: -0.4)),
-          const SizedBox(height: 2),
+              style: AppTypography.display.copyWith(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w700,
+                  height: 1,
+                  color: AppColors.ink)),
+          const SizedBox(height: 3),
           Text(label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: AppTypography.caption
                   .copyWith(color: AppColors.ink3, fontSize: 11)),
         ],
@@ -287,7 +291,7 @@ class CmpysYouScreen extends ConsumerWidget {
             ],
             if (!danger)
               const Icon(Icons.chevron_right_rounded,
-                  size: 18, color: AppColors.ink3),
+                  size: 18, color: AppColors.hair2),
           ],
         ),
       ),

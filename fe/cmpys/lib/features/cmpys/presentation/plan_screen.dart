@@ -66,8 +66,8 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
         CmpysKicker('Your growth plan'),
         const SizedBox(height: 4),
         Text(title,
-            style: AppTypography.h1
-                .copyWith(fontSize: 30, letterSpacing: -0.4, height: 1.3)),
+            style: AppTypography.display
+                .copyWith(fontSize: 30, letterSpacing: -0.5, height: 1.1)),
         const SizedBox(height: 6),
         Text(subtitle, style: AppTypography.bodyDim.copyWith(fontSize: 14.5)),
       ],
@@ -546,6 +546,28 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
     return _backendHabits(today);
   }
 
+  Widget _streakChip(int streak) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.18),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(PhosphorIconsFill.flame, size: 15, color: const Color(0xFFFFD166)),
+          const SizedBox(width: 6),
+          Text('$streak-day streak',
+              style: AppTypography.captionMedium.copyWith(
+                  color: Colors.white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700)),
+        ],
+      ),
+    );
+  }
+
   List<Widget> _backendHabits(TodayView today) {
     final done = today.items.where((i) => i.completedToday).length;
     final total = today.items.length;
@@ -584,12 +606,14 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
                           color: Colors.white, fontSize: 17)),
                   const SizedBox(height: 4),
                   Text(
-                      today.streak > 0
-                          ? 'These reset every day. You’re on a ${today.streak}-day streak.'
-                          : 'These reset every day. The roadmap moves forward — these keep you moving.',
+                      'These reset every day. The roadmap moves forward — these keep you moving.',
                       style: AppTypography.caption.copyWith(
                           color: Colors.white.withValues(alpha: 0.85),
                           fontSize: 13, height: 1.4)),
+                  if (today.streak > 0) ...[
+                    const SizedBox(height: 10),
+                    _streakChip(today.streak),
+                  ],
                 ],
               ),
             ),
@@ -746,6 +770,10 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
                       style: AppTypography.caption.copyWith(
                           color: Colors.white.withValues(alpha: 0.85),
                           fontSize: 13, height: 1.4)),
+                  if (st.streak > 0) ...[
+                    const SizedBox(height: 10),
+                    _streakChip(st.streak),
+                  ],
                 ],
               ),
             ),
@@ -843,7 +871,8 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
                             decoration:
                                 done ? TextDecoration.lineThrough : null)),
                     const SizedBox(height: 2),
-                    Text('${item.minutes} min · ${pillar.kicker}',
+                    Text(
+                        'Task · ${item.repeat == CmpysRepeat.weekly ? 'Weekly' : 'Daily'} · ${item.minutes} min',
                         style: AppTypography.caption
                             .copyWith(color: AppColors.ink3, fontSize: 12)),
                   ],

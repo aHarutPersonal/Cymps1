@@ -272,17 +272,26 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
                     const SizedBox(width: 5),
                     Text('AI mentor · always here',
                         style: AppTypography.caption.copyWith(
-                            color: AppColors.green2, fontSize: 12)),
+                            color: AppColors.green, fontSize: 12)),
                   ],
                 ),
               ],
             ),
           ),
-          IconButton(
-            onPressed: () => Navigator.of(context).push(
+          GestureDetector(
+            onTap: () => Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const CmpysNotesScreen())),
-            icon: const Icon(PhosphorIconsRegular.note,
-                size: 21, color: AppColors.ink2),
+            child: Container(
+              width: 38,
+              height: 38,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: AppColors.paper2,
+                borderRadius: BorderRadius.circular(11),
+              ),
+              child: const Icon(PhosphorIconsRegular.note,
+                  size: 19, color: AppColors.ink2),
+            ),
           ),
         ],
       ),
@@ -305,7 +314,9 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
                 size: 56,
               ),
               const SizedBox(height: 10),
-              Text(idol.name, style: AppTypography.h3.copyWith(fontSize: 17)),
+              Text(idol.name,
+                  style: AppTypography.display.copyWith(
+                      fontSize: 17, fontWeight: FontWeight.w700, height: 1.2)),
               const SizedBox(height: 6),
               ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 240),
@@ -444,20 +455,19 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
         decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.12),
+          color: AppColors.blueSoft,
           borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: color.withValues(alpha: 0.35)),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 13, color: color),
-            const SizedBox(width: 5),
+            Icon(icon, size: 14, color: color),
+            const SizedBox(width: 6),
             Text(label,
                 style: AppTypography.captionMedium.copyWith(
-                    color: color, fontWeight: FontWeight.w600, fontSize: 12.5)),
+                    color: color, fontWeight: FontWeight.w700, fontSize: 12.5)),
           ],
         ),
       ),

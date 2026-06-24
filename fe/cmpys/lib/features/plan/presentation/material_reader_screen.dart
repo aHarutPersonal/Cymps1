@@ -110,13 +110,13 @@ class _MaterialReaderScreenState extends ConsumerState<MaterialReaderScreen> {
                         padding: const EdgeInsets.symmetric(
                             horizontal: 10, vertical: 5),
                         decoration: BoxDecoration(
-                          color: AppColors.greenSoft,
+                          color: _kindColor(m.type).withValues(alpha: 0.14),
                           borderRadius: BorderRadius.circular(999),
                         ),
                         child: Text(
                           _kindLabel(m.type).toUpperCase(),
                           style: AppTypography.kicker.copyWith(
-                              color: AppColors.green2, fontSize: 10.5),
+                              color: _kindColor(m.type), fontSize: 10.5),
                         ),
                       ),
                       if (m.durationMinutes != null) ...[
@@ -245,6 +245,22 @@ class _MaterialReaderScreenState extends ConsumerState<MaterialReaderScreen> {
         return 'Video';
       default:
         return 'Read';
+    }
+  }
+
+  // Kind accent colors mirror the design's kindMeta:
+  // read → blue, video → clay, book/lesson → ochre.
+  Color _kindColor(String? type) {
+    switch (type) {
+      case 'book':
+        return AppColors.ochre2;
+      case 'video':
+        return AppColors.clay;
+      case 'in_app_lesson':
+        return AppColors.green2;
+      case 'article':
+      default:
+        return AppColors.blue;
     }
   }
 }

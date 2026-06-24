@@ -62,8 +62,8 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
                 CmpysKicker('Both at age ${c.age}'),
                 const SizedBox(height: 4),
                 Text('You vs ${idol.short}',
-                    style: AppTypography.h1.copyWith(
-                        fontSize: 30, letterSpacing: -0.4, height: 1.3)),
+                    style: AppTypography.display.copyWith(
+                        fontSize: 30, letterSpacing: -0.5, height: 1.1)),
               ],
             ),
             const SizedBox(height: 16),
@@ -126,7 +126,7 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text('$overall%',
-                      style: AppTypography.h2.copyWith(
+                      style: AppTypography.display.copyWith(
                           fontSize: 24, fontWeight: FontWeight.w800, height: 1)),
                   Text('of ${idol.short}',
                       style: AppTypography.caption.copyWith(
@@ -308,7 +308,7 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
                     ),
                   const SizedBox(width: 6),
                   const Icon(Icons.chevron_right_rounded,
-                      size: 18, color: AppColors.ink3),
+                      size: 18, color: AppColors.hair2),
                 ],
               ),
             ),
@@ -446,9 +446,9 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
                     ],
                   ),
                   const SizedBox(height: 8),
-                  _barWithVal(d.you, AppColors.ochre),
+                  _barWithVal(d.you, AppColors.ochre, AppColors.ochre2),
                   const SizedBox(height: 6),
-                  _barWithVal(d.idol, AppColors.green),
+                  _barWithVal(d.idol, AppColors.green, AppColors.green2),
                 ],
               ),
             ),
@@ -464,17 +464,17 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
     );
   }
 
-  Widget _barWithVal(int value, Color color) {
+  Widget _barWithVal(int value, Color color, Color valueColor) {
     return Row(
       children: [
         Expanded(child: CmpysBar(value: value.toDouble(), color: color, height: 9)),
-        const SizedBox(width: 10),
+        const SizedBox(width: 9),
         SizedBox(
-          width: 26,
+          width: 24,
           child: Text('$value',
               textAlign: TextAlign.right,
               style: AppTypography.monoLabel
-                  .copyWith(color: AppColors.ink2, fontSize: 12)),
+                  .copyWith(color: valueColor, fontSize: 11)),
         ),
       ],
     );
@@ -485,11 +485,12 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
-          padding: const EdgeInsets.only(top: 5, right: 8),
+          padding: const EdgeInsets.only(top: 4, right: 9),
           child: Container(
-              width: 8,
-              height: 8,
-              decoration: BoxDecoration(color: dot, shape: BoxShape.circle)),
+              width: 9,
+              height: 9,
+              decoration: BoxDecoration(
+                  color: dot, borderRadius: BorderRadius.circular(3))),
         ),
         Expanded(
           child: Text(text,
@@ -578,7 +579,7 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
               ),
               if (!hit)
                 const Icon(Icons.chevron_right_rounded,
-                    size: 18, color: AppColors.ink3),
+                    size: 16, color: AppColors.hair2),
             ],
           ),
         ),

@@ -112,13 +112,13 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
                     padding:
                         const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                     decoration: BoxDecoration(
-                      color: AppColors.greenSoft,
+                      color: AppColors.ochreSoft,
                       borderRadius: BorderRadius.circular(999),
                     ),
                     child: Text(
                       'BOOK',
                       style: AppTypography.kicker
-                          .copyWith(color: AppColors.green2, fontSize: 10.5),
+                          .copyWith(color: AppColors.ochre2, fontSize: 10.5),
                     ),
                   ),
                   const SizedBox(height: 14),

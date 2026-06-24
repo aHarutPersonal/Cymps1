@@ -400,7 +400,7 @@ class _CmpysReelsScreenState extends ConsumerState<CmpysReelsScreen> {
                       height: 44,
                       padding: const EdgeInsets.symmetric(horizontal: 16),
                       decoration: BoxDecoration(
-                        color: AppColors.paper,
+                        color: AppColors.card,
                         borderRadius: BorderRadius.circular(999),
                         border: Border.all(color: AppColors.hair2, width: 1.5),
                       ),
@@ -408,7 +408,7 @@ class _CmpysReelsScreenState extends ConsumerState<CmpysReelsScreen> {
                         child: TextField(
                           controller: controller,
                           onChanged: (_) => setSheet(() {}),
-                          style: AppTypography.body.copyWith(fontSize: 15),
+                          style: AppTypography.body.copyWith(fontSize: 14),
                           cursorColor: AppColors.green,
                           decoration: const InputDecoration(
                             hintText: 'Add a comment…',
@@ -434,7 +434,7 @@ class _CmpysReelsScreenState extends ConsumerState<CmpysReelsScreen> {
                             : AppColors.green,
                         shape: BoxShape.circle,
                       ),
-                      child: const Icon(Icons.arrow_upward_rounded,
+                      child: const Icon(Icons.arrow_forward_rounded,
                           color: Colors.white, size: 18),
                     ),
                   ),
@@ -708,12 +708,12 @@ class _ReelState extends ConsumerState<_Reel>
       const SizedBox(height: 16),
       Text(
         idea.text,
-        style: AppTypography.display.copyWith(
+        // Design uses the reading serif (`className="serif"`) for idea body text.
+        style: AppTypography.readingBold.copyWith(
           color: Colors.white,
           fontSize: idea.text.length > 90 ? 25 : 29,
           height: 1.16,
-          letterSpacing: -0.3,
-          fontWeight: FontWeight.w700,
+          letterSpacing: -0.4,
         ),
       ),
       const SizedBox(height: 18),

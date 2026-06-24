@@ -43,8 +43,8 @@ class CmpysIdolPreviewStep extends StatelessWidget {
                 Text(
                   '"${idol.quote}"',
                   style: AppTypography.readingQuote.copyWith(
-                    fontSize: 20,
-                    height: 1.42,
+                    fontSize: 21,
+                    height: 1.4,
                     color: AppColors.ink,
                   ),
                 ),
@@ -167,9 +167,10 @@ class CmpysIdolPreviewStep extends StatelessWidget {
           Center(
             child: Text(
               idol.name,
-              style: AppTypography.h1.copyWith(
+              style: AppTypography.display.copyWith(
                 color: Colors.white,
-                fontSize: 28,
+                fontSize: 30,
+                fontWeight: FontWeight.w500,
                 letterSpacing: -0.4,
               ),
             ),

@@ -253,7 +253,8 @@ class _CmpysRecordScreenState extends ConsumerState<CmpysRecordScreen> {
           const Icon(PhosphorIconsRegular.sparkle,
               size: 26, color: AppColors.ink3),
           const SizedBox(height: 12),
-          Text('Nothing here yet', style: AppTypography.h3.copyWith(fontSize: 19)),
+          Text('Nothing here yet',
+              style: AppTypography.display.copyWith(fontSize: 19, height: 1.2)),
           const SizedBox(height: 6),
           Text(
             'Log a win in this area and it becomes part of your side of the comparison.',
@@ -335,8 +336,8 @@ class _CmpysRecordScreenState extends ConsumerState<CmpysRecordScreen> {
               Row(
                 children: [
                   Text('Age $age',
-                      style: AppTypography.h3
-                          .copyWith(fontSize: 17, letterSpacing: -0.2)),
+                      style: AppTypography.display
+                          .copyWith(fontSize: 17, height: 1, letterSpacing: -0.2)),
                   if (isNow) ...[
                     const SizedBox(width: 8),
                     Text('NOW',
@@ -391,8 +392,8 @@ class _CmpysRecordScreenState extends ConsumerState<CmpysRecordScreen> {
                 Row(
                   children: [
                     Text('Age ${userAge + 1}',
-                        style: AppTypography.h3
-                            .copyWith(fontSize: 17, letterSpacing: -0.2)),
+                        style: AppTypography.display
+                            .copyWith(fontSize: 17, height: 1, letterSpacing: -0.2)),
                     const SizedBox(width: 8),
                     Flexible(
                       child: Text('WHERE ${idol.short.toUpperCase()} WENT NEXT',
@@ -504,8 +505,10 @@ class _WinCardState extends ConsumerState<_WinCard> {
                 decoration: BoxDecoration(
                     color: d.tint, borderRadius: BorderRadius.circular(999)),
                 child: Text(d.label,
-                    style: AppTypography.kicker.copyWith(
-                        color: d.deep, fontSize: 10.5, letterSpacing: 0.6)),
+                    style: AppTypography.bodyMedium.copyWith(
+                        color: d.deep,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700)),
               ),
               Row(
                 mainAxisSize: MainAxisSize.min,
@@ -525,30 +528,27 @@ class _WinCardState extends ConsumerState<_WinCard> {
                       color: AppColors.ochreSoft,
                       borderRadius: BorderRadius.circular(999)),
                   child: Text('Awaiting review',
-                      style: AppTypography.kicker.copyWith(
+                      style: AppTypography.bodyMedium.copyWith(
                           color: AppColors.ochre2,
-                          fontSize: 9.5,
-                          letterSpacing: 0.4)),
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w700)),
                 ),
             ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
+          Text(w.title,
+              style: AppTypography.h4.copyWith(fontSize: 15.5, height: 1.3)),
+          const SizedBox(height: 7),
           Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              Expanded(
-                child: Text(w.title,
-                    style: AppTypography.h4
-                        .copyWith(fontSize: 15.5, height: 1.3)),
-              ),
-              const SizedBox(width: 10),
               _impactBars(w.impact, d.color),
+              const SizedBox(width: 6),
+              Text(impact.label,
+                  style: AppTypography.caption
+                      .copyWith(color: AppColors.ink3, fontSize: 11.5)),
             ],
           ),
-          const SizedBox(height: 4),
-          Text(impact.label,
-              style: AppTypography.caption
-                  .copyWith(color: AppColors.ink3, fontSize: 12)),
           if (_open) ...[
             const SizedBox(height: 12),
             Text(w.note,
@@ -820,7 +820,7 @@ class _AddWinSheetState extends ConsumerState<AddWinSheet> {
 
   Widget _label(String s) => Padding(
         padding: const EdgeInsets.only(bottom: 8),
-        child: Text(s, style: AppTypography.label.copyWith(fontSize: 14)),
+        child: CmpysKicker(s),
       );
 
   Widget _multiline(TextEditingController c, String hint) {
@@ -1040,11 +1040,11 @@ class _ClaimSheetState extends ConsumerState<ClaimSheet> {
             ),
           ),
           const SizedBox(height: 18),
-          Text('When did you do it?', style: AppTypography.label.copyWith(fontSize: 14)),
+          const CmpysKicker('When did you do it?'),
           const SizedBox(height: 8),
           _agePicker(maxAge),
           const SizedBox(height: 18),
-          Text('How did it happen?', style: AppTypography.label.copyWith(fontSize: 14)),
+          const CmpysKicker('How did it happen?'),
           const SizedBox(height: 8),
           Container(
             decoration: BoxDecoration(

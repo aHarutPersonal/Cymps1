@@ -128,12 +128,15 @@ class CmpysIdolDetailScreen extends ConsumerWidget {
     return Container(
       padding: EdgeInsets.fromLTRB(22, top + 12, 22, 30),
       decoration: BoxDecoration(
+        // Design: linear-gradient(165deg, color, color@cc) — second stop is the
+        // mentor color at ~80% opacity composited over paper (lighter, not darker).
         gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
+          begin: Alignment.topRight,
+          end: Alignment.bottomLeft,
           colors: [
             idol.color,
-            Color.alphaBlend(Colors.black.withValues(alpha: 0.20), idol.color),
+            Color.alphaBlend(
+                idol.color.withValues(alpha: 0.80), AppColors.paper),
           ],
         ),
       ),
@@ -144,13 +147,13 @@ class CmpysIdolDetailScreen extends ConsumerWidget {
             color: Colors.transparent,
             child: InkWell(
               onTap: () => Navigator.of(context).maybePop(),
-              borderRadius: BorderRadius.circular(999),
+              borderRadius: BorderRadius.circular(12),
               child: Container(
                 width: 38,
                 height: 38,
                 decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.18),
-                  shape: BoxShape.circle,
+                  color: Colors.white.withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(12),
                 ),
                 child: const Icon(Icons.chevron_left_rounded,
                     size: 22, color: Colors.white),
@@ -172,20 +175,56 @@ class CmpysIdolDetailScreen extends ConsumerWidget {
           Center(
             child: Text(
               idol.name,
-              style: AppTypography.h1.copyWith(
+              style: AppTypography.display.copyWith(
                 color: Colors.white,
-                fontSize: 30,
+                fontSize: 28,
+                fontWeight: FontWeight.w500,
                 letterSpacing: -0.5,
+                height: 1.1,
               ),
             ),
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 3),
           Center(
             child: Text(
-              '${idol.title} · ${idol.era} · ${idol.tag}',
+              '${idol.title} · ${idol.era}',
               style: AppTypography.caption.copyWith(
                 color: Colors.white.withValues(alpha: 0.85),
                 fontSize: 13.5,
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          // "Your active mentor" pill (design: rgba(255,255,255,0.16) bg).
+          Center(
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.16),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 7,
+                    height: 7,
+                    decoration: const BoxDecoration(
+                      color: Color(0xFF9FD0B6),
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Your active mentor',
+                    style: AppTypography.captionMedium.copyWith(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
