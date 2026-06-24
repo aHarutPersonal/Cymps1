@@ -1,0 +1,15 @@
+# Build context is cmpys/ — keep the image lean and the context small.
+backend/.venv
+backend/__pycache__
+**/__pycache__
+*.pyc
+backend/.env
+backend/tests
+backend/.pytest_cache
+backend/*.log
+backend/*.out
+backend/*.pid
+infra
+.git
+docs
+*.md
