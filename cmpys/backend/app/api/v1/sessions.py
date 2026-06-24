@@ -15,7 +15,7 @@ import logging
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -252,6 +252,27 @@ async def create_session(
 
     logger.info(f"[SESSION] Created session {session.id} for user {current_user.id}")
     return _build_session_response(session)
+
+
+@router.post("/{session_id}/abandon", status_code=status.HTTP_204_NO_CONTENT)
+async def abandon_session(
+    session_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """
+    Abandon an in-progress session so the user can start a fresh one.
+
+    Terminal action from any phase: marks the session COMPLETED so it stops
+    being the user's "current" active session and `create_session` no longer
+    409s. Idempotent — abandoning an already-finished/absent session is a no-op.
+    """
+    session = await _get_session(session_id, current_user.id, db)
+    if session.phase != SessionPhase.COMPLETED:
+        # Bypass transition validation — abandon is terminal from any phase.
+        session.phase = SessionPhase.COMPLETED
+        await db.commit()
+        logger.info(f"[SESSION] Abandoned session {session_id}")
 
 
 # =============================================================================
