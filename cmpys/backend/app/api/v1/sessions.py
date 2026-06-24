@@ -68,8 +68,8 @@ async def _get_session(
         select(IntakeSession)
         .options(
             selectinload(IntakeSession.idol),
-            selectinload(IntakeSession.idol).selectinload("profile"),
-            selectinload(IntakeSession.idol).selectinload("persona"),
+            selectinload(IntakeSession.idol).selectinload(Idol.profile),
+            selectinload(IntakeSession.idol).selectinload(Idol.persona),
         )
         .where(
             IntakeSession.id == session_id,
@@ -438,8 +438,8 @@ async def get_current_session(
         select(IntakeSession)
         .options(
             selectinload(IntakeSession.idol),
-            selectinload(IntakeSession.idol).selectinload("profile"),
-            selectinload(IntakeSession.idol).selectinload("persona"),
+            selectinload(IntakeSession.idol).selectinload(Idol.profile),
+            selectinload(IntakeSession.idol).selectinload(Idol.persona),
         )
         .where(
             IntakeSession.user_id == current_user.id,
