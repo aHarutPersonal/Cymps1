@@ -6,7 +6,7 @@ celery_app = Celery(
     "cmpys",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.ingestion", "app.tasks.plans", "app.tasks.idols"],
+    include=["app.tasks.ingestion", "app.tasks.plans"],
 )
 
 celery_app.conf.update(
@@ -20,7 +20,6 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_default_queue="default",
     task_routes={
-        "app.tasks.idols.run_idol_suggestions": {"queue": "high_priority"},
         "app.tasks.ingestion.run_generate_idea_cards": {"queue": "low_priority"},
     },
 )
