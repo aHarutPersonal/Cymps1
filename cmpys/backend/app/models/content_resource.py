@@ -65,7 +65,12 @@ class ContentResource(Base, UUIDMixin, TimestampUpdateMixin):
     metadata_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     status: Mapped[CatalogStatus] = mapped_column(
-        SQLEnum(CatalogStatus, name="catalog_status", create_type=False),
+        SQLEnum(
+            CatalogStatus,
+            name="catalog_status",
+            create_type=False,
+            values_callable=lambda e: [x.value for x in e],
+        ),
         nullable=False,
         default=CatalogStatus.PENDING,
         index=True,
