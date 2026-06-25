@@ -408,19 +408,20 @@ async def select_idol(
     session.idol_id = idol.id
     session.interview_thread_id = thread.id
     session.transition_to(SessionPhase.INTERVIEW)
-
-    await db.commit()
-    # Attach the already-loaded idol in memory instead of a relationship-only
-    # refresh — refreshing just the relationship expired the session's scalar
-    # columns (updated_at) and triggered a MissingGreenlet lazy-load when the
-    # response was built.
     session.idol = idol
+
+    # Build the response BEFORE committing. db.commit() expires every attribute
+    # (expire_on_commit), and re-reading them here in async context would
+    # trigger MissingGreenlet lazy-loads. The in-memory values are already
+    # correct, so snapshot them first, then persist.
+    response = _build_session_response(session)
+    await db.commit()
 
     logger.info(
         f"[SESSION] Selected idol '{data.idol_name}' for session {session_id}, "
         f"thread {thread.id}"
     )
-    return _build_session_response(session)
+    return response
 
 
 # =============================================================================
