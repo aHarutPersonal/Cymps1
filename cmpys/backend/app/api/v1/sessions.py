@@ -168,10 +168,22 @@ def _build_session_response(session: IntakeSession) -> dict:
     """Build a session response dict from the model."""
     selected_idol = None
     if session.idol:
+        # Read the idol's era only if its profile relationship is already
+        # loaded — touching an unloaded relationship here would trigger an
+        # async lazy-load outside the greenlet (MissingGreenlet) right after a
+        # commit, e.g. for a freshly-created idol in select_idol.
+        era = None
+        try:
+            from sqlalchemy import inspect as sa_inspect
+            if "profile" not in sa_inspect(session.idol).unloaded:
+                profile = session.idol.profile
+                era = getattr(profile, "era_tags", None) if profile else None
+        except Exception:
+            era = None
         selected_idol = {
             "id": session.idol.id,
             "name": session.idol.name,
-            "era": getattr(session.idol.profile, "era_tags", None) if session.idol.profile else None,
+            "era": era,
         }
     return {
         "id": session.id,
