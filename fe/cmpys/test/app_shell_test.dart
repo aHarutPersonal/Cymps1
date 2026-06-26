@@ -5,7 +5,7 @@ void main() {
   test('app shell uses the canonical five-tab IA', () {
     expect(
       appShellDestinations.map((destination) => destination.label).toList(),
-      ['Today', 'Plan', 'Mentor', 'Library', 'Profile'],
+      ['Today', 'Plan', 'Chat', 'Compare', 'You'],
     );
   });
 }
