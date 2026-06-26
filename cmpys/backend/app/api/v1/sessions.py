@@ -549,6 +549,12 @@ async def interview(
         full_response = ""
 
         try:
+            # Emit a byte immediately so the client sees the stream is alive
+            # before the (first-turn) Google-Search grounding, which can take
+            # several seconds. Without this the connection is silent and the app
+            # can give up before the first interview chunk arrives.
+            yield f"data: {json_lib.dumps({'type': 'status', 'message': 'thinking'})}\n\n"
+
             # Render the system prompt (interview_system.xml) INSIDE the stream
             # so any render error surfaces as an SSE error event rather than
             # blocking the StreamingResponse from being returned.
