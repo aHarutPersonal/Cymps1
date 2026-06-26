@@ -229,7 +229,7 @@ class SessionCreateRequest with _$SessionCreateRequest {
   };
 }
 
-/// Request to select an idol.
+/// Request to choose the session mentor.
 @freezed
 class SelectIdolRequest with _$SelectIdolRequest {
   const SelectIdolRequest._();

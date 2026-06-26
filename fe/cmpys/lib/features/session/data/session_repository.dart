@@ -183,7 +183,7 @@ class SessionRepository {
         .toList();
   }
 
-  /// Select an idol for the session.
+  /// Choose the mentor for the session.
   ///
   /// Transitions session to 'interview' phase.
   Future<Session> selectIdol(

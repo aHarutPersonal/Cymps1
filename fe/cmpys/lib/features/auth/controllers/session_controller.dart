@@ -161,7 +161,7 @@ class SessionController extends StateNotifier<SessionState> {
     final currentIdolId = _prefs?.getString(SessionKeys.currentIdolId);
     debugPrint('🔑 currentIdolId: $currentIdolId');
     if (currentIdolId == null) {
-      // Has profile but no idol selected
+      // Has profile but no mentor chosen
       debugPrint('🔑 No idol ID, setting SessionNeedsOnboarding');
       state = SessionNeedsOnboarding(user: user);
       return;
