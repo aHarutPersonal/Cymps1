@@ -5,6 +5,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/network/api_error.dart';
 import '../../../core/network/dio_client.dart';
 import '../models/session_models.dart';
 
@@ -15,6 +16,48 @@ final sessionRepositoryProvider = Provider<SessionRepository>((ref) {
 
 /// The agentic-session flow refers to the repository by this name.
 typedef AgenticSessionRepository = SessionRepository;
+
+/// Thrown when an SSE stream ends without a terminal `done`/`error` event —
+/// i.e. the socket dropped mid-generation. Callers treat this as a failure and
+/// offer retry, so a truncated comparison/blueprint/interview is never shown
+/// or persisted as if it were complete.
+class SseIncompleteException implements Exception {
+  const SseIncompleteException();
+
+  @override
+  String toString() =>
+      'The response ended before it finished. Check your connection and try again.';
+}
+
+/// Robustly parse a raw SSE byte stream into `data:` JSON events.
+///
+/// Fixes two silent data-loss defects of a naive per-chunk parser:
+/// - **Split multibyte chars:** decodes UTF-8 *statefully* with
+///   `allowMalformed`, so an accented name / em-dash / emoji straddling a chunk
+///   boundary is reassembled instead of throwing and dropping the chunk.
+/// - **Split `data:` lines:** `LineSplitter` buffers a partial line across
+///   chunks, so a `data:` line split across TCP packets is reassembled rather
+///   than failing `jsonDecode` and vanishing.
+///
+/// Malformed `data:` payloads are skipped (logged), not fatal. Completion
+/// semantics are intentionally NOT enforced here — see [SessionRepository]'s
+/// completion guard — so this stays a pure, testable decoder.
+Stream<Map<String, dynamic>> parseSseEvents(Stream<List<int>> stream) async* {
+  final lines = stream
+      .transform(const Utf8Decoder(allowMalformed: true))
+      .transform(const LineSplitter());
+
+  await for (final line in lines) {
+    if (!line.startsWith('data:')) continue;
+    final jsonStr = line.substring(5).trim();
+    if (jsonStr.isEmpty) continue;
+    try {
+      yield jsonDecode(jsonStr) as Map<String, dynamic>;
+    } catch (e) {
+      debugPrint('⚠️ Failed to parse SSE event: $e');
+    }
+  }
+}
 
 /// Repository for the 5-phase agentic session workflow.
 ///
@@ -27,6 +70,22 @@ class SessionRepository {
   SessionRepository({required DioClient dioClient}) : _dioClient = dioClient;
 
   final DioClient _dioClient;
+
+  /// Wrap [parseSseEvents] with a completion guard: if the stream ends without
+  /// a terminal `done`/`error` event (socket dropped mid-generation), throw
+  /// [SseIncompleteException] so the caller retries and never treats a
+  /// truncated comparison/blueprint/interview as final.
+  Stream<Map<String, dynamic>> _sseWithCompletion(
+    Stream<List<int>> stream,
+  ) async* {
+    var sawTerminal = false;
+    await for (final event in parseSseEvents(stream)) {
+      final type = event['type'];
+      if (type == 'done' || type == 'error') sawTerminal = true;
+      yield event;
+    }
+    if (!sawTerminal) throw const SseIncompleteException();
+  }
 
   // ===========================================================================
   // Session Lifecycle
@@ -55,23 +114,32 @@ class SessionRepository {
 
   /// Get the user's current active (non-completed) session.
   ///
-  /// Returns null if no active session exists.
+  /// Returns null ONLY when the server authoritatively says there is no active
+  /// session (200 with a null body, or 404). A transient failure (5xx, network)
+  /// is re-thrown rather than masked as "no session" — otherwise a hiccup is
+  /// indistinguishable from a real absence, and a caller that reconciles local
+  /// state could wrongly treat a blip as "the user has nothing" and drop their
+  /// mentor/results. Callers that just want best-effort hydration already wrap
+  /// this in try/catch and keep their existing state on throw.
   Future<Session?> getCurrentSession() async {
     debugPrint('🔍 Checking for active session');
 
     try {
       final response = await _dioClient.get('/sessions/current');
-
       if (response.data == null) {
         debugPrint('🔍 No active session');
         return null;
       }
-
       debugPrint('🔍 Active session found');
       return Session.fromJson(response.data as Map<String, dynamic>);
-    } catch (e) {
-      debugPrint('🔍 No active session (error: $e)');
-      return null;
+    } on ApiError catch (e) {
+      if (e.statusCode == 404) {
+        debugPrint('🔍 No active session (404)');
+        return null;
+      }
+      // Ambiguous failure — do not pretend the user has no session.
+      debugPrint('🔍 /sessions/current failed transiently: ${e.message}');
+      rethrow;
     }
   }
 
@@ -173,20 +241,7 @@ class SessionRepository {
 
     final stream = response.data.stream as Stream<List<int>>;
 
-    await for (final chunk in stream) {
-      final text = utf8.decode(chunk);
-      for (final line in text.split('\n')) {
-        if (line.startsWith('data: ')) {
-          try {
-            final jsonStr = line.substring(6);
-            final event = jsonDecode(jsonStr) as Map<String, dynamic>;
-            yield event;
-          } catch (e) {
-            debugPrint('⚠️ Failed to parse SSE event: $e');
-          }
-        }
-      }
-    }
+    yield* _sseWithCompletion(stream);
   }
 
   // ===========================================================================
@@ -222,20 +277,7 @@ class SessionRepository {
 
     final stream = response.data.stream as Stream<List<int>>;
 
-    await for (final chunk in stream) {
-      final text = utf8.decode(chunk);
-      for (final line in text.split('\n')) {
-        if (line.startsWith('data: ')) {
-          try {
-            final jsonStr = line.substring(6);
-            final event = jsonDecode(jsonStr) as Map<String, dynamic>;
-            yield event;
-          } catch (e) {
-            debugPrint('⚠️ Failed to parse SSE event: $e');
-          }
-        }
-      }
-    }
+    yield* _sseWithCompletion(stream);
   }
 
   // ===========================================================================
@@ -303,19 +345,6 @@ class SessionRepository {
 
     final stream = response.data.stream as Stream<List<int>>;
 
-    await for (final chunk in stream) {
-      final text = utf8.decode(chunk);
-      for (final line in text.split('\n')) {
-        if (line.startsWith('data: ')) {
-          try {
-            final jsonStr = line.substring(6);
-            final event = jsonDecode(jsonStr) as Map<String, dynamic>;
-            yield event;
-          } catch (e) {
-            debugPrint('⚠️ Failed to parse SSE event: $e');
-          }
-        }
-      }
-    }
+    yield* _sseWithCompletion(stream);
   }
 }
