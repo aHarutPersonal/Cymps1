@@ -42,7 +42,8 @@ from app.services.gemini import (
     stream_with_grounding,
 )
 from app.services.content_resources import attach_content_resources_to_materials
-from app.services.llm.prompt_loader import load_and_render
+from app.services.llm.prompt_loader import load_and_render, sanitize_untrusted_input
+from app.services.transcripts import build_chat_history_json
 
 logger = logging.getLogger("cmpys.api.sessions")
 
@@ -202,14 +203,14 @@ def _build_session_response(session: IntakeSession) -> dict:
 
 
 def _build_chat_history_json(messages: list[ChatMessage]) -> str:
-    """Build a JSON string of chat history for prompt injection."""
-    history = []
-    for msg in messages:
-        history.append({
-            "role": msg.role.value,
-            "content": msg.content,
-        })
-    return json_lib.dumps(history, indent=2)
+    """Build a JSON string of chat history for prompt injection.
+
+    Delegates to the shared serializer with ``sanitize_user=True`` so
+    user-authored turns are wrapped with the untrusted-input delimiters (the
+    model treats them as DATA, not instructions) in interview / comparison /
+    blueprint generation. Assistant turns are model-generated and left as-is.
+    """
+    return build_chat_history_json(messages, sanitize_user=True)
 
 
 # =============================================================================
@@ -604,7 +605,7 @@ async def interview(
                 "turn_count": str(current_turn),
                 "max_turns": str(MAX_INTERVIEW_TURNS),
                 "idol_facts_json": json_lib.dumps(session.idol_facts_json or {}),
-                "user_message": data.content,
+                "user_message": sanitize_untrusted_input(data.content),
             })
 
             async for chunk in interview_stream(

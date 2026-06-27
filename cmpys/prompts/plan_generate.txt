@@ -48,6 +48,12 @@ If the session context is empty, build the plan from the profile and gap analysi
 
 Generate a highly effective, 12-week strategic plan that transforms this user toward the level of {idol_name}. The plan MUST be deeply rooted in {idol_name}'s actual domain, methods, and trajectory — NOT generic self-help advice.
 
+## CALIBRATE TO THE USER FIRST (READ BEFORE EVERYTHING BELOW)
+The idol's milestones define the DESTINATION; the User Context, Readiness data, and gap analysis define the STARTING LINE and the PACE. Before applying any rule below, anchor the plan to where THIS user actually is:
+- Set Week 1's difficulty to the user's current level, NOT the idol's peak. A beginner starts with fundamentals; do not open with idol-level challenges.
+- Every week's total effort MUST fit within {hours_per_week} hours. Do not exceed it — an over-stuffed plan the user abandons is a failed plan.
+- If the User Context is rich, the plan must visibly reflect it. Do not let the idol's achievements crowd out the user's real situation, constraints, and stated goal ({user_goal}).
+
 ## NON-NEGOTIABLE RULES
 
 ### 1. DOMAIN-SPECIFICITY (most important rule)

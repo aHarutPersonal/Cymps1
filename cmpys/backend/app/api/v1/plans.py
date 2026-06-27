@@ -154,6 +154,7 @@ async def generate_plan_endpoint(
     job = PlanGenerationJob(
         user_id=current_user.id,
         idol_id=data.idolId,
+        session_id=data.sessionId,
         target_age=data.targetAge,
         duration_weeks=data.durationWeeks,
         weekly_hours=data.weeklyHours,

@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from app.core.config import settings
 from app.models.plan import PlanItemType
 from app.services.llm import get_llm_client
-from app.services.llm.prompt_loader import load_prompt, render_prompt
+from app.services.llm.prompt_loader import load_prompt, render_prompt, sanitize_untrusted_input
 from app.services.llm.schemas import PlanGenerationResponse
 
 logger = logging.getLogger(__name__)
@@ -153,6 +153,9 @@ async def _generate_llm_items(
     idol_milestones: dict | list | str | None = None,
     gaps: dict | list | str | None = None,
     readiness_by_gap: dict | list | str | None = None,
+    interview_transcript_json: str = "",
+    comparison_summary: str = "",
+    blueprint_markdown: str = "",
 ) -> PlanRoadmap:
     """
     Generate plan items using LLM.
@@ -171,17 +174,27 @@ async def _generate_llm_items(
         user_template = load_prompt("plan_generate")
 
         # Render user prompt with the full plan contract.
+        #
+        # The three session-context placeholders (interview_transcript_json,
+        # comparison_summary, blueprint_markdown) are REQUIRED by plan_generate.txt.
+        # When this path runs without an agentic session they must still be
+        # provided (empty) or strict rendering raises PromptRenderError. The
+        # prompt is written to build from profile + gaps alone when they are empty.
+        # user_context is free user-authored text, so wrap it as untrusted data.
         user_prompt = render_prompt(user_template, {
             "user_goal": user_goal,
             "idol_name": idol_name,
             "hours_per_week": str(hours_per_week),
             "target_age": str(target_age or "null"),
-            "user_context": user_context,
+            "user_context": sanitize_untrusted_input(user_context) if user_context else "",
             "idol_profile_json": idol_profile or {},
             "idol_persona_json": idol_persona or {},
             "idol_milestones_json": idol_milestones or [],
             "gaps_json": gaps or [],
             "readiness_by_gap_json": readiness_by_gap or {},
+            "interview_transcript_json": interview_transcript_json or "",
+            "comparison_summary": comparison_summary or "",
+            "blueprint_markdown": blueprint_markdown or "",
         }, prompt_name="plan_generate.txt", strict=True)
 
         validated, response = await client.generate_and_validate(
@@ -288,6 +301,9 @@ async def generate_plan(
             idol_milestones=kwargs.get("idol_milestones"),
             gaps=kwargs.get("gaps"),
             readiness_by_gap=kwargs.get("readiness_by_gap"),
+            interview_transcript_json=kwargs.get("interview_transcript_json", ""),
+            comparison_summary=kwargs.get("comparison_summary", ""),
+            blueprint_markdown=kwargs.get("blueprint_markdown", ""),
         )
     else:
         logger.info("Generating plan using deterministic templates")

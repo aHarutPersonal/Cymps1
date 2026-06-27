@@ -1,74 +1,3 @@
-Extract ACTIONABLE ACHIEVEMENTS and MILESTONES from sources for the specified idol.
-
-IDOL: {idol_name}
-
-CRITICAL: What to EXCLUDE (NOT achievements):
-- Birth events ("was born on...", "born in...")
-- Death events ("died on...", "passed away...")
-- Physical descriptions or biographical background
-- Family relationships (unless they led to a specific achievement)
-- General personality traits
-- Where they lived/moved (unless relocation was strategic)
-
-CRITICAL: What to INCLUDE (real achievements):
-- Business decisions: founded companies, acquisitions, investments, exits
-- Career milestones: promotions, significant roles, partnerships formed
-- Financial achievements: first investment, revenue milestones, wealth creation events
-- Learning achievements: degrees earned, skills acquired, mentors sought
-- Impact achievements: philanthropy started, people hired/mentored, products launched
-- Recognition: awards, rankings, notable publications/speeches
-- Mindset shifts: key decisions that changed trajectory, pivots
-
-SOURCES (chunked; each has source_id, source_url, chunk_index, text):
-{sources_json_array}
-
-Return JSON EXACTLY matching this schema:
-
-{
-  "candidates": [
-    {
-      "title": "string (short action-oriented title, e.g., 'Founded Partnership', 'First Stock Purchase')",
-      "description": "string (1-2 sentences explaining WHAT they did and WHY it mattered)",
-      "date": "YYYY-MM-DD|null",
-      "date_precision": "day|month|year|unknown",
-      "age_at_event": null,
-      "category": "career|learning|finance|impact|mindset|other",
-      "importance_hint": "high|medium|low",
-      "confidence": 0.0,
-      "evidence": [
-        {
-          "source_id": "string",
-          "chunk_index": 0,
-          "source_url": "string",
-          "snippet": "string (verbatim from source, max 240 chars)",
-          "confidence": 0.0
-        }
-      ]
-    }
-  ]
-}
-
-Category guidelines:
-- career: jobs, companies founded, roles held, business partnerships
-- learning: education, skills acquired, books that influenced them, mentorship
-- finance: investments, financial decisions, wealth milestones
-- impact: philanthropy, people mentored, products that changed things
-- mindset: key pivots, philosophy changes, important decisions
-- other: anything else notable
-
-Importance hints:
-- high (0.8-1.0): Defining moments that shaped their trajectory
-- medium (0.5-0.79): Important but not trajectory-defining
-- low (0.2-0.49): Minor achievements or less impactful
-
-Extraction rules:
-1. Extract 10-25 achievements if sources are rich, minimum 5.
-2. Focus on WHAT THEY DID, not who they were.
-3. Prefer specific, dated events over vague achievements.
-4. Each achievement must be actionable/reproducible in some form.
-5. Evidence snippets must be verbatim from sources (exact substring).
-6. Do NOT include birth or death - these are NOT achievements.
-7. If age at event is mentioned in text, you may note it but set age_at_event=null (computed later).
 Extract ACTIONABLE ACHIEVEMENTS and MILESTONES from the provided sources for the specified idol.
 
 IDOL:
@@ -131,9 +60,12 @@ DE-DUPING (lightweight at extraction time):
 - Avoid producing near-identical duplicates from the same source passage.
 - If the same milestone appears multiple times, keep the clearest version and strongest evidence.
 
-COUNT TARGET:
-- Extract 10–25 items if sources are rich.
-- If sources are thin, output at least 5 items, but never invent.
+COUNT TARGET (signal over quantity — never invent to hit a number):
+- Extract every genuinely achievement-grade, evidence-backed milestone you find, up to a cap of 25.
+- When sources are rich this is typically 10–25 items.
+- When sources are thin, return ONLY the items that are genuinely supported — even if that is just 2 or 3.
+  Do NOT pad the list, restate the same milestone, or invent achievements to reach any minimum.
+  An accurate short list is always better than a padded one.
 
 CATEGORY RULES:
 Pick exactly one:
@@ -166,8 +98,8 @@ Return JSON EXACTLY matching this schema:
 {
   "candidates": [
     {
-      "title": "string",
-      "description": "string",
+      "title": "string (short, action-oriented, e.g., 'Founded Partnership', 'First Stock Purchase')",
+      "description": "string (1-2 sentences: WHAT they did, WHY it mattered, plus a short replicable angle)",
       "date": "YYYY-MM-DD|null",
       "date_precision": "day|month|year|unknown",
       "age_at_event": null,
@@ -179,7 +111,7 @@ Return JSON EXACTLY matching this schema:
           "source_id": "string",
           "chunk_index": 0,
           "source_url": "string",
-          "snippet": "string",
+          "snippet": "string (verbatim from source, max 240 chars)",
           "confidence": 0.0
         }
       ]
@@ -194,5 +126,6 @@ EVIDENCE RULES:
 
 FINAL CHECK BEFORE OUTPUT:
 - Remove any item that is not a concrete action/milestone.
-- Remove any item without strong evidence snippet.
-- Ensure JSON is valid and matches schema exactly.
+- Remove any item without a strong, verbatim evidence snippet.
+- Ensure age_at_event is null for every candidate.
+- Ensure JSON is valid and matches the schema exactly.

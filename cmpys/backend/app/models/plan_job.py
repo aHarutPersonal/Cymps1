@@ -13,7 +13,16 @@ class PlanGenerationJob(Base, UUIDMixin, TimestampUpdateMixin):
     idol_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False), ForeignKey("idols.id", ondelete="CASCADE"), nullable=False
     )
-    
+    # Optional link to the agentic IntakeSession this plan was generated from, so
+    # the interview transcript / comparison / blueprint can be threaded in
+    # precisely (added in migration s6t7u8v9w0x1). Nullable for legacy /plans jobs.
+    session_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("intake_sessions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     # Relationships
     idol = relationship("Idol")
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending")

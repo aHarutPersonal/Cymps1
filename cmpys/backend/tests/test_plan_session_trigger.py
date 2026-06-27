@@ -4,9 +4,11 @@ Tests for the blueprint → plan auto-trigger wiring.
 Covers the session-context threading into plan generation and the
 helpers added for the agentic plan pipeline.
 """
+from types import SimpleNamespace
+
 import pytest
 
-from app.services.llm.prompt_loader import load_and_render
+from app.services.llm.prompt_loader import _UNTRUSTED_OPEN, load_and_render
 from app.services.transcripts import build_chat_history_json
 from app.tasks.plans import _blueprint_phase_for_week, _load_session_context
 
@@ -18,6 +20,24 @@ class _FakeMessage:
                 self.value = value
         self.role = _Role(role_value)
         self.content = content
+
+
+class _FakeResult:
+    def __init__(self, value):
+        self._value = value
+
+    def scalar_one_or_none(self):
+        return self._value
+
+
+class _FakeDB:
+    """Returns queued scalar results, one per execute() call, in order."""
+
+    def __init__(self, results):
+        self._results = list(results)
+
+    async def execute(self, *args, **kwargs):
+        return _FakeResult(self._results.pop(0))
 
 
 class TestBlueprintPhaseMapping:
@@ -35,9 +55,66 @@ class TestBlueprintPhaseMapping:
 
 class TestLoadSessionContext:
     @pytest.mark.asyncio
-    async def test_returns_empty_for_legacy_jobs_without_session(self):
-        # Legacy /plans path: no session_id → no context, db never touched.
-        assert await _load_session_context(db=None, session_id=None) == {}
+    async def test_returns_empty_for_legacy_jobs_without_user_or_idol(self):
+        # Legacy /plans path: no user/idol to resolve a session → no context,
+        # db never touched.
+        assert await _load_session_context(db=None, user_id=None, idol_id=None) == {}
+        assert await _load_session_context(db=object(), user_id="u1", idol_id=None) == {}
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_when_no_session_found(self):
+        db = _FakeDB([None])  # IntakeSession lookup → None
+        assert await _load_session_context(db, user_id="u1", idol_id="i1") == {}
+
+    @pytest.mark.asyncio
+    async def test_threads_comparison_blueprint_and_sanitized_transcript(self):
+        session = SimpleNamespace(
+            interview_thread_id="thread-1",
+            comparison_output="By 28 I ran a partnership; you have read three books.",
+            blueprint_output="## Weeks 1-3: Foundation\nLearn balance sheets.",
+        )
+        thread = SimpleNamespace(
+            messages=[
+                _FakeMessage("assistant", "What have you built?"),
+                _FakeMessage("user", "A small trading model."),
+            ]
+        )
+        db = _FakeDB([session, thread])  # session lookup, then thread lookup
+
+        ctx = await _load_session_context(db, user_id="u1", idol_id="i1")
+
+        assert ctx["comparison_summary"] == session.comparison_output
+        assert ctx["blueprint_markdown"] == session.blueprint_output
+        assert "A small trading model." in ctx["interview_transcript_json"]
+        # User turn must be wrapped as untrusted DATA.
+        assert _UNTRUSTED_OPEN in ctx["interview_transcript_json"]
+
+    @pytest.mark.asyncio
+    async def test_session_id_resolves_without_user_or_idol(self):
+        # Exact linkage: a session_id alone is enough (no user/idol needed).
+        session = SimpleNamespace(
+            interview_thread_id=None,
+            comparison_output="by-id verdict",
+            blueprint_output=None,
+        )
+        db = _FakeDB([session])
+
+        ctx = await _load_session_context(db, session_id="s1")
+
+        assert ctx == {"comparison_summary": "by-id verdict"}
+
+    @pytest.mark.asyncio
+    async def test_handles_session_without_interview_thread(self):
+        session = SimpleNamespace(
+            interview_thread_id=None,
+            comparison_output="verdict",
+            blueprint_output=None,
+        )
+        db = _FakeDB([session])  # only the session lookup happens
+
+        ctx = await _load_session_context(db, user_id="u1", idol_id="i1")
+
+        assert ctx == {"comparison_summary": "verdict"}
 
 
 class TestTranscriptHelper:

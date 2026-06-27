@@ -6,13 +6,18 @@ Their goals: {goals_json}
 
 Generate exactly {count} items. ONLY these two types are allowed:
 
-**BOOK QUOTES (at least 8):**
-Real, verified quotes from well-known books. ONLY use quotes you are CERTAIN are accurate and attributable. If you are not 100% sure of the exact wording and source, do NOT include it.
+**INSIGHTS FROM BOOKS & THINKERS (at least 8, type "quote"):**
+You do NOT have a search tool here, so you CANNOT verify exact wording. Therefore PARAPHRASE BY DEFAULT —
+express the idea in your own words with NO quotation marks. This is the safe, expected format and carries
+zero fabrication risk.
 
-Instead of fabricating uncertain quotes, use these verified strategies:
-- Paraphrased wisdom: "The core idea from [Book] by [Author] is that [clear summary of the principle]" — this is always acceptable
-- Attributed principles: "[Author]'s key principle: [accurate summary]" — no quotation marks means no fabrication risk
-- Well-known sayings: Use only widely-attributed quotes you can verify (e.g., "The only way to do great work is to love what you do." — Steve Jobs)
+- DEFAULT (use this for almost everything): Attributed paraphrase, no quotation marks.
+  e.g.  The core idea in "Atomic Habits" by James Clear is that small, repeated habits compound into identity.
+  e.g.  Carol Dweck's central point: ability grows through effort, so treat setbacks as data, not verdicts.
+- RARE EXCEPTION — verbatim quotation in quotation marks is allowed ONLY for a saying so famous and
+  universally attributed that you are certain of the exact words AND the author (e.g. "Stay hungry, stay
+  foolish." — Steve Jobs). If you have the slightest doubt about the exact wording, PARAPHRASE instead.
+- NEVER attach quotation marks to words you are reconstructing or guessing. A wrong "quote" is a hard failure.
 
 Recommended book sources:
 - "Atomic Habits" by James Clear
@@ -33,7 +38,8 @@ Recommend types of videos the user should search for from TRUSTED sources:
 - Do NOT fabricate YouTube URLs. Set "url" to null for all videos — the system will resolve real URLs via search.
 
 Rules:
-- CRITICAL: Do NOT fabricate quotes. If you cannot verify the exact wording, paraphrase instead (no quotation marks).
+- CRITICAL: Do NOT fabricate quotes. Default to paraphrase (no quotation marks). Use quotation marks ONLY
+  for a handful of universally famous sayings whose exact words you are certain of — otherwise paraphrase.
 - Do NOT generate tasks, action items, suggestions, or actionable advice. ONLY quotes and videos.
 - All content in English only.
 - Vary the categories: use at least 3 distinct categories across the set.
