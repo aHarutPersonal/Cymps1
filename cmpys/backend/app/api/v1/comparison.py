@@ -25,6 +25,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/comparison", tags=["comparison"])
 
 
+def idol_has_comparable_data(timeline_count: int, achievement_count: int) -> bool:
+    """An idol is comparable only if it has at least one timeline event or
+    achievement ingested (guards against unverified/empty idols)."""
+    return (timeline_count or 0) > 0 or (achievement_count or 0) > 0
+
+
 # Category weights for scoring
 CATEGORY_WEIGHTS = {
     "career": 0.25,

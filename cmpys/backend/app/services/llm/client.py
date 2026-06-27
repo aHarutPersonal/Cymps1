@@ -4,6 +4,7 @@ LLM client abstraction for structured JSON generation.
 Provides an abstract interface and a DummyLLMClient for development
 that returns deterministic fixtures.
 """
+import asyncio
 import json
 import logging
 from abc import ABC, abstractmethod
@@ -16,6 +17,23 @@ logger = logging.getLogger(__name__)
 
 # Path to fixtures directory (relative to backend root)
 FIXTURES_DIR = Path(__file__).parent.parent.parent.parent / "fixtures"
+
+
+async def _retry_async(fn, attempts=3, base_delay=0.5):
+    """Retry an async callable with exponential backoff. Re-raises the last
+    exception after `attempts` tries."""
+    last_exc = None
+    for attempt in range(attempts):
+        try:
+            return await fn()
+        except Exception as exc:
+            last_exc = exc
+            if attempt == attempts - 1:
+                break
+            delay = base_delay * (2 ** attempt)
+            if delay > 0:
+                await asyncio.sleep(delay)
+    raise last_exc
 
 
 def _repair_json(raw: str) -> dict | None:

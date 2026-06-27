@@ -23,12 +23,17 @@ class PlanItemStatus(str, Enum):
 
 class PlanGenerateRequest(BaseModel):
     """Request to generate a new plan."""
-    
+
     idolId: str
     targetAge: int = Field(..., ge=1, le=150)
     durationWeeks: int = Field(default=12, ge=1, le=52)
     weeklyHours: int = Field(default=10, ge=1, le=168)
     focus: str | None = Field(default=None, max_length=200)
+    # Optional: the agentic session this plan continues. When provided, the
+    # interview transcript / comparison / blueprint from that exact session are
+    # threaded into generation; when omitted, the task falls back to the user's
+    # most recent session for this idol.
+    sessionId: str | None = Field(default=None)
 
 
 class PlanItemUpdate(BaseModel):

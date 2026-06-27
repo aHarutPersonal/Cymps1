@@ -6,12 +6,22 @@ Their preferred learning style: {learning_preferences}
 Mentor/idol context: {idol_name}
 Mentor/idol domain: {idol_domain}
 
+SESSION CONTEXT (from the user's diagnostic interview and strategic blueprint — may be empty):
+{session_context}
+
+If the session context is non-empty, personalize this module with it: choose examples and
+exercises that speak to what the user revealed in their interview, target the gaps named in
+the comparison verdict, and keep every step consistent with the blueprint phase this mission
+belongs to. The user must recognize themselves in this lesson.
+
 IMPORTANT CONTEXT: This task is a MISSION task (weekly project/course/reading), NOT a daily habit. The user will spend 2-8 hours on this. Design a substantial learning module — not a quick checklist.
 
 Design an **immediately actionable**, 100% useful execution protocol with rich sub-steps and curated learning resources that will help the user achieve this specific mission as fast and effectively as possible.
 
+RIGHT-SIZE FOR THE LEARNER (READ FIRST): Depth beats volume. Each step should teach ONE core concept, show ONE worked example, drive ONE concrete practice, and end with ONE check for understanding. Do NOT pad to hit a word count — a tight, high-signal lesson the user actually finishes beats a long one they abandon. Respect the word ranges below as CEILINGS, not targets.
+
 CRITICAL RULES:
-1. **STEPS = SUBSTANTIAL SKILL-BUILDING LESSONS, NOT ADVICE.** Each step must teach the user a REAL skill or technique they can practice. Steps should take 30-90 MINUTES each — these are not 5-minute tasks.
+1. **STEPS = SUBSTANTIAL SKILL-BUILDING LESSONS, NOT ADVICE.** Each step must teach the user a REAL skill or technique they can practice. Steps should take 30-60 MINUTES each — these are not 5-minute tasks.
    - BAD: "Read this book", "Add 50 people on LinkedIn", "Watch this course", "Network with experts"
    - BAD: "Take notes" (3 minutes, not a real step)
    - BAD: "Reflect on what you learned" (vague, not teachable)
@@ -19,12 +29,12 @@ CRITICAL RULES:
    - GOOD: "Practice [specific technique] with these exercises — start with the guided example, then solve 5 problems independently" (60-90 min)
    - GOOD: "Build [specific artifact] using [specific tool/method] — follow the template below, customize it for your context" (45-60 min)
 
-2. **EACH STEP HAS A FULL LESSON (500-1,200 WORDS).** Every step MUST include a `lesson_content` field — a comprehensive markdown lesson that teaches the user exactly how to execute that step. This is the CORE VALUE of the app — it must be substantial enough to spend 3-6 minutes reading. Structure it as:
-   - **Opening context** (2-3 sentences): Why this skill matters for the mission
-   - **Core concept explanation** (3-5 paragraphs): The key framework, model, or technique with concrete details
-   - **Real-world example** (1-2 paragraphs): A specific, named case study from {idol_name}'s career or the book's content that demonstrates this concept. NO generic examples.
-   - **Practice guide** (3-5 numbered steps): Exactly what to do, with specific tools, time estimates, and success criteria
-   - **Reflection prompt** (1-2 sentences): A question that forces the user to apply this to their own situation
+2. **EACH STEP HAS A FOCUSED LESSON (250-550 WORDS, ceiling not target).** Every step MUST include a `lesson_content` field — a markdown lesson that teaches the user exactly how to execute that step. This is the CORE VALUE of the app — aim for a tight 2-3 minute read. Structure it as:
+   - **Opening context** (1-2 sentences): Why this skill matters for the mission
+   - **Core concept explanation** (2-3 paragraphs): The key framework, model, or technique with concrete details
+   - **Real-world example** (1 paragraph): A specific, named case study from {idol_name}'s career or the book's content that demonstrates this concept. NO generic examples.
+   - **Practice guide** (3 numbered steps): Exactly what to do, with specific tools, time estimates, and success criteria
+   - **Reflection prompt** (1 sentence): A question that forces the user to apply this to their own situation
 
 3. **100% USEFUL MATERIALS.** Do not suggest generic ideas. Suggest specific, highly effective, renowned, or industry-standard materials.
 
@@ -39,9 +49,9 @@ CRITICAL RULES:
 
 7. **NO HALLUCINATIONS.** Only recommend REAL, existing books, courses, and tools.
 
-8. **IN-APP BOOK MODULES.** For any book material, set `type` to `"book"` and provide an `ideas` array (5-8 cards) plus `content_markdown` for a reusable 15-minute book summary module (600-1,000 words minimum). Each idea: `title` (max 50 chars), `content` (40-80 words with specific example and actionable takeaway), `category` (Mindset|Strategy|Productivity|Leadership|Creativity|Finance|Communication|Habits).
+8. **IN-APP BOOK MODULES.** For any book material, set `type` to `"book"` and provide an `ideas` array (4-6 cards) plus `content_markdown` for a reusable book summary module (400-600 words). Each idea: `title` (max 50 chars), `content` (40-80 words with specific example and actionable takeaway), `category` (Mindset|Strategy|Productivity|Leadership|Creativity|Finance|Communication|Habits).
 
-9. **FULL LESSON CONTENT FOR MATERIALS (600-1,000 WORDS).** For `book` and `in_app_lesson` materials, provide a `content_markdown` field — a substantial 600-1,000 word markdown lesson that teaches the key concept from the resource. This is NOT a summary — it must include:
+9. **LESSON CONTENT FOR MATERIALS (400-600 WORDS, ceiling not target).** For `book` and `in_app_lesson` materials, provide a `content_markdown` field — a focused 400-600 word markdown lesson that teaches the key concept from the resource. This is NOT a summary — it must include:
    - An opening hook connecting the resource to the user's mission
    - The core framework or concept with detailed explanation
    - A specific example or case study
@@ -54,7 +64,7 @@ CRITICAL RULES:
 
 12. **SUBSTEPS MUST BE ACTIONABLE.** Each substep should be 20-50 words describing a specific, measurable action. BAD: "Practice regularly". GOOD: "Set a 20-minute timer and write 3 application scenarios for this concept to your current project".
 
-13. **IF A STEP CLAIMS 60+ MINUTES**, its `lesson_content` MUST be at least 800 words with detailed examples, multiple practice exercises, and thorough explanation.
+13. **IF A STEP CLAIMS 50+ MINUTES**, its `lesson_content` should reach the upper end of the range (around 450-550 words) with a detailed example and an extra practice exercise — but never pad beyond the 550-word ceiling.
 
 OUTPUT FORMAT (strict JSON, no extra keys, no markdown):
 {
@@ -96,4 +106,4 @@ OUTPUT FORMAT (strict JSON, no extra keys, no markdown):
   "mental_model": "Name of 1 specific mental model that unlocks efficiency for this task."
 }
 
-Provide 3-4 substantial steps (30-90 minutes each). Each step MUST be a skill-building lesson with full lesson_content (500-1,200 words) and 2-4 practice substeps. Steps must TEACH, not advise. Provide 3-5 elite materials. Prefer at least 1 material type "book" with exact author, 5-8 ideas, and content_markdown (600-1,000 words). At least 1 MUST be type "video".
+Provide exactly 3 focused steps (30-60 minutes each). Each step MUST be a skill-building lesson with focused lesson_content (250-550 words) and 2-3 practice substeps. Steps must TEACH, not advise. Provide 3 elite materials. Prefer at least 1 material type "book" with exact author, 4-6 ideas, and content_markdown (400-600 words). At least 1 MUST be type "video". Word ranges are ceilings — never pad to fill them.

@@ -13,12 +13,17 @@ Select exactly 3 idols that are the BEST match for this specific person's situat
 Use Google Search to verify that each idol had documented achievements at or near age {user_age}.
 
 SELECTION CRITERIA (in priority order):
-1. MILESTONE DENSITY AT USER'S AGE: Prefer idols who had significant, documented achievements
-   by age {user_age}. This is critical — the comparison phase will contrast "what the idol did
-   by this age" vs "what the user has done."
-2. INTEREST ALIGNMENT: The idol's domain must overlap with the user's stated interests.
-3. DIVERSITY: Include at least 2 different domains and at least 1 historical figure (pre-1950).
-4. EVIDENCE-RICH: Prefer idols with extensive Wikipedia/biographical documentation.
+1. INSTRUCTIVE & BRIDGEABLE TRAJECTORY: Prefer idols whose path from a comparable starting point is
+   something this user can actually learn from and begin to follow. Favor idols who have a documented
+   EARLY trajectory — formative struggles, first steps, and the decisions they made on the way up — not
+   just a wall of peak achievements. The point is a gap that motivates, not one so vast it only discourages.
+2. MILESTONE RELEVANCE AT USER'S AGE: Prefer idols with significant, documented achievements by
+   age {user_age}, since the comparison phase contrasts "what the idol did by this age" vs "what the
+   user has done." Use this as a relevance signal — but do NOT pick the single most decorated figure
+   if their path is unrelatable to where this user is starting.
+3. INTEREST ALIGNMENT: The idol's domain must overlap with the user's stated interests.
+4. DIVERSITY: Include at least 2 different domains and at least 1 historical figure (pre-1950).
+5. EVIDENCE-RICH: Prefer idols with extensive Wikipedia/biographical documentation.
 
 HARD RULES:
 - Exactly 3 suggestions. No more, no less.
@@ -52,3 +57,6 @@ FINAL CHECK:
 - Each has verified achievements near age {user_age}
 - Each includes Wikidata/Wikipedia/photo hints so the app can cache a licensed idol photo once and reuse it
 - JSON is valid, no trailing commas, no markdown wrapping
+
+OUTPUT CONTRACT: Your entire output is the JSON object above and nothing else. It begins with {{
+and ends with }}. No prose before or after, no markdown code fences.

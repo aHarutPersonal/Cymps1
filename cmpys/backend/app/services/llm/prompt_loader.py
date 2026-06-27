@@ -113,72 +113,20 @@ PROMPT_PLACEHOLDERS = {
         "idol_milestones_json",
         "gaps_json",
         "readiness_by_gap_json",
+        "interview_transcript_json",
+        "comparison_summary",
+        "blueprint_markdown",
     ],
     
-    "chat_system.txt": [
-        "idol_name",
-        "voice_style",
-        "principles",
-        "dos",
-        "donts",
-        "signature_phrases",
-        "topics_of_strength",
-        "grounding_facts_json",
-        "idol_persona_json",
-        "user_context_json",
-        "disclaimer",
-    ],
     
-    "chat_reply.txt": [
-        "user_profile_json",
-        "idol_profile_json",
-        "idol_persona_json",
-        "idol_name",
-        "target_age",
-        "comparison_json",
-        "milestones_json",
-        "evidence_snippets_json",
-        "conversation_history_json",
-        "user_message",
-    ],
     
-    "idol_discover.txt": [
-        "interests_json_array",
-        "user_age",
-        "limit",
-    ],
     
     "persona_pack.txt": [
         "idol_name",
     ],  # Also receives profile and sources via f-string injection
     
-    "intake_questions_generate.txt": [
-        "idol_name",
-        "idol_persona_json",
-        "idol_profile_json",
-        "milestones_json",
-        "user_profile_json",
-        "target_age",
-        "limit",
-    ],
     
-    "intake_answers_normalize.txt": [
-        "idol_name",
-        "idol_persona_json",
-        "idol_profile_json",
-        "milestones_json",
-        "user_profile_json",
-        "questions_json",
-        "answers_json",
-    ],
     
-    "achievement_intake_generate.txt": [
-        "idol_name",
-        "idol_profile_json",
-        "milestones_json",
-        "user_age",
-        "limit",
-    ],
     
     "plan_item_details.txt": [
         "task_title",
@@ -186,6 +134,7 @@ PROMPT_PLACEHOLDERS = {
         "learning_preferences",
         "idol_name",
         "idol_domain",
+        "session_context",
     ],
 
     "book_module_generate.txt": [
@@ -195,9 +144,6 @@ PROMPT_PLACEHOLDERS = {
         "source_context",
     ],
     
-    "thinking_narrate.txt": [
-        "interests",
-    ],
     
     "discover_feed.txt": [
         "count",
@@ -272,13 +218,6 @@ PROMPT_PLACEHOLDERS = {
         "user_profile_json",
     ],
 
-    "idea_cards_generate.txt": [
-        "count",
-        "idol_name",
-        "idol_domain",
-        "persona_context",
-        "user_profile_json",
-    ],
     
     "image_generate.txt": [
         "idol_name",
@@ -286,16 +225,6 @@ PROMPT_PLACEHOLDERS = {
         "idol_description",
     ],
     
-    "comparison_analyze.txt": [
-        "idol_name",
-        "idol_field",
-        "idol_bio",
-        "target_age",
-        "idol_milestones",
-        "user_age",
-        "user_background",
-        "user_achievements",
-    ],
 }
 
 
@@ -308,6 +237,19 @@ class PromptRenderError(Exception):
         super().__init__(
             f"PROMPT_PARAMS_MISSING: Prompt '{prompt_name}' missing required params: {missing_keys}"
         )
+
+
+_UNTRUSTED_OPEN = "<<<USER_INPUT"
+_UNTRUSTED_CLOSE = "USER_INPUT>>>"
+
+
+def sanitize_untrusted_input(text: str | None) -> str:
+    """Wrap untrusted user text in delimiters and neutralise any attempt to
+    break out of the block (so it can be safely embedded in an LLM prompt)."""
+    raw = "" if text is None else str(text)
+    neutralised = re.sub(r"[<>]{3,}", "…", raw)
+    neutralised = neutralised.replace("USER_INPUT", "user input")
+    return f"{_UNTRUSTED_OPEN}\n{neutralised}\n{_UNTRUSTED_CLOSE}"
 
 
 def get_prompts_dir() -> Path:

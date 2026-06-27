@@ -15,11 +15,106 @@ from app.models.user_achievement import UserAchievement
 from app.models.user import User
 from app.models.user_profile import UserProfile
 from app.services.planning.generator import generate_plan
+from app.services.transcripts import build_chat_history_json
 
 logger = logging.getLogger(__name__)
 
-MIN_PLAN_DETAIL_LESSON_WORDS = 500
-MIN_PLAN_DETAIL_MATERIAL_WORDS = 600
+# "Too thin -> retry" floors. These are LOWER bounds, aligned with the focused
+# word ceilings in plan_item_details.txt (lessons 250-550, materials 400-600).
+# The prompt was deliberately tightened to avoid truncation and padded filler, so
+# the floors sit at the bottom of those ranges rather than the old 500/600.
+MIN_PLAN_DETAIL_LESSON_WORDS = 250
+MIN_PLAN_DETAIL_MATERIAL_WORDS = 350
+
+
+def _blueprint_phase_for_week(week: int | None) -> str:
+    """Map a plan week number to its blueprint phase label.
+
+    The 12-week blueprint is split into four three-week phases. Used to thread
+    the right phase context into per-item detail generation. Defaults to the
+    Foundation phase when the week is unknown.
+    """
+    if week is None or week <= 3:
+        return "Weeks 1-3: Foundation"
+    if week <= 6:
+        return "Weeks 4-6: Core Skills"
+    if week <= 9:
+        return "Weeks 7-9: Applied Practice"
+    return "Weeks 10-12: Integration"
+
+
+async def _load_session_context(
+    db,
+    user_id: str | None = None,
+    idol_id: str | None = None,
+    session_id: str | None = None,
+) -> dict:
+    """Load agentic-session context (interview transcript, comparison verdict,
+    blueprint) so plan generation can build on what the user already revealed.
+
+    Resolution order:
+      1. ``session_id`` — the exact session the plan was generated from (set on
+         the job when the agentic flow triggers /plans/generate).
+      2. Fallback: the user's most recent ``IntakeSession`` for this idol, the
+         same way ``GET /plans/current`` resolves the active idol.
+
+    Returns an empty dict for legacy ``/plans`` jobs (no session resolvable), so
+    the plan path degrades gracefully to profile+gap analysis alone.
+
+    Keys returned (all optional) match the plan_generate.txt placeholders:
+    ``interview_transcript_json``, ``comparison_summary``, ``blueprint_markdown``.
+    """
+    if db is None:
+        return {}
+
+    from app.models.intake import IntakeSession
+    from app.models.chat import ChatThread
+
+    if session_id:
+        result = await db.execute(
+            select(IntakeSession).where(IntakeSession.id == session_id)
+        )
+    elif user_id and idol_id:
+        result = await db.execute(
+            select(IntakeSession)
+            .where(
+                IntakeSession.user_id == user_id,
+                IntakeSession.idol_id == idol_id,
+            )
+            .order_by(IntakeSession.created_at.desc())
+            .limit(1)
+        )
+    else:
+        return {}
+
+    session = result.scalar_one_or_none()
+    if session is None:
+        return {}
+
+    ctx: dict = {}
+
+    # Interview transcript is not a column — it lives as ChatMessage rows on the
+    # session's interview thread. Reconstruct it with the same helper the live
+    # SSE endpoints use, so user turns get the same untrusted-input wrapping.
+    if session.interview_thread_id:
+        thread_result = await db.execute(
+            select(ChatThread)
+            .options(selectinload(ChatThread.messages))
+            .where(ChatThread.id == session.interview_thread_id)
+        )
+        thread = thread_result.scalar_one_or_none()
+        if thread and thread.messages:
+            # Shared serializer; sanitize_user wraps user turns as untrusted DATA.
+            ctx["interview_transcript_json"] = build_chat_history_json(
+                thread.messages, sanitize_user=True
+            )
+
+    if session.comparison_output:
+        ctx["comparison_summary"] = session.comparison_output
+    if session.blueprint_output:
+        ctx["blueprint_markdown"] = session.blueprint_output
+
+    return ctx
 
 @celery_app.task(bind=True)
 def run_plan_generation(self, job_id: str) -> dict:
@@ -251,7 +346,28 @@ async def _run_plan_generation_async(job_id: str) -> dict:
                 user_goal = ", ".join(idol_profile.notable_themes[:3])
             elif idol.domain and idol.domain != "general":
                 user_goal = f"excellence in {idol.domain}"
-            
+
+            # Thread the agentic-session context (interview transcript, comparison
+            # verdict, blueprint) into the plan so it builds on what the user
+            # revealed instead of profile+gaps alone. Resolved via user+idol since
+            # the job carries no session_id. Best-effort: a failure here must not
+            # fail plan generation, which still works from the profile.
+            session_ctx: dict = {}
+            try:
+                session_ctx = await _load_session_context(
+                    db,
+                    user_id=job.user_id,
+                    idol_id=job.idol_id,
+                    session_id=job.session_id,
+                )
+                if session_ctx:
+                    logger.info(
+                        f"[PLANNING] Threaded session context into plan for job={job.id}: "
+                        f"{sorted(session_ctx.keys())}"
+                    )
+            except Exception as e:
+                logger.warning(f"[PLANNING] Could not load session context for job={job.id}: {e}")
+
             roadmap = await generate_plan(
                 idol_name=idol.name,
                 user_goal=user_goal,
@@ -269,6 +385,9 @@ async def _run_plan_generation_async(job_id: str) -> dict:
                 idol_milestones=[],
                 gaps=[],
                 readiness_by_gap={},
+                interview_transcript_json=session_ctx.get("interview_transcript_json", ""),
+                comparison_summary=session_ctx.get("comparison_summary", ""),
+                blueprint_markdown=session_ctx.get("blueprint_markdown", ""),
             )
             
             plan_items_data = roadmap.items
@@ -551,11 +670,11 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                     f"Retrying with stronger prompt."
                 )
                 retry_prompt = prompt + (
-                    "\n\nIMPORTANT: Your previous attempt produced content that was too brief. "
-                    "You MUST write at least 500 words for each step's lesson_content (800+ if the "
-                    "step claims 60+ minutes), and 600-1,000 words for each book/in_app_lesson "
-                    "material's content_markdown. Expand every section with real examples from "
-                    "the idol's life, detailed practice exercises, and concrete case studies."
+                    "\n\nIMPORTANT: Your previous attempt produced content that was too thin. "
+                    "Each step's lesson_content should be roughly 250-550 words, and each "
+                    "book/in_app_lesson material's content_markdown roughly 400-600 words. "
+                    "Strengthen thin sections with a real example from the idol's life and a "
+                    "concrete practice exercise — but stay within those ranges and do NOT pad."
                 )
                 retry_response = await client.generate_json(
                     system_prompt=system_prompt,

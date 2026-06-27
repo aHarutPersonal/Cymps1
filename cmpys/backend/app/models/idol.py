@@ -41,7 +41,11 @@ class Idol(Base, UUIDMixin, TimestampMixin):
     image_attribution_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     status: Mapped[CatalogStatus] = mapped_column(
-        SAEnum(CatalogStatus, name="catalog_status"),
+        SAEnum(
+            CatalogStatus,
+            name="catalog_status",
+            values_callable=lambda e: [x.value for x in e],
+        ),
         nullable=False,
         default=CatalogStatus.PENDING,
         index=True,

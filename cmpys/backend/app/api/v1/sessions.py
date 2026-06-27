@@ -15,9 +15,9 @@ import logging
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -42,7 +42,8 @@ from app.services.gemini import (
     stream_with_grounding,
 )
 from app.services.content_resources import attach_content_resources_to_materials
-from app.services.llm.prompt_loader import load_and_render
+from app.services.llm.prompt_loader import load_and_render, sanitize_untrusted_input
+from app.services.transcripts import build_chat_history_json
 
 logger = logging.getLogger("cmpys.api.sessions")
 
@@ -68,8 +69,8 @@ async def _get_session(
         select(IntakeSession)
         .options(
             selectinload(IntakeSession.idol),
-            selectinload(IntakeSession.idol).selectinload("profile"),
-            selectinload(IntakeSession.idol).selectinload("persona"),
+            selectinload(IntakeSession.idol).selectinload(Idol.profile),
+            selectinload(IntakeSession.idol).selectinload(Idol.persona),
         )
         .where(
             IntakeSession.id == session_id,
@@ -91,6 +92,56 @@ def _require_phase(session: IntakeSession, expected: SessionPhase) -> None:
             detail=f"Session is in phase '{session.phase.value}', "
                    f"expected '{expected.value}'",
         )
+
+
+_FALLBACK_IDOLS = [
+    ("Steve Jobs", "20th-21st century", ["technology", "design", "business"],
+     "Built world-changing products by pairing ruthless focus with obsessive design taste."),
+    ("Warren Buffett", "20th-21st century", ["business", "finance", "investing"],
+     "Compounded a fortune through patient, long-term value investing and disciplined temperament."),
+    ("Marie Curie", "19th-20th century", ["science", "research", "physics"],
+     "Pioneered radioactivity research through relentless curiosity and methodical rigor."),
+    ("Leonardo da Vinci", "Renaissance", ["art", "science", "engineering"],
+     "Fused art and science, mastering many fields through endless observation and notebooks."),
+    ("Ada Lovelace", "19th century", ["technology", "mathematics", "science"],
+     "Saw the creative potential of computing a century early through rigorous mathematical insight."),
+]
+
+
+def _fallback_idol_suggestions(interests: list[str]) -> list["IdolSuggestionItem"]:
+    """Curated mentor suggestions used when live generation is unavailable.
+    Ranks the pool by overlap with the user's interests, always returns 3."""
+    wanted = {i.lower() for i in (interests or [])}
+
+    def score(domains: list[str]) -> int:
+        return len({d.lower() for d in domains} & wanted)
+
+    ranked = sorted(_FALLBACK_IDOLS, key=lambda e: score(e[2]), reverse=True)
+    return [
+        IdolSuggestionItem(
+            name=name,
+            era=era,
+            relevance_summary=summary,
+            wikidata_id=None,
+            domains=domains,
+            confidence=0.4,
+        )
+        for name, era, domains, summary in ranked[:3]
+    ]
+
+
+async def _sync_interview_turn_count(session: IntakeSession, db) -> None:
+    """Set the session's interview turn count from the number of persisted
+    assistant messages in its thread — the durable source of truth, robust to
+    streams that drop before the counter was bumped.
+    """
+    result = await db.execute(
+        select(func.count(ChatMessage.id)).where(
+            ChatMessage.thread_id == session.interview_thread_id,
+            ChatMessage.role == MessageRole.ASSISTANT,
+        )
+    )
+    session.interview_turn_count = result.scalar_one()
 
 
 def _persona_to_dict(persona) -> dict:
@@ -118,10 +169,22 @@ def _build_session_response(session: IntakeSession) -> dict:
     """Build a session response dict from the model."""
     selected_idol = None
     if session.idol:
+        # Read the idol's era only if its profile relationship is already
+        # loaded — touching an unloaded relationship here would trigger an
+        # async lazy-load outside the greenlet (MissingGreenlet) right after a
+        # commit, e.g. for a freshly-created idol in select_idol.
+        era = None
+        try:
+            from sqlalchemy import inspect as sa_inspect
+            if "profile" not in sa_inspect(session.idol).unloaded:
+                profile = session.idol.profile
+                era = getattr(profile, "era_tags", None) if profile else None
+        except Exception:
+            era = None
         selected_idol = {
             "id": session.idol.id,
             "name": session.idol.name,
-            "era": getattr(session.idol.profile, "era_tags", None) if session.idol.profile else None,
+            "era": era,
         }
     return {
         "id": session.id,
@@ -140,14 +203,14 @@ def _build_session_response(session: IntakeSession) -> dict:
 
 
 def _build_chat_history_json(messages: list[ChatMessage]) -> str:
-    """Build a JSON string of chat history for prompt injection."""
-    history = []
-    for msg in messages:
-        history.append({
-            "role": msg.role.value,
-            "content": msg.content,
-        })
-    return json_lib.dumps(history, indent=2)
+    """Build a JSON string of chat history for prompt injection.
+
+    Delegates to the shared serializer with ``sanitize_user=True`` so
+    user-authored turns are wrapped with the untrusted-input delimiters (the
+    model treats them as DATA, not instructions) in interview / comparison /
+    blueprint generation. Assistant turns are model-generated and left as-is.
+    """
+    return build_chat_history_json(messages, sanitize_user=True)
 
 
 # =============================================================================
@@ -204,6 +267,27 @@ async def create_session(
     return _build_session_response(session)
 
 
+@router.post("/{session_id}/abandon", status_code=status.HTTP_204_NO_CONTENT)
+async def abandon_session(
+    session_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """
+    Abandon an in-progress session so the user can start a fresh one.
+
+    Terminal action from any phase: marks the session COMPLETED so it stops
+    being the user's "current" active session and `create_session` no longer
+    409s. Idempotent — abandoning an already-finished/absent session is a no-op.
+    """
+    session = await _get_session(session_id, current_user.id, db)
+    if session.phase != SessionPhase.COMPLETED:
+        # Bypass transition validation — abandon is terminal from any phase.
+        session.phase = SessionPhase.COMPLETED
+        await db.commit()
+        logger.info(f"[SESSION] Abandoned session {session_id}")
+
+
 # =============================================================================
 # T013: POST /sessions/{id}/suggest-idols - Get 3 idol suggestions
 # =============================================================================
@@ -231,36 +315,36 @@ async def suggest_idols(
         "user_interests_json": json_lib.dumps(session.user_interests),
     })
 
-    # Call Gemini with Google Search for factual grounding
-    full_response = ""
-    async for chunk in stream_with_grounding(
-        system_prompt="You are a mentor matching system. Return valid JSON only.",
-        user_message=prompt,
-    ):
-        full_response += chunk
-
-    # Parse the LLM response into structured suggestions
+    # Call Gemini with Google Search for factual grounding. Any failure
+    # (provider down, bad JSON) falls back to a curated set so the user is
+    # never left with an empty selection screen.
+    suggestions: list[IdolSuggestionItem] = []
     try:
+        full_response = ""
+        async for chunk in stream_with_grounding(
+            system_prompt="You are a mentor matching system. Return valid JSON only.",
+            user_message=prompt,
+        ):
+            full_response += chunk
+
         parsed = json_lib.loads(full_response)
         suggestions_raw = parsed.get("suggestions", [])
-    except json_lib.JSONDecodeError:
-        logger.error(f"[SESSION] Failed to parse idol suggestions: {full_response[:200]}")
-        raise HTTPException(
-            status_code=502,
-            detail="Failed to parse idol suggestions from AI",
-        )
+        suggestions = [
+            IdolSuggestionItem(
+                name=s.get("name", "Unknown"),
+                era=s.get("era", "Unknown"),
+                relevance_summary=s.get("relevance_summary", ""),
+                wikidata_id=s.get("wikidata_id"),
+                domains=s.get("domains", []),
+                confidence=s.get("confidence", 0.8),
+            )
+            for s in suggestions_raw[:3]
+        ]
+    except Exception as e:
+        logger.error(f"[SESSION] Idol suggestion generation failed ({e}); using fallback")
 
-    suggestions = [
-        IdolSuggestionItem(
-            name=s.get("name", "Unknown"),
-            era=s.get("era", "Unknown"),
-            relevance_summary=s.get("relevance_summary", ""),
-            wikidata_id=s.get("wikidata_id"),
-            domains=s.get("domains", []),
-            confidence=s.get("confidence", 0.8),
-        )
-        for s in suggestions_raw[:3]
-    ]
+    if len(suggestions) < 3:
+        suggestions = _fallback_idol_suggestions(session.user_interests or [])
 
     logger.info(f"[SESSION] Generated {len(suggestions)} idol suggestions for session {session_id}")
     return IdolSuggestionsResponse(suggestions=suggestions)
@@ -325,15 +409,20 @@ async def select_idol(
     session.idol_id = idol.id
     session.interview_thread_id = thread.id
     session.transition_to(SessionPhase.INTERVIEW)
+    session.idol = idol
 
+    # Build the response BEFORE committing. db.commit() expires every attribute
+    # (expire_on_commit), and re-reading them here in async context would
+    # trigger MissingGreenlet lazy-loads. The in-memory values are already
+    # correct, so snapshot them first, then persist.
+    response = _build_session_response(session)
     await db.commit()
-    await db.refresh(session, ["idol"])
 
     logger.info(
         f"[SESSION] Selected idol '{data.idol_name}' for session {session_id}, "
         f"thread {thread.id}"
     )
-    return _build_session_response(session)
+    return response
 
 
 # =============================================================================
@@ -341,25 +430,11 @@ async def select_idol(
 # =============================================================================
 
 
-@router.get("/{session_id}", response_model=SessionResponse)
-async def get_session(
-    session_id: str,
-    db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(get_current_user)],
-):
-    """
-    Get the current state of a session.
-
-    Used for polling, resume, and state display.
-    Returns full session data including phase, turn count, outputs.
-    """
-    session = await _get_session(session_id, current_user.id, db)
-    return _build_session_response(session)
-
-
 # =============================================================================
 # T022: GET /sessions/current - Get current active session
 # =============================================================================
+# NOTE: this MUST be declared before GET /{session_id} so the literal "current"
+# path is not captured by the dynamic session-id route.
 
 
 @router.get("/current", response_model=SessionResponse | None)
@@ -377,8 +452,8 @@ async def get_current_session(
         select(IntakeSession)
         .options(
             selectinload(IntakeSession.idol),
-            selectinload(IntakeSession.idol).selectinload("profile"),
-            selectinload(IntakeSession.idol).selectinload("persona"),
+            selectinload(IntakeSession.idol).selectinload(Idol.profile),
+            selectinload(IntakeSession.idol).selectinload(Idol.persona),
         )
         .where(
             IntakeSession.user_id == current_user.id,
@@ -394,6 +469,22 @@ async def get_current_session(
     if not session:
         return None
 
+    return _build_session_response(session)
+
+
+@router.get("/{session_id}", response_model=SessionResponse)
+async def get_session(
+    session_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """
+    Get the current state of a session.
+
+    Used for polling, resume, and state display.
+    Returns full session data including phase, turn count, outputs.
+    """
+    session = await _get_session(session_id, current_user.id, db)
     return _build_session_response(session)
 
 
@@ -450,47 +541,6 @@ async def interview(
     idol_persona = _persona_to_dict(idol_persona_obj)
     idol_persona_data = json_lib.dumps(idol_persona)
 
-    # On first turn, fetch idol facts via Google Search
-    if session.interview_turn_count == 0 and not session.idol_facts_json:
-        logger.info(f"[SESSION] Fetching idol facts for {idol_name} at age {session.user_age}")
-        facts_prompt = (
-            f"What had {idol_name} achieved by age {session.user_age}? "
-            f"List specific, verified accomplishments with dates. Return as JSON array."
-        )
-        facts_response = ""
-        async for chunk in stream_with_grounding(
-            system_prompt="You are a historical fact checker. Return accurate, sourced facts.",
-            user_message=facts_prompt,
-        ):
-            facts_response += chunk
-        session.idol_facts_json = {"raw_facts": facts_response}
-
-    # Load and render the system prompt (interview_system.xml)
-    system_prompt = load_and_render("interview_system.xml", {
-        "idol_name": idol_name,
-        "idol_era": idol_persona.get("era_context", "unknown"),
-        "idol_domain": ", ".join(idol_persona.get("topics_of_strength", [])),
-        "voice_style": idol_persona.get("voice_style", "authoritative"),
-        "signature_phrases": ", ".join(idol_persona.get("signature_phrases", [])),
-        "user_age": str(session.user_age),
-        "user_financial_status": session.user_financial_status or "",
-        "user_interests_json": json_lib.dumps(session.user_interests or []),
-        "chat_history_json": chat_history_json,
-    })
-
-    # Render the per-turn user prompt
-    user_prompt = load_and_render("interview_question.txt", {
-        "idol_name": idol_name,
-        "user_age": str(session.user_age),
-        "user_financial_status": session.user_financial_status or "",
-        "user_interests_json": json_lib.dumps(session.user_interests or []),
-        "chat_history_json": chat_history_json,
-        "turn_count": str(session.interview_turn_count + 1),
-        "max_turns": str(MAX_INTERVIEW_TURNS),
-        "idol_facts_json": json_lib.dumps(session.idol_facts_json or {}),
-        "user_message": data.content,
-    })
-
     # Determine if this should be the last turn
     current_turn = session.interview_turn_count + 1
     should_transition = current_turn >= MAX_INTERVIEW_TURNS
@@ -500,6 +550,64 @@ async def interview(
         full_response = ""
 
         try:
+            # Emit a byte immediately so the client sees the stream is alive
+            # before the (first-turn) Google-Search grounding, which can take
+            # several seconds. Without this the connection is silent and the app
+            # can give up before the first interview chunk arrives.
+            yield f"data: {json_lib.dumps({'type': 'status', 'message': 'thinking'})}\n\n"
+
+            # Render the system prompt (interview_system.xml) INSIDE the stream
+            # so any render error surfaces as an SSE error event rather than
+            # blocking the StreamingResponse from being returned.
+            system_prompt = load_and_render("interview_system.xml", {
+                "idol_name": idol_name,
+                "idol_era": idol_persona.get("era_context", "unknown"),
+                "idol_domain": ", ".join(idol_persona.get("topics_of_strength", [])),
+                "voice_style": idol_persona.get("voice_style", "authoritative"),
+                "signature_phrases": ", ".join(idol_persona.get("signature_phrases", [])),
+                "principles": "; ".join(idol_persona.get("principles", [])),
+                "dos": "; ".join(idol_persona.get("dos", [])),
+                "donts": "; ".join(idol_persona.get("donts", [])),
+                "lexicon_allow": ", ".join(idol_persona.get("lexicon_allow", [])),
+                "lexicon_ban": ", ".join(idol_persona.get("lexicon_ban", [])),
+                "taboo_topics": ", ".join(idol_persona.get("taboo_topics", [])),
+                "worldview_adapter_json": json_lib.dumps(idol_persona.get("worldview_adapter", {})),
+                "user_age": str(session.user_age),
+                "user_financial_status": session.user_financial_status or "",
+                "user_interests_json": json_lib.dumps(session.user_interests or []),
+                "chat_history_json": chat_history_json,
+            })
+
+            # On the first turn, fetch idol facts via Google Search — done
+            # INSIDE the stream so the SSE response starts immediately rather
+            # than blocking on grounding before the first byte.
+            if session.interview_turn_count == 0 and not session.idol_facts_json:
+                logger.info(f"[SESSION] Fetching idol facts for {idol_name} at age {session.user_age}")
+                facts_prompt = (
+                    f"What had {idol_name} achieved by age {session.user_age}? "
+                    f"List specific, verified accomplishments with dates. Return as JSON array."
+                )
+                facts_response = ""
+                async for chunk in stream_with_grounding(
+                    system_prompt="You are a historical fact checker. Return accurate, sourced facts.",
+                    user_message=facts_prompt,
+                ):
+                    facts_response += chunk
+                session.idol_facts_json = {"raw_facts": facts_response}
+
+            # Render the per-turn user prompt (depends on idol facts).
+            user_prompt = load_and_render("interview_question.txt", {
+                "idol_name": idol_name,
+                "user_age": str(session.user_age),
+                "user_financial_status": session.user_financial_status or "",
+                "user_interests_json": json_lib.dumps(session.user_interests or []),
+                "chat_history_json": chat_history_json,
+                "turn_count": str(current_turn),
+                "max_turns": str(MAX_INTERVIEW_TURNS),
+                "idol_facts_json": json_lib.dumps(session.idol_facts_json or {}),
+                "user_message": sanitize_untrusted_input(data.content),
+            })
+
             async for chunk in interview_stream(
                 system_prompt=system_prompt,
                 user_message=user_prompt,

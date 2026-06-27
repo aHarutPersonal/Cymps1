@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import 'design_tokens.dart';
 
 /// App theme configuration.
-/// V8: light paper CMPYS interface with coral, peach, and mint accents.
+/// CMPYS 2026: cool-paper canvas, vibrant-green accent, Plus Jakarta Sans body
+/// (Bricolage Grotesque display + JetBrains Mono labels live in AppTypography).
 abstract final class AppTheme {
   static ThemeData get light {
     return ThemeData(
@@ -23,7 +25,7 @@ abstract final class AppTheme {
         error: AppColors.error,
         onError: Colors.white,
       ),
-      fontFamily: 'Inter',
+      fontFamily: GoogleFonts.plusJakartaSans().fontFamily,
       textTheme: _textTheme,
       appBarTheme: _appBarTheme,
       cardTheme: _cardTheme,

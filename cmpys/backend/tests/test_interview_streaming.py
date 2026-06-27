@@ -1,0 +1,160 @@
+import pytest
+from fastapi.responses import StreamingResponse
+
+from app.api.v1 import sessions as sessions_api
+from app.models.chat import ChatThread
+from app.models.idol import Idol
+from app.models.intake import IntakeSession, SessionPhase
+from app.models.user import User
+from app.schemas.session import InterviewMessageRequest
+from app.services import gemini
+
+
+@pytest.mark.asyncio
+async def test_interview_stream_uses_provider_streaming(monkeypatch):
+    class ResponseChunk:
+        def __init__(self, text: str):
+            self.text = text
+
+    class FakeModels:
+        async def generate_content(self, **kwargs):
+            raise AssertionError("interview_stream should not wait for full content")
+
+        def generate_content_stream(self, **kwargs):
+            async def stream():
+                yield ResponseChunk("Hel")
+                yield ResponseChunk("lo")
+
+            return stream()
+
+    class FakeClient:
+        class Aio:
+            models = FakeModels()
+
+        aio = Aio()
+
+    monkeypatch.setattr(gemini, "_gemini_client", lambda: FakeClient())
+
+    chunks = [
+        chunk
+        async for chunk in gemini.interview_stream(
+            system_prompt="system",
+            user_message="question",
+        )
+    ]
+
+    assert chunks == ["Hel", "lo"]
+
+
+@pytest.mark.asyncio
+async def test_interview_stream_awaits_coroutine_provider_stream(monkeypatch):
+    class ResponseChunk:
+        def __init__(self, text: str):
+            self.text = text
+
+    class FakeModels:
+        async def generate_content_stream(self, **kwargs):
+            async def stream():
+                yield ResponseChunk("Async")
+                yield ResponseChunk(" stream")
+
+            return stream()
+
+    class FakeClient:
+        class Aio:
+            models = FakeModels()
+
+        aio = Aio()
+
+    monkeypatch.setattr(gemini, "_gemini_client", lambda: FakeClient())
+
+    chunks = [
+        chunk
+        async for chunk in gemini.interview_stream(
+            system_prompt="system",
+            user_message="question",
+        )
+    ]
+
+    assert chunks == ["Async", " stream"]
+
+
+@pytest.mark.asyncio
+async def test_interview_returns_sse_before_fetching_missing_idol_facts(monkeypatch):
+    session = IntakeSession(
+        id="session-1",
+        user_id="user-1",
+        phase=SessionPhase.INTERVIEW,
+        user_age=24,
+        user_financial_status="student",
+        user_interests=["Technology"],
+        interview_thread_id="thread-1",
+        interview_turn_count=0,
+        idol_facts_json=None,
+    )
+    session.idol = Idol(id="idol-1", name="Bill Gates", domain="technology")
+
+    thread = ChatThread(id="thread-1", user_id="user-1", idol_id="idol-1")
+    thread.messages = []
+
+    class FakeResult:
+        def scalar_one_or_none(self):
+            return thread
+
+        def scalar_one(self):
+            return 0
+
+    class FakeDb:
+        def add(self, item):
+            pass
+
+        async def flush(self):
+            pass
+
+        async def execute(self, stmt):
+            return FakeResult()
+
+    async def fake_get_session(session_id, user_id, db):
+        return session
+
+    async def forbidden_grounding(*args, **kwargs):
+        raise AssertionError("missing idol facts should not block SSE start")
+        yield ""
+
+    monkeypatch.setattr(sessions_api, "_get_session", fake_get_session)
+    monkeypatch.setattr(sessions_api, "stream_with_grounding", forbidden_grounding)
+
+    response = await sessions_api.interview(
+        session_id=session.id,
+        data=InterviewMessageRequest(content="I am a QA engineer"),
+        db=FakeDb(),
+        current_user=User(id="user-1", email="coder@example.com", password_hash="hash"),
+    )
+
+    assert isinstance(response, StreamingResponse)
+
+
+@pytest.mark.asyncio
+async def test_sync_interview_turn_count_uses_persisted_assistant_messages():
+    session = IntakeSession(
+        id="session-1",
+        user_id="user-1",
+        phase=SessionPhase.INTERVIEW,
+        user_age=24,
+        user_financial_status="student",
+        user_interests=["Technology"],
+        interview_thread_id="thread-1",
+        interview_turn_count=3,
+    )
+
+    class FakeResult:
+        def scalar_one(self):
+            return 1
+
+    class FakeDb:
+        async def execute(self, stmt):
+            return FakeResult()
+
+    await sessions_api._sync_interview_turn_count(session, FakeDb())
+
+    assert session.interview_turn_count == 1

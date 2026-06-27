@@ -25,9 +25,34 @@ User Context:
 ### User Readiness by Category
 {readiness_by_gap_json}
 
+## SESSION CONTEXT (from the diagnostic interview and blueprint)
+
+### Diagnostic Interview Transcript (what the user revealed about themselves)
+{interview_transcript_json}
+
+### Comparison Verdict (the age-matched reality check already delivered)
+{comparison_summary}
+
+### Strategic Blueprint (the committed 12-week arc this plan implements)
+{blueprint_markdown}
+
+If the session context above is non-empty, it is BINDING:
+- The blueprint defines the 12-week arc. Your weeks 1-3, 4-6, 7-9, and 10-12 MUST implement
+  the corresponding blueprint phases and work toward their stated milestones.
+- Reference specific interview answers when choosing and framing tasks — the user must
+  recognize themselves in this plan.
+- The gaps named in the comparison verdict are the priority targets for the earliest weeks.
+If the session context is empty, build the plan from the profile and gap analysis alone.
+
 ## YOUR OBJECTIVE
 
 Generate a highly effective, 12-week strategic plan that transforms this user toward the level of {idol_name}. The plan MUST be deeply rooted in {idol_name}'s actual domain, methods, and trajectory — NOT generic self-help advice.
+
+## CALIBRATE TO THE USER FIRST (READ BEFORE EVERYTHING BELOW)
+The idol's milestones define the DESTINATION; the User Context, Readiness data, and gap analysis define the STARTING LINE and the PACE. Before applying any rule below, anchor the plan to where THIS user actually is:
+- Set Week 1's difficulty to the user's current level, NOT the idol's peak. A beginner starts with fundamentals; do not open with idol-level challenges.
+- Every week's total effort MUST fit within {hours_per_week} hours. Do not exceed it — an over-stuffed plan the user abandons is a failed plan.
+- If the User Context is rich, the plan must visibly reflect it. Do not let the idol's achievements crowd out the user's real situation, constraints, and stated goal ({user_goal}).
 
 ## NON-NEGOTIABLE RULES
 
@@ -134,13 +159,15 @@ Use the User Context and Readiness data. Adapt difficulty to their level. If the
           "title": "Specific, measurable, domain-grounded task (mission type)",
           "description": "Detailed execution instructions. Name exact books, chapters, exercises, techniques.",
           "type": "project|course|reading",
-          "estimated_hours": 4
+          "estimated_hours": 4,
+          "success_metric": "A concrete, binary (done/not-done) outcome that proves the task is complete — name the exact deliverable and quantity, e.g. 'Written 2-page teardown of one company with revenue/margin trend and one thesis-breaking risk'. NEVER restate the title or write 'task completed'."
         },
         {
           "title": "Specific daily practice action",
           "description": "Brief description of the daily rhythm.",
           "type": "habit|practice",
           "estimated_hours": 0.5,
+          "success_metric": "The concrete weekly outcome of doing this habit, e.g. '5 daily Mr.-Market notes logged'. Binary and measurable — never 'task completed'.",
           "daily_instructions": "3-5 sentences (40-80 words) telling the user EXACTLY what to do today. Include: what to work on, how to approach it, and how to know you're done. This is their daily script — they should NOT need to open a detail view."
         }
       ],
@@ -150,4 +177,4 @@ Use the User Context and Readiness data. Adapt difficulty to their level. If the
   ]
 }
 
-IMPORTANT: Each week MUST have 2-3 primary mission tasks (project/course/reading) AND 1-2 daily rhythm tasks (habit/practice). Mission tasks: 2-8 hours each. Daily rhythm tasks: 20-45 min each with daily_instructions. Total estimated effort per week should match {hours_per_week} hours.
+IMPORTANT: Each week MUST have 2-3 primary mission tasks (project/course/reading) AND 1-2 daily rhythm tasks (habit/practice). Mission tasks: 2-8 hours each. Daily rhythm tasks: 20-45 min each with daily_instructions. Total estimated effort per week should match {hours_per_week} hours. EVERY task MUST include a `success_metric`: a concrete, binary, measurable completion criterion that names the deliverable — never a restatement of the title and never "task completed".

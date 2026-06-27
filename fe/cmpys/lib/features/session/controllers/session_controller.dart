@@ -172,7 +172,7 @@ class SessionController extends StateNotifier<SessionState> {
     }
   }
 
-  /// Select an idol and transition to interview phase.
+  /// Choose the mentor and transition to interview phase.
   Future<void> selectIdol(String idolName, {String? wikidataId}) async {
     final current = state;
     if (current is! SessionActive) return;

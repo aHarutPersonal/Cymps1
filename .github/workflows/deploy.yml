@@ -55,7 +55,7 @@ jobs:
           ECR_URL: ${{ secrets.ECR_URL }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          docker build -t $ECR_URL:$IMAGE_TAG -t $ECR_URL:latest cmpys/backend
+          docker build -f cmpys/backend/Dockerfile -t $ECR_URL:$IMAGE_TAG -t $ECR_URL:latest cmpys
           docker push $ECR_URL:$IMAGE_TAG
           docker push $ECR_URL:latest
 

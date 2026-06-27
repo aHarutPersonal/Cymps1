@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../app/env.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/storage/token_store.dart';
 import '../models/auth_models.dart';
@@ -160,15 +161,17 @@ class AuthRepository {
     return _tokenStore.hasValidToken();
   }
 
-  /// Save tokens from auth response.
+  /// Save tokens from auth response. Records the API base the tokens were
+  /// issued by so [TokenStore.ensureTokenBoundTo] can invalidate them if the
+  /// app later points at a different backend.
   Future<void> _saveTokens(AuthResponse response) async {
-    await _tokenStore.saveAccessToken(response.accessToken);
-    if (response.refreshToken != null) {
-      await _tokenStore.saveRefreshToken(response.refreshToken!);
-    }
-    if (response.expiresIn != null) {
-      final expiry = DateTime.now().add(Duration(seconds: response.expiresIn!));
-      await _tokenStore.saveTokenExpiry(expiry);
-    }
+    await _tokenStore.saveTokens(
+      accessToken: response.accessToken,
+      refreshToken: response.refreshToken,
+      expiry: response.expiresIn != null
+          ? DateTime.now().add(Duration(seconds: response.expiresIn!))
+          : null,
+      apiBase: Env.apiBaseUrl,
+    );
   }
 }

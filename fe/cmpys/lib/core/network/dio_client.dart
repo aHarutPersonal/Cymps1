@@ -105,15 +105,22 @@ class DioClient {
   );
 
   /// Error interceptor - maps DioException to typed errors and handles 401 Refresh.
+  ///
+  /// At most ONE refresh+retry per original request. Marker `_authRetried` on
+  /// the request options breaks the loop where refresh succeeds with a token
+  /// that still 401s (e.g. a refresh token from a different backend that the
+  /// server happens to accept but the access token it issues is unusable).
+  static const _retryMarker = '_authRetried';
+
   InterceptorsWrapper get _errorInterceptor => InterceptorsWrapper(
     onError: (error, handler) async {
-      // Handle 401 Unauthorized - Refresh Token Flow
-      if (error.response?.statusCode == 401) {
-        // Attempt to refresh token
+      final alreadyRetried = error.requestOptions.extra[_retryMarker] == true;
+
+      if (error.response?.statusCode == 401 && !alreadyRetried) {
         if (await _refreshToken()) {
-          // Retry original request with new token
           try {
             final options = error.requestOptions;
+            options.extra[_retryMarker] = true;
             final newToken = await _tokenStore.readAccessToken();
             if (newToken != null) {
               options.headers['Authorization'] = 'Bearer $newToken';
@@ -121,24 +128,24 @@ class DioClient {
 
             final response = await _dio.fetch(options);
             return handler.resolve(response);
-          } catch (e) {
-            // If retry fails, continue with original error
+          } catch (_) {
+            // Retry also failed; fall through to logout below.
           }
-        } else {
-          // Refresh failed - Clear session (Logout)
-          await _tokenStore.clear();
         }
+        // Refresh failed, or refresh succeeded but the retry still 401'd —
+        // either way the session is unrecoverable on this backend.
+        await _tokenStore.clear();
+      } else if (error.response?.statusCode == 401 && alreadyRetried) {
+        // Second 401 in the same request chain → don't try to refresh again.
+        await _tokenStore.clear();
       }
 
-      final apiError = _mapError(error);
-
-      // Create a new DioException with our typed error
       handler.reject(
         DioException(
           requestOptions: error.requestOptions,
           response: error.response,
           type: error.type,
-          error: apiError,
+          error: _mapError(error),
         ),
       );
     },

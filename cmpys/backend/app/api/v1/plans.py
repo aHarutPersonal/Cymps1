@@ -20,6 +20,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api.dependencies import get_current_user
 from app.core.db import get_db
+from app.models.intake import IntakeSession
 from app.models.item_detail_job import PlanItemDetailJob
 from app.models.plan import (
     Plan,
@@ -153,6 +154,7 @@ async def generate_plan_endpoint(
     job = PlanGenerationJob(
         user_id=current_user.id,
         idol_id=data.idolId,
+        session_id=data.sessionId,
         target_age=data.targetAge,
         duration_weeks=data.durationWeeks,
         weekly_hours=data.weeklyHours,
@@ -182,17 +184,42 @@ async def get_current_plan(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> PlanResponse | None:
     """
-    Get the user's most recent plan.
-    
+    Get the user's current plan — the plan for the idol they most recently
+    chose, NOT merely the globally-newest plan row.
+
+    Without scoping to the active idol, a user who onboarded with idol A
+    (producing plan A) and then switched to idol B would keep seeing plan A
+    until B's plan finishes generating — and worse, would keep seeing A even
+    though B is now their mentor. We resolve the current idol from the user's
+    most recent session and prefer that idol's newest plan. If that idol has no
+    plan yet, return None so the client shows "generating" / starts generation
+    rather than presenting a stale other-idol plan as current.
+
     LLM USAGE: NONE (database query only)
     """
+    # Resolve the user's current idol from their most recent session that has
+    # one selected (the agentic flow selects the idol mid-session).
+    latest_session_idol = (
+        await db.execute(
+            select(IntakeSession.idol_id)
+            .where(
+                IntakeSession.user_id == current_user.id,
+                IntakeSession.idol_id.isnot(None),
+            )
+            .order_by(IntakeSession.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
     stmt = (
         select(Plan)
         .options(selectinload(Plan.items), selectinload(Plan.idol))
         .where(Plan.user_id == current_user.id)
-        .order_by(Plan.created_at.desc())
-        .limit(1)
     )
+    if latest_session_idol is not None:
+        stmt = stmt.where(Plan.idol_id == latest_session_idol)
+    stmt = stmt.order_by(Plan.created_at.desc()).limit(1)
+
     result = await db.execute(stmt)
     plan = result.scalar_one_or_none()
     

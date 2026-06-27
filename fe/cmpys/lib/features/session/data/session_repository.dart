@@ -5,6 +5,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/network/api_error.dart';
 import '../../../core/network/dio_client.dart';
 import '../models/session_models.dart';
 
@@ -12,6 +13,56 @@ import '../models/session_models.dart';
 final sessionRepositoryProvider = Provider<SessionRepository>((ref) {
   return SessionRepository(dioClient: ref.watch(dioClientProvider));
 });
+
+/// The agentic-session flow refers to the repository by this name.
+typedef AgenticSessionRepository = SessionRepository;
+
+/// Thrown when an SSE stream ends without a terminal `done`/`error` event —
+/// i.e. the socket dropped mid-generation. Callers treat this as a failure and
+/// offer retry, so a truncated comparison/blueprint/interview is never shown
+/// or persisted as if it were complete.
+class SseIncompleteException implements Exception {
+  const SseIncompleteException();
+
+  @override
+  String toString() =>
+      'The response ended before it finished. Check your connection and try again.';
+}
+
+/// Robustly parse a raw SSE byte stream into `data:` JSON events.
+///
+/// Fixes two silent data-loss defects of a naive per-chunk parser:
+/// - **Split multibyte chars:** decodes UTF-8 *statefully* with
+///   `allowMalformed`, so an accented name / em-dash / emoji straddling a chunk
+///   boundary is reassembled instead of throwing and dropping the chunk.
+/// - **Split `data:` lines:** `LineSplitter` buffers a partial line across
+///   chunks, so a `data:` line split across TCP packets is reassembled rather
+///   than failing `jsonDecode` and vanishing.
+///
+/// Malformed `data:` payloads are skipped (logged), not fatal. Completion
+/// semantics are intentionally NOT enforced here — see [SessionRepository]'s
+/// completion guard — so this stays a pure, testable decoder.
+Stream<Map<String, dynamic>> parseSseEvents(Stream<List<int>> stream) async* {
+  // `.cast<List<int>>()` is essential: Dio hands back a Stream<Uint8List> and
+  // the Utf8Decoder transformer is typed for List<int>. Without the cast,
+  // `.transform` does a runtime type check of the transformer against
+  // StreamTransformer<Uint8List, …> and throws "Utf8Decoder is not a subtype".
+  final lines = stream
+      .cast<List<int>>()
+      .transform(const Utf8Decoder(allowMalformed: true))
+      .transform(const LineSplitter());
+
+  await for (final line in lines) {
+    if (!line.startsWith('data:')) continue;
+    final jsonStr = line.substring(5).trim();
+    if (jsonStr.isEmpty) continue;
+    try {
+      yield jsonDecode(jsonStr) as Map<String, dynamic>;
+    } catch (e) {
+      debugPrint('⚠️ Failed to parse SSE event: $e');
+    }
+  }
+}
 
 /// Repository for the 5-phase agentic session workflow.
 ///
@@ -24,6 +75,41 @@ class SessionRepository {
   SessionRepository({required DioClient dioClient}) : _dioClient = dioClient;
 
   final DioClient _dioClient;
+
+  /// POST a request that streams its response (SSE), routed through the shared
+  /// authenticated Dio so it gets the Bearer token AND the refresh-on-401
+  /// interceptor — a fresh Dio would 401 the moment the access token expired
+  /// mid-session (e.g. between select-idol and the interview) with no way to
+  /// recover.
+  Future<Response<dynamic>> _streamPost(
+    String path,
+    Object data,
+  ) {
+    return _dioClient.dio.post(
+      path,
+      data: data,
+      options: Options(
+        responseType: ResponseType.stream,
+        headers: {'Accept': 'text/event-stream'},
+      ),
+    );
+  }
+
+  /// Wrap [parseSseEvents] with a completion guard: if the stream ends without
+  /// a terminal `done`/`error` event (socket dropped mid-generation), throw
+  /// [SseIncompleteException] so the caller retries and never treats a
+  /// truncated comparison/blueprint/interview as final.
+  Stream<Map<String, dynamic>> _sseWithCompletion(
+    Stream<List<int>> stream,
+  ) async* {
+    var sawTerminal = false;
+    await for (final event in parseSseEvents(stream)) {
+      final type = event['type'];
+      if (type == 'done' || type == 'error') sawTerminal = true;
+      yield event;
+    }
+    if (!sawTerminal) throw const SseIncompleteException();
+  }
 
   // ===========================================================================
   // Session Lifecycle
@@ -52,23 +138,51 @@ class SessionRepository {
 
   /// Get the user's current active (non-completed) session.
   ///
-  /// Returns null if no active session exists.
+  /// Returns null ONLY when the server authoritatively says there is no active
+  /// session (200 with a null body, or 404). A transient failure (5xx, network)
+  /// is re-thrown rather than masked as "no session" — otherwise a hiccup is
+  /// indistinguishable from a real absence, and a caller that reconciles local
+  /// state could wrongly treat a blip as "the user has nothing" and drop their
+  /// mentor/results. Callers that just want best-effort hydration already wrap
+  /// this in try/catch and keep their existing state on throw.
   Future<Session?> getCurrentSession() async {
     debugPrint('🔍 Checking for active session');
 
     try {
       final response = await _dioClient.get('/sessions/current');
-
       if (response.data == null) {
         debugPrint('🔍 No active session');
         return null;
       }
-
       debugPrint('🔍 Active session found');
       return Session.fromJson(response.data as Map<String, dynamic>);
+    } on ApiError catch (e) {
+      if (e.statusCode == 404) {
+        debugPrint('🔍 No active session (404)');
+        return null;
+      }
+      // Ambiguous failure — do not pretend the user has no session.
+      debugPrint('🔍 /sessions/current failed transiently: ${e.message}');
+      rethrow;
+    }
+  }
+
+  /// Get the user's latest resumable session (most recent non-completed).
+  /// Alias over [getCurrentSession] — the backend's `/sessions/current`
+  /// already returns the newest non-completed session.
+  Future<Session?> getLatestSession() => getCurrentSession();
+
+  /// Abandon the user's current in-progress session so a fresh one can start.
+  /// Best-effort: the backend rejects a second active session, so we clear the
+  /// current one server-side when the endpoint is available and ignore the
+  /// absence of one (older backends supersede on next create).
+  Future<void> abandonCurrentSession() async {
+    final session = await getCurrentSession();
+    if (session == null) return;
+    try {
+      await _dioClient.post('/sessions/${session.id}/abandon');
     } catch (e) {
-      debugPrint('🔍 No active session (error: $e)');
-      return null;
+      debugPrint('🗑️ abandonCurrentSession best-effort: $e');
     }
   }
 
@@ -93,7 +207,7 @@ class SessionRepository {
         .toList();
   }
 
-  /// Select an idol for the session.
+  /// Choose the mentor for the session.
   ///
   /// Transitions session to 'interview' phase.
   Future<Session> selectIdol(
@@ -127,44 +241,14 @@ class SessionRepository {
   ) async* {
     debugPrint('💬 Sending interview message to session $sessionId');
 
-    final dio = Dio(
-      BaseOptions(
-        baseUrl: _dioClient.baseUrl,
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'text/event-stream',
-        },
-        responseType: ResponseType.stream,
-      ),
-    );
-
-    // Inject auth token
-    final token = await _dioClient.getAuthToken();
-    if (token != null) {
-      dio.options.headers['Authorization'] = 'Bearer $token';
-    }
-
-    final response = await dio.post(
+    final response = await _streamPost(
       '/sessions/$sessionId/interview',
-      data: {'content': content},
+      {'content': content},
     );
 
     final stream = response.data.stream as Stream<List<int>>;
 
-    await for (final chunk in stream) {
-      final text = utf8.decode(chunk);
-      for (final line in text.split('\n')) {
-        if (line.startsWith('data: ')) {
-          try {
-            final jsonStr = line.substring(6);
-            final event = jsonDecode(jsonStr) as Map<String, dynamic>;
-            yield event;
-          } catch (e) {
-            debugPrint('⚠️ Failed to parse SSE event: $e');
-          }
-        }
-      }
-    }
+    yield* _sseWithCompletion(stream);
   }
 
   // ===========================================================================
@@ -180,40 +264,14 @@ class SessionRepository {
   Stream<Map<String, dynamic>> generateResults(String sessionId) async* {
     debugPrint('🔥 Starting results generation for session $sessionId');
 
-    final dio = Dio(
-      BaseOptions(
-        baseUrl: _dioClient.baseUrl,
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'text/event-stream',
-        },
-        responseType: ResponseType.stream,
-      ),
+    final response = await _streamPost(
+      '/sessions/$sessionId/generate-results',
+      const <String, dynamic>{},
     );
-
-    final token = await _dioClient.getAuthToken();
-    if (token != null) {
-      dio.options.headers['Authorization'] = 'Bearer $token';
-    }
-
-    final response = await dio.post('/sessions/$sessionId/generate-results');
 
     final stream = response.data.stream as Stream<List<int>>;
 
-    await for (final chunk in stream) {
-      final text = utf8.decode(chunk);
-      for (final line in text.split('\n')) {
-        if (line.startsWith('data: ')) {
-          try {
-            final jsonStr = line.substring(6);
-            final event = jsonDecode(jsonStr) as Map<String, dynamic>;
-            yield event;
-          } catch (e) {
-            debugPrint('⚠️ Failed to parse SSE event: $e');
-          }
-        }
-      }
-    }
+    yield* _sseWithCompletion(stream);
   }
 
   // ===========================================================================
@@ -258,42 +316,13 @@ class SessionRepository {
   ) async* {
     debugPrint('🎓 Sending guided learning message to session $sessionId');
 
-    final dio = Dio(
-      BaseOptions(
-        baseUrl: _dioClient.baseUrl,
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'text/event-stream',
-        },
-        responseType: ResponseType.stream,
-      ),
-    );
-
-    final token = await _dioClient.getAuthToken();
-    if (token != null) {
-      dio.options.headers['Authorization'] = 'Bearer $token';
-    }
-
-    final response = await dio.post(
+    final response = await _streamPost(
       '/sessions/$sessionId/guided-learning',
-      data: {'content': content},
+      {'content': content},
     );
 
     final stream = response.data.stream as Stream<List<int>>;
 
-    await for (final chunk in stream) {
-      final text = utf8.decode(chunk);
-      for (final line in text.split('\n')) {
-        if (line.startsWith('data: ')) {
-          try {
-            final jsonStr = line.substring(6);
-            final event = jsonDecode(jsonStr) as Map<String, dynamic>;
-            yield event;
-          } catch (e) {
-            debugPrint('⚠️ Failed to parse SSE event: $e');
-          }
-        }
-      }
-    }
+    yield* _sseWithCompletion(stream);
   }
 }

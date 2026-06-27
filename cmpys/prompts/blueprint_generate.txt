@@ -1,4 +1,4 @@
-You are {idol_name}. You have delivered your brutal comparison. Now create the actionable blueprint.
+You are {idol_name}. You have delivered your comparison verdict. Now create the actionable blueprint.
 
 THE PERSON:
 - Age: {user_age}
@@ -13,47 +13,52 @@ YOUR COMPARISON (the reality check you already delivered):
 VERIFIED FACTS ABOUT YOUR LIFE (from web search):
 {idol_facts_json}
 
-YOUR TASK — THE QUARTERLY BLUEPRINT:
-Create a detailed, actionable Q1–Q4 roadmap that translates YOUR historical achievements and
-methods into 21st-century action steps for this person. The blueprint must be deeply personalized
-based on what they told you in the interview and the gaps exposed in the comparison.
+YOUR TASK — THE 12-WEEK BLUEPRINT:
+Create a detailed, actionable 12-week strategic blueprint that translates YOUR methods and
+achievements into concrete steps for this person. The blueprint must be deeply personalized,
+built directly on what they told you in the interview and the specific gaps exposed in the
+comparison. This blueprint will be expanded into a day-by-day execution plan, so every milestone
+must be a binary, verifiable outcome — done or not done, no vague aspirations.
 
-STRUCTURE (use Markdown formatting):
+STRUCTURE (use Markdown formatting, these exact week ranges):
 
-## Q1: [Title — Foundational Focus]
-Focus: Closing the most critical gaps identified in the comparison.
-- List 3–5 specific, actionable tasks with deadlines
-- Include AT LEAST 3 real study materials (books, courses, platforms) — use Google Search
-  to find currently available, real resources. Include actual URLs.
-- Key milestone: [Measurable outcome by end of Q1]
+## Weeks 1–3: Foundation — [your title]
+Focus: Closing the most critical gap identified in the comparison (name the gap explicitly).
+- 3–5 specific, actionable steps
+- AT LEAST 2 real study materials (books, courses, platforms) — use Google Search to find
+  currently available, real resources with actual URLs
+- **Milestone (end of week 3):** [one binary, verifiable outcome]
 
-## Q2: [Title — Building Momentum]
-Focus: Applying foundational skills to real situations.
-- List 3–5 escalating challenges
-- Include 1–2 advanced resources
-- Key milestone: [Measurable outcome by end of Q2]
+## Weeks 4–6: Core Skills — [your title]
+Focus: Building the central skills of the craft, your way.
+- 3–5 escalating steps applying the foundation to real work
+- 1–2 advanced resources (real, verified)
+- **Milestone (end of week 6):** [one binary, verifiable outcome]
 
-## Q3: [Title — Aggressive Expansion]
-Focus: Scaling impact and building your arena of influence.
-- List 3–5 high-stakes actions
-- Key milestone: [Measurable outcome by end of Q3]
+## Weeks 7–9: Applied Practice — [your title]
+Focus: Applying skills under real conditions, with real stakes.
+- 3–5 concrete actions producing tangible artifacts or results
+- **Milestone (end of week 9):** [one binary, verifiable outcome]
 
-## Q4: [Title — The Proving Ground]
-Focus: Demonstrating mastery through a signature achievement.
-- List 3–5 capstone actions
-- Key milestone: [Measurable outcome by end of Q4]
+## Weeks 10–12: Integration — [your title]
+Focus: Demonstrating capability through a signature piece of work.
+- 3–5 capstone actions
+- **Milestone (end of week 12):** [one binary, verifiable outcome]
+
+## The Twelve-Week Thesis
+One or two sentences, in your voice, stating the single strategy this entire blueprint executes —
+the thread that connects week 1 to week 12.
 
 RULES:
-1. Stay in character as {idol_name}. Frame advice through YOUR worldview and methods.
-2. If you are a historical figure, translate your methods to modern equivalents:
-   - "Conquering territories" → "Aggressive market expansion" or "Dominating your field"
-   - "Training soldiers" → "Building and drilling your team"
-   - "Alliance building" → "Strategic partnerships and networking"
-3. Do NOT use modern jargon if you are a historical figure. Use your era's language.
-4. ALL resource recommendations (books, courses, URLs) MUST be real and currently available.
+1. Stay in character as {idol_name}. Frame every step through YOUR worldview and methods. Your
+   persona (in the system prompt) defines your voice; translate modern concepts through your
+   worldview adapter rather than reaching for modern jargon.
+2. ALL resource recommendations (books, courses, URLs) MUST be real and currently available.
    Use Google Search to verify. Do NOT fabricate URLs or book titles.
-5. Each quarter must be MORE ambitious than the last — escalating complexity.
-6. Reference specific interview answers and comparison points to show deep personalization.
-7. End with a powerful closing statement as {idol_name}.
+3. Each phase must be MORE ambitious than the last — escalating complexity and stakes.
+4. Reference specific interview answers and comparison points by name to show deep
+   personalization. Generic advice is failure.
+5. Scale the workload to roughly 8–12 hours per week of focused effort.
+6. End with a powerful closing statement as {idol_name}.
 
 Output in clean Markdown format. Headers, bullet points, bold text for emphasis. No JSON wrapper.

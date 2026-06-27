@@ -34,6 +34,7 @@ class TokenStore {
   static const _keyRefreshToken = 'cmpys_refresh_token';
   static const _keyTokenExpiry = 'cmpys_token_expiry';
   static const _keyUserId = 'cmpys_user_id';
+  static const _keyTokenApiBase = 'cmpys_token_api_base';
 
   bool get _usePrefs {
     if (kIsWeb) return true;
@@ -155,6 +156,7 @@ class TokenStore {
     required String accessToken,
     String? refreshToken,
     DateTime? expiry,
+    String? apiBase,
   }) async {
     await saveAccessToken(accessToken);
     if (refreshToken != null) {
@@ -162,6 +164,25 @@ class TokenStore {
     }
     if (expiry != null) {
       await saveTokenExpiry(expiry);
+    }
+    if (apiBase != null) {
+      await _write(_keyTokenApiBase, apiBase);
+    }
+  }
+
+  /// Invalidate stored tokens if they were issued by a different API base than
+  /// `currentApiBase`. Prevents the cross-environment auth loop where a token
+  /// from a local backend (different JWT secret) keeps 401'ing prod and never
+  /// gets cleaned up.
+  ///
+  /// An unbound token (saved before this guard existed, or written by an
+  /// older app version) is treated as untrusted and wiped — better one
+  /// re-login than a loop nobody can recover from.
+  Future<void> ensureTokenBoundTo(String currentApiBase) async {
+    final saved = await _read(_keyTokenApiBase);
+    if (saved != currentApiBase) {
+      await clear();
+      await _write(_keyTokenApiBase, currentApiBase);
     }
   }
 
@@ -191,6 +212,7 @@ class TokenStore {
       _delete(_keyRefreshToken),
       _delete(_keyTokenExpiry),
       _delete(_keyUserId),
+      _delete(_keyTokenApiBase),
     ]);
   }
 

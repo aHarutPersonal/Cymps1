@@ -28,7 +28,7 @@ Return JSON EXACTLY matching this schema:
       "canonical_description": "string",
       "date": "YYYY-MM-DD|null",
       "date_precision": "day|month|year|unknown",
-      "age_at_event": 0,
+      "age_at_event": "<integer, or null when it cannot be computed — see AGE COMPUTATION RULES>",
       "category": "career|learning|finance|impact|mindset|other",
       "importance_score": 0.0,
       "confidence": 0.0,
@@ -140,4 +140,4 @@ Before outputting:
 - Remove duplicates not merged.
 - Ensure each item has category in allowed set and evidence length >= 1.
 - Ensure JSON schema is respected.
-- If age_at_event cannot be computed, set it to null (even though schema example shows 0).
+- If age_at_event cannot be computed, set it to null (do NOT default it to 0 or any guessed number).

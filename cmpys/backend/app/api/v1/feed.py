@@ -134,6 +134,19 @@ async def _generate_and_persist(
             return []
 
         parsed = response.data
+        # The model may return a bare list, or wrap it in an object
+        # ({"items": [...]}, {"posts": [...]}, …). Normalise to a list of dicts
+        # so iterating never yields dict keys (strings) → 'str' has no .get.
+        if isinstance(parsed, dict):
+            for key in ("items", "posts", "feed", "quotes", "data"):
+                if isinstance(parsed.get(key), list):
+                    parsed = parsed[key]
+                    break
+            else:
+                parsed = []
+        if not isinstance(parsed, list):
+            parsed = []
+
         saved_posts: list[FeedPost] = []
         video_posts_needing_urls: list[tuple[FeedPost, str]] = []  # (post, search_query)
 
@@ -142,6 +155,8 @@ async def _generate_and_persist(
         valid_items = []
         hashes = []
         for item in parsed:
+            if not isinstance(item, dict):
+                continue
             item_type = item.get("type", "")
             if item_type not in ("quote", "video", "motivation"):
                 continue

@@ -31,3 +31,15 @@ ios/Flutter/flutter_export_environment.sh
 cmpys/backend/.venv/
 fe/cmpys/build/
 fe/cmpys/.dart_tool/
+
+# Agent tooling
+.agents/
+.jules/
+.superpowers/
+skills-lock.json
+ruvector.db
+*.db
+
+# Logs
+*.log
+logs/
