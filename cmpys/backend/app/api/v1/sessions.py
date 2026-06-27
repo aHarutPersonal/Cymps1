@@ -26,6 +26,7 @@ from app.core.db import get_db
 from app.models.chat import ChatThread, ChatMessage, MessageRole
 from app.models.idol import Idol
 from app.models.intake import IntakeSession, SessionPhase
+from app.models.plan_job import PlanGenerationJob
 from app.models.user import User
 from app.schemas.session import (
     IdolSuggestionItem,
@@ -803,6 +804,39 @@ async def generate_results(
             await db.commit()
             yield f"data: {json_lib.dumps({'type': 'error', 'section': 'blueprint', 'message': f'Blueprint generation failed. You can retry. Error: {str(e)}', 'retryable': True})}\n\n"
             return
+
+        # =====================================================================
+        # Part 3: Kick off 12-week plan generation
+        # =====================================================================
+        # The blueprint is the committed arc; the plan is what *implements* it as
+        # day-by-day tasks. Enqueue generation now and hand the client the job id
+        # via a `plan_job` event so it can poll while the user reads the
+        # blueprint — otherwise no plan is ever produced and the Plan tab shows
+        # only the seeded demo. Best-effort: a failure here must not fail the
+        # already-succeeded results stream, so we log and still emit `done`.
+        if session.idol_id:
+            try:
+                plan_job = PlanGenerationJob(
+                    user_id=current_user.id,
+                    idol_id=session.idol_id,
+                    session_id=session.id,
+                    target_age=session.user_age or 24,
+                    duration_weeks=12,
+                    weekly_hours=10,
+                    status="pending",
+                    progress_percent=0,
+                    step="analyzing_gaps",
+                )
+                db.add(plan_job)
+                await db.commit()
+                await db.refresh(plan_job)
+
+                from app.tasks.plans import run_plan_generation
+                run_plan_generation.delay(str(plan_job.id))
+
+                yield f"data: {json_lib.dumps({'type': 'plan_job', 'job_id': str(plan_job.id)})}\n\n"
+            except Exception as e:
+                logger.error(f"[SESSION] Failed to enqueue plan generation: {e}")
 
         # Final done event
         yield f"data: {json_lib.dumps({'type': 'done', 'phase': 'completed'})}\n\n"
