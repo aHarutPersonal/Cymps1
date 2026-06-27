@@ -66,8 +66,23 @@ jobs:
           SERVER_IP: ${{ secrets.SERVER_IP }}
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
-          echo "$SSH_PRIVATE_KEY" > /tmp/deploy_key
+          # Write the key robustly. `echo` plus a secret that has CRLF endings or
+          # no trailing newline yields a key OpenSSH can't parse ("error in
+          # libcrypto"). printf preserves the body, sed strips stray CRs, and the
+          # format guarantees a trailing newline.
+          umask 077
+          printf '%s\n' "$SSH_PRIVATE_KEY" | sed 's/\r$//' > /tmp/deploy_key
           chmod 600 /tmp/deploy_key
+
+          # Fail fast with a clear message if the key itself is malformed, so we
+          # don't get an opaque "Permission denied (publickey)" downstream. If
+          # this passes but SSH is still denied, the key is valid and the issue
+          # is the matching public key missing from the server's authorized_keys.
+          if ! ssh-keygen -y -f /tmp/deploy_key > /dev/null 2>&1; then
+            echo "::error::SSH_PRIVATE_KEY is not a valid OpenSSH private key. Re-add the secret with the full key body and a trailing newline (no CRLF)."
+            rm -f /tmp/deploy_key
+            exit 1
+          fi
 
           # Copy updated compose file and deploy script to server
           scp -i /tmp/deploy_key -o StrictHostKeyChecking=no \
