@@ -43,7 +43,12 @@ class SseIncompleteException implements Exception {
 /// semantics are intentionally NOT enforced here — see [SessionRepository]'s
 /// completion guard — so this stays a pure, testable decoder.
 Stream<Map<String, dynamic>> parseSseEvents(Stream<List<int>> stream) async* {
+  // `.cast<List<int>>()` is essential: Dio hands back a Stream<Uint8List> and
+  // the Utf8Decoder transformer is typed for List<int>. Without the cast,
+  // `.transform` does a runtime type check of the transformer against
+  // StreamTransformer<Uint8List, …> and throws "Utf8Decoder is not a subtype".
   final lines = stream
+      .cast<List<int>>()
       .transform(const Utf8Decoder(allowMalformed: true))
       .transform(const LineSplitter());
 

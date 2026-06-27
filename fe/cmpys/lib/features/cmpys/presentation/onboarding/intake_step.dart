@@ -181,6 +181,7 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
       if (transition) _advance();
     } catch (e) {
       if (!mounted) return;
+      debugPrint('💥 interview send failed: $e');
       setState(() {
         _typing = false;
         _streaming = false;
