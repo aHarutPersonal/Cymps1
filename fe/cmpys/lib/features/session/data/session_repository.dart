@@ -76,6 +76,25 @@ class SessionRepository {
 
   final DioClient _dioClient;
 
+  /// POST a request that streams its response (SSE), routed through the shared
+  /// authenticated Dio so it gets the Bearer token AND the refresh-on-401
+  /// interceptor — a fresh Dio would 401 the moment the access token expired
+  /// mid-session (e.g. between select-idol and the interview) with no way to
+  /// recover.
+  Future<Response<dynamic>> _streamPost(
+    String path,
+    Object data,
+  ) {
+    return _dioClient.dio.post(
+      path,
+      data: data,
+      options: Options(
+        responseType: ResponseType.stream,
+        headers: {'Accept': 'text/event-stream'},
+      ),
+    );
+  }
+
   /// Wrap [parseSseEvents] with a completion guard: if the stream ends without
   /// a terminal `done`/`error` event (socket dropped mid-generation), throw
   /// [SseIncompleteException] so the caller retries and never treats a
@@ -222,26 +241,9 @@ class SessionRepository {
   ) async* {
     debugPrint('💬 Sending interview message to session $sessionId');
 
-    final dio = Dio(
-      BaseOptions(
-        baseUrl: _dioClient.baseUrl,
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'text/event-stream',
-        },
-        responseType: ResponseType.stream,
-      ),
-    );
-
-    // Inject auth token
-    final token = await _dioClient.getAuthToken();
-    if (token != null) {
-      dio.options.headers['Authorization'] = 'Bearer $token';
-    }
-
-    final response = await dio.post(
+    final response = await _streamPost(
       '/sessions/$sessionId/interview',
-      data: {'content': content},
+      {'content': content},
     );
 
     final stream = response.data.stream as Stream<List<int>>;
@@ -262,23 +264,10 @@ class SessionRepository {
   Stream<Map<String, dynamic>> generateResults(String sessionId) async* {
     debugPrint('🔥 Starting results generation for session $sessionId');
 
-    final dio = Dio(
-      BaseOptions(
-        baseUrl: _dioClient.baseUrl,
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'text/event-stream',
-        },
-        responseType: ResponseType.stream,
-      ),
+    final response = await _streamPost(
+      '/sessions/$sessionId/generate-results',
+      const <String, dynamic>{},
     );
-
-    final token = await _dioClient.getAuthToken();
-    if (token != null) {
-      dio.options.headers['Authorization'] = 'Bearer $token';
-    }
-
-    final response = await dio.post('/sessions/$sessionId/generate-results');
 
     final stream = response.data.stream as Stream<List<int>>;
 
@@ -327,25 +316,9 @@ class SessionRepository {
   ) async* {
     debugPrint('🎓 Sending guided learning message to session $sessionId');
 
-    final dio = Dio(
-      BaseOptions(
-        baseUrl: _dioClient.baseUrl,
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'text/event-stream',
-        },
-        responseType: ResponseType.stream,
-      ),
-    );
-
-    final token = await _dioClient.getAuthToken();
-    if (token != null) {
-      dio.options.headers['Authorization'] = 'Bearer $token';
-    }
-
-    final response = await dio.post(
+    final response = await _streamPost(
       '/sessions/$sessionId/guided-learning',
-      data: {'content': content},
+      {'content': content},
     );
 
     final stream = response.data.stream as Stream<List<int>>;
