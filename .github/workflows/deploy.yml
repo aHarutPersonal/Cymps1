@@ -50,14 +50,25 @@ jobs:
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build and push image
         env:
           ECR_URL: ${{ secrets.ECR_URL }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          docker build -f cmpys/backend/Dockerfile -t $ECR_URL:$IMAGE_TAG -t $ECR_URL:latest cmpys
-          docker push $ECR_URL:$IMAGE_TAG
-          docker push $ECR_URL:latest
+          # The EC2 host is arm64 (Graviton) but the runner is amd64. Build for
+          # the target platform via buildx+QEMU, otherwise the image fails on the
+          # server with "exec format error". buildx --push builds and pushes in
+          # one step (a cross-platform image can't be `docker push`ed normally).
+          docker buildx build --platform linux/arm64 \
+            -f cmpys/backend/Dockerfile \
+            -t $ECR_URL:$IMAGE_TAG -t $ECR_URL:latest \
+            --push cmpys
 
       - name: Deploy to EC2
         env:
