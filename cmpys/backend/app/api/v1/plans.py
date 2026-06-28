@@ -26,6 +26,7 @@ from app.models.plan import (
     Plan,
     PlanItem,
     PlanItemStatus,
+    PlanItemType,
     PlanItemCompletion,
     PlanItemStepCompletion,
 )
@@ -54,6 +55,20 @@ from app.schemas.idol import IdolImportResponse
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/plans", tags=["plans"])
+
+MISSION_TYPES = {PlanItemType.PROJECT, PlanItemType.COURSE, PlanItemType.READING}
+
+
+def _count_remaining_missions(items, completed_item_ids: set[str]) -> int:
+    """Number of mission tasks (project/course/reading) not yet completed.
+
+    Daily rhythm items (habit/practice) never gate plan completion.
+    """
+    return sum(
+        1
+        for it in items
+        if it.type in MISSION_TYPES and str(it.id) not in completed_item_ids
+    )
 
 
 def _item_to_response(item: PlanItem) -> PlanItemResponse:
@@ -681,13 +696,46 @@ async def toggle_item_complete(
                     db.add(step_completion)
     
     await db.commit()
-    
+
     # Recompute progress
     progress, _ = await _compute_item_progress(db, current_user.id, item)
-    
+
+    # Completion detection: count remaining mission tasks across the plan.
+    items_stmt = select(PlanItem).where(PlanItem.plan_id == item.plan_id)
+    items = (await db.execute(items_stmt)).scalars().all()
+    comp_stmt = select(PlanItemCompletion.plan_item_id).where(
+        PlanItemCompletion.user_id == current_user.id,
+        PlanItemCompletion.completed_at.isnot(None),
+        PlanItemCompletion.plan_item_id.in_([str(i.id) for i in items]),
+    )
+    completed_ids = {str(r) for r in (await db.execute(comp_stmt)).scalars().all()}
+    has_missions = any(i.type in MISSION_TYPES for i in items)
+    remaining = _count_remaining_missions(items, completed_ids)
+
+    plan = await db.get(Plan, item.plan_id)
+    plan_complete = False
+    if has_missions and remaining == 0:
+        if plan and plan.completed_at is None:
+            plan.completed_at = datetime.now(timezone.utc)
+            await db.commit()
+        plan_complete = True
+    elif plan and plan.completed_at is not None and plan.previous_plan_id is None:
+        # Re-opened before any next cycle exists: only clear if THIS plan was
+        # never used as a parent for a next cycle.
+        next_exists = await db.scalar(
+            select(func.count())
+            .select_from(Plan)
+            .where(Plan.previous_plan_id == plan.id)
+        )
+        if not next_exists:
+            plan.completed_at = None
+            await db.commit()
+
     return ToggleCompleteResponse(
         completed=new_completed,
         progress=progress,
+        planComplete=plan_complete,
+        missionTasksRemaining=remaining if has_missions else None,
     )
 
 

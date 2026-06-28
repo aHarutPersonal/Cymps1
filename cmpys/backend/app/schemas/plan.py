@@ -186,6 +186,8 @@ class ToggleCompleteResponse(BaseModel):
     """Response for toggling item completion."""
     completed: bool
     progress: ItemProgress
+    planComplete: bool = False
+    missionTasksRemaining: int | None = None
 
 
 class ToggleStepResponse(BaseModel):
