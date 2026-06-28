@@ -156,6 +156,7 @@ async def _generate_llm_items(
     interview_transcript_json: str = "",
     comparison_summary: str = "",
     blueprint_markdown: str = "",
+    previous_cycle_block: str = "",
 ) -> PlanRoadmap:
     """
     Generate plan items using LLM.
@@ -195,6 +196,7 @@ async def _generate_llm_items(
             "interview_transcript_json": interview_transcript_json or "",
             "comparison_summary": comparison_summary or "",
             "blueprint_markdown": blueprint_markdown or "",
+            "previous_cycle_block": previous_cycle_block or "",
         }, prompt_name="plan_generate.txt", strict=True)
 
         validated, response = await client.generate_and_validate(
@@ -261,6 +263,7 @@ async def generate_plan(
     duration_weeks: int = 12,
     force_llm: bool = False,
     user_context: str = "",
+    previous_cycle_block: str = "",
     # Legacy params kept for backward compat (ignored by new prompt)
     **kwargs,
 ) -> PlanRoadmap:
@@ -304,6 +307,7 @@ async def generate_plan(
             interview_transcript_json=kwargs.get("interview_transcript_json", ""),
             comparison_summary=kwargs.get("comparison_summary", ""),
             blueprint_markdown=kwargs.get("blueprint_markdown", ""),
+            previous_cycle_block=previous_cycle_block,
         )
     else:
         logger.info("Generating plan using deterministic templates")

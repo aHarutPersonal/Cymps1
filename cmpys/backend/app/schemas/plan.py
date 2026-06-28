@@ -90,6 +90,7 @@ class PlanResponse(BaseModel):
     targetAge: int
     durationWeeks: int
     weeklyHours: int
+    cycleNumber: int = 1
     items: list[PlanItemResponse] = []
     createdAt: datetime
     
@@ -186,6 +187,8 @@ class ToggleCompleteResponse(BaseModel):
     """Response for toggling item completion."""
     completed: bool
     progress: ItemProgress
+    planComplete: bool = False
+    missionTasksRemaining: int | None = None
 
 
 class ToggleStepResponse(BaseModel):
@@ -207,3 +210,13 @@ class WeekSummaryResponse(BaseModel):
     completed_items: int
     total_items: int
     percent: float
+
+
+class AchievementSuggestionResponse(BaseModel):
+    title: str
+    category: str
+
+
+class CycleSummaryResponse(BaseModel):
+    narrative: str
+    capstoneTitle: str | None = None

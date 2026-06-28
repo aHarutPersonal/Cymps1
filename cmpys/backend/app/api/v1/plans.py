@@ -22,17 +22,22 @@ from app.api.dependencies import get_current_user
 from app.core.db import get_db
 from app.models.intake import IntakeSession
 from app.models.item_detail_job import PlanItemDetailJob
+from app.models.idol import Idol
 from app.models.plan import (
     Plan,
     PlanItem,
     PlanItemStatus,
+    PlanItemType,
     PlanItemCompletion,
     PlanItemStepCompletion,
 )
 from app.models.plan_job import PlanGenerationJob
 from app.models.user import User
+from app.models.user_achievement import UserAchievement
 from app.schemas.plan import (
+    AchievementSuggestionResponse,
     BookIdeaDetail,
+    CycleSummaryResponse,
     DetailsStatus,
     ItemDetails,
     ItemProgress,
@@ -54,6 +59,28 @@ from app.schemas.idol import IdolImportResponse
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/plans", tags=["plans"])
+
+MISSION_TYPES = {PlanItemType.PROJECT, PlanItemType.COURSE, PlanItemType.READING}
+
+
+def _count_remaining_missions(items, completed_item_ids: set[str]) -> int:
+    """Number of mission tasks (project/course/reading) not yet completed.
+
+    Daily rhythm items (habit/practice) never gate plan completion.
+    """
+    return sum(
+        1
+        for it in items
+        if it.type in MISSION_TYPES and str(it.id) not in completed_item_ids
+    )
+
+
+def _should_clear_completed_at(completed_at_set: bool, next_cycle_exists: bool) -> bool:
+    """Un-check recovery: clear a plan's completion stamp only when it was set
+    AND no next cycle has been generated from it. Once a next cycle exists the
+    stamp is sticky (a cycle-2+ plan is still eligible to clear before its own
+    successor exists)."""
+    return completed_at_set and not next_cycle_exists
 
 
 def _item_to_response(item: PlanItem) -> PlanItemResponse:
@@ -95,6 +122,7 @@ def _plan_to_response(plan: Plan, idol_name: str | None = None) -> PlanResponse:
         targetAge=plan.target_age,
         durationWeeks=plan.duration_weeks,
         weeklyHours=plan.weekly_hours,
+        cycleNumber=plan.cycle_number,
         items=items,
         createdAt=plan.created_at,
         roadmapThesis=roadmap.get("roadmap_thesis"),
@@ -681,13 +709,46 @@ async def toggle_item_complete(
                     db.add(step_completion)
     
     await db.commit()
-    
+
     # Recompute progress
     progress, _ = await _compute_item_progress(db, current_user.id, item)
-    
+
+    # Completion detection: count remaining mission tasks across the plan.
+    items_stmt = select(PlanItem).where(PlanItem.plan_id == item.plan_id)
+    items = (await db.execute(items_stmt)).scalars().all()
+    comp_stmt = select(PlanItemCompletion.plan_item_id).where(
+        PlanItemCompletion.user_id == current_user.id,
+        PlanItemCompletion.completed_at.isnot(None),
+        PlanItemCompletion.plan_item_id.in_([str(i.id) for i in items]),
+    )
+    completed_ids = {str(r) for r in (await db.execute(comp_stmt)).scalars().all()}
+    has_missions = any(i.type in MISSION_TYPES for i in items)
+    remaining = _count_remaining_missions(items, completed_ids)
+
+    plan = await db.get(Plan, item.plan_id)
+    plan_complete = False
+    if has_missions and remaining == 0:
+        if plan and plan.completed_at is None:
+            plan.completed_at = datetime.now(timezone.utc)
+            await db.commit()
+        plan_complete = True
+    elif plan and plan.completed_at is not None:
+        # Re-opened before any next cycle exists: clear only when no successor
+        # cycle has been generated yet (sticky once a next cycle exists).
+        next_exists = await db.scalar(
+            select(func.count())
+            .select_from(Plan)
+            .where(Plan.previous_plan_id == plan.id)
+        )
+        if _should_clear_completed_at(plan.completed_at is not None, bool(next_exists)):
+            plan.completed_at = None
+            await db.commit()
+
     return ToggleCompleteResponse(
         completed=new_completed,
         progress=progress,
+        planComplete=plan_complete,
+        missionTasksRemaining=remaining if has_missions else None,
     )
 
 
@@ -841,6 +902,23 @@ async def regenerate_item_details(
     return RegenerateDetailsResponse(job_id=job.id)
 
 
+@items_router.post(
+    "/{item_id}/achievement-suggestion",
+    response_model=AchievementSuggestionResponse,
+)
+async def achievement_suggestion(
+    item_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> AchievementSuggestionResponse:
+    from app.services.achievements.suggestion import ai_suggestion
+    item = await _get_item_for_user(db, item_id, current_user.id)
+    plan = await db.get(Plan, item.plan_id)
+    idol = await db.get(Idol, plan.idol_id) if plan else None
+    out = await ai_suggestion(item, idol.name if idol else "your mentor")
+    return AchievementSuggestionResponse(**out)
+
+
 # =============================================================================
 # Plan Week Summary
 # =============================================================================
@@ -916,3 +994,82 @@ async def get_week_summary(
         total_items=total_items,
         percent=percent,
     )
+
+
+def _next_cycle_fields(prev_plan) -> dict:
+    """Fields for the next cycle's PlanGenerationJob, derived from the parent."""
+    return {
+        "cycle_number": (prev_plan.cycle_number or 1) + 1,
+        "previous_plan_id": str(prev_plan.id),
+        "idol_id": prev_plan.idol_id,
+        "weekly_hours": prev_plan.weekly_hours,
+        "duration_weeks": prev_plan.duration_weeks,
+        "target_age": prev_plan.target_age,
+    }
+
+
+@router.post("/{plan_id}/generate-next", response_model=IdolImportResponse,
+             status_code=status.HTTP_201_CREATED)
+async def generate_next_plan(
+    plan_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> IdolImportResponse:
+    prev = await db.get(Plan, plan_id)
+    if not prev or prev.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Plan not found")
+
+    # Idempotent: reuse an existing job for this parent.
+    existing = (
+        await db.execute(
+            select(PlanGenerationJob)
+            .where(PlanGenerationJob.previous_plan_id == str(prev.id))
+            .order_by(PlanGenerationJob.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if existing:
+        return IdolImportResponse(
+            idolId=existing.idol_id, jobId=str(existing.id), status=existing.status
+        )
+
+    fields = _next_cycle_fields(prev)
+    job = PlanGenerationJob(
+        user_id=current_user.id,
+        session_id=None,
+        focus=None,
+        status="pending",
+        progress_percent=0,
+        step="analyzing_gaps",
+        **fields,
+    )
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+
+    from app.tasks.plans import run_plan_generation
+    run_plan_generation.delay(str(job.id))
+    return IdolImportResponse(idolId=job.idol_id, jobId=str(job.id), status="pending")
+
+
+@router.post("/{plan_id}/cycle-summary", response_model=CycleSummaryResponse)
+async def plan_cycle_summary(
+    plan_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> CycleSummaryResponse:
+    from app.services.achievements.suggestion import cycle_summary
+    plan = await db.get(Plan, plan_id)
+    if not plan or plan.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    idol = await db.get(Idol, plan.idol_id)
+    titles = (
+        await db.execute(
+            select(UserAchievement.title).where(
+                UserAchievement.user_id == current_user.id,
+                UserAchievement.plan_id == plan_id,
+            )
+        )
+    ).scalars().all()
+    out = await cycle_summary(idol.name if idol else "your mentor", list(titles))
+    return CycleSummaryResponse(**out)

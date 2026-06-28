@@ -71,6 +71,7 @@ class TestPlanGenerateRendersWithoutCrash:
             "interview_transcript_json": "",
             "comparison_summary": "",
             "blueprint_markdown": "",
+            "previous_cycle_block": "",
         }
         # strict=True must NOT raise and must leave no unresolved {placeholders}.
         rendered = render_prompt(

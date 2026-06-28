@@ -11,7 +11,9 @@ import '../../../core/ui/cmpys/cmpys_primitives.dart';
 import '../data/plan_repository.dart';
 import '../models/plan_models.dart';
 import '../state/current_plan_provider.dart';
+import 'achievement_sheet.dart';
 import 'book_reader_screen.dart';
+import 'cycle_completion_screen.dart';
 import 'material_reader_screen.dart';
 import 'material_video_screen.dart';
 import 'material_web_screen.dart';
@@ -76,20 +78,42 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
     if (detailed == null || _toggling) return;
     setState(() => _toggling = true);
     try {
-      final completed = await ref
+      final result = await ref
           .read(planRepositoryProvider)
           .toggleItemComplete(detailed.item.id);
       if (!mounted) return;
-      if (completed) {
-        showCmpysToast(context, 'Marked done. Kept your word.',
+      if (result.completed) {
+        showCmpysToast(context, "Marked done. Kept your word.",
             icon: Icons.check_rounded, tone: AppColors.green);
       }
       // Refresh both this screen and the plan-wide progress numbers.
       await _load();
       ref.read(currentPlanProvider.notifier).refresh();
+      if (!mounted) return;
+
+      final item = detailed.item;
+      final plan = ref.read(currentPlanProvider).plan;
+
+      // Show achievement sheet for completed mission tasks (project/course/reading).
+      if (item.isMissionTask && result.completed) {
+        await showAchievementSheet(
+          context,
+          ref: ref,
+          item: item,
+          planId: plan?.id ?? '',
+          cycleNumber: plan?.cycleNumber ?? 1,
+        );
+      }
+
+      // Show cycle completion recap + next-plan CTA when the last mission
+      // task is marked done and the backend signals planComplete.
+      if (!mounted) return;
+      if (result.planComplete && plan != null) {
+        await showCycleCompletion(context, plan: plan);
+      }
     } catch (_) {
       if (mounted) {
-        showCmpysToast(context, 'Couldn’t update — try again.',
+        showCmpysToast(context, "Couldn’t update - try again.",
             icon: Icons.error_outline_rounded, tone: AppColors.ink2);
       }
     } finally {

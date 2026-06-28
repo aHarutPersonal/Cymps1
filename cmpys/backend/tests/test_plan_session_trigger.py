@@ -154,6 +154,7 @@ class TestPlanPromptSessionContext:
             "interview_transcript_json": '[{"role": "user", "content": "I read annual reports weekly"}]',
             "comparison_summary": "By 28 I ran a partnership; you have read three books.",
             "blueprint_markdown": "## Weeks 1-3: Foundation\nLearn balance sheets.",
+            "previous_cycle_block": "",
         }, strict=True)
 
         assert "I read annual reports weekly" in rendered

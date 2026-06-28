@@ -56,6 +56,7 @@ class TestPlanGeneratePlaceholders:
             "interview_transcript_json": '[{"role": "user", "content": "I read annual reports"}]',
             "comparison_summary": "By 30 Buffett ran a partnership; you are starting out.",
             "blueprint_markdown": "## Weeks 1-3: Foundation\nLearn balance sheets.",
+            "previous_cycle_block": "",
         }
         
         # Should not raise
@@ -99,6 +100,7 @@ class TestPlanGeneratePlaceholders:
                 "interview_transcript_json": '[{"role": "user", "content": "I read annual reports"}]',
                 "comparison_summary": "By 30 Buffett ran a partnership; you are starting out.",
                 "blueprint_markdown": "## Weeks 1-3: Foundation\nLearn balance sheets.",
+                "previous_cycle_block": "",
             },
             strict=True,
         )
@@ -148,6 +150,7 @@ class TestValidatePromptParams:
             "interview_transcript_json": "[]",
             "comparison_summary": "",
             "blueprint_markdown": "",
+            "previous_cycle_block": "",
         }
         missing = validate_prompt_params("plan_generate", params)
         

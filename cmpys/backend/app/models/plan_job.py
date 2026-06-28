@@ -35,6 +35,10 @@ class PlanGenerationJob(Base, UUIDMixin, TimestampUpdateMixin):
     target_age: Mapped[int] = mapped_column(Integer, nullable=False)
     duration_weeks: Mapped[int] = mapped_column(Integer, nullable=False, default=12)
     weekly_hours: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
+    cycle_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    previous_plan_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False), nullable=True
+    )
     focus: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
     # Resulting plan ID (populated when done)

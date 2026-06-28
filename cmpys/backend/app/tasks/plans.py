@@ -9,7 +9,7 @@ from app.core.db import async_session_maker
 from app.models.idol_persona import IdolPersona
 from app.models.idol_profile import IdolProfile
 from app.models.idol_timeline import IdolTimelineEvent
-from app.models.plan import Plan, PlanItem
+from app.models.plan import Plan, PlanItem, PlanItemType
 from app.models.plan_job import PlanGenerationJob
 from app.models.user_achievement import UserAchievement
 from app.models.user import User
@@ -25,6 +25,30 @@ logger = logging.getLogger(__name__)
 # the floors sit at the bottom of those ranges rather than the old 500/600.
 MIN_PLAN_DETAIL_LESSON_WORDS = 250
 MIN_PLAN_DETAIL_MATERIAL_WORDS = 350
+
+
+def build_previous_cycle_block(
+    cycle_number: int,
+    prior_thesis: str,
+    completed_missions: list[str],
+    achievements: list[str],
+) -> str:
+    """Render the previous-cycle directive. Empty for cycle 1 (backward compat)."""
+    if cycle_number < 2:
+        return ""
+    prev = cycle_number - 1
+    missions = "\n".join(f"- {m}" for m in completed_missions[:20]) or "- (none)"
+    wins = "\n".join(f"- {a}" for a in achievements[:20]) or "- (none)"
+    return (
+        f"## PREVIOUS CYCLE (cycle {prev}) — THIS IS CYCLE {cycle_number}\n"
+        f"Prior thesis: {prior_thesis}\n"
+        f"Completed mission tasks:\n{missions}\n"
+        f"Logged achievements:\n{wins}\n\n"
+        "Directive: assume mastery of cycle "
+        f"{prev}'s foundations — do NOT repeat them. Open at the level cycle "
+        f"{prev} ended. Escalate difficulty, depth, and idol-proximity. Reference "
+        "the user's actual logged achievements so this cycle visibly builds on them.\n"
+    )
 
 
 def _blueprint_phase_for_week(week: int | None) -> str:
@@ -368,6 +392,28 @@ async def _run_plan_generation_async(job_id: str) -> dict:
             except Exception as e:
                 logger.warning(f"[PLANNING] Could not load session context for job={job.id}: {e}")
 
+            previous_cycle_block = ""
+            if job.cycle_number and job.cycle_number >= 2 and job.previous_plan_id:
+                prior = await db.get(Plan, job.previous_plan_id)
+                prior_items = (await db.execute(
+                    select(PlanItem).where(PlanItem.plan_id == job.previous_plan_id)
+                )).scalars().all() if prior else []
+                completed_missions = [
+                    i.title for i in prior_items if i.type in {
+                        PlanItemType.PROJECT, PlanItemType.COURSE, PlanItemType.READING}
+                ]
+                ach_titles = (await db.execute(
+                    select(UserAchievement.title).where(
+                        UserAchievement.plan_id == job.previous_plan_id)
+                )).scalars().all()
+                prior_thesis = (prior.roadmap_json or {}).get("roadmap_thesis", "") if prior else ""
+                previous_cycle_block = build_previous_cycle_block(
+                    job.cycle_number,
+                    prior_thesis,
+                    completed_missions,
+                    list(ach_titles),
+                )
+
             roadmap = await generate_plan(
                 idol_name=idol.name,
                 user_goal=user_goal,
@@ -388,6 +434,7 @@ async def _run_plan_generation_async(job_id: str) -> dict:
                 interview_transcript_json=session_ctx.get("interview_transcript_json", ""),
                 comparison_summary=session_ctx.get("comparison_summary", ""),
                 blueprint_markdown=session_ctx.get("blueprint_markdown", ""),
+                previous_cycle_block=previous_cycle_block,
             )
             
             plan_items_data = roadmap.items
@@ -410,6 +457,8 @@ async def _run_plan_generation_async(job_id: str) -> dict:
                     "roadmap_thesis": roadmap.roadmap_thesis,
                     "anti_goals": roadmap.anti_goals,
                 },
+                cycle_number=job.cycle_number or 1,
+                previous_plan_id=job.previous_plan_id,
             )
             db.add(plan)
             await db.flush()

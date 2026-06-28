@@ -44,6 +44,7 @@ If the session context above is non-empty, it is BINDING:
 - The gaps named in the comparison verdict are the priority targets for the earliest weeks.
 If the session context is empty, build the plan from the profile and gap analysis alone.
 
+{previous_cycle_block}
 ## YOUR OBJECTIVE
 
 Generate a highly effective, 12-week strategic plan that transforms this user toward the level of {idol_name}. The plan MUST be deeply rooted in {idol_name}'s actual domain, methods, and trajectory — NOT generic self-help advice.

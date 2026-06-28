@@ -2,6 +2,26 @@
 // /jobs/{id}). Hand-written fromJson, matching the backend's response schemas:
 // plan/item payloads are camelCase, item-detail payloads are snake_case.
 
+/// Result of toggling a plan item's completion state. Contains the new
+/// completed flag plus plan-level signals used by the achievement cycle flow.
+class ToggleResult {
+  const ToggleResult({
+    required this.completed,
+    this.planComplete = false,
+    this.missionTasksRemaining,
+  });
+
+  final bool completed;
+  final bool planComplete;
+  final int? missionTasksRemaining;
+
+  factory ToggleResult.fromJson(Map<String, dynamic> j) => ToggleResult(
+        completed: j['completed'] as bool? ?? false,
+        planComplete: j['planComplete'] as bool? ?? false,
+        missionTasksRemaining: (j['missionTasksRemaining'] as num?)?.toInt(),
+      );
+}
+
 /// One generated plan item. `type == 'habit'` items are the week's daily
 /// rhythm tasks; every other type is a primary mission task.
 class BackendPlanItem {
@@ -36,6 +56,8 @@ class BackendPlanItem {
   final String? resourceUrl;
 
   bool get isDailyRhythm => type == 'habit';
+  bool get isMissionTask =>
+      type == 'project' || type == 'course' || type == 'reading';
   bool get isCompleted => status == 'completed';
 
   factory BackendPlanItem.fromJson(Map<String, dynamic> j) => BackendPlanItem(
@@ -62,6 +84,7 @@ class BackendPlan {
     required this.durationWeeks,
     required this.weeklyHours,
     required this.items,
+    this.cycleNumber = 1,
     this.idolName,
     this.roadmapThesis,
     this.antiGoals = const [],
@@ -74,6 +97,7 @@ class BackendPlan {
   final String id;
   final int durationWeeks;
   final int weeklyHours;
+  final int cycleNumber;
   final List<BackendPlanItem> items;
   final String? idolName;
   final String? roadmapThesis;
@@ -106,6 +130,7 @@ class BackendPlan {
         id: j['id']?.toString() ?? '',
         durationWeeks: (j['durationWeeks'] as num?)?.toInt() ?? 12,
         weeklyHours: (j['weeklyHours'] as num?)?.toInt() ?? 10,
+        cycleNumber: (j['cycleNumber'] as num?)?.toInt() ?? 1,
         items: (j['items'] as List?)
                 ?.whereType<Map<String, dynamic>>()
                 .map(BackendPlanItem.fromJson)
