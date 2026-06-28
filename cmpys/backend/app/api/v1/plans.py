@@ -33,9 +33,11 @@ from app.models.plan import (
 )
 from app.models.plan_job import PlanGenerationJob
 from app.models.user import User
+from app.models.user_achievement import UserAchievement
 from app.schemas.plan import (
     AchievementSuggestionResponse,
     BookIdeaDetail,
+    CycleSummaryResponse,
     DetailsStatus,
     ItemDetails,
     ItemProgress,
@@ -983,3 +985,26 @@ async def get_week_summary(
         total_items=total_items,
         percent=percent,
     )
+
+
+@router.post("/{plan_id}/cycle-summary", response_model=CycleSummaryResponse)
+async def plan_cycle_summary(
+    plan_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> CycleSummaryResponse:
+    from app.services.achievements.suggestion import cycle_summary
+    plan = await db.get(Plan, plan_id)
+    if not plan or plan.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    idol = await db.get(Idol, plan.idol_id)
+    titles = (
+        await db.execute(
+            select(UserAchievement.title).where(
+                UserAchievement.user_id == current_user.id,
+                UserAchievement.plan_id == plan_id,
+            )
+        )
+    ).scalars().all()
+    out = await cycle_summary(idol.name if idol else "your mentor", list(titles))
+    return CycleSummaryResponse(**out)

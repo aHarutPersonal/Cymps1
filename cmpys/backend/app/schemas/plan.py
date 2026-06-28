@@ -214,3 +214,8 @@ class WeekSummaryResponse(BaseModel):
 class AchievementSuggestionResponse(BaseModel):
     title: str
     category: str
+
+
+class CycleSummaryResponse(BaseModel):
+    narrative: str
+    capstoneTitle: str | None = None

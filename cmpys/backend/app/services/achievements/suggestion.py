@@ -36,6 +36,16 @@ _SUGGESTION_SCHEMA = {
 }
 
 
+_SUMMARY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "narrative": {"type": "string"},
+        "capstone": {"type": "string"},
+    },
+    "required": ["narrative"],
+}
+
+
 async def ai_suggestion(item, idol_name: str, timeout_s: float = 2.5) -> dict:
     """AI-phrased achievement; returns fallback on timeout/error.
 
@@ -65,4 +75,46 @@ async def ai_suggestion(item, idol_name: str, timeout_s: float = 2.5) -> dict:
             return {"title": text[:200], "category": fb["category"]}
     except Exception as e:  # noqa: BLE001 — fallback is the contract
         logger.info(f"[ACH] AI suggestion fell back: {e}")
+    return fb
+
+
+def fallback_cycle_summary(count: int) -> dict:
+    return {
+        "narrative": f"You logged {count} achievement(s) this cycle. Strong work.",
+        "capstoneTitle": None,
+    }
+
+
+async def cycle_summary(
+    idol_name: str, achievement_titles: list[str], timeout_s: float = 4.0
+) -> dict:
+    """One-shot narrative recap; degrades to a count-based summary on failure."""
+    fb = fallback_cycle_summary(len(achievement_titles))
+    if not achievement_titles:
+        return fb
+    try:
+        client = get_llm_client(fast=True)
+        bullet = "\n".join(f"- {t}" for t in achievement_titles[:30])
+        prompt = (
+            f"A user spent 12 weeks learning from {idol_name} and logged:\n"
+            f"{bullet}\n\nReturn JSON {{\"narrative\": \"...\", \"capstone\": \"...\"}}. "
+            "narrative = 2-3 warm sentences summarizing their progress in second "
+            "person ('you'). capstone = one short title naming their single biggest "
+            "accomplishment."
+        )
+        resp = await asyncio.wait_for(
+            client.generate_json(
+                system_prompt="You write growth recaps as JSON.",
+                user_prompt=prompt,
+                json_schema=_SUMMARY_SCHEMA,
+            ),
+            timeout=timeout_s,
+        )
+        data = resp.data or {}
+        narrative = (data.get("narrative") or "").strip()
+        if not resp.error and narrative:
+            capstone = (data.get("capstone") or "").strip()[:200] or None
+            return {"narrative": narrative, "capstoneTitle": capstone}
+    except Exception as e:  # noqa: BLE001
+        logger.info(f"[ACH] cycle summary fell back: {e}")
     return fb
