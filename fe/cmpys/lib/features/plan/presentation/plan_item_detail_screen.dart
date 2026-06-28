@@ -109,7 +109,7 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
       // task is marked done and the backend signals planComplete.
       if (!mounted) return;
       if (result.planComplete && plan != null) {
-        await showCycleCompletion(context, plan: plan, ref: ref);
+        await showCycleCompletion(context, plan: plan);
       }
     } catch (_) {
       if (mounted) {

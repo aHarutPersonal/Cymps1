@@ -85,7 +85,6 @@ class _PlanRepoBridge implements CycleCompletionRepo {
 Future<void> showCycleCompletion(
   BuildContext context, {
   required BackendPlan plan,
-  required WidgetRef ref,
 }) {
   return showModalBottomSheet<void>(
     context: context,
@@ -95,7 +94,7 @@ Future<void> showCycleCompletion(
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(26)),
     ),
-    builder: (ctx) => _CycleCompletionBody(plan: plan, ref: ref),
+    builder: (ctx) => _CycleCompletionBody(plan: plan),
   );
 }
 
@@ -103,17 +102,17 @@ Future<void> showCycleCompletion(
 // Widget
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _CycleCompletionBody extends StatefulWidget {
-  const _CycleCompletionBody({required this.plan, required this.ref});
+class _CycleCompletionBody extends ConsumerStatefulWidget {
+  const _CycleCompletionBody({required this.plan});
 
   final BackendPlan plan;
-  final WidgetRef ref;
 
   @override
-  State<_CycleCompletionBody> createState() => _CycleCompletionBodyState();
+  ConsumerState<_CycleCompletionBody> createState() =>
+      _CycleCompletionBodyState();
 }
 
-class _CycleCompletionBodyState extends State<_CycleCompletionBody> {
+class _CycleCompletionBodyState extends ConsumerState<_CycleCompletionBody> {
   late final CycleCompletionPresenter _presenter;
   bool _loading = true;
   bool _starting = false;
@@ -122,12 +121,12 @@ class _CycleCompletionBodyState extends State<_CycleCompletionBody> {
   @override
   void initState() {
     super.initState();
-    final repoInstance = widget.ref.read(planRepositoryProvider);
+    final repoInstance = ref.read(planRepositoryProvider);
     _presenter = CycleCompletionPresenter(
       planId: widget.plan.id,
       repo: _PlanRepoBridge(repoInstance),
       onJobId: (jobId) {
-        widget.ref.read(cmpysStoreProvider.notifier).setPlanJobId(jobId);
+        ref.read(cmpysStoreProvider.notifier).setPlanJobId(jobId);
       },
     );
     _load();
