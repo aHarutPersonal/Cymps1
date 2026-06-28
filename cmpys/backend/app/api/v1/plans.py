@@ -75,6 +75,14 @@ def _count_remaining_missions(items, completed_item_ids: set[str]) -> int:
     )
 
 
+def _should_clear_completed_at(completed_at_set: bool, next_cycle_exists: bool) -> bool:
+    """Un-check recovery: clear a plan's completion stamp only when it was set
+    AND no next cycle has been generated from it. Once a next cycle exists the
+    stamp is sticky (a cycle-2+ plan is still eligible to clear before its own
+    successor exists)."""
+    return completed_at_set and not next_cycle_exists
+
+
 def _item_to_response(item: PlanItem) -> PlanItemResponse:
     """Convert plan item model to response."""
     return PlanItemResponse(
@@ -724,15 +732,15 @@ async def toggle_item_complete(
             plan.completed_at = datetime.now(timezone.utc)
             await db.commit()
         plan_complete = True
-    elif plan and plan.completed_at is not None and plan.previous_plan_id is None:
-        # Re-opened before any next cycle exists: only clear if THIS plan was
-        # never used as a parent for a next cycle.
+    elif plan and plan.completed_at is not None:
+        # Re-opened before any next cycle exists: clear only when no successor
+        # cycle has been generated yet (sticky once a next cycle exists).
         next_exists = await db.scalar(
             select(func.count())
             .select_from(Plan)
             .where(Plan.previous_plan_id == plan.id)
         )
-        if not next_exists:
+        if _should_clear_completed_at(plan.completed_at is not None, bool(next_exists)):
             plan.completed_at = None
             await db.commit()
 
