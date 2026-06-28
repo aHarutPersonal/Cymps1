@@ -13,6 +13,7 @@ import '../models/plan_models.dart';
 import '../state/current_plan_provider.dart';
 import 'achievement_sheet.dart';
 import 'book_reader_screen.dart';
+import 'cycle_completion_screen.dart';
 import 'material_reader_screen.dart';
 import 'material_video_screen.dart';
 import 'material_web_screen.dart';
@@ -104,9 +105,11 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
         );
       }
 
-      // Placeholder for cycle-completion flow — implemented in Task 10.
-      if (result.planComplete) {
-        // cycle completion — implemented in Task 10
+      // Show cycle completion recap + next-plan CTA when the last mission
+      // task is marked done and the backend signals planComplete.
+      if (!mounted) return;
+      if (result.planComplete && plan != null) {
+        await showCycleCompletion(context, plan: plan, ref: ref);
       }
     } catch (_) {
       if (mounted) {
