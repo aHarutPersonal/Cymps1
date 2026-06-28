@@ -90,6 +90,7 @@ class PlanResponse(BaseModel):
     targetAge: int
     durationWeeks: int
     weeklyHours: int
+    cycleNumber: int = 1
     items: list[PlanItemResponse] = []
     createdAt: datetime
     

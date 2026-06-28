@@ -82,7 +82,7 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
           .toggleItemComplete(detailed.item.id);
       if (!mounted) return;
       if (result.completed) {
-        showCmpysToast(context, "Marked done. Kept your word.",  
+        showCmpysToast(context, "Marked done. Kept your word.",
             icon: Icons.check_rounded, tone: AppColors.green);
       }
       // Refresh both this screen and the plan-wide progress numbers.
@@ -93,14 +93,14 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
       final item = detailed.item;
       final plan = ref.read(currentPlanProvider).plan;
 
-      // Show achievement sheet for completed mission tasks (non-habit types).
-      if (!item.isDailyRhythm && result.completed) {
+      // Show achievement sheet for completed mission tasks (project/course/reading).
+      if (item.isMissionTask && result.completed) {
         await showAchievementSheet(
           context,
           ref: ref,
           item: item,
           planId: plan?.id ?? '',
-          cycleNumber: 1, // BackendPlan has no cycleNumber field yet; Task 10 will update
+          cycleNumber: plan?.cycleNumber ?? 1,
         );
       }
 

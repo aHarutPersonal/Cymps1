@@ -56,6 +56,8 @@ class BackendPlanItem {
   final String? resourceUrl;
 
   bool get isDailyRhythm => type == 'habit';
+  bool get isMissionTask =>
+      type == 'project' || type == 'course' || type == 'reading';
   bool get isCompleted => status == 'completed';
 
   factory BackendPlanItem.fromJson(Map<String, dynamic> j) => BackendPlanItem(
@@ -82,6 +84,7 @@ class BackendPlan {
     required this.durationWeeks,
     required this.weeklyHours,
     required this.items,
+    this.cycleNumber = 1,
     this.idolName,
     this.roadmapThesis,
     this.antiGoals = const [],
@@ -94,6 +97,7 @@ class BackendPlan {
   final String id;
   final int durationWeeks;
   final int weeklyHours;
+  final int cycleNumber;
   final List<BackendPlanItem> items;
   final String? idolName;
   final String? roadmapThesis;
@@ -126,6 +130,7 @@ class BackendPlan {
         id: j['id']?.toString() ?? '',
         durationWeeks: (j['durationWeeks'] as num?)?.toInt() ?? 12,
         weeklyHours: (j['weeklyHours'] as num?)?.toInt() ?? 10,
+        cycleNumber: (j['cycleNumber'] as num?)?.toInt() ?? 1,
         items: (j['items'] as List?)
                 ?.whereType<Map<String, dynamic>>()
                 .map(BackendPlanItem.fromJson)

@@ -114,6 +114,7 @@ def _plan_to_response(plan: Plan, idol_name: str | None = None) -> PlanResponse:
         targetAge=plan.target_age,
         durationWeeks=plan.duration_weeks,
         weeklyHours=plan.weekly_hours,
+        cycleNumber=plan.cycle_number,
         items=items,
         createdAt=plan.created_at,
         roadmapThesis=roadmap.get("roadmap_thesis"),
