@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.dependencies import get_current_user
 from app.core.db import get_db
 from app.models.user import User
-from app.models.user_achievement import UserAchievement, AchievementCategory
+from app.models.user_achievement import UserAchievement, AchievementCategory, AchievementSource
 from app.schemas.achievement import (
     AchievementCreate,
     AchievementListResponse,
@@ -32,6 +32,10 @@ def _to_response(achievement: UserAchievement) -> AchievementResponse:
         evidenceLink=achievement.evidence_link,
         createdAt=achievement.created_at,
         updatedAt=getattr(achievement, "updated_at", None) or achievement.created_at,
+        source=achievement.source,
+        planId=achievement.plan_id,
+        planItemId=achievement.plan_item_id,
+        cycleNumber=achievement.cycle_number,
     )
 
 
@@ -42,6 +46,26 @@ async def create_achievement(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> AchievementResponse:
     """Create a new user achievement."""
+    # plan_item achievements upsert: re-confirming an item updates its row.
+    if data.source == AchievementSource.PLAN_ITEM and data.planItemId:
+        existing = (
+            await db.execute(
+                select(UserAchievement).where(
+                    UserAchievement.user_id == current_user.id,
+                    UserAchievement.plan_item_id == data.planItemId,
+                    UserAchievement.source == AchievementSource.PLAN_ITEM,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing:
+            existing.title = data.title
+            existing.category = AchievementCategory(data.category.value)
+            existing.notes = data.notes
+            existing.evidence_link = data.evidenceLink
+            await db.commit()
+            await db.refresh(existing)
+            return _to_response(existing)
+
     achievement = UserAchievement(
         user_id=current_user.id,
         title=data.title,
@@ -49,11 +73,14 @@ async def create_achievement(
         achievement_date=data.achievementDate,
         notes=data.notes,
         evidence_link=data.evidenceLink,
+        source=data.source,
+        plan_id=data.planId,
+        plan_item_id=data.planItemId,
+        cycle_number=data.cycleNumber,
     )
     db.add(achievement)
     await db.commit()
     await db.refresh(achievement)
-    
     return _to_response(achievement)
 
 
