@@ -987,6 +987,62 @@ async def get_week_summary(
     )
 
 
+def _next_cycle_fields(prev_plan) -> dict:
+    """Fields for the next cycle's PlanGenerationJob, derived from the parent."""
+    return {
+        "cycle_number": (prev_plan.cycle_number or 1) + 1,
+        "previous_plan_id": str(prev_plan.id),
+        "idol_id": prev_plan.idol_id,
+        "weekly_hours": prev_plan.weekly_hours,
+        "duration_weeks": prev_plan.duration_weeks,
+        "target_age": prev_plan.target_age,
+    }
+
+
+@router.post("/{plan_id}/generate-next", response_model=IdolImportResponse,
+             status_code=status.HTTP_201_CREATED)
+async def generate_next_plan(
+    plan_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> IdolImportResponse:
+    prev = await db.get(Plan, plan_id)
+    if not prev or prev.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Plan not found")
+
+    # Idempotent: reuse an existing job for this parent.
+    existing = (
+        await db.execute(
+            select(PlanGenerationJob)
+            .where(PlanGenerationJob.previous_plan_id == str(prev.id))
+            .order_by(PlanGenerationJob.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if existing:
+        return IdolImportResponse(
+            idolId=existing.idol_id, jobId=str(existing.id), status=existing.status
+        )
+
+    fields = _next_cycle_fields(prev)
+    job = PlanGenerationJob(
+        user_id=current_user.id,
+        session_id=None,
+        focus=None,
+        status="pending",
+        progress_percent=0,
+        step="analyzing_gaps",
+        **fields,
+    )
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+
+    from app.tasks.plans import run_plan_generation
+    run_plan_generation.delay(str(job.id))
+    return IdolImportResponse(idolId=job.idol_id, jobId=str(job.id), status="pending")
+
+
 @router.post("/{plan_id}/cycle-summary", response_model=CycleSummaryResponse)
 async def plan_cycle_summary(
     plan_id: str,
