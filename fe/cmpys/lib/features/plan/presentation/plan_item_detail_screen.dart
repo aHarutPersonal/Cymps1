@@ -11,6 +11,7 @@ import '../../../core/ui/cmpys/cmpys_primitives.dart';
 import '../data/plan_repository.dart';
 import '../models/plan_models.dart';
 import '../state/current_plan_provider.dart';
+import 'achievement_sheet.dart';
 import 'book_reader_screen.dart';
 import 'material_reader_screen.dart';
 import 'material_video_screen.dart';
@@ -81,15 +82,35 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
           .toggleItemComplete(detailed.item.id);
       if (!mounted) return;
       if (result.completed) {
-        showCmpysToast(context, 'Marked done. Kept your word.',
+        showCmpysToast(context, "Marked done. Kept your word.",  
             icon: Icons.check_rounded, tone: AppColors.green);
       }
       // Refresh both this screen and the plan-wide progress numbers.
       await _load();
       ref.read(currentPlanProvider.notifier).refresh();
+      if (!mounted) return;
+
+      final item = detailed.item;
+      final plan = ref.read(currentPlanProvider).plan;
+
+      // Show achievement sheet for completed mission tasks (non-habit types).
+      if (!item.isDailyRhythm && result.completed) {
+        await showAchievementSheet(
+          context,
+          ref: ref,
+          item: item,
+          planId: plan?.id ?? '',
+          cycleNumber: 1, // BackendPlan has no cycleNumber field yet; Task 10 will update
+        );
+      }
+
+      // Placeholder for cycle-completion flow — implemented in Task 10.
+      if (result.planComplete) {
+        // cycle completion — implemented in Task 10
+      }
     } catch (_) {
       if (mounted) {
-        showCmpysToast(context, 'Couldn’t update — try again.',
+        showCmpysToast(context, "Couldn’t update - try again.",
             icon: Icons.error_outline_rounded, tone: AppColors.ink2);
       }
     } finally {
