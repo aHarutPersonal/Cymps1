@@ -22,6 +22,7 @@ from app.api.dependencies import get_current_user
 from app.core.db import get_db
 from app.models.intake import IntakeSession
 from app.models.item_detail_job import PlanItemDetailJob
+from app.models.idol import Idol
 from app.models.plan import (
     Plan,
     PlanItem,
@@ -33,6 +34,7 @@ from app.models.plan import (
 from app.models.plan_job import PlanGenerationJob
 from app.models.user import User
 from app.schemas.plan import (
+    AchievementSuggestionResponse,
     BookIdeaDetail,
     DetailsStatus,
     ItemDetails,
@@ -887,6 +889,23 @@ async def regenerate_item_details(
     regenerate_plan_item_details.apply_async(args=[job.id], queue="high_priority")
     
     return RegenerateDetailsResponse(job_id=job.id)
+
+
+@items_router.post(
+    "/{item_id}/achievement-suggestion",
+    response_model=AchievementSuggestionResponse,
+)
+async def achievement_suggestion(
+    item_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> AchievementSuggestionResponse:
+    from app.services.achievements.suggestion import ai_suggestion
+    item = await _get_item_for_user(db, item_id, current_user.id)
+    plan = await db.get(Plan, item.plan_id)
+    idol = await db.get(Idol, plan.idol_id) if plan else None
+    out = await ai_suggestion(item, idol.name if idol else "your mentor")
+    return AchievementSuggestionResponse(**out)
 
 
 # =============================================================================

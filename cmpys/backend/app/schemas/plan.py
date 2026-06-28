@@ -209,3 +209,8 @@ class WeekSummaryResponse(BaseModel):
     completed_items: int
     total_items: int
     percent: float
+
+
+class AchievementSuggestionResponse(BaseModel):
+    title: str
+    category: str
