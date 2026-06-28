@@ -7,10 +7,13 @@ import 'package:go_router/go_router.dart';
 import '../../../app/assets.dart';
 import '../../../app/design_tokens.dart';
 import '../../../app/router.dart';
-import '../../../core/ui/ambient_background.dart';
 import '../controllers/auth_controller.dart';
 import '../controllers/session_controller.dart';
 
+/// Welcome / auth entry. Matches the Cmpys.zip reference (01-auth):
+/// paper background, CMPYS wordmark top-left, an editorial Bricolage headline
+/// anchored to the bottom, social-first auth (filled Apple pill + outline
+/// Google pill), and email tucked behind "Use email instead".
 class AuthScreen extends ConsumerStatefulWidget {
   const AuthScreen({super.key});
 
@@ -45,7 +48,6 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Match the light paper shell used across the redesigned flows.
     SystemChrome.setSystemUIOverlayStyle(
       const SystemUiOverlayStyle(
         statusBarBrightness: Brightness.light,
@@ -57,7 +59,6 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     final authState = ref.watch(authControllerProvider);
     final isLoading = authState is AuthLoading;
 
-    // Listen for auth state changes
     ref.listen(authControllerProvider, (prev, next) async {
       if (next is AuthAuthenticated) {
         _clearError();
@@ -66,9 +67,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!mounted) return;
           final sessionState = ref.read(sessionControllerProvider);
-          if (sessionState is SessionNeedsOnboarding) {
-            context.go(AppRoutes.cmpysOnboarding);
-          } else if (sessionState is SessionReady) {
+          if (sessionState is SessionReady) {
             context.go(AppRoutes.home);
           } else {
             context.go(AppRoutes.cmpysOnboarding);
@@ -81,33 +80,30 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
 
     return Scaffold(
       backgroundColor: AppColors.bg,
-      body: AmbientBackground(
-        useSafeArea: false,
-        child: SafeArea(
-          child: Column(
-            children: [
-              // Error banner
-              _ErrorBanner(message: _errorMessage, onDismiss: _clearError),
-              // Content
-              Expanded(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.symmetric(horizontal: 32),
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      minHeight:
-                          MediaQuery.of(context).size.height -
-                          MediaQuery.of(context).padding.top -
-                          MediaQuery.of(context).padding.bottom -
-                          (_errorMessage != null ? 56 : 0),
-                    ),
+      body: SafeArea(
+        child: Column(
+          children: [
+            _ErrorBanner(message: _errorMessage, onDismiss: _clearError),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(28, 8, 28, 20),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    minHeight: MediaQuery.of(context).size.height -
+                        MediaQuery.of(context).padding.top -
+                        MediaQuery.of(context).padding.bottom -
+                        (_errorMessage != null ? 56 : 0) -
+                        28,
+                  ),
+                  child: IntrinsicHeight(
                     child: _showEmailForm
                         ? _buildEmailForm(isLoading)
                         : _buildSocialAuth(isLoading),
                   ),
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -115,191 +111,75 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
 
   Widget _buildSocialAuth(bool isLoading) {
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const SizedBox(height: 64),
-        // Header
-        Text(
-          _isLoginMode ? 'Welcome Back' : 'Create Account',
-          textAlign: TextAlign.center,
-          style: AppTypography.h1.copyWith(fontSize: 34),
-        ),
         const SizedBox(height: 8),
+        // Wordmark
         Text(
-          _isLoginMode
-              ? 'Your comparison mirror is ready.'
-              : 'Build your profile, then choose your North Star.',
-          textAlign: TextAlign.center,
-          style: AppTypography.body.copyWith(color: AppColors.textSecondary),
-        ),
-        const SizedBox(height: 32),
-
-        // Social logins — 2-col grid
-        Row(
-          children: [
-            Expanded(
-              child: _SocialButton(
-                label: 'Google',
-                icon: AppAssets.iconGoogle,
-                useColorIcon: true,
-                onTap: isLoading ? null : () => _handleOAuth('google'),
-              ),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: _SocialButton(
-                label: 'Apple',
-                icon: AppAssets.iconApple,
-                onTap: isLoading ? null : () => _handleOAuth('apple'),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 32),
-
-        // Divider
-        Row(
-          children: [
-            Expanded(child: Container(height: 1, color: AppColors.border)),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Text(
-                'OR CONTINUE WITH',
-                style: AppTypography.captionUpper.copyWith(
-                  fontSize: 10,
-                  color: AppColors.textTertiary,
-                ),
-              ),
-            ),
-            Expanded(child: Container(height: 1, color: AppColors.border)),
-          ],
-        ),
-        const SizedBox(height: 32),
-
-        // Name field (registration mode)
-        if (!_isLoginMode) ...[
-          _DarkInputField(
-            label: 'FULL NAME',
-            hintText: 'Enter your name',
-            controller: _nameController,
-            textCapitalization: TextCapitalization.words,
-            enabled: !isLoading,
-            onChanged: (_) => _clearError(),
+          'CMPYS',
+          style: AppTypography.kicker.copyWith(
+            fontSize: 16,
+            color: AppColors.ink,
+            letterSpacing: 4,
           ),
-          const SizedBox(height: 16),
-        ],
-
-        // Email form fields
-        _DarkInputField(
-          label: 'EMAIL ADDRESS',
-          hintText: 'name@example.com',
-          controller: _emailController,
-          keyboardType: TextInputType.emailAddress,
-          enabled: !isLoading,
-          onChanged: (_) => _clearError(),
         ),
-        const SizedBox(height: 16),
-        _DarkInputField(
-          label: 'PASSWORD',
-          hintText: '••••••••',
-          controller: _passwordController,
-          obscureText: _obscurePassword,
-          enabled: !isLoading,
-          onChanged: (_) => _clearError(),
-          suffixIcon: GestureDetector(
-            onTap: () => setState(() => _obscurePassword = !_obscurePassword),
-            child: Icon(
-              _obscurePassword
-                  ? Icons.visibility_off_outlined
-                  : Icons.visibility_outlined,
-              color: AppColors.textTertiary,
-              size: 20,
-            ),
+        const Spacer(),
+        // Editorial headline — Bricolage display, bottom-anchored.
+        Text(
+          'Measure your life against the people who inspire you.',
+          style: AppTypography.display.copyWith(
+            fontSize: 38,
+            height: 1.08,
+            color: AppColors.ink,
           ),
         ),
         const SizedBox(height: 16),
-
-        // Forgot password
-        Align(
-          alignment: Alignment.centerRight,
+        Text(
+          'Pick a mentor. See how you compare at the same age. '
+          'Get a plan to close the gap.',
+          style: AppTypography.body.copyWith(
+            fontSize: 15.5,
+            height: 1.45,
+            color: AppColors.textSecondary,
+          ),
+        ),
+        const SizedBox(height: 30),
+        // Apple — filled (ink) pill
+        _AuthPill(
+          label: 'Continue with Apple',
+          icon: AppAssets.iconApple,
+          filled: true,
+          onTap: isLoading ? null : () => _handleOAuth('apple'),
+        ),
+        const SizedBox(height: 12),
+        // Google — outline pill
+        _AuthPill(
+          label: 'Continue with Google',
+          icon: AppAssets.iconGoogle,
+          filled: false,
+          useColorIcon: true,
+          onTap: isLoading ? null : () => _handleOAuth('google'),
+        ),
+        const SizedBox(height: 18),
+        Center(
           child: GestureDetector(
-            onTap: () => context.push(AppRoutes.forgotPassword),
-            child: const Text(
-              'Forgot Password?',
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w500,
+            onTap: isLoading
+                ? null
+                : () {
+                    _clearError();
+                    setState(() => _showEmailForm = true);
+                  },
+            child: Text(
+              'Use email instead',
+              style: AppTypography.bodyMedium.copyWith(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
                 color: AppColors.accent,
               ),
             ),
           ),
         ),
-        const SizedBox(height: 32),
-
-        // Sign In button
-        GestureDetector(
-          onTap: isLoading ? null : _handleEmailAuth,
-          child: AnimatedContainer(
-            duration: AppDurations.fast,
-            width: double.infinity,
-            height: 56,
-            decoration: BoxDecoration(
-              color: AppColors.accent,
-              borderRadius: AppRadii.brFull,
-            ),
-            child: Center(
-              child: isLoading
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
-                  : Text(
-                      _isLoginMode ? 'Sign In' : 'Create Account',
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.white,
-                      ),
-                    ),
-            ),
-          ),
-        ),
-        const SizedBox(height: 24),
-
-        // Toggle login/register
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              _isLoginMode
-                  ? "Don't have an account? "
-                  : 'Already have an account? ',
-              style: AppTypography.caption.copyWith(
-                color: AppColors.textSecondary,
-              ),
-            ),
-            GestureDetector(
-              onTap: isLoading
-                  ? null
-                  : () {
-                      _clearError();
-                      setState(() => _isLoginMode = !_isLoginMode);
-                    },
-              child: Text(
-                _isLoginMode ? 'Create one' : 'Sign in',
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.accent,
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 32),
+        const SizedBox(height: 8),
       ],
     );
   }
@@ -311,8 +191,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const SizedBox(height: 16),
-            // Back button
+            const SizedBox(height: 8),
+            // Back to social
             GestureDetector(
               onTap: isLoading
                   ? null
@@ -328,30 +208,32 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                   border: Border.all(color: AppColors.border),
                   borderRadius: BorderRadius.circular(20),
                 ),
-                child: const Icon(
-                  Icons.arrow_back,
-                  color: AppColors.textPrimary,
-                  size: 20,
-                ),
+                child: const Icon(Icons.arrow_back,
+                    color: AppColors.ink, size: 20),
               ),
             ),
-            const SizedBox(height: 24),
+            const Spacer(),
             Text(
-              _isLoginMode ? 'Welcome back' : 'Create account',
-              style: AppTypography.h1.copyWith(fontSize: 28),
+              _isLoginMode ? 'Welcome back.' : 'Create your account.',
+              style: AppTypography.display.copyWith(
+                fontSize: 34,
+                height: 1.1,
+                color: AppColors.ink,
+              ),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 10),
             Text(
               _isLoginMode
-                  ? 'Sign in to continue your journey'
-                  : 'Start your journey to greatness',
+                  ? 'Sign in to continue closing the gap.'
+                  : 'Build your profile, then choose your North Star.',
               style: AppTypography.body.copyWith(
+                fontSize: 15.5,
                 color: AppColors.textSecondary,
               ),
             ),
-            const SizedBox(height: 32),
+            const SizedBox(height: 28),
             if (!_isLoginMode) ...[
-              _DarkInputField(
+              _PaperInputField(
                 label: 'FULL NAME',
                 hintText: 'Enter your name',
                 controller: _nameController,
@@ -359,9 +241,9 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                 enabled: !isLoading,
                 onChanged: (_) => _clearError(),
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 12),
             ],
-            _DarkInputField(
+            _PaperInputField(
               label: 'EMAIL ADDRESS',
               hintText: 'name@example.com',
               controller: _emailController,
@@ -369,12 +251,10 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
               enabled: !isLoading,
               onChanged: (_) => _clearError(),
             ),
-            const SizedBox(height: 16),
-            _DarkInputField(
+            const SizedBox(height: 12),
+            _PaperInputField(
               label: 'PASSWORD',
-              hintText: _isLoginMode
-                  ? 'Enter your password'
-                  : 'Create a password',
+              hintText: '••••••••',
               controller: _passwordController,
               obscureText: _obscurePassword,
               enabled: !isLoading,
@@ -391,37 +271,29 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                 ),
               ),
             ),
-            const SizedBox(height: 24),
-            // Submit
-            GestureDetector(
-              onTap: isLoading ? null : _handleEmailAuth,
-              child: Container(
-                width: double.infinity,
-                height: 56,
-                decoration: BoxDecoration(
-                  color: AppColors.accent,
-                  borderRadius: AppRadii.brFull,
-                ),
-                child: Center(
-                  child: isLoading
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : Text(
-                          _isLoginMode ? 'Sign In' : 'Create Account',
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w700,
-                            color: Colors.white,
-                          ),
-                        ),
+            if (_isLoginMode) ...[
+              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerRight,
+                child: GestureDetector(
+                  onTap: () => context.push(AppRoutes.forgotPassword),
+                  child: Text(
+                    'Forgot Password?',
+                    style: AppTypography.bodyMedium.copyWith(
+                      fontSize: 14,
+                      color: AppColors.accent,
+                    ),
+                  ),
                 ),
               ),
+            ],
+            const Spacer(),
+            _AuthPill(
+              label: _isLoginMode ? 'Sign In' : 'Create Account',
+              filled: true,
+              accent: true,
+              loading: isLoading,
+              onTap: isLoading ? null : _handleEmailAuth,
             ),
             const SizedBox(height: 16),
             Center(
@@ -432,19 +304,30 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                         _clearError();
                         setState(() => _isLoginMode = !_isLoginMode);
                       },
-                child: Text(
-                  _isLoginMode
-                      ? "Don't have an account? Sign up"
-                      : 'Already have an account? Sign in',
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.accent,
+                child: Text.rich(
+                  TextSpan(
+                    text: _isLoginMode
+                        ? "Don't have an account? "
+                        : 'Already have an account? ',
+                    style: AppTypography.caption.copyWith(
+                      color: AppColors.textSecondary,
+                      fontSize: 14,
+                    ),
+                    children: [
+                      TextSpan(
+                        text: _isLoginMode ? 'Create one' : 'Sign in',
+                        style: AppTypography.bodyMedium.copyWith(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.accent,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 8),
           ],
         ),
       ),
@@ -501,9 +384,94 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   }
 }
 
-/// Paper input field for auth screens.
-class _DarkInputField extends StatelessWidget {
-  const _DarkInputField({
+/// Full-width pill button used across the auth screen.
+/// - `filled` + `accent`: green primary (Sign In / Create Account).
+/// - `filled` (no accent): ink-dark pill (Continue with Apple).
+/// - outline: paper surface with a hairline border (Continue with Google).
+class _AuthPill extends StatelessWidget {
+  const _AuthPill({
+    required this.label,
+    required this.onTap,
+    this.icon,
+    this.filled = false,
+    this.accent = false,
+    this.useColorIcon = false,
+    this.loading = false,
+  });
+
+  final String label;
+  final VoidCallback? onTap;
+  final String? icon;
+  final bool filled;
+  final bool accent;
+  final bool useColorIcon;
+  final bool loading;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color bg = accent
+        ? AppColors.accent
+        : filled
+            ? AppColors.ink
+            : AppColors.surface;
+    final Color fg = filled || accent ? Colors.white : AppColors.ink;
+
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: double.infinity,
+        height: 56,
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: AppRadii.brFull,
+          border: filled || accent
+              ? null
+              : Border.all(color: AppColors.borderFocus, width: 1.5),
+          boxShadow: filled || accent ? AppShadows.sm : null,
+        ),
+        child: Center(
+          child: loading
+              ? const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                )
+              : Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    if (icon != null) ...[
+                      SvgPicture.asset(
+                        icon!,
+                        width: 19,
+                        height: 19,
+                        colorFilter: useColorIcon
+                            ? null
+                            : ColorFilter.mode(fg, BlendMode.srcIn),
+                      ),
+                      const SizedBox(width: 10),
+                    ],
+                    Text(
+                      label,
+                      style: AppTypography.bodyMedium.copyWith(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: fg,
+                      ),
+                    ),
+                  ],
+                ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Paper input field (label above a borderless field, hairline card).
+class _PaperInputField extends StatelessWidget {
+  const _PaperInputField({
     required this.label,
     required this.hintText,
     required this.controller,
@@ -557,9 +525,7 @@ class _DarkInputField extends StatelessWidget {
                   enabled: enabled,
                   onChanged: onChanged,
                   textCapitalization: textCapitalization,
-                  style: AppTypography.body.copyWith(
-                    color: AppColors.textPrimary,
-                  ),
+                  style: AppTypography.body.copyWith(color: AppColors.ink),
                   cursorColor: AppColors.accent,
                   decoration: InputDecoration(
                     hintText: hintText,
@@ -582,61 +548,6 @@ class _DarkInputField extends StatelessWidget {
             ],
           ),
         ],
-      ),
-    );
-  }
-}
-
-/// Social login button for auth screen.
-class _SocialButton extends StatelessWidget {
-  const _SocialButton({
-    required this.label,
-    required this.icon,
-    required this.onTap,
-    this.useColorIcon = false,
-  });
-
-  final String label;
-  final String icon;
-  final VoidCallback? onTap;
-  final bool useColorIcon;
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        height: 52,
-        decoration: BoxDecoration(
-          color: AppColors.surface,
-          border: Border.all(color: AppColors.border),
-          borderRadius: AppRadii.br16,
-          boxShadow: AppShadows.sm,
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            SvgPicture.asset(
-              icon,
-              width: 20,
-              height: 20,
-              colorFilter: useColorIcon
-                  ? null
-                  : const ColorFilter.mode(
-                      AppColors.textPrimary,
-                      BlendMode.srcIn,
-                    ),
-            ),
-            const SizedBox(width: 8),
-            Text(
-              label,
-              style: AppTypography.captionMedium.copyWith(
-                fontSize: 14,
-                color: AppColors.textPrimary,
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -671,18 +582,14 @@ class _ErrorBanner extends StatelessWidget {
               ),
               child: Row(
                 children: [
-                  const Icon(
-                    Icons.error_outline,
-                    size: 18,
-                    color: AppColors.error,
-                  ),
+                  const Icon(Icons.error_outline,
+                      size: 18, color: AppColors.error),
                   const SizedBox(width: AppSpacing.s12),
                   Expanded(
                     child: Text(
                       message!,
-                      style: AppTypography.caption.copyWith(
-                        color: AppColors.error,
-                      ),
+                      style: AppTypography.caption
+                          .copyWith(color: AppColors.error),
                     ),
                   ),
                   GestureDetector(
