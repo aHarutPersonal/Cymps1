@@ -116,6 +116,7 @@ PROMPT_PLACEHOLDERS = {
         "interview_transcript_json",
         "comparison_summary",
         "blueprint_markdown",
+        "previous_cycle_block",
     ],
     
     
