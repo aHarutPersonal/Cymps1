@@ -2,6 +2,26 @@
 // /jobs/{id}). Hand-written fromJson, matching the backend's response schemas:
 // plan/item payloads are camelCase, item-detail payloads are snake_case.
 
+/// Result of toggling a plan item's completion state. Contains the new
+/// completed flag plus plan-level signals used by the achievement cycle flow.
+class ToggleResult {
+  const ToggleResult({
+    required this.completed,
+    this.planComplete = false,
+    this.missionTasksRemaining,
+  });
+
+  final bool completed;
+  final bool planComplete;
+  final int? missionTasksRemaining;
+
+  factory ToggleResult.fromJson(Map<String, dynamic> j) => ToggleResult(
+        completed: j['completed'] as bool? ?? false,
+        planComplete: j['planComplete'] as bool? ?? false,
+        missionTasksRemaining: (j['missionTasksRemaining'] as num?)?.toInt(),
+      );
+}
+
 /// One generated plan item. `type == 'habit'` items are the week's daily
 /// rhythm tasks; every other type is a primary mission task.
 class BackendPlanItem {

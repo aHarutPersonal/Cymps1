@@ -37,13 +37,61 @@ class PlanRepository {
     return PlanItemDetailed.fromJson(response.data as Map<String, dynamic>);
   }
 
-  /// Toggle item-level completion. Returns the new completed state.
-  Future<bool> toggleItemComplete(String itemId) async {
+  /// Toggle item-level completion. Returns a [ToggleResult] with the new
+  /// completed state plus plan-level signals (planComplete,
+  /// missionTasksRemaining) used by the achievement cycle flow.
+  Future<ToggleResult> toggleItemComplete(String itemId) async {
     final response =
         await _dioClient.post('/plan-items/$itemId/toggle-complete');
     final data = response.data as Map<String, dynamic>;
     debugPrint('✅ Toggled plan item $itemId → ${data['completed']}');
-    return data['completed'] as bool? ?? false;
+    return ToggleResult.fromJson(data);
+  }
+
+  /// Fetch an AI-suggested achievement title + category for a completed item.
+  Future<({String title, String category})> fetchAchievementSuggestion(
+      String itemId) async {
+    final r = await _dioClient.post('/plan-items/$itemId/achievement-suggestion');
+    final d = r.data as Map<String, dynamic>;
+    return (title: d['title'] as String? ?? '', category: d['category'] as String? ?? 'other');
+  }
+
+  /// Persist a user achievement (auto-generated or manually edited).
+  Future<void> saveAchievement({
+    required String title,
+    required String category,
+    String? notes,
+    String? evidenceLink,
+    required String source,
+    String? planId,
+    String? planItemId,
+    int cycleNumber = 1,
+  }) async {
+    await _dioClient.post('/achievements', data: {
+      'title': title,
+      'category': category,
+      'source': source,
+      if (planId != null) 'planId': planId,
+      if (planItemId != null) 'planItemId': planItemId,
+      'cycleNumber': cycleNumber,
+      if (notes != null) 'notes': notes,
+      if (evidenceLink != null) 'evidenceLink': evidenceLink,
+    });
+  }
+
+  /// Generate a narrative summary of the completed plan cycle.
+  Future<({String narrative, String? capstoneTitle})> fetchCycleSummary(
+      String planId) async {
+    final r = await _dioClient.post('/plans/$planId/cycle-summary');
+    final d = r.data as Map<String, dynamic>;
+    return (narrative: d['narrative'] as String? ?? '',
+        capstoneTitle: d['capstoneTitle'] as String?);
+  }
+
+  /// Enqueue generation of the next 12-week plan cycle. Returns the job id.
+  Future<String> generateNext(String planId) async {
+    final r = await _dioClient.post('/plans/$planId/generate-next');
+    return (r.data as Map<String, dynamic>)['jobId'] as String? ?? '';
   }
 
   /// Today's habit/practice items for the plan's current week, with per-day

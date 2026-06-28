@@ -76,11 +76,11 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
     if (detailed == null || _toggling) return;
     setState(() => _toggling = true);
     try {
-      final completed = await ref
+      final result = await ref
           .read(planRepositoryProvider)
           .toggleItemComplete(detailed.item.id);
       if (!mounted) return;
-      if (completed) {
+      if (result.completed) {
         showCmpysToast(context, 'Marked done. Kept your word.',
             icon: Icons.check_rounded, tone: AppColors.green);
       }
