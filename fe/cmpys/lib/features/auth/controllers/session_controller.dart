@@ -157,33 +157,27 @@ class SessionController extends StateNotifier<SessionState> {
       return;
     }
 
-    // Get current idol ID
-    final currentIdolId = _prefs?.getString(SessionKeys.currentIdolId);
+    // Onboarding is complete → the user is ready. The active mentor is hydrated
+    // from the backend on the home screen (getLatestSession → syncFromSession),
+    // so a missing locally-cached idol id must NOT bounce a returning user back
+    // into onboarding — that was the defect that lost their session on relaunch.
+    // currentIdolId is informational only (no consumers read it); default to ''.
+    final currentIdolId =
+        _prefs?.getString(SessionKeys.currentIdolId) ?? '';
     debugPrint('🔑 currentIdolId: $currentIdolId');
-    if (currentIdolId == null) {
-      // Has profile but no mentor chosen
-      debugPrint('🔑 No idol ID, setting SessionNeedsOnboarding');
-      state = SessionNeedsOnboarding(user: user);
-      return;
-    }
-
     debugPrint('🔑 Setting SessionReady');
     state = SessionReady(user: user, currentIdolId: currentIdolId);
   }
 
   /// Check if user needs onboarding.
+  ///
+  /// The agentic onboarding flow is the source of truth and persists this flag
+  /// (and the chosen idol) on completion. We intentionally do NOT gate on the
+  /// legacy backend profile fields (fullName/birthDate/interests): the agentic
+  /// flow never PATCHes them to `/me`, so requiring them here bounced every
+  /// already-onboarded user back into onboarding on every relaunch.
   bool _needsOnboarding(Me user) {
-    // Check if onboarding was completed
-    final onboardingComplete =
-        _prefs?.getBool(SessionKeys.onboardingComplete) ?? false;
-    if (!onboardingComplete) return true;
-
-    // Check required profile fields
-    if (user.fullName == null || user.fullName!.isEmpty) return true;
-    if (user.birthDate == null) return true;
-    if (user.interests.isEmpty) return true;
-
-    return false;
+    return !(_prefs?.getBool(SessionKeys.onboardingComplete) ?? false);
   }
 
   /// Called after successful login/register.

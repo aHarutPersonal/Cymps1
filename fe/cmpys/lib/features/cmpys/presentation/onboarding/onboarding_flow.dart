@@ -59,8 +59,15 @@ class _CmpysOnboardingFlowState extends ConsumerState<CmpysOnboardingFlow> {
           blueprintMd: _draft.blueprintMd,
           planJobId: _draft.planJobId,
         );
+    final idolId = (_selectedIdol ?? defaultIdol()).id;
     try {
       await ref.read(sessionControllerProvider.notifier).completeOnboarding();
+      // Persist the chosen mentor so the next cold start resolves to
+      // SessionReady → /home instead of bouncing back into onboarding. The
+      // splash gates on SessionReady, which requires a persisted idol id.
+      await ref
+          .read(sessionControllerProvider.notifier)
+          .setCurrentIdolId(idolId);
     } catch (_) {
       // Best-effort. The design demo can proceed even if backend wiring is
       // pending; we route into /home either way so the user sees the app.
