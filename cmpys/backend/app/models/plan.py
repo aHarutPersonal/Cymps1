@@ -52,7 +52,16 @@ class Plan(Base, UUIDMixin, TimestampMixin):
     target_age: Mapped[int] = mapped_column(Integer, nullable=False)
     duration_weeks: Mapped[int] = mapped_column(Integer, nullable=False, default=12)
     weekly_hours: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
-    
+    cycle_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    previous_plan_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("plans.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
     # New: stores roadmap_thesis and anti_goals from plan_generate.txt
     # Structure: { "roadmap_thesis": "...", "anti_goals": ["..."] }
     roadmap_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
