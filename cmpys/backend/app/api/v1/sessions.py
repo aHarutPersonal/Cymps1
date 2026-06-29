@@ -199,6 +199,7 @@ def _build_session_response(session: IntakeSession) -> dict:
         "interview_turn_count": session.interview_turn_count,
         "comparison_output": session.comparison_output,
         "blueprint_output": session.blueprint_output,
+        "comparisonScores": getattr(session, "comparison_scores_json", None),
         "interview_thread_id": session.interview_thread_id,
         "created_at": session.created_at.isoformat() if session.created_at else None,
         "updated_at": session.updated_at.isoformat() if session.updated_at else None,
