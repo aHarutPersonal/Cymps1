@@ -663,7 +663,30 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
         
         await _update_job(db, job, progress=50)
         
-        # Render prompt with 3-var schema (task, goal, learning preference)
+        # session_context grounds the lesson in the user's agentic session
+        # (blueprint + comparison). Best-effort: an empty string still renders a
+        # valid lesson, but the prompt REQUIRES the key, so it must always be
+        # supplied (its omission failed every lesson with PROMPT_PARAMS_MISSING).
+        session_context = ""
+        try:
+            sctx = await _load_session_context(
+                db,
+                user_id=user_id,
+                idol_id=idol.id if idol else None,
+                session_id=None,
+            )
+            session_context = "\n\n".join(
+                p
+                for p in [
+                    sctx.get("blueprint_markdown") or "",
+                    sctx.get("comparison_summary") or "",
+                ]
+                if p
+            ).strip()[:4000]
+        except Exception as e:
+            logger.warning(f"[PLAN_DETAILS] session_context load failed: {e}")
+
+        # Render prompt (task, goal, learning pref, idol, session context).
         prompt = load_and_render(
             "plan_item_details.txt",
             {
@@ -672,6 +695,7 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                 "learning_preferences": user_learning_pref,
                 "idol_name": idol_name,
                 "idol_domain": idol_domain,
+                "session_context": session_context,
             },
             strict=True,
         )
@@ -685,7 +709,24 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                 system_prompt=system_prompt,
                 user_prompt=prompt,
             )
-            
+
+            # Gemini occasionally emits JSON that survives neither the parser nor
+            # _repair_json (e.g. a dropped delimiter inside long lesson markdown).
+            # A single fresh sampling almost always returns valid JSON, so retry
+            # once with an explicit strict-JSON reminder before giving up.
+            if llm_response.error:
+                logger.warning(
+                    f"[PLAN_DETAILS] LLM JSON error for '{item.title}': "
+                    f"{llm_response.error}. Retrying once."
+                )
+                llm_response = await client.generate_json(
+                    system_prompt=system_prompt,
+                    user_prompt=prompt
+                    + "\n\nIMPORTANT: Return ONLY strictly valid, minified JSON. "
+                    "Escape every quote and newline inside string values. No "
+                    "trailing commas, no commentary, no markdown fences.",
+                )
+
             if llm_response.error:
                 await _update_job(db, job, status="failed", step="error", error_message=llm_response.error)
                 return {"status": "failed", "error": llm_response.error}
