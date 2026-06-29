@@ -156,7 +156,15 @@ class IntakeSession(Base, UUIDMixin, TimestampUpdateMixin):
         nullable=True,
         default=None,
     )
-    
+
+    # Structured comparison scores (dimensions + milestones) generated after the
+    # prose comparison. Null until generated / if generation fails.
+    comparison_scores_json: Mapped[dict | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        default=None,
+    )
+
     # Generated outputs (Phases 4–5)
     comparison_output: Mapped[str | None] = mapped_column(
         Text,
