@@ -42,7 +42,9 @@ from app.services.gemini import (
     interview_stream,
     stream_with_grounding,
 )
+from app.services.comparison.scoring import generate_comparison_scores
 from app.services.content_resources import attach_content_resources_to_materials
+from app.services.llm import get_llm_client
 from app.services.llm.prompt_loader import load_and_render, sanitize_untrusted_input
 from app.services.transcripts import build_chat_history_json
 
@@ -804,6 +806,29 @@ async def generate_results(
             await db.commit()
             yield f"data: {json_lib.dumps({'type': 'error', 'section': 'blueprint', 'message': f'Blueprint generation failed. You can retry. Error: {str(e)}', 'retryable': True})}\n\n"
             return
+
+        # =====================================================================
+        # Part 2.5: Structured comparison scores (best-effort)
+        # =====================================================================
+        # The prose comparison is the mirror; these are the numbers behind the
+        # Compare screen's gauges/radar. Best-effort: a failure leaves
+        # comparison_scores_json null and the client falls back to seed data.
+        try:
+            scores = await generate_comparison_scores(
+                get_llm_client(),
+                idol_name=idol_name,
+                user_age=session.user_age,
+                user_profile_json=json_lib.dumps(user_profile),
+                interview_transcript_json=interview_transcript,
+                idol_facts_json=json_lib.dumps(session.idol_facts_json or {}),
+                comparison_summary=full_comparison,
+            )
+            if scores:
+                session.comparison_scores_json = scores
+                await db.commit()
+                yield f"data: {json_lib.dumps({'type': 'comparison_scores', 'ready': True})}\n\n"
+        except Exception as e:
+            logger.error(f"[SESSION] comparison scores failed: {e}")
 
         # =====================================================================
         # Part 3: Kick off 12-week plan generation
