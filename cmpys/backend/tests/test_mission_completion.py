@@ -1,7 +1,7 @@
 """Mission-task completion detection: daily habits never gate completion."""
 from types import SimpleNamespace
 
-from app.api.v1.plans import _count_remaining_missions, MISSION_TYPES
+from app.api.v1.plans import _count_remaining_missions, _should_clear_completed_at, MISSION_TYPES
 from app.models.plan import PlanItemType
 
 
@@ -32,3 +32,15 @@ def test_remaining_zero_when_all_missions_done():
         _item("c", PlanItemType.HABIT),
     ]
     assert _count_remaining_missions(items, {"a"}) == 0
+
+
+def test_clears_when_set_and_no_next_cycle():
+    assert _should_clear_completed_at(True, False) is True
+
+
+def test_sticky_when_next_cycle_exists():
+    assert _should_clear_completed_at(True, True) is False
+
+
+def test_no_clear_when_never_completed():
+    assert _should_clear_completed_at(False, False) is False

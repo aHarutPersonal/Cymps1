@@ -1,0 +1,41 @@
+You are scoring how this person compares to {idol_name} at age {user_age}, on five fixed dimensions. Output ONLY JSON.
+
+THE PERSON (profile): {user_profile_json}
+
+WHAT THEY SAID IN THE INTERVIEW:
+{interview_transcript_json}
+
+VERIFIED FACTS ABOUT {idol_name} BY AGE {user_age}:
+{idol_facts_json}
+
+THE HONEST COMPARISON ALREADY DELIVERED (for grounding):
+{comparison_summary}
+
+Score these EXACT five dimension ids (do not rename or add any):
+- "capital"  (Capital at work — money/assets actually compounding)
+- "knowledge" (Knowledge base — depth in the idol's domain)
+- "habits"   (Daily discipline — consistency of the right daily actions)
+- "network"  (Trusted network — mentors/peers compounding their growth)
+- "clarity"  (Strategic clarity — a written, statable philosophy/system)
+
+For EACH dimension give:
+- "you": integer 0-100, grounded in what the person revealed. Be fair, not harsh.
+- "idol": integer 0-100, grounded in the verified facts at the same age.
+- "you_note": one concrete sentence (max 18 words) about the person's current state.
+- "idol_note": one concrete sentence (max 18 words) about the idol at that age, factual.
+
+Also give "milestones": 5 SPECIFIC things {idol_name} had achieved by age {user_age} (from the verified facts), each as {"text": "...", "hit_by_age": <int>}. Each text is a short, claimable accomplishment (max 12 words).
+
+OUTPUT (strict JSON, no markdown, no commentary):
+{
+  "dimensions": [
+    {"id":"capital","label":"Capital at work","you":0,"idol":0,"you_note":"","idol_note":""},
+    {"id":"knowledge","label":"Knowledge base","you":0,"idol":0,"you_note":"","idol_note":""},
+    {"id":"habits","label":"Daily discipline","you":0,"idol":0,"you_note":"","idol_note":""},
+    {"id":"network","label":"Trusted network","you":0,"idol":0,"you_note":"","idol_note":""},
+    {"id":"clarity","label":"Strategic clarity","you":0,"idol":0,"you_note":"","idol_note":""}
+  ],
+  "milestones": [
+    {"text":"...","hit_by_age":0}
+  ]
+}

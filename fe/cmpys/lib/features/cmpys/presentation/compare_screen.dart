@@ -42,10 +42,12 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
     final idol = st.idol;
     final c = cmpysComparison;
     final dims = st.liveDims();
+    final ms = st.liveMilestones();
+    final cmpAge = st.user.age > 0 ? st.user.age : c.age;
     final youAvg = (dims.map((d) => d.you).reduce((a, b) => a + b) / dims.length).round();
     final idolAvg = (dims.map((d) => d.idol).reduce((a, b) => a + b) / dims.length).round();
     final overall = (youAvg / idolAvg * 100).round();
-    final hitCount = c.milestones.where((m) => st.milestones[m.id] ?? false).length;
+    final hitCount = ms.where((m) => st.milestones[m.id] ?? false).length;
     final pending = st.pendingWins().length;
     final initial = st.user.name.isNotEmpty ? st.user.name[0].toUpperCase() : 'Y';
 
@@ -59,7 +61,7 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                CmpysKicker('Both at age ${c.age}'),
+                CmpysKicker('Both at age $cmpAge'),
                 const SizedBox(height: 4),
                 Text('You vs ${idol.short}',
                     style: AppTypography.display.copyWith(
@@ -77,7 +79,7 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
             const SizedBox(height: 16),
             _dimensionRows(dims),
             const SizedBox(height: 22),
-            _milestonesSection(st, idol, hitCount),
+            _milestonesSection(st, idol, ms, hitCount, cmpAge),
             const SizedBox(height: 22),
             const Padding(
                 padding: EdgeInsets.only(left: 2),
@@ -501,8 +503,8 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
     );
   }
 
-  Widget _milestonesSection(CmpysState st, CmpysIdol idol, int hitCount) {
-    final c = cmpysComparison;
+  Widget _milestonesSection(
+      CmpysState st, CmpysIdol idol, List<CmpysMilestone> ms, int hitCount, int cmpAge) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -510,9 +512,9 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
           padding: const EdgeInsets.only(left: 2),
           child: Row(
             children: [
-              CmpysKicker('Milestones ${idol.short} hit by ${c.age}'),
+              CmpysKicker('Milestones ${idol.short} hit by $cmpAge'),
               const Spacer(),
-              Text('$hitCount/${c.milestones.length}',
+              Text('$hitCount/${ms.length}',
                   style: AppTypography.captionMedium.copyWith(
                       color: AppColors.green, fontWeight: FontWeight.w700)),
             ],
@@ -523,8 +525,8 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
           pad: const EdgeInsets.all(6),
           child: Column(
             children: [
-              for (var i = 0; i < c.milestones.length; i++)
-                _milestoneRow(st, c.milestones[i], first: i == 0),
+              for (var i = 0; i < ms.length; i++)
+                _milestoneRow(st, ms[i], first: i == 0),
             ],
           ),
         ),

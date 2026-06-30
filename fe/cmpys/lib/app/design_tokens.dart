@@ -20,7 +20,7 @@ abstract final class AppColors {
   static const Color bg = brandBg;
   static const Color bgTrue = Color(0xFFF9FAFB);
   static const Color surface = Color(0xFFFFFFFF);
-  static const Color surfaceHighlight = Color(0xFFF8FAFC);
+  static const Color surfaceHighlight = Color(0xFFECECEF); // --hair (tracks)
   static const Color surface2 = surfaceHighlight;
   static const Color surfaceGlass = Color(0xEFFFFFFF);
 
@@ -45,10 +45,10 @@ abstract final class AppColors {
   static const Color timelineLine = Color(0x1A1F1B16);
   static const Color timelineLineActive = brandAccent;
 
-  // ── Typography Colors (light backgrounds) ──
-  static const Color textPrimary = charcoal;
-  static const Color textSecondary = Color(0xFF64748B);
-  static const Color textTertiary = Color(0xFF94A3B8);
+  // ── Typography Colors — reference ink scale (Cmpys.zip) ──
+  static const Color textPrimary = ink; //               --ink   #16161C
+  static const Color textSecondary = Color(0xFF5B5C66); // --ink-2
+  static const Color textTertiary = Color(0xFF9A9BA6); //  --ink-3
 
   // ── Typography Colors (dark backgrounds — auth/splash) ──
   static const Color textOnDarkPrimary = Color(0xFFFFFFFF);
@@ -75,10 +75,10 @@ abstract final class AppColors {
   static const Color warning = Color(0xFFFFC107);
   static const Color info = blue;
 
-  static const Color border = Color(0xFFE2E8F0);
-  static const Color borderLight = Color(0xFFF1F5F9);
-  static const Color borderFocus = Color(0xFFCBD5E1);
-  static const Color cardBorder = Color(0xFFE2E8F0);
+  static const Color border = Color(0xFFECECEF); //      --hair
+  static const Color borderLight = Color(0xFFECECEF); //  --hair
+  static const Color borderFocus = Color(0xFFDDDDE3); //  --hair-2
+  static const Color cardBorder = Color(0xFFECECEF); //   --hair
 
   // ── Dark-mode borders (auth/splash) ──
   static const Color borderOnDark = Color(0x1AFFFFFF);

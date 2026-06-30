@@ -225,7 +225,16 @@ PROMPT_PLACEHOLDERS = {
         "age",
         "idol_description",
     ],
-    
+
+    "comparison_scores.txt": [
+        "idol_name",
+        "user_age",
+        "user_profile_json",
+        "interview_transcript_json",
+        "idol_facts_json",
+        "comparison_summary",
+    ],
+
 }
 
 

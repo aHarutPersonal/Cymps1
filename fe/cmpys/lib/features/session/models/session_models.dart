@@ -103,6 +103,7 @@ class Session with _$Session {
     @Default(0) int interviewTurnCount,
     String? comparisonOutput,
     String? blueprintOutput,
+    Map<String, dynamic>? comparisonScores,
     String? interviewThreadId,
     DateTime? createdAt,
     DateTime? updatedAt,
@@ -123,6 +124,9 @@ class Session with _$Session {
       interviewTurnCount: _parseInt(json['interview_turn_count']) ?? 0,
       comparisonOutput: json['comparison_output']?.toString(),
       blueprintOutput: json['blueprint_output']?.toString(),
+      comparisonScores: json['comparisonScores'] is Map
+          ? (json['comparisonScores'] as Map).cast<String, dynamic>()
+          : null,
       interviewThreadId: json['interview_thread_id']?.toString(),
       createdAt: _parseDate(json['created_at']),
       updatedAt: _parseDate(json['updated_at']),

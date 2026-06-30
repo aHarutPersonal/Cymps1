@@ -83,12 +83,11 @@ flutter:
   # the material Icons class.
   uses-material-design: true
 
-  # Asset folders
+  # Asset folders (Flutter does NOT include subfolders recursively — list each)
   assets:
     - assets/icons/
     - assets/images/
-    - assets/figma_refs/
-    - assets/videos/
+    - assets/images/mentors/
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
