@@ -20,6 +20,46 @@ import '../data/cmpys_seed.dart';
 const _storeKey = 'cmpys_store_v1';
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Conversion helpers — raw comparisonScores map → seed-shaped objects
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Convert a raw `comparisonScores` map (from the session) into seed-shaped
+/// dimensions. Returns null when absent/empty so callers fall back to seed.
+List<CmpysDimension>? dimsFromScores(Map<String, dynamic>? scores) {
+  final raw = scores?['dimensions'];
+  if (raw is! List || raw.isEmpty) return null;
+  final out = <CmpysDimension>[];
+  for (final d in raw) {
+    if (d is! Map) continue;
+    out.add(CmpysDimension(
+      id: (d['id'] ?? '').toString(),
+      label: (d['label'] ?? '').toString(),
+      you: (d['you'] as num?)?.toInt() ?? 0,
+      idol: (d['idol'] as num?)?.toInt() ?? 0,
+      youNote: (d['you_note'] ?? '').toString(),
+      idolNote: (d['idol_note'] ?? '').toString(),
+    ));
+  }
+  return out.isEmpty ? null : out;
+}
+
+/// Convert raw milestones into seed-shaped CmpysMilestone with stable ids
+/// (`m1`..). Returns null when absent so callers fall back to seed.
+List<CmpysMilestone>? milestonesFromScores(Map<String, dynamic>? scores) {
+  final raw = scores?['milestones'];
+  if (raw is! List || raw.isEmpty) return null;
+  final out = <CmpysMilestone>[];
+  for (var i = 0; i < raw.length; i++) {
+    final m = raw[i];
+    if (m is! Map) continue;
+    final label = (m['label'] ?? m['text'] ?? '').toString();
+    if (label.isEmpty) continue;
+    out.add(CmpysMilestone((m['id'] ?? 'm${i + 1}').toString(), label));
+  }
+  return out.isEmpty ? null : out;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Sub-models
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -189,6 +229,7 @@ class CmpysState {
     this.comparisonMd,
     this.blueprintMd,
     this.planJobId,
+    this.liveComparisonScores,
   });
 
   final CmpysUser user;
@@ -217,6 +258,11 @@ class CmpysState {
   /// Polled (GET /jobs/{id}) until the Celery worker finishes writing the
   /// plan, after which /plans/current serves it.
   final String? planJobId;
+
+  /// Raw `comparison_scores` map from the backend session. When present,
+  /// [liveDims] and [liveMilestones] use these real values; when null they
+  /// fall back to the seed data.
+  final Map<String, dynamic>? liveComparisonScores;
 
   /// A truly empty start: no pre-logged achievements, no fake streak, nothing
   /// checked off. Every entry the user sees is either backend-generated or
@@ -255,6 +301,7 @@ class CmpysState {
     String? comparisonMd,
     String? blueprintMd,
     String? planJobId,
+    Map<String, dynamic>? liveComparisonScores,
   }) =>
       CmpysState(
         user: user ?? this.user,
@@ -274,6 +321,7 @@ class CmpysState {
         comparisonMd: comparisonMd ?? this.comparisonMd,
         blueprintMd: blueprintMd ?? this.blueprintMd,
         planJobId: planJobId ?? this.planJobId,
+        liveComparisonScores: liveComparisonScores ?? this.liveComparisonScores,
       );
 
   Map<String, dynamic> toJson() => {
@@ -352,9 +400,12 @@ class CmpysState {
   // ── derived helpers (mirror record-data.jsx) ──
 
   /// Comparison dimensions with reassessment shifts applied (you-score capped 100).
+  /// Prefers real dims from the session when present, else the seed list.
   List<({String id, String label, int you, int idol, String youNote, String idolNote})>
       liveDims() {
-    return cmpysComparison.dimensions
+    final base = dimsFromScores(liveComparisonScores) ??
+        cmpysComparison.dimensions;
+    return base
         .map((d) => (
               id: d.id,
               label: d.label,
@@ -365,6 +416,11 @@ class CmpysState {
             ))
         .toList();
   }
+
+  /// Real milestones from the session when present, else the seed list.
+  List<CmpysMilestone> liveMilestones() =>
+      milestonesFromScores(liveComparisonScores) ??
+      cmpysComparison.milestones;
 
   List<CmpysWin> pendingWins() =>
       achievements.where((a) => !a.assessed).toList();
@@ -682,6 +738,7 @@ class CmpysStore extends StateNotifier<CmpysState> {
       blueprintMd: (blueprint != null && blueprint.trim().isNotEmpty)
           ? blueprint
           : null,
+      liveComparisonScores: session.comparisonScores,
       user: CmpysUser(
         name: state.user.name,
         age: session.userAge > 0 ? session.userAge : state.user.age,
