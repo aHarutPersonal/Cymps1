@@ -195,6 +195,7 @@ mixin _$Session {
   int get interviewTurnCount => throw _privateConstructorUsedError;
   String? get comparisonOutput => throw _privateConstructorUsedError;
   String? get blueprintOutput => throw _privateConstructorUsedError;
+  Map<String, dynamic>? get comparisonScores => throw _privateConstructorUsedError;
   String? get interviewThreadId => throw _privateConstructorUsedError;
   DateTime? get createdAt => throw _privateConstructorUsedError;
   DateTime? get updatedAt => throw _privateConstructorUsedError;
@@ -220,6 +221,7 @@ abstract class $SessionCopyWith<$Res> {
     int interviewTurnCount,
     String? comparisonOutput,
     String? blueprintOutput,
+    Map<String, dynamic>? comparisonScores,
     String? interviewThreadId,
     DateTime? createdAt,
     DateTime? updatedAt,
@@ -252,6 +254,7 @@ class _$SessionCopyWithImpl<$Res, $Val extends Session>
     Object? interviewTurnCount = null,
     Object? comparisonOutput = freezed,
     Object? blueprintOutput = freezed,
+    Object? comparisonScores = freezed,
     Object? interviewThreadId = freezed,
     Object? createdAt = freezed,
     Object? updatedAt = freezed,
@@ -294,6 +297,10 @@ class _$SessionCopyWithImpl<$Res, $Val extends Session>
                 ? _value.blueprintOutput
                 : blueprintOutput // ignore: cast_nullable_to_non_nullable
                       as String?,
+            comparisonScores: freezed == comparisonScores
+                ? _value.comparisonScores
+                : comparisonScores // ignore: cast_nullable_to_non_nullable
+                      as Map<String, dynamic>?,
             interviewThreadId: freezed == interviewThreadId
                 ? _value.interviewThreadId
                 : interviewThreadId // ignore: cast_nullable_to_non_nullable
@@ -344,6 +351,7 @@ abstract class _$$SessionImplCopyWith<$Res> implements $SessionCopyWith<$Res> {
     int interviewTurnCount,
     String? comparisonOutput,
     String? blueprintOutput,
+    Map<String, dynamic>? comparisonScores,
     String? interviewThreadId,
     DateTime? createdAt,
     DateTime? updatedAt,
@@ -376,6 +384,7 @@ class __$$SessionImplCopyWithImpl<$Res>
     Object? interviewTurnCount = null,
     Object? comparisonOutput = freezed,
     Object? blueprintOutput = freezed,
+    Object? comparisonScores = freezed,
     Object? interviewThreadId = freezed,
     Object? createdAt = freezed,
     Object? updatedAt = freezed,
@@ -418,6 +427,10 @@ class __$$SessionImplCopyWithImpl<$Res>
             ? _value.blueprintOutput
             : blueprintOutput // ignore: cast_nullable_to_non_nullable
                   as String?,
+        comparisonScores: freezed == comparisonScores
+            ? _value.comparisonScores
+            : comparisonScores // ignore: cast_nullable_to_non_nullable
+                  as Map<String, dynamic>?,
         interviewThreadId: freezed == interviewThreadId
             ? _value.interviewThreadId
             : interviewThreadId // ignore: cast_nullable_to_non_nullable
@@ -448,6 +461,7 @@ class _$SessionImpl extends _Session {
     this.interviewTurnCount = 0,
     this.comparisonOutput,
     this.blueprintOutput,
+    this.comparisonScores,
     this.interviewThreadId,
     this.createdAt,
     this.updatedAt,
@@ -480,6 +494,8 @@ class _$SessionImpl extends _Session {
   @override
   final String? blueprintOutput;
   @override
+  final Map<String, dynamic>? comparisonScores;
+  @override
   final String? interviewThreadId;
   @override
   final DateTime? createdAt;
@@ -488,7 +504,7 @@ class _$SessionImpl extends _Session {
 
   @override
   String toString() {
-    return 'Session(id: $id, phase: $phase, userAge: $userAge, userFinancialStatus: $userFinancialStatus, userInterests: $userInterests, selectedIdol: $selectedIdol, interviewTurnCount: $interviewTurnCount, comparisonOutput: $comparisonOutput, blueprintOutput: $blueprintOutput, interviewThreadId: $interviewThreadId, createdAt: $createdAt, updatedAt: $updatedAt)';
+    return 'Session(id: $id, phase: $phase, userAge: $userAge, userFinancialStatus: $userFinancialStatus, userInterests: $userInterests, selectedIdol: $selectedIdol, interviewTurnCount: $interviewTurnCount, comparisonOutput: $comparisonOutput, blueprintOutput: $blueprintOutput, comparisonScores: $comparisonScores, interviewThreadId: $interviewThreadId, createdAt: $createdAt, updatedAt: $updatedAt)';
   }
 
   @override
@@ -513,6 +529,10 @@ class _$SessionImpl extends _Session {
                 other.comparisonOutput == comparisonOutput) &&
             (identical(other.blueprintOutput, blueprintOutput) ||
                 other.blueprintOutput == blueprintOutput) &&
+            const DeepCollectionEquality().equals(
+              other.comparisonScores,
+              comparisonScores,
+            ) &&
             (identical(other.interviewThreadId, interviewThreadId) ||
                 other.interviewThreadId == interviewThreadId) &&
             (identical(other.createdAt, createdAt) ||
@@ -533,6 +553,7 @@ class _$SessionImpl extends _Session {
     interviewTurnCount,
     comparisonOutput,
     blueprintOutput,
+    const DeepCollectionEquality().hash(comparisonScores),
     interviewThreadId,
     createdAt,
     updatedAt,
@@ -558,6 +579,7 @@ abstract class _Session extends Session {
     final int interviewTurnCount,
     final String? comparisonOutput,
     final String? blueprintOutput,
+    final Map<String, dynamic>? comparisonScores,
     final String? interviewThreadId,
     final DateTime? createdAt,
     final DateTime? updatedAt,
@@ -582,6 +604,8 @@ abstract class _Session extends Session {
   String? get comparisonOutput;
   @override
   String? get blueprintOutput;
+  @override
+  Map<String, dynamic>? get comparisonScores;
   @override
   String? get interviewThreadId;
   @override
