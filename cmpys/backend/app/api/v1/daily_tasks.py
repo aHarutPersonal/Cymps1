@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import and_, distinct, func, select
+from sqlalchemy import and_, distinct, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Annotated
 
@@ -427,39 +427,50 @@ async def get_streak(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> StreakResponse:
     """Get the user's current and longest daily streak."""
-    current = await calculate_streak(db, current_user.id)
-
-    # Calculate longest streak
+    # ⚡ Bolt Optimization: Fetch distinct dates once to calculate all streak stats
+    # in memory, saving 2 database queries
     dates_stmt = (
         select(distinct(DailyTaskCompletion.completed_date))
         .where(DailyTaskCompletion.user_id == current_user.id)
-        .order_by(DailyTaskCompletion.completed_date.asc())
+        .order_by(DailyTaskCompletion.completed_date.desc())
     )
     dates_result = await db.execute(dates_stmt)
     all_dates = [row[0] for row in dates_result.fetchall()]
 
-    longest = 0
-    if all_dates:
-        longest = 1
-        current_run = 1
-        for i in range(1, len(all_dates)):
-            if all_dates[i] == all_dates[i - 1] + timedelta(days=1):
-                current_run += 1
-                longest = max(longest, current_run)
-            else:
-                current_run = 1
+    if not all_dates:
+        return StreakResponse(
+            current_streak=0,
+            longest_streak=0,
+            last_active_date=None,
+        )
 
-    # Get last active date
-    last_stmt = select(func.max(DailyTaskCompletion.completed_date)).where(
-        DailyTaskCompletion.user_id == current_user.id
-    )
-    last_result = await db.execute(last_stmt)
-    last_active = last_result.scalar()
+    # Calculate current streak
+    today = date.today()
+    current = 0
+    if all_dates[0] == today or all_dates[0] == today - timedelta(days=1):
+        expected = all_dates[0]
+        for d in all_dates:
+            if d == expected:
+                current += 1
+                expected -= timedelta(days=1)
+            elif d < expected:
+                break
+
+    # Calculate longest streak
+    longest = 1
+    current_run = 1
+    for i in range(1, len(all_dates)):
+        # all_dates is ordered descending, so the previous day is all_dates[i - 1] - 1 day
+        if all_dates[i] == all_dates[i - 1] - timedelta(days=1):
+            current_run += 1
+            longest = max(longest, current_run)
+        else:
+            current_run = 1
 
     return StreakResponse(
         current_streak=current,
         longest_streak=longest,
-        last_active_date=last_active.isoformat() if last_active else None,
+        last_active_date=all_dates[0].isoformat(),
     )
 
 
