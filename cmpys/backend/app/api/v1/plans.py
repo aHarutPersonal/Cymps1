@@ -679,22 +679,29 @@ async def toggle_item_complete(
         
         # If marking complete AND details exist, also mark all steps complete
         if item.details_json and "steps" in item.details_json:
-            for step in item.details_json["steps"]:
-                step_id = step.get("id")
-                if not step_id:
-                    continue
-                
-                # Check if step completion exists
+            # ⚡ Bolt Optimization: Batch fetch step completions to prevent N+1 query problem
+            step_ids = [step.get("id") for step in item.details_json["steps"] if step.get("id")]
+
+            existing_step_completions = {}
+            if step_ids:
                 step_stmt = (
                     select(PlanItemStepCompletion)
                     .where(
                         PlanItemStepCompletion.user_id == current_user.id,
                         PlanItemStepCompletion.plan_item_id == item_id,
-                        PlanItemStepCompletion.step_id == step_id,
+                        PlanItemStepCompletion.step_id.in_(step_ids),
                     )
                 )
                 step_result = await db.execute(step_stmt)
-                step_completion = step_result.scalar_one_or_none()
+                for sc in step_result.scalars():
+                    existing_step_completions[sc.step_id] = sc
+
+            for step in item.details_json["steps"]:
+                step_id = step.get("id")
+                if not step_id:
+                    continue
+
+                step_completion = existing_step_completions.get(step_id)
                 
                 if step_completion:
                     if not step_completion.completed_at:
@@ -880,7 +887,7 @@ async def regenerate_item_details(
     
     Returns job_id to poll for completion.
     """
-    item = await _get_item_for_user(db, item_id, current_user.id)
+    await _get_item_for_user(db, item_id, current_user.id)
     
     # Create job
     job = PlanItemDetailJob(
