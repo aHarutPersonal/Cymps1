@@ -682,12 +682,17 @@ class GeminiLLMClient(BaseLLMClient):
         start_time = time.perf_counter()
         
         try:
-            client = genai.Client(api_key=api_key)
-            
+            # Reuse the shared warm client (avoids a TCP+TLS handshake per
+            # call) and enforce the configured timeout — previously stored
+            # but never applied, so user-facing paths could hang unbounded.
+            from app.services.gemini import _gemini_client
+            client = _gemini_client() if api_key == settings.gemini_api_key else genai.Client(api_key=api_key)
+
             # Build config
             config_kwargs: dict[str, Any] = {
                 "temperature": 0.1,
                 "response_mime_type": "application/json",
+                "http_options": types.HttpOptions(timeout=int(self.timeout * 1000)),
             }
             if self.max_tokens:
                 config_kwargs["max_output_tokens"] = self.max_tokens

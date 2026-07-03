@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -22,6 +23,16 @@ class ScalarResult:
 
     def scalar_one_or_none(self):
         return self._value
+
+    def scalars(self):
+        return self
+
+    def all(self):
+        if self._value is None:
+            return []
+        if isinstance(self._value, list):
+            return self._value
+        return [self._value]
 
 
 class LLMResponse:
@@ -443,6 +454,148 @@ async def test_get_or_create_video_resource_caches_unavailable_query_without_res
     assert result.metadata_json["unavailable"] is True
     db.add.assert_called_once_with(result)
     db.flush.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_attach_content_resources_defers_uncached_book_generation(monkeypatch):
+    from app.services import content_resources as svc
+
+    db = AsyncMock()
+    db.add = MagicMock()
+    db.execute.return_value = ScalarResult(None)
+    enqueued = []
+
+    monkeypatch.setattr(
+        svc,
+        "enqueue_book_module_generation",
+        lambda **kwargs: enqueued.append(kwargs),
+    )
+
+    async def source_lookup(**kwargs):
+        raise AssertionError("source lookup must not run inline when deferred")
+
+    async def factory(**kwargs):
+        raise AssertionError("book generation must not run inline when deferred")
+
+    materials = await svc.attach_content_resources_to_materials(
+        db,
+        [
+            {
+                "title": "Atomic Habits",
+                "type": "book",
+                "author_or_creator": "James Clear",
+                "reason": "Habit design.",
+            }
+        ],
+        user_goal="build better routines",
+        book_source_lookup=source_lookup,
+        book_module_factory=factory,
+        defer_book_generation=True,
+    )
+
+    assert "content_resource_id" not in materials[0]
+    assert materials[0]["canonical_key"] == "book:james_clear:atomic_habits"
+    assert enqueued == [
+        {
+            "title": "Atomic Habits",
+            "author": "James Clear",
+            "user_goal": "build better routines",
+            "source_context": "Habit design.",
+        }
+    ]
+    db.add.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_attach_content_resources_attaches_cached_book_without_enqueue(monkeypatch):
+    from app.services import content_resources as svc
+
+    cached = MagicMock()
+    cached.id = "book-resource-1"
+    cached.canonical_key = "book:james_clear:atomic_habits"
+    cached.source_url = "https://example.com/atomic-habits"
+    cached.thumbnail_url = None
+    cached.license_status = LicenseStatus.LLM_SUMMARY
+    cached.content_markdown = "# Atomic Habits\n\nCached module."
+    cached.duration_minutes = 15
+    cached.summary_json = {"ideas": [], "promise": "Small habits compound.", "sections": []}
+
+    db = AsyncMock()
+    db.add = MagicMock()
+    db.execute.return_value = ScalarResult([cached])
+
+    def fail_enqueue(**kwargs):
+        raise AssertionError("cached book must not be enqueued")
+
+    monkeypatch.setattr(svc, "enqueue_book_module_generation", fail_enqueue)
+
+    materials = await svc.attach_content_resources_to_materials(
+        db,
+        [
+            {
+                "title": "Atomic Habits",
+                "type": "book",
+                "author_or_creator": "James Clear",
+            }
+        ],
+        defer_book_generation=True,
+    )
+
+    # Cached materials only need the single batched IN lookup.
+    assert db.execute.await_count == 1
+    assert materials[0]["content_resource_id"] == "book-resource-1"
+    assert materials[0]["canonical_key"] == "book:james_clear:atomic_habits"
+    assert materials[0]["content_markdown"].startswith("# Atomic Habits")
+    assert materials[0]["license_status"] == "llm_summary"
+    db.add.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_attach_content_resources_runs_independent_book_prep_concurrently():
+    from app.services.content_resources import attach_content_resources_to_materials
+
+    db = AsyncMock()
+    db.add = MagicMock()
+    db.execute.return_value = ScalarResult(None)
+
+    started = {"Deep Work": asyncio.Event(), "Atomic Habits": asyncio.Event()}
+
+    async def no_source(**kwargs):
+        return None
+
+    async def factory(**kwargs):
+        title = kwargs["title"]
+        other = "Atomic Habits" if title == "Deep Work" else "Deep Work"
+        started[title].set()
+        # Each factory only completes once the other has started, which
+        # deadlocks (and times out) unless the prep work runs concurrently.
+        await asyncio.wait_for(started[other].wait(), timeout=1.0)
+        return {
+            "title": title,
+            "author_or_creator": kwargs["author"],
+            "duration_minutes": 15,
+            "promise": "Apply one durable idea.",
+            "sections": [],
+            "ideas": [],
+            "content_markdown": _book_module_markdown(title),
+        }
+
+    materials = await attach_content_resources_to_materials(
+        db,
+        [
+            {"title": "Deep Work", "type": "book", "author_or_creator": "Cal Newport"},
+            {"title": "Atomic Habits", "type": "book", "author_or_creator": "James Clear"},
+        ],
+        user_goal="focus better",
+        book_source_lookup=no_source,
+        book_module_factory=factory,
+    )
+
+    assert materials[0]["canonical_key"] == "book:cal_newport:deep_work"
+    assert materials[1]["canonical_key"] == "book:james_clear:atomic_habits"
+    assert materials[0]["content_markdown"].startswith("# Deep Work")
+    assert materials[1]["content_markdown"].startswith("# Atomic Habits")
+    assert db.add.call_count == 2
 
 
 @pytest.mark.asyncio

@@ -17,6 +17,15 @@ import '../state/cmpys_backend_sync.dart';
 import '../state/cmpys_store.dart';
 import 'detail_screens.dart';
 
+/// Lazily-built lookup from plan-item id to its (item, pillar). `cmpysPlan` is
+/// a top-level const, so this is computed once for the whole app instead of
+/// re-scanning every pillar/item on each habit tile render (was O(pillars×items)
+/// per tile).
+final Map<String, ({CmpysPlanItem item, CmpysPillar pillar})> _pillarByItemId = {
+  for (final p in cmpysPlan.pillars)
+    for (final it in p.items) it.id: (item: it, pillar: p),
+};
+
 /// CMPYS Today tab — the "next best action" home screen.
 ///
 /// Daily habits come from the AI-generated 12-week plan (current week's
@@ -31,14 +40,8 @@ class CmpysTodayScreen extends ConsumerWidget {
       .where((it) => it.repeat == CmpysRepeat.daily)
       .toList();
 
-  ({CmpysPlanItem item, CmpysPillar pillar})? _pillarFor(String id) {
-    for (final p in cmpysPlan.pillars) {
-      for (final it in p.items) {
-        if (it.id == id) return (item: it, pillar: p);
-      }
-    }
-    return null;
-  }
+  ({CmpysPlanItem item, CmpysPillar pillar})? _pillarFor(String id) =>
+      _pillarByItemId[id];
 
   String _greeting() {
     final h = DateTime.now().hour;

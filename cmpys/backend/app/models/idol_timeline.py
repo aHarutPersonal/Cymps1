@@ -2,7 +2,7 @@
 from datetime import date
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Date, Enum as SQLEnum, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Date, Enum as SQLEnum, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -21,6 +21,11 @@ class IdolTimelineEvent(Base, UUIDMixin, TimestampMixin):
     with computed age information.
     """
     __tablename__ = "idol_timeline_events"
+    __table_args__ = (
+        # Backs "events for this idol up to age N" lookups
+        # (WHERE idol_id = ? AND age_at_event <= ?).
+        Index("ix_idol_timeline_idol_age", "idol_id", "age_at_event"),
+    )
 
     idol_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),

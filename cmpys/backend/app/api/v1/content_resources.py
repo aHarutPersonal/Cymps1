@@ -5,6 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import defer
 
 from app.api.dependencies import get_current_user
 from app.core.db import get_db
@@ -37,8 +38,16 @@ def _resource_response(
     *,
     save: UserContentSave | None = None,
     progress: UserContentProgress | None = None,
+    include_content: bool = True,
 ) -> ContentResourceResponse:
-    """Convert a shared resource plus user state into API shape."""
+    """Convert a shared resource plus user state into API shape.
+
+    include_content=False is used by LIST endpoints, whose queries defer the
+    multi-KB content_markdown column (a 50-book library is several MB of
+    markdown). Readers always fetch the full text via GET /{resource_id}.
+    Do NOT touch resource.content_markdown in that case — the attribute is
+    deferred and accessing it would trigger a lazy load in async context.
+    """
     return ContentResourceResponse(
         id=resource.id,
         kind=resource.kind.value if hasattr(resource.kind, "value") else str(resource.kind),
@@ -50,7 +59,7 @@ def _resource_response(
         licenseStatus=resource.license_status.value
         if hasattr(resource.license_status, "value")
         else str(resource.license_status),
-        contentMarkdown=resource.content_markdown,
+        contentMarkdown=resource.content_markdown if include_content else None,
         summaryJson=resource.summary_json,
         durationMinutes=resource.duration_minutes,
         metadataJson=resource.metadata_json,
@@ -121,7 +130,7 @@ async def list_content_resources(
     offset: int = Query(default=0, ge=0),
 ) -> ContentResourceListResponse:
     """List reusable resources, optionally filtered by kind/search."""
-    stmt = select(ContentResource)
+    stmt = select(ContentResource).options(defer(ContentResource.content_markdown))
     if kind:
         try:
             parsed_kind = ContentResourceKind(kind)
@@ -174,6 +183,7 @@ async def list_content_resources(
                 r,
                 save=saves_by_resource.get(r.id),
                 progress=progress_by_resource.get(r.id),
+                include_content=False,
             )
             for r in resources
         ],
@@ -196,6 +206,7 @@ async def list_vault_resources(
 
     result = await db.execute(
         select(ContentResource, UserContentSave, UserContentProgress)
+        .options(defer(ContentResource.content_markdown))
         .join(UserContentSave, UserContentSave.content_resource_id == ContentResource.id)
         .outerjoin(
             UserContentProgress,
@@ -213,7 +224,9 @@ async def list_vault_resources(
 
     return ContentResourceListResponse(
         resources=[
-            _resource_response(resource, save=save, progress=progress)
+            _resource_response(
+                resource, save=save, progress=progress, include_content=False
+            )
             for resource, save, progress in rows
         ],
         total=total,
@@ -271,7 +284,11 @@ async def list_library_resources(
         return ContentResourceListResponse(resources=[], total=0)
 
     # Build base query filtering to accessible resource IDs
-    stmt = select(ContentResource).where(ContentResource.id.in_(resource_ids))
+    stmt = (
+        select(ContentResource)
+        .options(defer(ContentResource.content_markdown))
+        .where(ContentResource.id.in_(resource_ids))
+    )
 
     # Apply kind filter
     if kind:
@@ -336,6 +353,7 @@ async def list_library_resources(
                 r,
                 save=saves_by_resource.get(r.id),
                 progress=progress_by_resource.get(r.id),
+                include_content=False,
             )
             for r in resources
         ],

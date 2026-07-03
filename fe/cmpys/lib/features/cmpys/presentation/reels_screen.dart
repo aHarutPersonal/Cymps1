@@ -30,31 +30,12 @@ class _CmpysReelsScreenState extends ConsumerState<CmpysReelsScreen> {
   final PageController _page = PageController();
   int _active = 0;
   String _refresh = 'idle'; // idle | loading | error
-  List<CmpysIdea>? _ideas; // null while first load is in flight
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
+  List<CmpysIdea>? _ideas; // set by the explicit refresh; overrides the cache
 
   @override
   void dispose() {
     _page.dispose();
     super.dispose();
-  }
-
-  Future<void> _load() async {
-    try {
-      final dio = ref.read(dioClientProvider);
-      final ideas = await fetchCmpysIdeasFromDio(dio);
-      if (!mounted) return;
-      setState(() => _ideas = ideas);
-    } catch (_) {
-      // No static fallback — show an explicit error with retry.
-      if (!mounted) return;
-      setState(() => _refresh = 'error');
-    }
   }
 
   Future<void> _doRefresh() async {
@@ -80,10 +61,16 @@ class _CmpysReelsScreenState extends ConsumerState<CmpysReelsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final ideas = _ideas;
+    // Initial data comes from the shared, cached ideas provider (same /feed
+    // payload the Today surface uses) — a network fetch only happens on the
+    // true first load. The explicit refresh button still fetches fresh ideas.
+    final ideasAsync = ref.watch(cmpysIdeasProvider);
+    final ideas = _ideas ?? ideasAsync.valueOrNull;
     if (ideas == null) {
-      // First load: spinner, or full-screen error + retry. Never canned quotes.
-      if (_refresh == 'error') {
+      // First load: spinner, or full-screen error + retry. Never canned
+      // quotes. While a retry is reloading, show the spinner again.
+      if (_refresh == 'error' ||
+          (ideasAsync.hasError && !ideasAsync.isLoading)) {
         return Scaffold(
           backgroundColor: const Color(0xFF0E0E12),
           body: SafeArea(
@@ -117,7 +104,7 @@ class _CmpysReelsScreenState extends ConsumerState<CmpysReelsScreen> {
                           leadingIcon: Icons.refresh_rounded,
                           onTap: () {
                             setState(() => _refresh = 'idle');
-                            _load();
+                            ref.invalidate(cmpysIdeasProvider);
                           },
                           child: const Text('Try again'),
                         ),
@@ -407,7 +394,6 @@ class _CmpysReelsScreenState extends ConsumerState<CmpysReelsScreen> {
                       child: Center(
                         child: TextField(
                           controller: controller,
-                          onChanged: (_) => setSheet(() {}),
                           style: AppTypography.body.copyWith(fontSize: 14),
                           cursorColor: AppColors.green,
                           decoration: const InputDecoration(
@@ -422,20 +408,25 @@ class _CmpysReelsScreenState extends ConsumerState<CmpysReelsScreen> {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  GestureDetector(
-                    onTap: () =>
-                        _submitComment(store, idea.id, controller, setSheet),
-                    child: Container(
-                      width: 44,
-                      height: 44,
-                      decoration: BoxDecoration(
-                        color: controller.text.trim().isEmpty
-                            ? AppColors.hair2
-                            : AppColors.green,
-                        shape: BoxShape.circle,
+                  // Only the send button tracks the text per keystroke — the
+                  // rest of the sheet doesn't need to rebuild while typing.
+                  ValueListenableBuilder<TextEditingValue>(
+                    valueListenable: controller,
+                    builder: (_, value, _) => GestureDetector(
+                      onTap: () =>
+                          _submitComment(store, idea.id, controller, setSheet),
+                      child: Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: value.text.trim().isEmpty
+                              ? AppColors.hair2
+                              : AppColors.green,
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.arrow_forward_rounded,
+                            color: Colors.white, size: 18),
                       ),
-                      child: const Icon(Icons.arrow_forward_rounded,
-                          color: Colors.white, size: 18),
                     ),
                   ),
                 ],

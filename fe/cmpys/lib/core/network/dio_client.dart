@@ -5,11 +5,10 @@ import '../../app/env.dart';
 import '../storage/token_store.dart';
 import 'api_error.dart';
 
-/// Dio instance provider.
+/// Dio instance provider. Shares the [dioClientProvider] instance so the app
+/// runs on one Dio with one set of interceptors.
 final dioProvider = Provider<Dio>((ref) {
-  final tokenStore = ref.watch(tokenStoreProvider);
-  final client = DioClient(tokenStore: tokenStore);
-  return client.dio;
+  return ref.watch(dioClientProvider).dio;
 });
 
 /// Dio client provider (for direct access to DioClient methods).

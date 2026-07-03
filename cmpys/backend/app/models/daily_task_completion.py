@@ -30,6 +30,9 @@ class DailyTaskCompletion(Base, UUIDMixin, TimestampMixin):
         Index("ix_daily_task_completions_user_id", "user_id"),
         Index("ix_daily_task_completions_plan_item_id", "plan_item_id"),
         Index("ix_daily_task_completions_completed_date", "completed_date"),
+        # Backs streak/today lookups (WHERE user_id = ? ORDER BY/filter
+        # completed_date) as index-only scans.
+        Index("ix_daily_task_completions_user_date", "user_id", "completed_date"),
     )
 
     user_id: Mapped[str] = mapped_column(

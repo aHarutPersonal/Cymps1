@@ -4,7 +4,7 @@ Development plans endpoints.
 PROMPT MAPPING:
 - POST /plans/generate
   - Service: app.services.planning.generator.generate_plan()
-  - Prompts (when LLM mode): extractor_system.txt, plan_generate.txt
+  - Prompts (when LLM mode): planner_system.txt, plan_generate.txt
   - LLM: OPTIONAL (controlled by PLAN_GENERATOR_MODE env var)
   
 - All other endpoints: NO LLM (database operations only)
@@ -239,9 +239,19 @@ async def get_current_plan(
         )
     ).scalar_one_or_none()
 
+    # This endpoint is polled by the Plan/Today screens and its response never
+    # includes item details — defer the multi-KB-per-item JSONB columns so a
+    # 30-item plan doesn't drag hundreds of KB out of the DB per poll.
+    from sqlalchemy.orm import defer
     stmt = (
         select(Plan)
-        .options(selectinload(Plan.items), selectinload(Plan.idol))
+        .options(
+            selectinload(Plan.items).options(
+                defer(PlanItem.details_json),
+                defer(PlanItem.meta_json),
+            ),
+            selectinload(Plan.idol),
+        )
         .where(Plan.user_id == current_user.id)
     )
     if latest_session_idol is not None:
@@ -679,23 +689,32 @@ async def toggle_item_complete(
         
         # If marking complete AND details exist, also mark all steps complete
         if item.details_json and "steps" in item.details_json:
-            for step in item.details_json["steps"]:
-                step_id = step.get("id")
-                if not step_id:
-                    continue
-                
-                # Check if step completion exists
-                step_stmt = (
+            step_ids = [
+                s.get("id") for s in item.details_json["steps"] if s.get("id")
+            ]
+            # Batch-fetch existing step completions in a single query instead of
+            # one query per step (avoids an N+1 over the item's steps).
+            existing_steps: dict[str, PlanItemStepCompletion] = {}
+            if step_ids:
+                existing_stmt = (
                     select(PlanItemStepCompletion)
                     .where(
                         PlanItemStepCompletion.user_id == current_user.id,
                         PlanItemStepCompletion.plan_item_id == item_id,
-                        PlanItemStepCompletion.step_id == step_id,
+                        PlanItemStepCompletion.step_id.in_(step_ids),
                     )
                 )
-                step_result = await db.execute(step_stmt)
-                step_completion = step_result.scalar_one_or_none()
-                
+                existing_result = await db.execute(existing_stmt)
+                existing_steps = {
+                    sc.step_id: sc for sc in existing_result.scalars().all()
+                }
+
+            for step in item.details_json["steps"]:
+                step_id = step.get("id")
+                if not step_id:
+                    continue
+
+                step_completion = existing_steps.get(step_id)
                 if step_completion:
                     if not step_completion.completed_at:
                         step_completion.completed_at = now

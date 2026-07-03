@@ -1,5 +1,5 @@
 """Feed like — user ↔ post relationship."""
-from sqlalchemy import ForeignKey
+from sqlalchemy import ForeignKey, Index
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -11,6 +11,9 @@ class FeedLike(Base, UUIDMixin, TimestampMixin):
 
     __tablename__ = "feed_likes"
     __table_args__ = (
+        # Backs the feed "which of these posts did I like" lookup
+        # (WHERE user_id = ? AND post_id IN (...)).
+        Index("ix_feed_likes_user_post", "user_id", "post_id"),
         {"extend_existing": True},
     )
 

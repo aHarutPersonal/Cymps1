@@ -406,18 +406,12 @@ async def _run_ingestion_async(job_id: str) -> dict:
             }
             logger.info(f"[INGESTION][{job_id}] Final result: {result}")
             
-            # --- Pre-generate first batch of IdeaCards in the background ---
-            # Enqueue Celery task for generating IdeaCards so Daily Ideas tab opens instantly
-            user_id = getattr(job, "user_id", None)
-            if user_id:
-                logger.info(f"[INGESTION][{job_id}] Enqueuing IdeaCards pre-generation background task...")
-                run_generate_idea_cards.delay(job.idol_id, user_id)
-            else:
-                logger.info(
-                    f"[INGESTION][{job_id}] Skipping IdeaCards pre-generation: "
-                    "job has no user_id"
-                )
-            
+            # NOTE: IdeaCards pre-generation was removed here. The task it
+            # enqueued imported app.api.v1.idea_cards, which no longer exists,
+            # so every enqueue crashed a worker with ModuleNotFoundError.
+            # Daily insights are served by GET /sessions/{id}/feed (cached
+            # per day) instead.
+
             return result
 
         except Exception as e:
@@ -966,39 +960,17 @@ def _normalize_plan_item_details(details: dict) -> dict:
 
 
 # =============================================================================
-# IdeaCards Pre-generation Task
+# IdeaCards Pre-generation Task (retired)
 # =============================================================================
+# The generator it delegated to (app.api.v1.idea_cards._generate_idea_cards)
+# was removed, so this task crashed with ModuleNotFoundError on every run.
+# Kept as a registered no-op so stale queued messages drain harmlessly instead
+# of erroring; nothing enqueues it anymore.
 
 @celery_app.task(bind=True)
 def run_generate_idea_cards(self, idol_id: str, user_id: str) -> dict:
-    """
-    Pre-generate the first batch of IdeaCards in the background.
-    Called immediately after successful Idol Ingestion.
-    """
-    logger.info(f"[IDEA_CARDS_TASK] Starting background generation for idol={idol_id}")
-    try:
-        result = asyncio.get_event_loop().run_until_complete(
-            _run_generate_idea_cards_async(idol_id, user_id)
-        )
-        return result
-    except Exception as e:
-        logger.exception(f"[IDEA_CARDS_TASK] Fatal error generating cards: {e}")
-        raise
-
-async def _run_generate_idea_cards_async(idol_id: str, user_id: str) -> dict:
-    from app.api.v1.idea_cards import _generate_idea_cards
-    from app.models.user import User
-    
-    logger.info(f"[IDEA_CARDS_TASK] Async generation started for idol={idol_id}")
-    async with async_session_maker() as db:
-        idol = await db.get(Idol, idol_id)
-        user = await db.get(User, user_id)
-        
-        if not idol or not user:
-             logger.error(f"[IDEA_CARDS_TASK] Idol or user not found. idol_id={idol_id}, user_id={user_id}")
-             return {"error": "Idol or user not found"}
-        
-        # Pre-generate 24 cards (2 pages of 12)
-        saved = await _generate_idea_cards(idol=idol, user=user, db=db, count=24)
-        logger.info(f"[IDEA_CARDS_TASK] Finished generation. Created {len(saved)} cards.")
-        return {"status": "completed", "cards_generated": len(saved)}
+    logger.warning(
+        f"[IDEA_CARDS_TASK] Retired task invoked (idol={idol_id}); ignoring. "
+        "IdeaCards pre-generation was removed with app.api.v1.idea_cards."
+    )
+    return {"status": "retired"}

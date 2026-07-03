@@ -39,7 +39,10 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
 
   bool _typing = true; // waiting for first chunk of a turn
   bool _streaming = false; // chunks arriving
-  String _streamingText = '';
+
+  /// In-flight mentor text — a [ValueNotifier] so each SSE chunk repaints
+  /// only the streaming bubble instead of rebuilding the whole step.
+  final ValueNotifier<String> _streamingText = ValueNotifier('');
   bool _awaitingText = false; // user's turn to answer
   bool _finished = false; // phase transitioned, advancing
   String? _error; // visible error; retry re-sends _lastSent
@@ -62,6 +65,7 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
   void dispose() {
     _input.dispose();
     _scroll.dispose();
+    _streamingText.dispose();
     super.dispose();
   }
 
@@ -134,7 +138,7 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
     setState(() {
       _typing = true;
       _streaming = false;
-      _streamingText = '';
+      _streamingText.value = '';
       _error = null;
     });
     _lastSent = content;
@@ -150,11 +154,13 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
         final type = ev['type'] as String? ?? '';
         if (type == 'chunk') {
           acc += (ev['content'] as String? ?? '');
-          setState(() {
-            _typing = false;
-            _streaming = true;
-            _streamingText = acc;
-          });
+          if (_typing || !_streaming) {
+            setState(() {
+              _typing = false;
+              _streaming = true;
+            });
+          }
+          _streamingText.value = acc;
           _scrollToBottom();
         } else if (type == 'done') {
           transition = ev['phase_transition'] == true;
@@ -173,7 +179,7 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
         _msgs.add(_M(me: false, text: acc.trim()));
         _typing = false;
         _streaming = false;
-        _streamingText = '';
+        _streamingText.value = '';
         _awaitingText = !transition;
       });
       _scrollToBottom();
@@ -185,7 +191,7 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
       setState(() {
         _typing = false;
         _streaming = false;
-        _streamingText = '';
+        _streamingText.value = '';
         _error =
             '${widget.idol.short} got cut off. Tap retry to continue the conversation.';
       });
@@ -387,9 +393,12 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
                     bottomLeft: Radius.circular(18),
                     bottomRight: Radius.circular(18)),
               ),
-              child: Text(_streamingText,
-                  style: AppTypography.body
-                      .copyWith(fontSize: 15.5, height: 1.45)),
+              child: ValueListenableBuilder<String>(
+                valueListenable: _streamingText,
+                builder: (_, text, _) => Text(text,
+                    style: AppTypography.body
+                        .copyWith(fontSize: 15.5, height: 1.45)),
+              ),
             ),
           ),
         ],
@@ -489,7 +498,6 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
                 minLines: 1,
                 maxLines: 5,
                 autofocus: true,
-                onChanged: (_) => setState(() {}),
                 style: AppTypography.body.copyWith(fontSize: 15.5),
                 cursorColor: AppColors.green,
                 decoration: const InputDecoration(
@@ -502,18 +510,21 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
             ),
             GestureDetector(
               onTap: () => _answer(_input.text),
-              child: Container(
-                width: 38,
-                height: 38,
-                margin: const EdgeInsets.only(bottom: 1),
-                decoration: BoxDecoration(
-                  color: _input.text.trim().isEmpty
-                      ? AppColors.hair2
-                      : AppColors.green,
-                  shape: BoxShape.circle,
+              child: ValueListenableBuilder<TextEditingValue>(
+                valueListenable: _input,
+                builder: (_, value, _) => Container(
+                  width: 38,
+                  height: 38,
+                  margin: const EdgeInsets.only(bottom: 1),
+                  decoration: BoxDecoration(
+                    color: value.text.trim().isEmpty
+                        ? AppColors.hair2
+                        : AppColors.green,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.arrow_upward_rounded,
+                      color: Colors.white, size: 18),
                 ),
-                child: const Icon(Icons.arrow_upward_rounded,
-                    color: Colors.white, size: 18),
               ),
             ),
           ],

@@ -703,7 +703,10 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
         await _update_job(db, job, progress=60)
         
         try:
-            system_prompt = load_and_render("extractor_system.txt", {}, strict=False)
+            # planner_system.txt, not extractor_system.txt: lesson/material
+            # generation needs world knowledge of real resources, which the
+            # extraction prompt forbids.
+            system_prompt = load_and_render("planner_system.txt", {}, strict=False)
             client = get_llm_client(max_tokens=16000)
             llm_response = await client.generate_json(
                 system_prompt=system_prompt,

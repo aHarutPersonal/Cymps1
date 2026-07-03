@@ -72,11 +72,15 @@ async def calculate_streak(db: AsyncSession, user_id: str) -> int:
     """
     today = date.today()
 
-    # Get all distinct completed dates for the user, ordered descending
+    # Get distinct completed dates descending. The streak walk stops at the
+    # first gap, so a current streak can never exceed the rows scanned before
+    # that gap — cap the fetch instead of loading the user's whole history
+    # (this runs on every Today-screen request).
     stmt = (
         select(distinct(DailyTaskCompletion.completed_date))
         .where(DailyTaskCompletion.user_id == user_id)
         .order_by(DailyTaskCompletion.completed_date.desc())
+        .limit(400)
     )
     result = await db.execute(stmt)
     dates = [row[0] for row in result.fetchall()]

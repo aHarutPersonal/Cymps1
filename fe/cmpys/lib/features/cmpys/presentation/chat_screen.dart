@@ -37,7 +37,10 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
   final List<_Msg> _msgs = [];
   bool _waiting = false; // sent, no chunks yet
   bool _streaming = false;
-  String _streamingText = '';
+
+  /// In-flight reply text — a [ValueNotifier] so each SSE chunk repaints only
+  /// the streaming bubble instead of rebuilding the whole screen.
+  final ValueNotifier<String> _streamingText = ValueNotifier('');
   bool _winMode = false;
   String? _error;
   String? _lastSent;
@@ -55,10 +58,16 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
   void dispose() {
     _input.dispose();
     _scroll.dispose();
+    _streamingText.dispose();
     super.dispose();
   }
 
   bool _needsOnboarding = false;
+
+  /// Session id from the last successful resolution — avoids a
+  /// `GET /sessions/current` round-trip (plus store sync) before every send.
+  /// Cleared on stream failure so the next attempt re-resolves.
+  String? _cachedSessionId;
 
   /// Resolves a chat-capable session from the backend (source of truth) and
   /// keeps the local store in sync — this is also what corrects the mentor
@@ -107,7 +116,7 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
       _winMode = false;
       _error = null;
       _waiting = true;
-      _streamingText = '';
+      _streamingText.value = '';
       if (reportingWin) _pendingWinText = text;
     });
     _scrollToBottom();
@@ -120,7 +129,7 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
     setState(() {
       _error = null;
       _waiting = true;
-      _streamingText = '';
+      _streamingText.value = '';
     });
     await _streamReply(last, reportingWin: _pendingWinText != null);
   }
@@ -129,7 +138,8 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
     _lastSent = text;
     final idol = ref.read(cmpysStoreProvider).idol;
 
-    final sessionId = await _resolveSessionId();
+    final hadCachedId = _cachedSessionId != null;
+    final sessionId = _cachedSessionId ?? await _resolveSessionId();
     if (sessionId == null) {
       if (!mounted) return;
       final mentor = ref.read(cmpysStoreProvider).idol.short;
@@ -141,6 +151,7 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
       });
       return;
     }
+    _cachedSessionId = sessionId;
 
     // For win reports, frame the message so the mentor reacts in character.
     final content = reportingWin
@@ -156,12 +167,14 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
         final type = ev['type'] as String? ?? '';
         if (type == 'chunk') {
           acc += (ev['content'] as String? ?? '');
-          setState(() {
-            _waiting = false;
-            _streaming = true;
-            _streamingText = acc;
-          });
-          _scrollToBottom();
+          if (_waiting || !_streaming) {
+            setState(() {
+              _waiting = false;
+              _streaming = true;
+            });
+          }
+          _streamingText.value = acc;
+          _scrollToBottom(streaming: true);
         } else if (type == 'error') {
           throw StateError(ev['message']?.toString() ?? 'chat error');
         }
@@ -172,7 +185,7 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
       setState(() {
         _msgs.add(_Msg(me: false, text: acc.trim(), rich: true));
         _streaming = false;
-        _streamingText = '';
+        _streamingText.value = '';
       });
       _scrollToBottom();
 
@@ -194,10 +207,17 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
       }
     } catch (e) {
       if (!mounted) return;
+      _cachedSessionId = null;
+      if (hadCachedId && acc.isEmpty) {
+        // The cached id may have gone stale — re-resolve once and retry,
+        // matching the pre-cache behavior of resolving before every send.
+        await _streamReply(text, reportingWin: reportingWin);
+        return;
+      }
       setState(() {
         _waiting = false;
         _streaming = false;
-        _streamingText = '';
+        _streamingText.value = '';
         _error =
             '${idol.short} got cut off. Check your connection and tap retry.';
       });
@@ -209,10 +229,16 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
     setState(() => _winMode = !_winMode);
   }
 
-  void _scrollToBottom() {
+  void _scrollToBottom({bool streaming = false}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scroll.hasClients) return;
-      _scroll.animateTo(_scroll.position.maxScrollExtent,
+      final max = _scroll.position.maxScrollExtent;
+      if (streaming) {
+        // Per-chunk: don't stack 280ms animations — snap if not at bottom.
+        if (_scroll.offset < max) _scroll.jumpTo(max);
+        return;
+      }
+      _scroll.animateTo(max,
           duration: const Duration(milliseconds: 280),
           curve: Curves.easeOutCubic);
     });
@@ -530,9 +556,12 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
                     bottomLeft: Radius.circular(16),
                     bottomRight: Radius.circular(16)),
               ),
-              child: Text(_streamingText,
-                  style: AppTypography.body
-                      .copyWith(fontSize: 15.5, height: 1.45)),
+              child: ValueListenableBuilder<String>(
+                valueListenable: _streamingText,
+                builder: (_, text, _) => Text(text,
+                    style: AppTypography.body
+                        .copyWith(fontSize: 15.5, height: 1.45)),
+              ),
             ),
           ),
         ],
@@ -609,7 +638,6 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
                           controller: _input,
                           minLines: 1,
                           maxLines: 5,
-                          onChanged: (_) => setState(() {}),
                           style: AppTypography.body.copyWith(fontSize: 15.5),
                           cursorColor: AppColors.green,
                           decoration: InputDecoration(
@@ -628,18 +656,21 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
                           HapticFeedback.lightImpact();
                           _send(_input.text);
                         },
-                        child: Container(
-                          width: 38,
-                          height: 38,
-                          margin: const EdgeInsets.only(bottom: 1),
-                          decoration: BoxDecoration(
-                            color: _input.text.trim().isEmpty
-                                ? AppColors.hair2
-                                : AppColors.green,
-                            shape: BoxShape.circle,
+                        child: ValueListenableBuilder<TextEditingValue>(
+                          valueListenable: _input,
+                          builder: (_, value, _) => Container(
+                            width: 38,
+                            height: 38,
+                            margin: const EdgeInsets.only(bottom: 1),
+                            decoration: BoxDecoration(
+                              color: value.text.trim().isEmpty
+                                  ? AppColors.hair2
+                                  : AppColors.green,
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(Icons.arrow_upward_rounded,
+                                color: Colors.white, size: 18),
                           ),
-                          child: const Icon(Icons.arrow_upward_rounded,
-                              color: Colors.white, size: 18),
                         ),
                       ),
                     ],

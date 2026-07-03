@@ -50,6 +50,21 @@ class CurrentPlanState {
   final int jobProgress;
   final String jobLine;
   final String? error;
+
+  // Value equality so watchers (Today + Plan tabs) don't rebuild every poll
+  // tick when the job status hasn't actually changed.
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is CurrentPlanState &&
+          other.status == status &&
+          other.plan == plan &&
+          other.jobProgress == jobProgress &&
+          other.jobLine == jobLine &&
+          other.error == error;
+
+  @override
+  int get hashCode => Object.hash(status, plan, jobProgress, jobLine, error);
 }
 
 class CurrentPlanController extends StateNotifier<CurrentPlanState> {
@@ -93,34 +108,55 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
   Future<void> refresh() async {
     _poll?.cancel();
     try {
+      final jobId = _readJobId();
+      final hasJob = jobId != null && jobId.isNotEmpty;
+      // The job-status and current-plan requests are independent — start both
+      // together and await them as one; only the decision logic below depends
+      // on the job result. Errors are captured per-request so neither future
+      // is left unhandled when the other short-circuits the flow.
+      PlanJobStatus? job;
+      Object? jobError;
+      BackendPlan? plan;
+      Object? planError;
+      await Future.wait<void>([
+        if (hasJob)
+          _repo.getJobStatus(jobId).then<void>(
+                (j) => job = j,
+                onError: (Object e) => jobError = e,
+              ),
+        _repo.getCurrentPlan().then<void>(
+              (p) => plan = p,
+              onError: (Object e) => planError = e,
+            ),
+      ]);
+      if (!mounted) return;
+
       // Check the stored job FIRST. A running job means a newer plan is being
       // generated — we must not show the stale old plan during that window.
-      final jobId = _readJobId();
-      if (jobId != null && jobId.isNotEmpty) {
-        try {
-          final job = await _repo.getJobStatus(jobId);
-          if (!mounted) return;
-          if (!job.isCompleted && !job.isFailed) {
+      if (hasJob) {
+        final j = job;
+        if (j != null) {
+          if (!j.isCompleted && !j.isFailed) {
             state = CurrentPlanState(
               status: CurrentPlanStatus.generating,
-              jobProgress: job.progressPercent,
-              jobLine: job.thinkingLine ?? '',
+              jobProgress: j.progressPercent,
+              jobLine: j.thinkingLine ?? '',
             );
             _startPolling(jobId);
             return;
           }
-          // Completed or failed → fall through to fetch the (new) plan.
-        } catch (e) {
-          if (e is ApiError && e.statusCode == 404) {
-            // Stale job id → ignore, fall through to existing plan.
-          } else {
-            rethrow;
-          }
+          // Completed or failed → fall through to the (new) plan.
+        } else if (jobError is ApiError &&
+            (jobError as ApiError).statusCode == 404) {
+          // Stale job id → ignore, fall through to existing plan.
+        } else {
+          throw jobError!;
         }
       }
 
-      final plan = await _repo.getCurrentPlan();
-      if (!mounted) return;
+      if (planError != null) throw planError!;
+      // Local copy so the closure-assigned variable can promote to non-null.
+      final fetched = plan;
       // Guard against showing a plan that belongs to a previously-selected
       // idol. /plans/current returns the user's newest plan globally; if the
       // user has since switched idols and that idol's plan isn't the newest
@@ -128,15 +164,16 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
       // Compare normalised names, matching CmpysStore.syncFromSession, since
       // both names originate from the backend idol record.
       final wantIdol = _readIdolName?.call()?.toLowerCase().trim();
-      final planIdol = plan?.idolName?.toLowerCase().trim();
-      final matchesActiveIdol = plan == null ||
+      final planIdol = fetched?.idolName?.toLowerCase().trim();
+      final matchesActiveIdol = fetched == null ||
           wantIdol == null ||
           wantIdol.isEmpty ||
           planIdol == null ||
           planIdol.isEmpty ||
           planIdol == wantIdol;
-      if (plan != null && plan.items.isNotEmpty && matchesActiveIdol) {
-        state = CurrentPlanState(status: CurrentPlanStatus.ready, plan: plan);
+      if (fetched != null && fetched.items.isNotEmpty && matchesActiveIdol) {
+        state =
+            CurrentPlanState(status: CurrentPlanStatus.ready, plan: fetched);
         return;
       }
       if (jobId != null && jobId.isNotEmpty) {
@@ -227,11 +264,14 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
           error: job.errorMessage ?? 'Plan generation failed.',
         );
       } else {
-        state = CurrentPlanState(
+        final next = CurrentPlanState(
           status: CurrentPlanStatus.generating,
           jobProgress: job.progressPercent,
           jobLine: job.thinkingLine ?? '',
         );
+        // Skip the assignment when nothing the UI reads changed, so watchers
+        // don't rebuild on every 3s tick.
+        if (next != state) state = next;
       }
     } catch (e) {
       if (!mounted) return;

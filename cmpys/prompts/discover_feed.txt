@@ -4,6 +4,9 @@ The user is studying {idol_name}'s approach to success.
 Their interests: {interests_json}
 Their goals: {goals_json}
 
+ALREADY SHOWN (recently generated titles — do NOT repeat these or produce near-duplicates of their ideas):
+{exclude_titles_json}
+
 Generate exactly {count} items. ONLY these two types are allowed:
 
 **INSIGHTS FROM BOOKS & THINKERS (at least 8, type "quote"):**
@@ -19,7 +22,7 @@ zero fabrication risk.
   foolish." — Steve Jobs). If you have the slightest doubt about the exact wording, PARAPHRASE instead.
 - NEVER attach quotation marks to words you are reconstructing or guessing. A wrong "quote" is a hard failure.
 
-Recommended book sources:
+Example book sources (STARTING POINTS ONLY — do not limit yourself to this list):
 - "Atomic Habits" by James Clear
 - "Zero to One" by Peter Thiel
 - "The 7 Habits of Highly Effective People" by Stephen Covey
@@ -28,8 +31,10 @@ Recommended book sources:
 - "Meditations" by Marcus Aurelius
 - "The Art of War" by Sun Tzu
 
-Also draw from famous people: Steve Jobs, Elon Musk, Warren Buffett, Naval Ravikant, Albert Einstein, Oprah Winfrey, etc.
-Pick content relevant to the user's interests.
+Draw from the WIDER canon of well-known books and thinkers relevant to the user's specific interests
+and to {idol_name}'s domain — vary authors, eras, and fields across the set so consecutive generations
+do not repeat the same handful of sources. Also draw from famous people relevant to those interests
+(e.g. Steve Jobs, Warren Buffett, Marie Curie, Maya Angelou, Naval Ravikant, Albert Einstein).
 
 **VIDEO RECOMMENDATIONS (at least 2):**
 Recommend types of videos the user should search for from TRUSTED sources:

@@ -128,19 +128,6 @@ async def compare_to_idol(
     
     logger.info(f"[COMPARISON] Idol found: {idol.name}, birth_date={idol.birth_date}")
     
-    # First, check total milestones for this idol (for debugging)
-    total_stmt = select(IdolTimelineEvent).where(IdolTimelineEvent.idol_id == idolId)
-    total_result = await db.execute(total_stmt)
-    all_milestones = list(total_result.scalars().all())
-    logger.info(f"[COMPARISON] Total milestones for idol: {len(all_milestones)}")
-    
-    # Log age distribution
-    age_dist = {}
-    for m in all_milestones:
-        age_key = m.age_at_event if m.age_at_event is not None else "NULL"
-        age_dist[age_key] = age_dist.get(age_key, 0) + 1
-    logger.debug(f"[COMPARISON] Age distribution: {age_dist}")
-    
     # Load idol milestones at target age
     # Strategy: First try to get milestones with known ages, then consider NULL ages
     from app.models.idol_achievement import IdolAchievement

@@ -18,9 +18,19 @@ Score these EXACT five dimension ids (do not rename or add any):
 - "network"  (Trusted network — mentors/peers compounding their growth)
 - "clarity"  (Strategic clarity — a written, statable philosophy/system)
 
+SCORING ANCHORS — apply the SAME scale to both "you" and "idol":
+- 0-19: no meaningful evidence of activity in this dimension
+- 20-39: early interest; sporadic, unsystematic action
+- 40-59: consistent activity, but no compounding system or measurable results yet
+- 60-79: a working system with documented, repeatable results
+- 80-100: exceptional, compounding results that would be rare at this age
+Score strictly from the evidence provided (interview/profile for the person, verified facts for the idol).
+When evidence is thin, pick the LOWEST band you can justify and reflect the uncertainty in the note —
+do not invent credit for either side.
+
 For EACH dimension give:
-- "you": integer 0-100, grounded in what the person revealed. Be fair, not harsh.
-- "idol": integer 0-100, grounded in the verified facts at the same age.
+- "you": integer 0-100 per the anchors above, grounded in what the person revealed. Be fair, not harsh.
+- "idol": integer 0-100 per the anchors above, grounded in the verified facts at the same age.
 - "you_note": one concrete sentence (max 18 words) about the person's current state.
 - "idol_note": one concrete sentence (max 18 words) about the idol at that age, factual.
 

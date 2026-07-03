@@ -7,6 +7,7 @@
 // (main.jsx) so toggles, counts, and saves stay consistent across all tabs and
 // detail screens. Persisted to shared_preferences.
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -445,6 +446,19 @@ class CmpysStore extends StateNotifier<CmpysState> {
   }
 
   int _noteSeq = 0;
+  Timer? _persistTimer;
+
+  static const _persistDebounce = Duration(milliseconds: 300);
+
+  @override
+  void dispose() {
+    // Flush a pending debounced persist so the last mutation isn't lost.
+    if (_persistTimer?.isActive ?? false) {
+      _persistTimer!.cancel();
+      _persistNow();
+    }
+    super.dispose();
+  }
 
   Future<void> _load() async {
     try {
@@ -458,10 +472,22 @@ class CmpysStore extends StateNotifier<CmpysState> {
     }
   }
 
-  Future<void> _persist() async {
+  /// Debounced persist: encoding the whole state (including two full LLM
+  /// markdown docs) on every checkbox tap/like/note is needlessly heavy, so
+  /// rapid mutations coalesce into one write. Still best-effort; a pending
+  /// write is flushed in [dispose].
+  void _persist() {
+    _persistTimer?.cancel();
+    _persistTimer = Timer(_persistDebounce, _persistNow);
+  }
+
+  Future<void> _persistNow() async {
     try {
+      // Encode before the async gap so the flush-on-dispose path never reads
+      // state after the notifier is disposed.
+      final encoded = jsonEncode(state.toJson());
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_storeKey, jsonEncode(state.toJson()));
+      await prefs.setString(_storeKey, encoded);
     } catch (e) {
       debugPrint('CMPYS store persist failed: $e');
     }
@@ -698,6 +724,7 @@ class CmpysStore extends StateNotifier<CmpysState> {
   /// Clears all persisted local state. Called on logout so the next account
   /// never inherits a previous user's mentor, achievements, or notes.
   Future<void> reset() async {
+    _persistTimer?.cancel(); // a pending write must not resurrect old state
     state = CmpysState.initial();
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -728,28 +755,61 @@ class CmpysStore extends StateNotifier<CmpysState> {
       }
     }
 
+    // Resolve the effective values first (copyWith keeps the old value when a
+    // synced field is absent) and no-op when nothing changed — otherwise every
+    // sync (app entry, Today tab, every chat send) causes a global rebuild
+    // plus a full persist.
     final comparison = session.comparisonOutput;
     final blueprint = session.blueprintOutput;
+    final comparisonMd = (comparison != null && comparison.trim().isNotEmpty)
+        ? comparison
+        : next.comparisonMd;
+    final blueprintMd = (blueprint != null && blueprint.trim().isNotEmpty)
+        ? blueprint
+        : next.blueprintMd;
+    final scores = session.comparisonScores ?? next.liveComparisonScores;
+    final age = session.userAge > 0 ? session.userAge : next.user.age;
+    final interests = session.userInterests.isNotEmpty
+        ? session.userInterests
+        : next.user.interests;
+
+    final unchanged = identical(next, state) &&
+        next.sessionId == session.id &&
+        comparisonMd == next.comparisonMd &&
+        blueprintMd == next.blueprintMd &&
+        _scoresEqual(scores, next.liveComparisonScores) &&
+        age == next.user.age &&
+        listEquals(interests, next.user.interests);
+    if (unchanged) return;
+
     next = next.copyWith(
       sessionId: session.id,
-      comparisonMd: (comparison != null && comparison.trim().isNotEmpty)
-          ? comparison
-          : null,
-      blueprintMd: (blueprint != null && blueprint.trim().isNotEmpty)
-          ? blueprint
-          : null,
-      liveComparisonScores: session.comparisonScores,
+      comparisonMd: comparisonMd,
+      blueprintMd: blueprintMd,
+      liveComparisonScores: scores,
       user: CmpysUser(
-        name: state.user.name,
-        age: session.userAge > 0 ? session.userAge : state.user.age,
-        interests: session.userInterests.isNotEmpty
-            ? session.userInterests
-            : state.user.interests,
-        goalId: state.user.goalId,
+        name: next.user.name,
+        age: age,
+        interests: interests,
+        goalId: next.user.goalId,
       ),
     );
 
-    if (!identical(next, state)) _set(next);
+    _set(next);
+  }
+
+  /// Deep-equality for the raw comparison-scores map. Each sync parses a fresh
+  /// map from the backend response, so instance identity is never enough. The
+  /// map is small (a handful of dimensions/milestones), so comparing the JSON
+  /// encoding is cheap and avoids a hand-rolled deep compare.
+  static bool _scoresEqual(Map<String, dynamic>? a, Map<String, dynamic>? b) {
+    if (identical(a, b)) return true;
+    if (a == null || b == null) return false;
+    try {
+      return jsonEncode(a) == jsonEncode(b);
+    } catch (_) {
+      return false;
+    }
   }
 
   /// Called when onboarding completes — seeds user + idol + the AI results

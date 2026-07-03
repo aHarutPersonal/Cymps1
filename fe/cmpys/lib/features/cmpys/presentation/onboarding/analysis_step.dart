@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -37,9 +39,18 @@ class _CmpysAnalysisStepState extends ConsumerState<CmpysAnalysisStep>
   late final AnimationController _bob;
 
   String _status = 'Reading your interview…';
-  String _comparison = '';
+
+  /// Streaming comparison markdown — a [ValueNotifier] so only the markdown
+  /// card rebuilds per applied update, not the whole step.
+  final ValueNotifier<String> _comparison = ValueNotifier('');
   bool _comparisonDone = false;
   String? _error;
+
+  /// Throttle gate: markdown re-parsing is O(document), so applying every SSE
+  /// chunk is O(n²). Chunks land in [_pendingComparison] and get applied at
+  /// most once per ~120ms; the final value is always flushed on completion.
+  Timer? _throttle;
+  String _pendingComparison = '';
 
   @override
   void initState() {
@@ -52,7 +63,8 @@ class _CmpysAnalysisStepState extends ConsumerState<CmpysAnalysisStep>
     final existing = widget.draft.comparisonMd;
     if (existing != null && existing.isNotEmpty) {
       // Already generated (back-nav / retry path) — show it immediately.
-      _comparison = existing;
+      _comparison.value = existing;
+      _pendingComparison = existing;
       _comparisonDone = true;
     } else {
       _start();
@@ -61,8 +73,33 @@ class _CmpysAnalysisStepState extends ConsumerState<CmpysAnalysisStep>
 
   @override
   void dispose() {
+    _throttle?.cancel();
     _bob.dispose();
+    _comparison.dispose();
     super.dispose();
+  }
+
+  void _onComparisonChunk(String acc) {
+    widget.draft.comparisonMd = acc;
+    _pendingComparison = acc;
+    if (_throttle?.isActive ?? false) return; // gate closed — timer flushes
+    _applyPendingComparison();
+    _throttle = Timer(
+        const Duration(milliseconds: 120), _applyPendingComparison);
+  }
+
+  void _applyPendingComparison() {
+    if (!mounted) return;
+    final wasEmpty = _comparison.value.isEmpty;
+    _comparison.value = _pendingComparison;
+    if (wasEmpty && _pendingComparison.isNotEmpty) {
+      setState(() {}); // first text — switch thinking → verdict screen
+    }
+  }
+
+  void _flushComparison() {
+    _throttle?.cancel();
+    _applyPendingComparison();
   }
 
   Future<void> _start() async {
@@ -84,26 +121,26 @@ class _CmpysAnalysisStepState extends ConsumerState<CmpysAnalysisStep>
         onStatus: (s) {
           if (mounted && s.isNotEmpty) setState(() => _status = s);
         },
-        onComparison: (acc) {
-          widget.draft.comparisonMd = acc;
-          if (mounted) setState(() => _comparison = acc);
-        },
+        onComparison: _onComparisonChunk,
         onBlueprint: (acc) {
           // Keep flowing into the draft even if this widget gets disposed —
           // the plan-gen step polls the draft for completion.
           widget.draft.blueprintMd = acc;
           if (mounted && !_comparisonDone) {
+            _flushComparison();
             setState(() => _comparisonDone = true);
           }
         },
         onPlanJob: (jobId) => widget.draft.planJobId = jobId,
       );
       widget.draft.resultsFailed = false;
+      _flushComparison();
       if (mounted) setState(() => _comparisonDone = true);
     } catch (e) {
       widget.draft.resultsFailed = true;
       if (!mounted) return;
-      if (_comparison.isEmpty) {
+      _flushComparison();
+      if (_comparison.value.isEmpty) {
         setState(() => _error =
             'The analysis didn’t come through. Check your connection and try again.');
       } else {
@@ -116,7 +153,7 @@ class _CmpysAnalysisStepState extends ConsumerState<CmpysAnalysisStep>
   @override
   Widget build(BuildContext context) {
     if (_error != null) return _errorScreen();
-    if (_comparison.isEmpty) return _thinkingScreen();
+    if (_comparison.value.isEmpty) return _thinkingScreen();
     return _verdictScreen();
   }
 
@@ -249,7 +286,10 @@ class _CmpysAnalysisStepState extends ConsumerState<CmpysAnalysisStep>
                 CmpysCardSurface(
                   raised: true,
                   pad: const EdgeInsets.all(20),
-                  child: CmpysMarkdown(_comparison),
+                  child: ValueListenableBuilder<String>(
+                    valueListenable: _comparison,
+                    builder: (_, md, _) => CmpysMarkdown(md),
+                  ),
                 ),
                 if (!_comparisonDone) ...[
                   const SizedBox(height: 14),

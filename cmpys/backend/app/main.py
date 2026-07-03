@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
 
 from fastapi import FastAPI
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 import os
 
@@ -46,6 +47,12 @@ app.add_middleware(
 # Add request/response logging middleware
 # This logs all HTTP requests in curl format and responses with timing
 app.add_middleware(ResponseBodyLoggerMiddleware)
+
+# Compress JSON/text responses over ~1KB. Large list payloads (feed,
+# content library, session outputs) typically shrink 60-85% on the wire.
+# Added last so it sits OUTERMOST: the body logger above still sees the
+# uncompressed body, while the client receives the gzipped response.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 from app.api.v1.media import router as media_router
 

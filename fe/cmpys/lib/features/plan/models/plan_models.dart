@@ -79,7 +79,8 @@ class BackendPlanItem {
 
 /// The user's generated 12-week plan.
 class BackendPlan {
-  const BackendPlan({
+  // Non-const: carries a lazily-built week index (see [_weekIndex]).
+  BackendPlan({
     required this.id,
     required this.durationWeeks,
     required this.weeklyHours,
@@ -107,15 +108,35 @@ class BackendPlan {
   final double overallProgress;
   final DateTime? createdAt;
 
+  // week → items covering it, precomputed once per plan instance so the
+  // roadmap doesn't re-filter the full item list per week on every rebuild.
+  Map<int, List<BackendPlanItem>>? _missionsByWeek;
+  Map<int, List<BackendPlanItem>>? _rhythmByWeek;
+
+  void _buildWeekIndex() {
+    final missions = <int, List<BackendPlanItem>>{};
+    final rhythm = <int, List<BackendPlanItem>>{};
+    for (final item in items) {
+      final byWeek = item.isDailyRhythm ? rhythm : missions;
+      for (var week = item.weekStart; week <= item.weekEnd; week++) {
+        (byWeek[week] ??= []).add(item);
+      }
+    }
+    _missionsByWeek = missions;
+    _rhythmByWeek = rhythm;
+  }
+
   /// Mission tasks (non-habit) covering [week].
-  List<BackendPlanItem> missionsForWeek(int week) => items
-      .where((i) => !i.isDailyRhythm && i.weekStart <= week && i.weekEnd >= week)
-      .toList();
+  List<BackendPlanItem> missionsForWeek(int week) {
+    if (_missionsByWeek == null) _buildWeekIndex();
+    return _missionsByWeek![week] ?? const [];
+  }
 
   /// Daily rhythm (habit) tasks covering [week].
-  List<BackendPlanItem> dailyRhythmForWeek(int week) => items
-      .where((i) => i.isDailyRhythm && i.weekStart <= week && i.weekEnd >= week)
-      .toList();
+  List<BackendPlanItem> dailyRhythmForWeek(int week) {
+    if (_rhythmByWeek == null) _buildWeekIndex();
+    return _rhythmByWeek![week] ?? const [];
+  }
 
   /// Week the user is in right now (1-based, clamped to the plan length).
   /// A freshly generated plan is in week 1.
