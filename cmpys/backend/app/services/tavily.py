@@ -45,10 +45,11 @@ async def _search_video_via_google(query: str) -> Optional[str]:
     Validates via oEmbed. Returns None if no valid video found.
     """
     try:
-        from google import genai
         from google.genai import types
 
-        client = genai.Client(api_key=settings.gemini_api_key)
+        from app.services.gemini import _gemini_client
+
+        client = _gemini_client()
         response = await client.aio.models.generate_content(
             model="gemini-2.5-flash",
             contents=(

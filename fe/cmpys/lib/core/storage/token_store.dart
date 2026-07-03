@@ -29,6 +29,17 @@ class TokenStore {
 
   final FlutterSecureStorage _storage;
 
+  // In-memory memo of the access token: every HTTP request reads it, and a
+  // platform-channel Keychain read per request (including 3-4s polls) is
+  // needlessly expensive. Invalidated on save/clear/delete.
+  String? _cachedAccessToken;
+  bool _accessTokenCached = false;
+
+  void _invalidateAccessTokenMemo() {
+    _cachedAccessToken = null;
+    _accessTokenCached = false;
+  }
+
   // Storage keys
   static const _keyAccessToken = 'cmpys_access_token';
   static const _keyRefreshToken = 'cmpys_refresh_token';
@@ -77,17 +88,24 @@ class TokenStore {
 
   /// Save access token to secure storage.
   Future<void> saveAccessToken(String token) async {
+    _cachedAccessToken = token;
+    _accessTokenCached = true;
     await _write(_keyAccessToken, token);
   }
 
-  /// Read access token from secure storage.
+  /// Read access token from secure storage (memoized in memory).
   /// Returns null if not found.
   Future<String?> readAccessToken() async {
-    return _read(_keyAccessToken);
+    if (_accessTokenCached) return _cachedAccessToken;
+    final token = await _read(_keyAccessToken);
+    _cachedAccessToken = token;
+    _accessTokenCached = true;
+    return token;
   }
 
   /// Delete access token.
   Future<void> deleteAccessToken() async {
+    _invalidateAccessTokenMemo();
     await _delete(_keyAccessToken);
   }
 
@@ -207,6 +225,7 @@ class TokenStore {
 
   /// Clear all stored tokens and user data.
   Future<void> clear() async {
+    _invalidateAccessTokenMemo();
     await Future.wait([
       _delete(_keyAccessToken),
       _delete(_keyRefreshToken),
@@ -218,6 +237,7 @@ class TokenStore {
 
   /// Clear all data from secure storage (full reset).
   Future<void> clearAll() async {
+    _invalidateAccessTokenMemo();
     if (_usePrefs) {
       final prefs = await SharedPreferences.getInstance();
       await prefs.clear();

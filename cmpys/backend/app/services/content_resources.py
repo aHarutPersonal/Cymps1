@@ -1,6 +1,7 @@
 """Helpers for deduplicating reusable books, videos, and lessons."""
 from __future__ import annotations
 
+import asyncio
 import re
 import unicodedata
 from collections.abc import Awaitable, Callable
@@ -204,7 +205,9 @@ async def generate_book_module(
     from app.services.llm.client import get_llm_client
     from app.services.llm.prompt_loader import load_and_render
 
-    system_prompt = load_and_render("extractor_system.txt", {}, strict=False)
+    # planner_system.txt, not extractor_system.txt: writing a book module needs
+    # world knowledge of the book, which the extraction prompt forbids.
+    system_prompt = load_and_render("planner_system.txt", {}, strict=False)
     user_prompt = load_and_render(
         "book_module_generate.txt",
         {
@@ -499,6 +502,72 @@ async def get_or_create_video_resource(
     return resource
 
 
+def enqueue_book_module_generation(
+    *,
+    title: str,
+    author: str | None,
+    user_goal: str,
+    source_context: str | None,
+) -> None:
+    """Queue background generation of one shared book-module resource."""
+    from app.tasks.content_resources import generate_book_module_resource
+
+    generate_book_module_resource.apply_async(
+        kwargs={
+            "title": title,
+            "author": author,
+            "user_goal": user_goal,
+            "source_context": source_context,
+        },
+        queue="low_priority",
+    )
+
+
+def _material_video_query(item: dict[str, Any]) -> str:
+    return str(item.get("search_query") or item.get("title") or "").strip()
+
+
+def _material_cache_key(item: dict[str, Any], kind: str) -> str | None:
+    """Canonical key a material would be cached under, computable without I/O."""
+    if kind == "video":
+        url_key = canonical_youtube_key(str(item.get("url") or ""))
+        if url_key:
+            return url_key
+        query = _material_video_query(item)
+        return canonical_video_query_key(query) if query else None
+    if kind == "book":
+        return canonical_book_key(str(item.get("title") or ""), _material_author(item))
+    return None
+
+
+def _apply_video_resource(item: dict[str, Any], resource: ContentResource) -> None:
+    item["content_resource_id"] = resource.id
+    item["canonical_key"] = resource.canonical_key
+    item["url"] = resource.source_url
+    item["thumbnail_url"] = resource.thumbnail_url
+    item["duration_minutes"] = resource.duration_minutes
+    if resource.metadata_json:
+        item["resource_unavailable"] = bool(resource.metadata_json.get("unavailable"))
+
+
+def _apply_book_resource(item: dict[str, Any], resource: ContentResource) -> None:
+    item["content_resource_id"] = resource.id
+    item["canonical_key"] = resource.canonical_key
+    item["url"] = resource.source_url
+    item["thumbnail_url"] = resource.thumbnail_url
+    item["license_status"] = (
+        resource.license_status.value
+        if hasattr(resource.license_status, "value")
+        else str(resource.license_status)
+    )
+    item["content_markdown"] = resource.content_markdown
+    item["duration_minutes"] = resource.duration_minutes
+    if resource.summary_json:
+        item["ideas"] = resource.summary_json.get("ideas", [])
+        item["promise"] = resource.summary_json.get("promise")
+        item["sections"] = resource.summary_json.get("sections", [])
+
+
 async def attach_content_resources_to_materials(
     db: AsyncSession,
     materials: list[dict[str, Any]],
@@ -507,62 +576,155 @@ async def attach_content_resources_to_materials(
     book_source_lookup: BookSourceLookup | None = None,
     book_module_factory: BookModuleFactory | None = None,
     video_resolver: VideoResolver | None = None,
+    defer_book_generation: bool = False,
 ) -> list[dict[str, Any]]:
-    """Annotate plan materials with reusable content_resource_id values."""
-    enriched: list[dict[str, Any]] = []
-    for material in materials:
-        item = dict(material)
+    """Annotate plan materials with reusable content_resource_id values.
+
+    Cached resources are resolved with a single IN query over the canonical
+    keys, and the network/LLM work for cache misses runs concurrently. All
+    AsyncSession access stays sequential (the session is not concurrency-safe).
+    With defer_book_generation=True — the interactive request path — uncached
+    book modules are enqueued to Celery instead of generated inline, and the
+    material is returned without a content_resource_id.
+    """
+    items = [dict(material) for material in materials]
+
+    payloads: dict[int, dict[str, Any]] = {}
+    kinds: list[str] = []
+    cache_keys: list[str | None] = []
+    for index, item in enumerate(items):
         payload = material_to_resource_payload(item)
+        material_type = str(item.get("type") or "").lower()
         if payload:
-            resource = await get_or_create_content_resource(db, **payload)
+            payloads[index] = payload
+            kinds.append("payload")
+            cache_keys.append(payload["canonical_key"])
+        elif material_type in {"video", "book"}:
+            kinds.append(material_type)
+            cache_keys.append(_material_cache_key(item, material_type))
+        else:
+            kinds.append("other")
+            cache_keys.append(None)
+
+    cached: dict[str, ContentResource] = {}
+    wanted = sorted({key for key in cache_keys if key})
+    if wanted:
+        result = await db.execute(
+            select(ContentResource).where(ContentResource.canonical_key.in_(wanted))
+        )
+        cached = {resource.canonical_key: resource for resource in result.scalars().all()}
+
+    async def _prepare_book(
+        title: str, author: str | None, source_context: str | None
+    ) -> dict[str, Any]:
+        lookup = book_source_lookup or lookup_public_domain_book
+        source = await lookup(title=title, author=author)
+        if source is not None:
+            return {"source": source, "module": None}
+        factory = book_module_factory or generate_book_module
+        module = await factory(
+            title=title,
+            author=author,
+            user_goal=user_goal,
+            source_context=source_context,
+        )
+        return {"source": None, "module": module}
+
+    # Fan out the per-material network/LLM work for cache misses, deduplicated
+    # by canonical key. These coroutines never touch the DB session.
+    prep_coros: dict[str, Awaitable[Any]] = {}
+    for index, item in enumerate(items):
+        key = cache_keys[index]
+        if not key or key in cached or key in prep_coros:
+            continue
+        kind = kinds[index]
+        if kind == "video":
+            query = _material_video_query(item)
+            if not canonical_youtube_key(str(item.get("url") or "")) and query:
+                resolve = video_resolver or resolve_youtube_url
+                prep_coros[key] = resolve(query)
+        elif kind == "book" and not defer_book_generation:
+            prep_coros[key] = _prepare_book(
+                str(item.get("title") or ""),
+                _material_author(item),
+                item.get("source_context") or item.get("reason"),
+            )
+
+    prepared: dict[str, Any] = {}
+    if prep_coros:
+        results = await asyncio.gather(*prep_coros.values())
+        prepared = dict(zip(prep_coros.keys(), results))
+
+    # Sequential DB phase: attach cached hits and persist prepared misses.
+    for index, item in enumerate(items):
+        kind = kinds[index]
+        if kind == "other":
+            continue
+        key = cache_keys[index]
+        resource = cached.get(key) if key else None
+
+        if kind == "payload":
+            if resource is None:
+                resource = await get_or_create_content_resource(db, **payloads[index])
+                cached[resource.canonical_key] = resource
             item["content_resource_id"] = resource.id
             item["canonical_key"] = resource.canonical_key
-        elif str(item.get("type") or "").lower() == "video":
-            resource = await get_or_create_video_resource(
-                db,
-                title=str(item.get("title") or ""),
-                search_query=item.get("search_query"),
-                url=item.get("url"),
-                author_or_creator=_material_author(item),
-                thumbnail_url=item.get("thumbnail_url"),
-                duration_minutes=item.get("duration_minutes"),
-                reason=item.get("reason"),
-                resolver=video_resolver,
-            )
-            item["content_resource_id"] = resource.id
-            item["canonical_key"] = resource.canonical_key
-            item["url"] = resource.source_url
-            item["thumbnail_url"] = resource.thumbnail_url
-            item["duration_minutes"] = resource.duration_minutes
-            if resource.metadata_json:
-                item["resource_unavailable"] = bool(resource.metadata_json.get("unavailable"))
-        elif str(item.get("type") or "").lower() == "book":
-            resource = await get_or_create_book_module_resource(
-                db,
-                title=str(item.get("title") or ""),
-                author=_material_author(item),
-                user_goal=user_goal,
-                source_context=item.get("source_context") or item.get("reason"),
-                source_lookup=book_source_lookup,
-                module_factory=book_module_factory,
-            )
-            item["content_resource_id"] = resource.id
-            item["canonical_key"] = resource.canonical_key
-            item["url"] = resource.source_url
-            item["thumbnail_url"] = resource.thumbnail_url
-            item["license_status"] = (
-                resource.license_status.value
-                if hasattr(resource.license_status, "value")
-                else str(resource.license_status)
-            )
-            item["content_markdown"] = resource.content_markdown
-            item["duration_minutes"] = resource.duration_minutes
-            if resource.summary_json:
-                item["ideas"] = resource.summary_json.get("ideas", [])
-                item["promise"] = resource.summary_json.get("promise")
-                item["sections"] = resource.summary_json.get("sections", [])
-        enriched.append(item)
-    return enriched
+        elif kind == "video":
+            if resource is None:
+
+                async def _preresolved(
+                    query: str, _url: str | None = prepared.get(key) if key else None
+                ) -> str | None:
+                    return _url
+
+                resource = await get_or_create_video_resource(
+                    db,
+                    title=str(item.get("title") or ""),
+                    search_query=item.get("search_query"),
+                    url=item.get("url"),
+                    author_or_creator=_material_author(item),
+                    thumbnail_url=item.get("thumbnail_url"),
+                    duration_minutes=item.get("duration_minutes"),
+                    reason=item.get("reason"),
+                    resolver=_preresolved,
+                )
+                cached[resource.canonical_key] = resource
+            _apply_video_resource(item, resource)
+        elif kind == "book":
+            if resource is None and defer_book_generation:
+                item["canonical_key"] = key
+                enqueue_book_module_generation(
+                    title=str(item.get("title") or ""),
+                    author=_material_author(item),
+                    user_goal=user_goal,
+                    source_context=item.get("source_context") or item.get("reason"),
+                )
+                continue
+            if resource is None:
+                prep = prepared[key]
+
+                async def _prepared_lookup(
+                    _source: dict[str, Any] | None = prep["source"], **kwargs: Any
+                ) -> dict[str, Any] | None:
+                    return _source
+
+                async def _prepared_factory(
+                    _module: dict[str, Any] | None = prep["module"], **kwargs: Any
+                ) -> dict[str, Any]:
+                    return _module
+
+                resource = await get_or_create_book_module_resource(
+                    db,
+                    title=str(item.get("title") or ""),
+                    author=_material_author(item),
+                    user_goal=user_goal,
+                    source_context=item.get("source_context") or item.get("reason"),
+                    source_lookup=_prepared_lookup,
+                    module_factory=_prepared_factory,
+                )
+                cached[resource.canonical_key] = resource
+            _apply_book_resource(item, resource)
+    return items
 
 
 async def sync_plan_item_content_resource_links(

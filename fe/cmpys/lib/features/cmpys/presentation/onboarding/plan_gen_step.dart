@@ -55,9 +55,19 @@ class _CmpysPlanGenStepState extends ConsumerState<CmpysPlanGenStep>
       vsync: this,
       duration: const Duration(milliseconds: 2600),
     )..repeat(reverse: true);
-    // The analysis step's stream may still be writing into the draft; poll.
+    // The analysis step's stream may still be writing into the draft; poll —
+    // but only rebuild when a value the build actually reads has changed
+    // (status changes go through their own setState in [_retry]).
+    var lastReady = _ready;
+    var lastFailed = _failed;
     _poll = Timer.periodic(const Duration(milliseconds: 400), (_) {
-      if (mounted) setState(() {});
+      if (!mounted) return;
+      final ready = _ready;
+      final failed = _failed;
+      if (ready == lastReady && failed == lastFailed) return;
+      lastReady = ready;
+      lastFailed = failed;
+      setState(() {});
     });
   }
 

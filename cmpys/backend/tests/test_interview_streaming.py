@@ -119,10 +119,9 @@ async def test_interview_returns_sse_before_fetching_missing_idol_facts(monkeypa
 
     async def forbidden_grounding(*args, **kwargs):
         raise AssertionError("missing idol facts should not block SSE start")
-        yield ""
 
     monkeypatch.setattr(sessions_api, "_get_session", fake_get_session)
-    monkeypatch.setattr(sessions_api, "stream_with_grounding", forbidden_grounding)
+    monkeypatch.setattr(sessions_api, "generate_with_grounding", forbidden_grounding)
 
     response = await sessions_api.interview(
         session_id=session.id,

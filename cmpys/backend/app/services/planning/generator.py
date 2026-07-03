@@ -2,7 +2,7 @@
 Plan generation service.
 
 PROMPT MAPPING:
-- generate_plan() -> extractor_system.txt + plan_generate.txt (LLM optional)
+- generate_plan() -> planner_system.txt + plan_generate.txt (LLM optional)
 
 When PLAN_GENERATOR_MODE=llm and LLM is configured, uses LLM to generate plan items.
 Otherwise, generates deterministic template-based items.
@@ -138,7 +138,7 @@ def _generate_deterministic_items(
 
 # =============================================================================
 # LLM Plan Generation
-# PROMPTS: extractor_system.txt, plan_generate.txt
+# PROMPTS: planner_system.txt, plan_generate.txt
 # =============================================================================
 
 
@@ -162,7 +162,7 @@ async def _generate_llm_items(
     Generate plan items using LLM.
 
     PROMPTS USED:
-    - System: extractor_system.txt
+    - System: planner_system.txt
     - User: plan_generate.txt
 
     Falls back to deterministic if LLM fails.
@@ -170,8 +170,10 @@ async def _generate_llm_items(
     client = get_llm_client(fast=True)
 
     try:
-        # Load prompt templates
-        system_prompt = load_prompt("extractor_system")
+        # Load prompt templates. planner_system.txt (not extractor_system.txt):
+        # plan generation needs world knowledge of real books/courses, which the
+        # extraction system prompt explicitly forbids.
+        system_prompt = load_prompt("planner_system")
         user_template = load_prompt("plan_generate")
 
         # Render user prompt with the full plan contract.
@@ -271,7 +273,7 @@ async def generate_plan(
     Generate a strategic 12-week plan.
 
     PROMPTS USED (when LLM mode):
-    - System: extractor_system.txt
+    - System: planner_system.txt
     - User: plan_generate.txt
 
     LLM is used if:

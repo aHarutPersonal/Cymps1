@@ -6,7 +6,7 @@ celery_app = Celery(
     "cmpys",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.ingestion", "app.tasks.plans"],
+    include=["app.tasks.content_resources", "app.tasks.ingestion", "app.tasks.plans"],
 )
 
 celery_app.conf.update(

@@ -89,37 +89,38 @@ class PlanGeneratingCard extends StatelessWidget {
   }
 }
 
-/// The week-by-week roadmap for a generated plan.
-class BackendPlanRoadmap extends StatelessWidget {
-  const BackendPlanRoadmap({super.key, required this.plan});
+/// The week-by-week roadmap for a generated plan, as a flat list of blocks.
+///
+/// Spread the result directly into the surrounding ListView's children so
+/// each week card is its own list child and builds lazily — one big Column
+/// child would inflate all 12 weeks (100+ rows) eagerly.
+List<Widget> backendPlanRoadmapBlocks(BackendPlan plan) {
+  final currentWeek = plan.currentWeek();
+  return [
+    _PlanProgressCard(plan: plan),
+    if (plan.roadmapThesis != null &&
+        plan.roadmapThesis!.trim().isNotEmpty) ...[
+      const SizedBox(height: 14),
+      _PlanThesisCard(plan: plan),
+    ],
+    for (var week = 1; week <= plan.durationWeeks; week++) ...[
+      const SizedBox(height: 14),
+      _WeekBlock(
+        plan: plan,
+        week: week,
+        isCurrent: week == currentWeek,
+      ),
+    ],
+  ];
+}
+
+class _PlanProgressCard extends StatelessWidget {
+  const _PlanProgressCard({required this.plan});
 
   final BackendPlan plan;
 
   @override
   Widget build(BuildContext context) {
-    final currentWeek = plan.currentWeek();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _progressCard(),
-        if (plan.roadmapThesis != null &&
-            plan.roadmapThesis!.trim().isNotEmpty) ...[
-          const SizedBox(height: 14),
-          _thesisCard(),
-        ],
-        for (var week = 1; week <= plan.durationWeeks; week++) ...[
-          const SizedBox(height: 14),
-          _WeekBlock(
-            plan: plan,
-            week: week,
-            isCurrent: week == currentWeek,
-          ),
-        ],
-      ],
-    );
-  }
-
-  Widget _progressCard() {
     final pct = plan.overallProgress.round();
     return Container(
       padding: const EdgeInsets.all(20),
@@ -167,8 +168,15 @@ class BackendPlanRoadmap extends StatelessWidget {
       ),
     );
   }
+}
 
-  Widget _thesisCard() {
+class _PlanThesisCard extends StatelessWidget {
+  const _PlanThesisCard({required this.plan});
+
+  final BackendPlan plan;
+
+  @override
+  Widget build(BuildContext context) {
     return CmpysCardSurface(
       color: AppColors.greenSoft,
       border: false,
@@ -229,6 +237,12 @@ class _WeekBlock extends StatelessWidget {
     final rhythm = plan.dailyRhythmForWeek(week);
     if (missions.isEmpty && rhythm.isEmpty) return const SizedBox.shrink();
 
+    // Count once instead of allocating a spread list ([...missions, ...rhythm])
+    // and re-filtering it inside the header Text on every rebuild.
+    final totalCount = missions.length + rhythm.length;
+    final completedCount = missions.where((i) => i.isCompleted).length +
+        rhythm.where((i) => i.isCompleted).length;
+
     return CmpysCardSurface(
       pad: const EdgeInsets.fromLTRB(16, 16, 16, 10),
       raised: isCurrent,
@@ -257,8 +271,7 @@ class _WeekBlock extends StatelessWidget {
               ],
               const Spacer(),
               Text(
-                '${[...missions, ...rhythm].where((i) => i.isCompleted).length}'
-                '/${missions.length + rhythm.length}',
+                '$completedCount/$totalCount',
                 style: AppTypography.captionMedium.copyWith(
                     color: AppColors.ink3,
                     fontSize: 12.5,

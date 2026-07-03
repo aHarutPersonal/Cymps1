@@ -10,9 +10,11 @@ Endpoints:
 - GET    /sessions/{id}                  → Get session state
 - GET    /sessions/current               → Get current active session
 """
+import asyncio
 import json as json_lib
 import logging
 import uuid
+from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -40,7 +42,7 @@ from app.services.gemini import (
     blueprint_stream,
     comparison_stream,
     interview_stream,
-    stream_with_grounding,
+    generate_with_grounding,
 )
 from app.services.comparison.scoring import generate_comparison_scores
 from app.services.content_resources import attach_content_resources_to_materials
@@ -166,6 +168,45 @@ def _persona_to_dict(persona) -> dict:
         "default_frameworks": persona.default_frameworks or [],
         "disclaimer": persona.disclaimer or "",
     }
+
+
+def _strip_json_fences(text: str) -> str:
+    """Strip a wrapping markdown code fence (``` or ```json) from an LLM response."""
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        first_newline = stripped.find("\n")
+        if first_newline != -1:
+            stripped = stripped[first_newline + 1:]
+        if stripped.endswith("```"):
+            stripped = stripped[:-3]
+    return stripped.strip()
+
+
+def _render_persona_system(idol_name: str, idol_persona: dict) -> str:
+    """Render persona_system.txt so the model speaks AS the idol with full voice
+    fidelity (voice style, principles, era lexicon, worldview adapter).
+
+    Falls back to a minimal in-character instruction when no persona pack
+    exists yet (e.g. ingestion still running)."""
+    if not idol_persona:
+        return (
+            f"You are {idol_name}. Stay 100% in character. First person only. "
+            f"Never break character. Never use AI disclaimers."
+        )
+    return load_and_render("persona_system.txt", {
+        "idol_name": idol_name,
+        "voice_style": idol_persona.get("voice_style") or "direct and authoritative",
+        "principles": "; ".join(idol_persona.get("principles", [])) or "none documented",
+        "dos": "; ".join(idol_persona.get("dos", [])) or "none documented",
+        "donts": "; ".join(idol_persona.get("donts", [])) or "none documented",
+        "signature_phrases": ", ".join(idol_persona.get("signature_phrases", [])) or "none documented",
+        "lexicon_allow": ", ".join(idol_persona.get("lexicon_allow", [])) or "language consistent with your era",
+        "lexicon_ban": ", ".join(idol_persona.get("lexicon_ban", [])) or "modern jargon inconsistent with your era",
+        "worldview_adapter_json": json_lib.dumps(idol_persona.get("worldview_adapter", {})),
+        "taboo_topics": ", ".join(idol_persona.get("taboo_topics", [])) or "none documented",
+        "era_context": idol_persona.get("era_context") or "contemporary",
+        "disclaimer": idol_persona.get("disclaimer") or "",
+    })
 
 
 def _build_session_response(session: IntakeSession) -> dict:
@@ -312,6 +353,14 @@ async def suggest_idols(
     session = await _get_session(session_id, current_user.id, db)
     _require_phase(session, SessionPhase.IDOL_SELECTION)
 
+    # The inputs (age/status/interests) are frozen on the session, so the
+    # first successful generation is definitive — reuse it on retries and
+    # back-navigation instead of a fresh 5-15s grounded LLM call.
+    if session.idol_suggestions_json:
+        cached = [IdolSuggestionItem(**s) for s in session.idol_suggestions_json]
+        logger.info(f"[SESSION] Returning {len(cached)} cached idol suggestions for session {session_id}")
+        return IdolSuggestionsResponse(suggestions=cached)
+
     # Render the idol suggestion prompt
     prompt = load_and_render("idol_suggest.txt", {
         "user_age": str(session.user_age),
@@ -324,14 +373,12 @@ async def suggest_idols(
     # never left with an empty selection screen.
     suggestions: list[IdolSuggestionItem] = []
     try:
-        full_response = ""
-        async for chunk in stream_with_grounding(
-            system_prompt="You are a mentor matching system. Return valid JSON only.",
+        full_response = await generate_with_grounding(
+            system_prompt=load_and_render("idol_suggest_system.txt", {}),
             user_message=prompt,
-        ):
-            full_response += chunk
+        )
 
-        parsed = json_lib.loads(full_response)
+        parsed = json_lib.loads(_strip_json_fences(full_response))
         suggestions_raw = parsed.get("suggestions", [])
         suggestions = [
             IdolSuggestionItem(
@@ -347,7 +394,12 @@ async def suggest_idols(
     except Exception as e:
         logger.error(f"[SESSION] Idol suggestion generation failed ({e}); using fallback")
 
-    if len(suggestions) < 3:
+    if len(suggestions) >= 3:
+        # Cache only real LLM output — the static fallback should not become
+        # sticky; a failed generation gets retried on the next call.
+        session.idol_suggestions_json = [s.model_dump(mode="json") for s in suggestions]
+        await db.commit()
+    else:
         suggestions = _fallback_idol_suggestions(session.user_interests or [])
 
     logger.info(f"[SESSION] Generated {len(suggestions)} idol suggestions for session {session_id}")
@@ -422,11 +474,55 @@ async def select_idol(
     response = _build_session_response(session)
     await db.commit()
 
+    # Prefetch the grounded idol facts in the background so the first
+    # interview turn doesn't pay the 3-8s Google-Search round trip inline.
+    # Best-effort: the interview path still fetches inline if this hasn't
+    # landed (it only prefills session.idol_facts_json).
+    asyncio.create_task(_prefetch_idol_facts(
+        session_id=session.id,
+        idol_name=data.idol_name,
+        user_age=session.user_age,
+    ))
+
     logger.info(
         f"[SESSION] Selected idol '{data.idol_name}' for session {session_id}, "
         f"thread {thread.id}"
     )
     return response
+
+
+async def _prefetch_idol_facts(session_id: str, idol_name: str, user_age: int | None) -> None:
+    """Background task: fetch idol facts and store them on the session.
+
+    Uses its own DB session — the request's session is closed by the time
+    this runs. Any failure is swallowed; the interview stream falls back to
+    fetching the facts inline (guarded by `not session.idol_facts_json`).
+    """
+    from app.core.db import async_session_maker
+    try:
+        facts_prompt = (
+            f"What had {idol_name} achieved by age {user_age}? "
+            f"List specific, verified accomplishments as concise bullet points, "
+            f"one per line, each with the year and {idol_name}'s age at the time."
+        )
+        facts_response = await generate_with_grounding(
+            system_prompt="You are a historical fact checker. Return accurate, sourced facts.",
+            user_message=facts_prompt,
+        )
+        if not facts_response:
+            return
+        async with async_session_maker() as bg_db:
+            result = await bg_db.execute(
+                select(IntakeSession).where(IntakeSession.id == session_id)
+            )
+            bg_session = result.scalar_one_or_none()
+            # Never clobber facts the interview path may have written first.
+            if bg_session and not bg_session.idol_facts_json:
+                bg_session.idol_facts_json = {"raw_facts": facts_response}
+                await bg_db.commit()
+                logger.info(f"[SESSION] Prefetched idol facts for session {session_id}")
+    except Exception as e:
+        logger.warning(f"[SESSION] Idol facts prefetch failed (will fetch inline): {e}")
 
 
 # =============================================================================
@@ -589,14 +685,13 @@ async def interview(
                 logger.info(f"[SESSION] Fetching idol facts for {idol_name} at age {session.user_age}")
                 facts_prompt = (
                     f"What had {idol_name} achieved by age {session.user_age}? "
-                    f"List specific, verified accomplishments with dates. Return as JSON array."
+                    f"List specific, verified accomplishments as concise bullet points, "
+                    f"one per line, each with the year and {idol_name}'s age at the time."
                 )
-                facts_response = ""
-                async for chunk in stream_with_grounding(
+                facts_response = await generate_with_grounding(
                     system_prompt="You are a historical fact checker. Return accurate, sourced facts.",
                     user_message=facts_prompt,
-                ):
-                    facts_response += chunk
+                )
                 session.idol_facts_json = {"raw_facts": facts_response}
 
             # Render the per-turn user prompt (depends on idol facts).
@@ -728,11 +823,10 @@ async def generate_results(
         "interests": session.user_interests,
     }
 
-    # Persona system prompt (reusable for both phases)
-    persona_system = (
-        f"You are {idol_name}. Stay 100% in character. First person only. "
-        f"Never break character. Never use AI disclaimers."
-    )
+    # Persona system prompt (reusable for both phases). comparison_generate.txt
+    # and blueprint_generate.txt both defer voice, intensity, and era language
+    # to "your persona (in the system prompt)" — so it must be the full pack.
+    persona_system = _render_persona_system(idol_name, idol_persona)
 
     async def generate_stream():
         # =====================================================================
@@ -761,6 +855,21 @@ async def generate_results(
             session.comparison_output = full_comparison
             session.transition_to(SessionPhase.BLUEPRINT)
             await db.commit()
+
+            # Comparison scores depend only on the comparison (not the
+            # blueprint) and are pure LLM work — start them now so they run
+            # concurrently with the blueprint stream instead of adding their
+            # wall time (5-50s) to the SSE tail. DB writes happen later, on
+            # this session, after the blueprint commit.
+            scores_task = asyncio.create_task(generate_comparison_scores(
+                get_llm_client(),
+                idol_name=idol_name,
+                user_age=session.user_age,
+                user_profile_json=json_lib.dumps(user_profile),
+                interview_transcript_json=interview_transcript,
+                idol_facts_json=json_lib.dumps(session.idol_facts_json or {}),
+                comparison_summary=full_comparison,
+            ))
 
         except Exception as e:
             logger.error(f"[SESSION] Comparison stream error: {e}")
@@ -801,35 +910,14 @@ async def generate_results(
 
         except Exception as e:
             logger.error(f"[SESSION] Blueprint stream error: {e}")
+            # Don't leave the concurrent scores task dangling on early return
+            scores_task.cancel()
             # Roll back to COMPARISON phase so the user can retry
             session.transition_to(SessionPhase.COMPARISON)
             session.blueprint_output = None
             await db.commit()
             yield f"data: {json_lib.dumps({'type': 'error', 'section': 'blueprint', 'message': f'Blueprint generation failed. You can retry. Error: {str(e)}', 'retryable': True})}\n\n"
             return
-
-        # =====================================================================
-        # Part 2.5: Structured comparison scores (best-effort)
-        # =====================================================================
-        # The prose comparison is the mirror; these are the numbers behind the
-        # Compare screen's gauges/radar. Best-effort: a failure leaves
-        # comparison_scores_json null and the client falls back to seed data.
-        try:
-            scores = await generate_comparison_scores(
-                get_llm_client(),
-                idol_name=idol_name,
-                user_age=session.user_age,
-                user_profile_json=json_lib.dumps(user_profile),
-                interview_transcript_json=interview_transcript,
-                idol_facts_json=json_lib.dumps(session.idol_facts_json or {}),
-                comparison_summary=full_comparison,
-            )
-            if scores:
-                session.comparison_scores_json = scores
-                await db.commit()
-                yield f"data: {json_lib.dumps({'type': 'comparison_scores', 'ready': True})}\n\n"
-        except Exception as e:
-            logger.error(f"[SESSION] comparison scores failed: {e}")
 
         # =====================================================================
         # Part 3: Kick off 12-week plan generation
@@ -864,6 +952,23 @@ async def generate_results(
             except Exception as e:
                 logger.error(f"[SESSION] Failed to enqueue plan generation: {e}")
 
+        # =====================================================================
+        # Part 3.5: Structured comparison scores (best-effort)
+        # =====================================================================
+        # Started concurrently with the blueprint (see Part 1) — by now the
+        # task is usually already finished, so this await is ~free. The prose
+        # comparison is the mirror; these are the numbers behind the Compare
+        # screen's gauges/radar. Best-effort: a failure leaves
+        # comparison_scores_json null and the client falls back to seed data.
+        try:
+            scores = await scores_task
+            if scores:
+                session.comparison_scores_json = scores
+                await db.commit()
+                yield f"data: {json_lib.dumps({'type': 'comparison_scores', 'ready': True})}\n\n"
+        except Exception as e:
+            logger.error(f"[SESSION] comparison scores failed: {e}")
+
         # Final done event
         yield f"data: {json_lib.dumps({'type': 'done', 'phase': 'completed'})}\n\n"
 
@@ -897,25 +1002,18 @@ async def get_learning_materials(
     """
     session = await _get_session(session_id, current_user.id, db)
 
-    prompt = (
-        f"Find 3 highly educational, beginner-friendly resources (mix of articles and videos) "
-        f"to help someone learn about: '{data.topic}'. "
-        f"Return ONLY a JSON array of objects with keys: 'title', 'url', 'type' (must be 'article' or 'video'), and 'summary'."
+    # Braces in the user-typed topic would read as unresolved placeholders
+    # under strict rendering — neutralise them before substitution.
+    safe_topic = data.topic.replace("{", "(").replace("}", ")")
+    prompt = load_and_render("learning_materials_generate.txt", {"topic": safe_topic})
+
+    full_response = await generate_with_grounding(
+        system_prompt=load_and_render("learning_materials_system.txt", {}),
+        user_message=prompt,
     )
 
-    full_response = ""
-    async for chunk in stream_with_grounding(
-        system_prompt="You are an expert curriculum designer. Return valid JSON only.",
-        user_message=prompt,
-    ):
-        full_response += chunk
-
     try:
-        # Strip markdown json block if present
-        if full_response.strip().startswith("```json"):
-            full_response = full_response.strip()[7:-3]
-
-        parsed = json_lib.loads(full_response)
+        parsed = json_lib.loads(_strip_json_fences(full_response))
         raw_materials = [
             {
                 "title": m.get("title", "Resource"),
@@ -927,10 +1025,14 @@ async def get_learning_materials(
             }
             for m in parsed[:3]
         ]
+        # Only attach resources that are already cached; uncached book modules
+        # are generated in the background so this request stays fast. The
+        # client tolerates materials without a content_resource_id.
         enriched_materials = await attach_content_resources_to_materials(
             db,
             raw_materials,
             user_goal=data.topic,
+            defer_book_generation=True,
         )
         materials = [
             LearningMaterialResponse(
@@ -997,16 +1099,33 @@ async def guided_learning(
     idol_name = session.idol.name if session.idol else "Your Mentor"
     idol_persona_obj = getattr(session.idol, "persona", None)
     idol_persona = _persona_to_dict(idol_persona_obj)
-    idol_persona_data = json_lib.dumps(idol_persona)
+
+    # Render the Socratic tutor system prompt with the full persona pack.
+    # strict=False: the conversation history contains user-typed text whose
+    # stray braces would otherwise read as unresolved placeholders.
+    tutor_system_prompt = load_and_render("guided_learning_system.txt", {
+        "idol_name": idol_name,
+        "topic": "",
+        "voice_style": idol_persona.get("voice_style") or "direct and authoritative",
+        "principles": "; ".join(idol_persona.get("principles", [])) or "none documented",
+        "dos": "; ".join(idol_persona.get("dos", [])) or "none documented",
+        "donts": "; ".join(idol_persona.get("donts", [])) or "none documented",
+        "signature_phrases": ", ".join(idol_persona.get("signature_phrases", [])) or "none documented",
+        "lexicon_allow": ", ".join(idol_persona.get("lexicon_allow", [])) or "language consistent with your era",
+        "lexicon_ban": ", ".join(idol_persona.get("lexicon_ban", [])) or "modern jargon inconsistent with your era",
+        "worldview_adapter_json": json_lib.dumps(idol_persona.get("worldview_adapter", {})),
+        "taboo_topics": ", ".join(idol_persona.get("taboo_topics", [])) or "none documented",
+        "era_context": idol_persona.get("era_context") or "contemporary",
+        "conversation_history_json": chat_history_json,
+        "disclaimer": idol_persona.get("disclaimer") or "",
+    }, strict=False)
 
     async def generate_stream():
         full_response = ""
         try:
             async for chunk in stream_learnlm(
-                idol_name=idol_name,
-                idol_persona_context=json_lib.dumps(idol_persona),
+                system_prompt=tutor_system_prompt,
                 user_message=data.content,
-                conversation_history=chat_history_json,
             ):
                 full_response += chunk
                 yield f"data: {json_lib.dumps({'type': 'chunk', 'content': chunk})}\n\n"
@@ -1049,7 +1168,18 @@ async def get_daily_feed(
     """
     session = await _get_session(session_id, current_user.id, db)
 
+    # Daily by design: serve today's cached insights instead of re-running a
+    # 5-15s grounded generation on every open of the screen.
+    today_iso = date.today().isoformat()
+    cached_feed = session.daily_feed_json or {}
+    if cached_feed.get("date") == today_iso and cached_feed.get("insights"):
+        return DailyFeedResponse(insights=[
+            DailyInsightResponse(**item) for item in cached_feed["insights"]
+        ])
+
     idol_name = session.idol.name if session.idol else "Your Mentor"
+    idol_persona_obj = getattr(session.idol, "persona", None)
+    idol_persona = _persona_to_dict(idol_persona_obj)
 
     user_profile = {
         "age": session.user_age,
@@ -1057,27 +1187,34 @@ async def get_daily_feed(
         "interests": session.user_interests,
     }
 
+    # Documented evidence the prompt's anti-fabrication rules draw from:
+    # signature phrases, principles, and sourced grounding evidence.
+    raw_evidence = getattr(idol_persona_obj, "grounding_evidence", None)
+    idol_evidence = {
+        "signature_phrases": idol_persona.get("signature_phrases", []),
+        "principles": idol_persona.get("principles", []),
+        "grounding_evidence": raw_evidence[:10] if isinstance(raw_evidence, list) else [],
+    }
+
     prompt = load_and_render("daily_feed_generate.txt", {
         "count": "3",
         "idol_name": idol_name,
         "user_profile_json": json_lib.dumps(user_profile),
+        "idol_evidence_json": json_lib.dumps(idol_evidence),
     })
 
-    full_response = ""
-    async for chunk in stream_with_grounding(
-        system_prompt=f"You are {idol_name}. Deliver profound microlearning insights.",
+    full_response = await generate_with_grounding(
+        system_prompt=_render_persona_system(idol_name, idol_persona),
         user_message=prompt,
-    ):
-        full_response += chunk
+    )
 
     try:
-        # Strip markdown json block if present
-        if full_response.strip().startswith("```json"):
-            full_response = full_response.strip()[7:-3]
-        elif full_response.strip().startswith("```"):
-            full_response = full_response.strip()[3:-3]
-
-        parsed = json_lib.loads(full_response)
+        parsed = json_lib.loads(_strip_json_fences(full_response))
+        # The prompt asks for {"insights": [...]}; tolerate a bare array too.
+        if isinstance(parsed, dict):
+            parsed = parsed.get("insights", [])
+        if not isinstance(parsed, list):
+            parsed = []
         insights = [
             DailyInsightResponse(
                 title=item.get("title", "Insight"),
@@ -1085,7 +1222,14 @@ async def get_daily_feed(
                 category=item.get("category", "Mindset"),
             )
             for item in parsed[:3]
+            if isinstance(item, dict)
         ]
+        if insights:
+            session.daily_feed_json = {
+                "date": today_iso,
+                "insights": [i.model_dump(mode="json") for i in insights],
+            }
+            await db.commit()
         return DailyFeedResponse(insights=insights)
     except Exception as e:
         logger.error(f"[SESSION] Failed to parse daily feed: {e}. Raw: {full_response}")

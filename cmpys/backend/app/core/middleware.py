@@ -142,7 +142,12 @@ class ResponseBodyLoggerMiddleware:
     """
     
     SKIP_PATHS = {"/health", "/ready", "/favicon.ico"}
-    
+
+    # Cap how much body we retain for logging. log_response truncates to
+    # 2,000 chars anyway, so buffering multi-MB payloads (or entire SSE
+    # streams) only burns memory and regex time on every request.
+    MAX_CAPTURED_BODY = 8 * 1024
+
     def __init__(self, app: ASGIApp):
         self.app = app
     
@@ -168,30 +173,39 @@ class ResponseBodyLoggerMiddleware:
             message = await receive()
             if message["type"] == "http.request" and not request_body_captured:
                 body = message.get("body", b"")
-                request_body += body
+                if len(request_body) < self.MAX_CAPTURED_BODY:
+                    request_body += body[: self.MAX_CAPTURED_BODY - len(request_body)]
                 if not message.get("more_body", False):
                     request_body_captured = True
             return message
-        
+
         # Capture response
         response_status = 0
         response_headers: dict = {}
         response_body = b""
-        
+        is_event_stream = False
+
         async def send_wrapper(message: dict) -> None:
-            nonlocal response_status, response_headers, response_body
-            
+            nonlocal response_status, response_headers, response_body, is_event_stream
+
             if message["type"] == "http.response.start":
                 response_status = message["status"]
                 response_headers = {
-                    k.decode() if isinstance(k, bytes) else k: 
+                    k.decode() if isinstance(k, bytes) else k:
                     v.decode() if isinstance(v, bytes) else v
                     for k, v in message.get("headers", [])
                 }
-            elif message["type"] == "http.response.body":
-                body = message.get("body", b"")
-                response_body += body
-            
+                # Never buffer SSE bodies: a stream is long-lived, its content
+                # is already logged at the source, and accumulating it here
+                # holds the whole LLM output in memory per connection.
+                is_event_stream = "text/event-stream" in response_headers.get(
+                    "content-type", ""
+                )
+            elif message["type"] == "http.response.body" and not is_event_stream:
+                if len(response_body) < self.MAX_CAPTURED_BODY:
+                    body = message.get("body", b"")
+                    response_body += body[: self.MAX_CAPTURED_BODY - len(response_body)]
+
             await send(message)
         
         # Process request

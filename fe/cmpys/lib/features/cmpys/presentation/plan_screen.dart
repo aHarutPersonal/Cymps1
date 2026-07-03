@@ -132,7 +132,8 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
       case CurrentPlanStatus.ready:
         return [
           ...blueprint,
-          BackendPlanRoadmap(plan: planState.plan!),
+          // Spread so each week card is its own ListView child (lazy build).
+          ...backendPlanRoadmapBlocks(planState.plan!),
           const SizedBox(height: 18),
           Center(
             child: Text('"The whole secret is small things, done daily."',

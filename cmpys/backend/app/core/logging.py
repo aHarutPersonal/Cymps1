@@ -208,11 +208,14 @@ def log_response(
         if key.lower() in include_headers:
             response_parts.append(f"  {key}: {value}")
     
-    # Add body (truncated if too long)
+    # Add body (truncate BEFORE masking — the regex passes scale with input
+    # size, and we only ever log the first 2,000 chars anyway)
     if body:
-        masked_body = _mask_sensitive_data(body)
-        # Truncate very long responses
-        if len(masked_body) > 2000:
+        # 6KB masking window: wide enough that a long token starting near the
+        # 2,000-char display cut still gets masked before slicing.
+        truncated = len(body) > 6000
+        masked_body = _mask_sensitive_data(body[:6000])
+        if len(masked_body) > 2000 or truncated:
             masked_body = masked_body[:2000] + "... [truncated]"
         response_parts.append(f"  Body: {masked_body}")
     

@@ -232,7 +232,7 @@ abstract final class AppTypography {
   // ═══════════════════════════════════════════════
 
   // -- HEADERS --
-  static TextStyle get h1 => GoogleFonts.inter(
+  static final TextStyle h1 = GoogleFonts.inter(
     fontSize: 32,
     fontWeight: FontWeight.w800,
     height: 1.1,
@@ -240,7 +240,7 @@ abstract final class AppTypography {
     color: AppColors.textPrimary,
   );
 
-  static TextStyle get h2 => GoogleFonts.inter(
+  static final TextStyle h2 = GoogleFonts.inter(
     fontSize: 24,
     fontWeight: FontWeight.w700,
     height: 1.2,
@@ -248,14 +248,14 @@ abstract final class AppTypography {
     color: AppColors.textPrimary,
   );
 
-  static TextStyle get h3 => GoogleFonts.inter(
+  static final TextStyle h3 = GoogleFonts.inter(
     fontSize: 18,
     fontWeight: FontWeight.w700,
     height: 1.3,
     color: AppColors.textPrimary,
   );
 
-  static TextStyle get h4 => GoogleFonts.inter(
+  static final TextStyle h4 = GoogleFonts.inter(
     fontSize: 16,
     fontWeight: FontWeight.w700,
     height: 1.3,
@@ -263,44 +263,44 @@ abstract final class AppTypography {
   );
 
   // -- BODY (UI context — descriptions, secondary text) --
-  static TextStyle get bodyLarge => GoogleFonts.inter(
+  static final TextStyle bodyLarge = GoogleFonts.inter(
     fontSize: 16,
     fontWeight: FontWeight.w500,
     height: 1.5,
     color: AppColors.textPrimary,
   );
 
-  static TextStyle get body => GoogleFonts.inter(
+  static final TextStyle body = GoogleFonts.inter(
     fontSize: 15,
     fontWeight: FontWeight.w400,
     height: 1.5,
     color: AppColors.textPrimary,
   );
 
-  static TextStyle get bodyMedium => GoogleFonts.inter(
+  static final TextStyle bodyMedium = GoogleFonts.inter(
     fontSize: 15,
     fontWeight: FontWeight.w500,
     height: 1.5,
     color: AppColors.textPrimary,
   );
 
-  static TextStyle get caption => GoogleFonts.inter(
+  static final TextStyle caption = GoogleFonts.inter(
     fontSize: 13,
     fontWeight: FontWeight.w400,
     height: 1.4,
     color: AppColors.textSecondary,
   );
 
-  static TextStyle get captionMedium => GoogleFonts.inter(
+  static final TextStyle captionMedium = GoogleFonts.inter(
     fontSize: 13,
     fontWeight: FontWeight.w500,
     height: 1.4,
     color: AppColors.textSecondary,
   );
 
-  static TextStyle get bodySmall => caption;
+  static final TextStyle bodySmall = caption;
 
-  static TextStyle get captionUpper => GoogleFonts.jetBrainsMono(
+  static final TextStyle captionUpper = GoogleFonts.jetBrainsMono(
     fontSize: 11,
     fontWeight: FontWeight.w700,
     height: 1.2,
@@ -308,16 +308,16 @@ abstract final class AppTypography {
     color: AppColors.textTertiary,
   );
 
-  static TextStyle get tiny => captionUpper;
+  static final TextStyle tiny = captionUpper;
 
   // -- DATA / NUMBERS --
-  static TextStyle get monoNum => GoogleFonts.jetBrainsMono(
+  static final TextStyle monoNum = GoogleFonts.jetBrainsMono(
     fontSize: 24,
     fontWeight: FontWeight.w300,
     color: AppColors.textPrimary,
   );
 
-  static TextStyle get monoLabel => GoogleFonts.jetBrainsMono(
+  static final TextStyle monoLabel = GoogleFonts.jetBrainsMono(
     fontSize: 11,
     fontWeight: FontWeight.w600,
     letterSpacing: 0.8,
@@ -326,25 +326,25 @@ abstract final class AppTypography {
   );
 
   // -- UI ELEMENTS --
-  static TextStyle get button => GoogleFonts.inter(
+  static final TextStyle button = GoogleFonts.inter(
     fontSize: 15,
     fontWeight: FontWeight.w700,
     color: Colors.white,
   );
 
-  static TextStyle get buttonSmall => GoogleFonts.inter(
+  static final TextStyle buttonSmall = GoogleFonts.inter(
     fontSize: 14,
     fontWeight: FontWeight.w600,
     color: Colors.white,
   );
 
-  static TextStyle get label => GoogleFonts.inter(
+  static final TextStyle label = GoogleFonts.inter(
     fontSize: 14,
     fontWeight: FontWeight.w600,
     color: AppColors.textPrimary,
   );
 
-  static TextStyle get labelSmall => GoogleFonts.inter(
+  static final TextStyle labelSmall = GoogleFonts.inter(
     fontSize: 12,
     fontWeight: FontWeight.w500,
     color: AppColors.textSecondary,
@@ -356,7 +356,7 @@ abstract final class AppTypography {
 
   /// Primary reading style for IdeaCard content.
   /// Size 28, height 1.6 for maximum frictionless reading.
-  static TextStyle get reading => GoogleFonts.playfairDisplay(
+  static final TextStyle reading = GoogleFonts.playfairDisplay(
     fontSize: 28,
     fontWeight: FontWeight.w400,
     height: 1.6,
@@ -364,7 +364,7 @@ abstract final class AppTypography {
   );
 
   /// Smaller reading variant for secondary content.
-  static TextStyle get readingSmall => GoogleFonts.playfairDisplay(
+  static final TextStyle readingSmall = GoogleFonts.playfairDisplay(
     fontSize: 22,
     fontWeight: FontWeight.w400,
     height: 1.55,
@@ -372,7 +372,7 @@ abstract final class AppTypography {
   );
 
   /// Bold reading variant for emphasis within IdeaCards.
-  static TextStyle get readingBold => GoogleFonts.playfairDisplay(
+  static final TextStyle readingBold = GoogleFonts.playfairDisplay(
     fontSize: 28,
     fontWeight: FontWeight.w700,
     height: 1.6,
@@ -380,7 +380,7 @@ abstract final class AppTypography {
   );
 
   /// Reading quote style — italic serif for pullquotes.
-  static TextStyle get readingQuote => GoogleFonts.playfairDisplay(
+  static final TextStyle readingQuote = GoogleFonts.playfairDisplay(
     fontSize: 24,
     fontWeight: FontWeight.w400,
     fontStyle: FontStyle.italic,
@@ -389,7 +389,7 @@ abstract final class AppTypography {
   );
 
   /// Category tag on IdeaCards — small uppercase serif.
-  static TextStyle get readingTag => GoogleFonts.playfairDisplay(
+  static final TextStyle readingTag = GoogleFonts.playfairDisplay(
     fontSize: 13,
     fontWeight: FontWeight.w600,
     letterSpacing: 1.2,
@@ -398,7 +398,7 @@ abstract final class AppTypography {
   );
 
   /// IdeaCard body text — Playfair at 17px for card-context reading.
-  static TextStyle get ideaCardBody => GoogleFonts.playfairDisplay(
+  static final TextStyle ideaCardBody = GoogleFonts.playfairDisplay(
     fontSize: 17,
     fontWeight: FontWeight.w400,
     height: 1.65,
@@ -411,7 +411,7 @@ abstract final class AppTypography {
   // ═══════════════════════════════════════════════
 
   /// Big editorial headline ("Who were they, at your age?").
-  static TextStyle get display => GoogleFonts.bricolageGrotesque(
+  static final TextStyle display = GoogleFonts.bricolageGrotesque(
     fontSize: 34,
     fontWeight: FontWeight.w800,
     height: 1.05,
@@ -420,7 +420,7 @@ abstract final class AppTypography {
   );
 
   /// Small uppercase mono label above sections (letter-spacing 0.14em).
-  static TextStyle get kicker => GoogleFonts.jetBrainsMono(
+  static final TextStyle kicker = GoogleFonts.jetBrainsMono(
     fontSize: 11,
     fontWeight: FontWeight.w500,
     letterSpacing: 1.5,
@@ -429,7 +429,7 @@ abstract final class AppTypography {
   );
 
   /// Dimmed body copy (secondary ink).
-  static TextStyle get bodyDim => GoogleFonts.plusJakartaSans(
+  static final TextStyle bodyDim = GoogleFonts.plusJakartaSans(
     fontSize: 15,
     fontWeight: FontWeight.w500,
     height: 1.5,

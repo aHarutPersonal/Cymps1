@@ -52,12 +52,11 @@ async def test_suggest_idols_returns_fallback_suggestions_when_llm_fails(monkeyp
     async def fake_get_session(session_id, user_id, db):
         return session
 
-    async def failing_stream(*args, **kwargs):
+    async def failing_generate(*args, **kwargs):
         raise RuntimeError("Gemini unavailable")
-        yield ""
 
     monkeypatch.setattr(sessions_api, "_get_session", fake_get_session)
-    monkeypatch.setattr(sessions_api, "stream_with_grounding", failing_stream)
+    monkeypatch.setattr(sessions_api, "generate_with_grounding", failing_generate)
 
     response = await sessions_api.suggest_idols(
         session_id=session.id,

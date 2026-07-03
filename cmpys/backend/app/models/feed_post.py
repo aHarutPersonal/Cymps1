@@ -1,7 +1,7 @@
 """Feed post — persisted feed content (quotes, videos)."""
 import hashlib
 
-from sqlalchemy import Integer, String, Text
+from sqlalchemy import Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDMixin
@@ -11,6 +11,11 @@ class FeedPost(Base, UUIDMixin, TimestampMixin):
     """A single persisted feed item visible to all users."""
 
     __tablename__ = "feed_posts"
+    __table_args__ = (
+        # Backs the per-request "newest N posts" scans (ORDER BY created_at
+        # DESC LIMIT ...) on a table that grows forever.
+        Index("ix_feed_posts_created_at", "created_at"),
+    )
 
     type: Mapped[str] = mapped_column(String(20), nullable=False)
     title: Mapped[str] = mapped_column(String(255), nullable=False)

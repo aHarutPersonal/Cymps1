@@ -2,13 +2,14 @@
 Google Gemini service for the CMPYS chat advisor.
 
 Provides two capabilities:
-1. `stream_with_grounding()` — Gemini 2.0 Flash with Google Search grounding.
+1. `generate_with_grounding()` — Gemini 2.5 Flash with Google Search grounding.
    Used for resource/link queries: the model searches Google in real-time and
-   cites real URLs in its response.
+   cites real URLs in its response. Single call, full response.
 
-2. `stream_learnlm()` — LearnLM 2.0 Flash for Socratic tutoring.
+2. `stream_learnlm()` — Gemini 2.5 Flash for Socratic tutoring.
    Used for study/learning questions: the model asks guiding questions and
-   checks understanding rather than just giving answers.
+   checks understanding rather than just giving answers. The caller provides
+   the full rendered system prompt (guided_learning_system.txt).
 
 Both return async generators that yield text chunks for SSE streaming.
 """
@@ -40,8 +41,20 @@ TUTOR_KEYWORDS = {
 }
 
 
+# Module-level singleton: each genai.Client owns its own httpx pool, so a
+# per-call client pays a fresh TCP+TLS handshake (~100-300ms) on every LLM
+# call. Reusing one client keeps connections warm; the async surface is safe
+# for concurrent use.
+_client_singleton: genai.Client | None = None
+_client_api_key: str | None = None
+
+
 def _gemini_client() -> genai.Client:
-    return genai.Client(api_key=settings.gemini_api_key)
+    global _client_singleton, _client_api_key
+    if _client_singleton is None or _client_api_key != settings.gemini_api_key:
+        _client_singleton = genai.Client(api_key=settings.gemini_api_key)
+        _client_api_key = settings.gemini_api_key
+    return _client_singleton
 
 
 def detect_intent(message: str) -> str:
@@ -57,105 +70,105 @@ def detect_intent(message: str) -> str:
     return "general"
 
 
-async def stream_with_grounding(
+async def generate_with_grounding(
     system_prompt: str,
     user_message: str,
     conversation_history: str = "",
-) -> AsyncGenerator[str, None]:
+) -> str:
     """
-    Stream a Gemini 2.0 Flash response with Google Search grounding.
+    Single Gemini 2.5 Flash call with Google Search grounding.
 
-    The model automatically searches Google before responding and cites
-    real URLs — no manual Tavily injection needed.
+    For callers that need the complete response (JSON contracts, fact
+    lookups) — no streaming involved. The model automatically searches
+    Google before responding and cites real URLs.
     """
     client = _gemini_client()
 
-    full_prompt = f"""{system_prompt}
+    if conversation_history:
+        contents = f"Previous conversation:\n{conversation_history}\n\n{user_message}"
+    else:
+        contents = user_message
 
-Previous conversation:
-{conversation_history}
-
-User: {user_message}
-
-When recommending resources, use the real URLs from your Google Search results.
-Respond as the persona above:"""
-
-    logger.info("[GEMINI] Starting grounded stream (Google Search enabled)")
+    logger.info("[GEMINI] Grounded generate (Google Search enabled)")
 
     try:
         response = await client.aio.models.generate_content(
             model="gemini-2.5-flash",
-            contents=full_prompt,
+            contents=contents,
             config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
                 tools=[types.Tool(google_search=types.GoogleSearch())],
                 temperature=0.7,
             ),
         )
-        # Non-streaming with grounding (grounding requires non-streaming)
-        if response.text:
-            # Yield in chunks to simulate streaming
-            text = response.text
-            chunk_size = 8
-            for i in range(0, len(text), chunk_size):
-                yield text[i:i + chunk_size]
+        return response.text or ""
     except Exception as e:
-        logger.error(f"[GEMINI] Grounded stream error: {e}")
+        logger.error(f"[GEMINI] Grounded generate error: {e}")
+        raise
+
+
+async def _stream_generate(
+    system_prompt: str,
+    contents: str,
+    label: str,
+    grounded: bool = True,
+    temperature: float = 0.7,
+) -> AsyncGenerator[str, None]:
+    """
+    True token streaming via generate_content_stream (the pattern proven by
+    interview_stream: streaming works WITH the google_search tool). This cuts
+    user-perceived time-to-first-byte from full-generation time to first-token
+    time, and yields natural token chunks instead of artificial 8-char slices
+    (~10x fewer SSE events downstream).
+    """
+    client = _gemini_client()
+    tools = [types.Tool(google_search=types.GoogleSearch())] if grounded else None
+
+    try:
+        stream = client.aio.models.generate_content_stream(
+            model="gemini-2.5-flash",
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                tools=tools,
+                temperature=temperature,
+            ),
+        )
+        # The async SDK may return the iterator directly or a coroutine that
+        # resolves to it, depending on version — support both.
+        if inspect.iscoroutine(stream):
+            stream = await stream
+        async for chunk in stream:
+            text = getattr(chunk, "text", None)
+            if text:
+                yield text
+    except Exception as e:
+        logger.error(f"[GEMINI] {label} stream error: {e}")
         raise
 
 
 async def stream_learnlm(
-    idol_name: str,
-    idol_persona_context: str,
+    system_prompt: str,
     user_message: str,
-    conversation_history: str = "",
 ) -> AsyncGenerator[str, None]:
     """
-    Stream a LearnLM 2.0 Flash response for Socratic educational tutoring.
+    Stream a Gemini 2.5 Flash response for Socratic educational tutoring.
 
-    LearnLM is fine-tuned to:
-    - Ask guiding questions rather than just giving answers
-    - Check the user's understanding
-    - Adapt to the user's level
-    - Break down complex concepts step-by-step
-
-    This is used when users ask study/comprehension questions.
+    The caller passes the fully rendered system prompt — normally
+    guided_learning_system.txt with the idol's persona pack (voice style,
+    principles, lexicon, worldview adapter) and the conversation history
+    already substituted in. Keeping the rendering at the call site means
+    the tutoring voice stays in the prompt file, not in code.
     """
-    client = _gemini_client()
-
-    system_instruction = f"""You are {idol_name}, a simulated AI persona acting as a Socratic tutor.
-
-{idol_persona_context}
-
-As a tutor, you must:
-- Guide with questions rather than immediately giving the full answer
-- Check if the user understands before moving on
-- Break complex ideas into small steps
-- Celebrate correct thinking
-- Gently correct misconceptions
-- Stay in character as {idol_name}
-
-Previous conversation:
-{conversation_history}"""
-
     logger.info("[GEMINI] Starting LearnLM tutor stream")
-
-    try:
-        response = await client.aio.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=user_message,
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                temperature=0.8,
-            ),
-        )
-        if response.text:
-            text = response.text
-            chunk_size = 8
-            for i in range(0, len(text), chunk_size):
-                yield text[i:i + chunk_size]
-    except Exception as e:
-        logger.warning(f"[GEMINI] LearnLM error (falling back): {e}")
-        raise
+    async for text in _stream_generate(
+        system_prompt=system_prompt,
+        contents=user_message,
+        label="LearnLM",
+        grounded=False,
+        temperature=0.8,
+    ):
+        yield text
 
 
 # =============================================================================
@@ -178,8 +191,6 @@ async def interview_stream(
 
     The model asks exactly ONE question per turn and reacts emotionally.
     """
-    client = _gemini_client()
-
     # Build the user-facing content (history + current message)
     if conversation_history:
         contents = f"{conversation_history}\n\nUser: {user_message}"
@@ -187,29 +198,13 @@ async def interview_stream(
         contents = user_message
 
     logger.info("[GEMINI] Starting interview stream (persona + Google Search)")
-
-    try:
-        stream = client.aio.models.generate_content_stream(
-            model="gemini-2.5-flash",
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                tools=[types.Tool(google_search=types.GoogleSearch())],
-                temperature=0.8,
-            ),
-        )
-        # The async SDK may return the iterator directly or a coroutine that
-        # resolves to it, depending on version — support both. True streaming
-        # (not waiting for the full response) is what lets the SSE start fast.
-        if inspect.iscoroutine(stream):
-            stream = await stream
-        async for chunk in stream:
-            text = getattr(chunk, "text", None)
-            if text:
-                yield text
-    except Exception as e:
-        logger.error(f"[GEMINI] Interview stream error: {e}")
-        raise
+    async for text in _stream_generate(
+        system_prompt=system_prompt,
+        contents=contents,
+        label="Interview",
+        temperature=0.8,
+    ):
+        yield text
 
 
 async def comparison_stream(
@@ -223,28 +218,13 @@ async def comparison_stream(
     The system_prompt maintains the idol persona. The user_message is
     the rendered comparison_generate.txt with full interview context.
     """
-    client = _gemini_client()
-
     logger.info("[GEMINI] Starting comparison stream (Google Search enabled)")
-
-    try:
-        response = await client.aio.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=user_message,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                tools=[types.Tool(google_search=types.GoogleSearch())],
-                temperature=0.7,
-            ),
-        )
-        if response.text:
-            text = response.text
-            chunk_size = 8
-            for i in range(0, len(text), chunk_size):
-                yield text[i:i + chunk_size]
-    except Exception as e:
-        logger.error(f"[GEMINI] Comparison stream error: {e}")
-        raise
+    async for text in _stream_generate(
+        system_prompt=system_prompt,
+        contents=user_message,
+        label="Comparison",
+    ):
+        yield text
 
 
 async def blueprint_stream(
@@ -259,25 +239,10 @@ async def blueprint_stream(
     maintains the idol persona. The user_message is the rendered
     blueprint_generate.txt with full context.
     """
-    client = _gemini_client()
-
     logger.info("[GEMINI] Starting blueprint stream (Google Search for resources)")
-
-    try:
-        response = await client.aio.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=user_message,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                tools=[types.Tool(google_search=types.GoogleSearch())],
-                temperature=0.7,
-            ),
-        )
-        if response.text:
-            text = response.text
-            chunk_size = 8
-            for i in range(0, len(text), chunk_size):
-                yield text[i:i + chunk_size]
-    except Exception as e:
-        logger.error(f"[GEMINI] Blueprint stream error: {e}")
-        raise
+    async for text in _stream_generate(
+        system_prompt=system_prompt,
+        contents=user_message,
+        label="Blueprint",
+    ):
+        yield text

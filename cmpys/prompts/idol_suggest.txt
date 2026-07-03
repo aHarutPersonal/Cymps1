@@ -32,9 +32,9 @@ HARD RULES:
 - Each must have verifiable achievements at or near age {user_age}.
 
 OUTPUT — JSON ONLY, matching this schema exactly:
-{{
+{
   "suggestions": [
-    {{
+    {
       "name": "Full Name",
       "era": "356–323 BC | 1452–1519 | 1955–2011",
       "relevance_summary": "One sentence: what they achieved by age {user_age} and why it's relevant to this user's interests.",
@@ -43,9 +43,9 @@ OUTPUT — JSON ONLY, matching this schema exactly:
       "photo_lookup_hints": ["Wikidata image property P18", "Wikipedia infobox image", "Wikimedia Commons portrait search phrase"],
       "domains": ["domain1", "domain2"],
       "confidence": 0.85
-    }}
+    }
   ]
-}}
+}
 
 CONFIDENCE (0.0–1.0):
 - 0.90+: Strong Wikipedia page, achievements at user's age well-documented, excellent interest match
@@ -58,5 +58,5 @@ FINAL CHECK:
 - Each includes Wikidata/Wikipedia/photo hints so the app can cache a licensed idol photo once and reuse it
 - JSON is valid, no trailing commas, no markdown wrapping
 
-OUTPUT CONTRACT: Your entire output is the JSON object above and nothing else. It begins with {{
-and ends with }}. No prose before or after, no markdown code fences.
+OUTPUT CONTRACT: Your entire output is the JSON object above and nothing else. It begins with {
+and ends with }. No prose before or after, no markdown code fences.

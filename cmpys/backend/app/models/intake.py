@@ -165,6 +165,23 @@ class IntakeSession(Base, UUIDMixin, TimestampUpdateMixin):
         default=None,
     )
 
+    # Cached idol suggestions (Phase 2). Inputs (age/status/interests) are
+    # frozen on the session, so the first successful generation is reused on
+    # retries/back-navigation instead of a fresh grounded LLM call.
+    idol_suggestions_json: Mapped[list | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        default=None,
+    )
+
+    # Cached daily insights: {"date": "YYYY-MM-DD", "insights": [...]}.
+    # Regenerated only when the date changes — the feed is daily by design.
+    daily_feed_json: Mapped[dict | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        default=None,
+    )
+
     # Generated outputs (Phases 4–5)
     comparison_output: Mapped[str | None] = mapped_column(
         Text,

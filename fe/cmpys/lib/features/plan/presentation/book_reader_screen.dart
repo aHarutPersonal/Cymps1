@@ -27,6 +27,7 @@ class BookReaderScreen extends ConsumerStatefulWidget {
 
 class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
   String? _markdown;
+  List<String> _blocks = const [];
   String? _title;
   String? _author;
   bool _loading = false;
@@ -50,6 +51,7 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
       if (!mounted) return;
       setState(() {
         _markdown = resource.contentMarkdown;
+        _blocks = _splitMarkdownBlocks(resource.contentMarkdown ?? '');
         _title = resource.title;
         _author = resource.authorOrCreator;
         _loading = false;
@@ -61,6 +63,39 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
         _error = 'Couldn’t load this book. Check your connection.';
       });
     }
+  }
+
+  /// Splits markdown into blocks on top-level heading lines (starting with
+  /// `#`) so each block renders as its own list item. Headings inside fenced
+  /// code blocks are ignored, and a document without headings stays a single
+  /// block.
+  static List<String> _splitMarkdownBlocks(String markdown) {
+    final lines = markdown.split('\n');
+    final blocks = <String>[];
+    final buffer = StringBuffer();
+    var inFence = false;
+    var sawHeading = false;
+
+    void flush() {
+      final block = buffer.toString();
+      if (block.trim().isNotEmpty) blocks.add(block);
+      buffer.clear();
+    }
+
+    for (final line in lines) {
+      final trimmed = line.trimLeft();
+      if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
+        inFence = !inFence;
+      } else if (!inFence && line.startsWith('#')) {
+        sawHeading = true;
+        flush();
+      }
+      buffer.writeln(line);
+    }
+    flush();
+
+    if (!sawHeading || blocks.length <= 1) return [markdown];
+    return blocks;
   }
 
   @override
@@ -165,7 +200,17 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
                       ),
                     )
                   else if (hasText)
-                    CmpysMarkdown(_markdown!)
+                    // One sliver child per heading-delimited block, so a full
+                    // book parses and lays out lazily instead of as a single
+                    // multi-hundred-ms MarkdownBody. The 8px gap between
+                    // blocks reproduces flutter_markdown's default
+                    // blockSpacing, keeping the output visually identical.
+                    ...[
+                      for (var i = 0; i < _blocks.length; i++) ...[
+                        if (i > 0) const SizedBox(height: 8),
+                        CmpysMarkdown(_blocks[i]),
+                      ],
+                    ]
                   else
                     Text('This book has no readable content yet.',
                         style: AppTypography.body

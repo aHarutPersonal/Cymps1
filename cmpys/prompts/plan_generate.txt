@@ -53,6 +53,7 @@ Generate a highly effective, 12-week strategic plan that transforms this user to
 The idol's milestones define the DESTINATION; the User Context, Readiness data, and gap analysis define the STARTING LINE and the PACE. Before applying any rule below, anchor the plan to where THIS user actually is:
 - Set Week 1's difficulty to the user's current level, NOT the idol's peak. A beginner starts with fundamentals; do not open with idol-level challenges.
 - Every week's total effort MUST fit within {hours_per_week} hours. Do not exceed it — an over-stuffed plan the user abandons is a failed plan.
+- THE HOUR CAP ALWAYS WINS over the task-count guidance below. If {hours_per_week} is small (under ~6 hours), shrink the plan to fit: 1-2 shorter mission tasks (1-3 hours each) and exactly 1 daily rhythm task of 15-20 minutes. Never emit a week whose estimated hours sum above {hours_per_week}.
 - If the User Context is rich, the plan must visibly reflect it. Do not let the idol's achievements crowd out the user's real situation, constraints, and stated goal ({user_goal}).
 
 ## NON-NEGOTIABLE RULES
@@ -66,6 +67,8 @@ Every task MUST directly relate to {idol_name}'s actual field of expertise. Use 
 - If the idol is a writer: tasks must involve writing, reading great literature, developing voice, publishing
 
 NEVER generate generic tasks like "write your first article", "network with people", "build your brand" that could apply to anyone regardless of idol.
+
+NOTE ON EXAMPLES: the Einstein/Buffett/Jobs examples throughout this prompt illustrate FORMAT and SPECIFICITY only. Never let their domains (physics, investing, product) leak into a plan for a different kind of idol — an athlete's plan trains like the athlete, a painter's plan paints. Derive every task from {idol_name}'s actual field.
 
 ### 2. SUBSTANTIAL MISSION TASKS (not micro-tasks)
 Each MISSION task must represent REAL work — 2 to 8 hours of focused effort. A week should have 2-3 substantial mission tasks, NOT 5 tiny tasks that can be finished in an afternoon.
@@ -95,12 +98,12 @@ GOOD daily rhythm examples (specific, progressive, domain-grounded):
 
 Each daily rhythm task MUST include a `daily_instructions` field — a 3-5 sentence paragraph (40-80 words) that tells the user EXACTLY what to do that day so they don't need to open a separate detail view. Include: what to work on, how to approach it, and how to know you're done. This is their daily script.
 
-### 12. SUBSTANCE MINIMUMS
+### 4. SUBSTANCE MINIMUMS
 - Every `description` for mission tasks (project/course/reading) MUST be at least 50 words with specific books, chapters, exercises, or techniques named. Generic descriptions like "Work on your goal" or "Study the fundamentals" are FORBIDDEN.
 - Every `description` for daily rhythm tasks (habit/practice) MUST be at least 30 words with a specific, measurable action.
 - Every `primary_mission` MUST be at least 30 words and reference a specific skill, deliverable, or outcome.
 
-### 4. IDOL-SPECIFIC REFERENCES
+### 5. IDOL-SPECIFIC REFERENCES
 Include specific resources that are:
 - Books written BY the idol or considered foundational in their field
 - Biographies or papers about the idol's actual methods
@@ -110,27 +113,27 @@ Include specific resources that are:
 Example for Einstein: reference "The Feynman Lectures on Physics", Einstein's 1905 papers, "Spacetime Physics" by Taylor & Wheeler, thought experiment methodology.
 Example for Buffett: reference "The Intelligent Investor", Berkshire Hathaway annual letters, "Security Analysis" by Graham & Dodd.
 
-### 5. BINARY MISSION TASKS
+### 6. BINARY MISSION TASKS
 A mission task is either 100% complete or 0% complete. "Study physics" is vague. "Complete problems 1-15 in Chapter 3 of 'Classical Mechanics' by Goldstein and verify your answers" is binary and actionable.
 
-### 6. TWO CATEGORIES OF TASKS
+### 7. TWO CATEGORIES OF TASKS
 Every week MUST include BOTH:
 - **Primary Mission tasks** (`type: "project"`, `"course"`, or `"reading"`): Major milestone tasks (2-8 hours each). These get expanded into full sub-step lessons by the detail generator. 2-3 per week.
 - **Daily Rhythm tasks** (`type: "habit"` or `"practice"`): Repeatable daily actions (20-45 min each). These are self-contained — the user sees them on the home screen and checks them off daily. 1-2 per week.
 
-### 7. RESOURCE HINTS MUST BE CANONICAL
+### 8. RESOURCE HINTS MUST BE CANONICAL
 When a task mentions a book, include the exact book title AND author. When referencing a video or course, include the creator/platform. These hints will become shared `content_resources`, so ambiguity creates duplicates.
 
-### 8. ANTI-GOALS MUST BE DOMAIN-SPECIFIC
+### 9. ANTI-GOALS MUST BE DOMAIN-SPECIFIC
 Anti-goals should identify real distractions specific to the idol's field:
 - ❌ BAD: "Avoid procrastination" (generic, applies to everyone)
 - ✅ GOOD: "Do NOT jump into advanced quantum mechanics before mastering classical mechanics and linear algebra — premature abstraction is the #1 killer of physics students"
 - ✅ GOOD: "Do NOT chase hot stock tips or crypto — stick to understanding intrinsic value and reading annual reports"
 
-### 9. USE THE GAP ANALYSIS
+### 10. USE THE GAP ANALYSIS
 The gap analysis tells you exactly where the user is behind {idol_name}. Prioritize tasks that close the biggest gaps first. If the user is "beginner" in a category the idol excelled in, that category gets the most attention.
 
-### 10. PROGRESSION STRUCTURE
+### 11. PROGRESSION STRUCTURE
 The 12 weeks should follow a natural learning arc:
 - **Weeks 1-3: Foundation** — Master prerequisites, build mental models, establish daily practice
 - **Weeks 4-6: Core Skills** — Tackle the idol's primary domain skills, read foundational texts
@@ -142,7 +145,7 @@ Daily rhythm tasks should PROGRESS across weeks:
 - Middle weeks: more complex, longer, skill-building
 - Late weeks: creative output, teaching others, synthesis
 
-### 11. HYPER-PERSONALIZED
+### 12. HYPER-PERSONALIZED
 Use the User Context and Readiness data. Adapt difficulty to their level. If they're a beginner in the idol's domain, start with fundamentals — don't skip to advanced material.
 
 ## OUTPUT FORMAT (Strict JSON):

@@ -7,52 +7,36 @@ and rendering them with variable substitution and validation.
 PROMPT WIRING DOCUMENTATION:
 ============================
 
-Each prompt file and its required placeholders:
+System prompts (no placeholders unless noted):
 
-1. extractor_system.txt
-   - Placeholders: NONE (pure system prompt)
-   - Used by: All extraction functions as system prompt
+- extractor_system.txt — strict evidence-grounded extraction. System prompt for
+  the ingestion pipeline ONLY (profile/achievements/timeline/milestones/persona).
+- planner_system.txt — plan/lesson/book-module generation. System prompt for the
+  planning trio (plan_generate, plan_item_details, book_module_generate); unlike
+  extractor_system it permits world knowledge of real books/courses.
+- persona_system.txt — full idol persona pack; system prompt wherever the model
+  speaks AS the idol (comparison, blueprint, daily feed).
+- guided_learning_system.txt — idol persona as Socratic tutor (guided learning).
+- learning_materials_system.txt — curriculum curator JSON contract.
+- idol_suggest_system.txt — mentor matching JSON contract.
+- interview_system.xml — idol persona conducting the diagnostic interview.
 
-2. profile_extract.txt
-   - Placeholders: {selected_name}, {provider}, {external_id}, {wikipedia_url}, {sources_json_array}
-   - Used by: run_profile_extraction() in ingestion
+User prompts and their consumers (placeholders per PROMPT_PLACEHOLDERS below):
 
-3. achievements_extract.txt
-   - Placeholders: {idol_name}, {sources_json_array}
-   - Used by: run_achievements_extraction() in ingestion
-
-4. timeline_normalize.txt
-   - Placeholders: {idol_birth_date}, {candidates_json}
-   - Used by: run_timeline_normalization() in ingestion
-
-5. milestones_by_age.txt
-   - Placeholders: {target_age}, {mode}, {timeline_json}
-   - Used by: run_milestones_by_age() in extraction
-
-6. plan_generate.txt
-   - Placeholders: {idol_name}, {idol_profile_json}, {idol_persona_json}, {idol_milestones_json}, 
-                   {user_profile_json}, {target_age}, {gaps_json}, {readiness_by_gap_json}, {allowed_resources_json}
-   - Used by: generate_plan() in planning
-
-7. chat_system.txt
-   - Placeholders: {idol_name}, {voice_style}, {principles}, {dos}, {donts},
-                   {signature_phrases}, {topics_of_strength}, {grounding_facts_json},
-                   {idol_persona_json}, {user_context_json}, {disclaimer}
-   - Used by: generate_reply() in chat
-
-8. chat_reply.txt
-   - Placeholders: {user_profile_json}, {idol_profile_json}, {idol_persona_json},
-                   {target_age}, {comparison_json}, {milestones_json}, 
-                   {evidence_snippets_json}, {conversation_history_json}, {user_message}
-   - Used by: generate_reply() in chat
-
-9. idol_discover.txt
-   - Placeholders: {interests_json_array}, {user_age}, {limit}
-   - Used by: suggest_idols() in idols API
-
-10. persona_pack.txt
-    - Placeholders: (injected via f-string with profile and sources)
-    - Used by: run_persona_pack() in ingestion
+- profile_extract.txt / achievements_extract.txt / timeline_normalize.txt /
+  milestones_by_age.txt — ingestion + extraction services.
+- persona_pack.txt — persona generation in ingestion (profile/sources via f-string).
+- plan_generate.txt — generate_plan() in planning.
+- plan_item_details.txt — regenerate_plan_item_details in tasks/plans.py.
+- book_module_generate.txt — generate_book_module() in content_resources.py.
+- interview_question.txt / comparison_generate.txt / comparison_scores.txt /
+  blueprint_generate.txt — agentic session flow in api/v1/sessions.py.
+- idol_suggest.txt — suggest_idols() in api/v1/sessions.py.
+- learning_materials_generate.txt — get_learning_materials() in api/v1/sessions.py.
+- daily_feed_generate.txt — get_daily_feed() in api/v1/sessions.py.
+- discover_feed.txt — discover feed generation in api/v1/feed.py.
+- thinking_plan.txt / thinking_task.txt — streamed "thinking out loud" narration.
+- image_generate.txt — DEPRECATED, not wired to any service.
 """
 import json
 import logging
@@ -77,7 +61,47 @@ _loaded_prompts: set[str] = set()
 
 PROMPT_PLACEHOLDERS = {
     "extractor_system.txt": [],  # No placeholders - pure system prompt
-    
+    "planner_system.txt": [],  # No placeholders - pure system prompt
+    "idol_suggest_system.txt": [],  # No placeholders - pure system prompt
+    "learning_materials_system.txt": [],  # No placeholders - pure system prompt
+
+    "learning_materials_generate.txt": [
+        "topic",
+    ],
+
+    "persona_system.txt": [
+        "idol_name",
+        "voice_style",
+        "principles",
+        "dos",
+        "donts",
+        "signature_phrases",
+        "lexicon_allow",
+        "lexicon_ban",
+        "worldview_adapter_json",
+        "taboo_topics",
+        "era_context",
+        "disclaimer",
+    ],
+
+    "guided_learning_system.txt": [
+        "idol_name",
+        "topic",
+        "voice_style",
+        "principles",
+        "dos",
+        "donts",
+        "signature_phrases",
+        "lexicon_allow",
+        "lexicon_ban",
+        "worldview_adapter_json",
+        "taboo_topics",
+        "era_context",
+        "conversation_history_json",
+        "disclaimer",
+    ],
+
+
     "profile_extract.txt": [
         "selected_name",
         "provider",
@@ -151,6 +175,7 @@ PROMPT_PLACEHOLDERS = {
         "interests_json",
         "goals_json",
         "idol_name",
+        "exclude_titles_json",
     ],
     
     "thinking_plan.txt": [
@@ -172,6 +197,13 @@ PROMPT_PLACEHOLDERS = {
         "idol_domain",
         "voice_style",
         "signature_phrases",
+        "principles",
+        "dos",
+        "donts",
+        "lexicon_allow",
+        "lexicon_ban",
+        "worldview_adapter_json",
+        "taboo_topics",
         "user_age",
         "user_financial_status",
         "user_interests_json",
@@ -217,6 +249,7 @@ PROMPT_PLACEHOLDERS = {
         "count",
         "idol_name",
         "user_profile_json",
+        "idol_evidence_json",
     ],
 
     
@@ -487,37 +520,34 @@ PROMPT_REGISTRY = {
     },
     # Plan generation
     "planning": {
-        "generate_plan": ["extractor_system.txt", "plan_generate.txt"],
-        "generate_item_details": ["extractor_system.txt", "plan_item_details.txt"],
-        "generate_book_module": ["extractor_system.txt", "book_module_generate.txt"],
-    },
-    # Chat
-    "chat": {
-        "generate_reply": ["chat_system.txt", "chat_reply.txt"],
+        "generate_plan": ["planner_system.txt", "plan_generate.txt"],
+        "generate_item_details": ["planner_system.txt", "plan_item_details.txt"],
+        "generate_book_module": ["planner_system.txt", "book_module_generate.txt"],
     },
     # Milestones query
     "milestones": {
         "by_age": ["extractor_system.txt", "milestones_by_age.txt"],
     },
-    # Idol discovery/suggestion
+    # Idol suggestion (session flow)
     "idols": {
-        "suggest": ["idol_discover.txt"],
-        "suggest_for_session": ["idol_suggest.txt"],
+        "suggest_for_session": ["idol_suggest_system.txt", "idol_suggest.txt"],
     },
-    # Intake questionnaire
-    "intake": {
-        "generate_questions": ["extractor_system.txt", "intake_questions_generate.txt"],
-        "normalize_answers": ["extractor_system.txt", "intake_answers_normalize.txt"],
-    },
-    # Agentic workflow
+    # Agentic workflow (sessions API)
     "agentic": {
         "interview": ["interview_system.xml", "interview_question.txt"],
-        "comparison": ["comparison_generate.txt"],
-        "blueprint": ["blueprint_generate.txt"],
+        "comparison": ["persona_system.txt", "comparison_generate.txt"],
+        "comparison_scores": ["comparison_scores.txt"],
+        "blueprint": ["persona_system.txt", "blueprint_generate.txt"],
     },
-    # Idea cards (Deepstash-style)
-    "idea_cards": {
-        "generate_cards": ["idea_cards_generate.txt"],
+    # Guided learning (sessions API)
+    "learning": {
+        "materials": ["learning_materials_system.txt", "learning_materials_generate.txt"],
+        "tutor": ["guided_learning_system.txt"],
+    },
+    # Feeds
+    "feed": {
+        "daily_insights": ["persona_system.txt", "daily_feed_generate.txt"],
+        "discover": ["discover_feed.txt"],
     },
 }
 

@@ -8,6 +8,7 @@ Flow:
 3. GET /feed/{id}/comments — List comments
 4. POST /feed/{id}/comments — Add a comment
 """
+import asyncio
 import json as json_lib
 import logging
 import random
@@ -75,7 +76,11 @@ class CommentRequest(BaseModel):
 
 async def _get_user_context(user: User, db: AsyncSession) -> dict:
     """Build user context for LLM prompts."""
-    await db.refresh(user, ["profile"])
+    # get_current_user already selectinloads the profile on request paths;
+    # only hit the DB again when it's genuinely unloaded (background refill).
+    from sqlalchemy import inspect as sa_inspect
+    if "profile" in sa_inspect(user).unloaded:
+        await db.refresh(user, ["profile"])
     profile = user.profile
 
     interests = []
@@ -116,11 +121,21 @@ async def _generate_and_persist(
     try:
         from app.services.llm import get_llm_client
 
+        # Recently generated titles: without this the prompt converges on the
+        # same handful of sources and hash-dedup silently drops the yield.
+        recent_stmt = (
+            select(FeedPost.title)
+            .order_by(FeedPost.created_at.desc())
+            .limit(40)
+        )
+        recent_titles = [row[0] for row in (await db.execute(recent_stmt)).all()]
+
         prompt = load_and_render("discover_feed.txt", {
             "count": str(count),
             "interests_json": json_lib.dumps(interests) if interests else '["personal development", "entrepreneurship"]',
             "goals_json": json_lib.dumps(goals) if goals else '["build a successful career"]',
             "idol_name": idol_name,
+            "exclude_titles_json": json_lib.dumps(recent_titles),
         })
 
         client = get_llm_client(timeout=60.0)
@@ -227,6 +242,45 @@ async def _generate_and_persist(
         return []
 
 
+# Single-flight guard: many users hitting a low pool at once should trigger
+# one refill, not a stampede of LLM generations.
+_refill_in_progress = False
+
+
+async def _background_refill(user_id: str) -> None:
+    """Top up the shared feed pool outside the request path.
+
+    Runs on its own DB session — the request's session is closed by the time
+    this executes. Failures are logged and swallowed; the next low-pool
+    request simply tries again.
+    """
+    global _refill_in_progress
+    if _refill_in_progress:
+        return
+    _refill_in_progress = True
+    try:
+        from app.core.db import async_session_maker
+
+        async with async_session_maker() as bg_db:
+            user = await bg_db.get(User, user_id)
+            if user is None:
+                return
+            ctx = await _get_user_context(user, bg_db)
+            await _generate_and_persist(
+                interests=ctx["interests"],
+                goals=ctx["goals"],
+                idol_name=ctx["idol_name"],
+                db=bg_db,
+                count=12,
+            )
+            await bg_db.commit()
+            logger.info("[FEED] Background refill completed")
+    except Exception as e:
+        logger.warning(f"[FEED] Background refill failed: {e}")
+    finally:
+        _refill_in_progress = False
+
+
 # ─── Endpoints ─────────────────────────────────────────────────────
 
 @router.get("", response_model=FeedResponse)
@@ -259,8 +313,12 @@ async def get_feed(
         if p.type != "video" or (p.url and "watch?v=" in p.url)
     )
 
-    # 2. Generate fresh content when pool is low or forced refresh
-    if usable < 20 or refresh:
+    # 2. Generate fresh content when the pool is low or on forced refresh.
+    #    Only block the request when we must: an explicit refresh (the user
+    #    asked for new content) or a completely empty pool. A merely-low pool
+    #    is topped up in the background — LLM + video resolution can take
+    #    15-60s and should never stall the main scroll surface.
+    if refresh or usable == 0:
         ctx = await _get_user_context(current_user, db)
         ai_posts = await _generate_and_persist(
             interests=ctx["interests"],
@@ -273,6 +331,8 @@ async def get_feed(
             if post.id not in existing_ids:
                 db_posts.append(post)
                 existing_ids.add(post.id)
+    elif usable < 20:
+        asyncio.create_task(_background_refill(current_user.id))
 
     await db.commit()
 
