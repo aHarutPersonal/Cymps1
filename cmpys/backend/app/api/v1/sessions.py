@@ -209,6 +209,36 @@ def _render_persona_system(idol_name: str, idol_persona: dict) -> str:
     })
 
 
+# Session ids whose scores backfill was already enqueued by this process.
+# Cheap dedup so polling clients don't flood the queue; the task itself is
+# idempotent, so a duplicate after a restart is harmless.
+_scores_backfill_enqueued: set[str] = set()
+
+
+def _maybe_enqueue_scores_backfill(session: IntakeSession) -> None:
+    """Self-heal sessions with a comparison verdict but no structured scores.
+
+    Without scores the client silently falls back to seed (demo) numbers, so
+    any fetch of such a session queues background generation. Best-effort:
+    a broker hiccup must never fail the read path.
+    """
+    if session.comparison_scores_json is not None or not session.comparison_output:
+        return
+    session_id = str(session.id)
+    if session_id in _scores_backfill_enqueued:
+        return
+    _scores_backfill_enqueued.add(session_id)
+    try:
+        from app.tasks.comparison import backfill_comparison_scores
+
+        backfill_comparison_scores.apply_async(
+            args=[session_id], queue="low_priority"
+        )
+        logger.info(f"[CMP_SCORES] Enqueued scores backfill for session={session_id}")
+    except Exception as e:
+        logger.warning(f"[CMP_SCORES] Could not enqueue backfill for {session_id}: {e}")
+
+
 def _build_session_response(session: IntakeSession) -> dict:
     """Build a session response dict from the model."""
     selected_idol = None
@@ -569,6 +599,7 @@ async def get_current_session(
     if not session:
         return None
 
+    _maybe_enqueue_scores_backfill(session)
     return _build_session_response(session)
 
 
@@ -585,6 +616,7 @@ async def get_session(
     Returns full session data including phase, turn count, outputs.
     """
     session = await _get_session(session_id, current_user.id, db)
+    _maybe_enqueue_scores_backfill(session)
     return _build_session_response(session)
 
 
