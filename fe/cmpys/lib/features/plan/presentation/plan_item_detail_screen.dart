@@ -8,6 +8,7 @@ import '../../../app/design_tokens.dart';
 import '../../../core/ui/app_shell.dart';
 import '../../../core/ui/cmpys/cmpys_markdown.dart';
 import '../../../core/ui/cmpys/cmpys_primitives.dart';
+import '../../../core/ui/motion/page_transition.dart';
 import '../data/plan_repository.dart';
 import '../models/plan_models.dart';
 import '../state/current_plan_provider.dart';
@@ -402,7 +403,7 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
       screen = MaterialWebScreen(title: m.title, url: m.url!);
     }
     if (screen == null) return;
-    final route = MaterialPageRoute<void>(builder: (_) => screen!);
+    final route = CmpysPageRoute<void>(builder: (_) => screen!);
     Navigator.of(context).push(route);
   }
 

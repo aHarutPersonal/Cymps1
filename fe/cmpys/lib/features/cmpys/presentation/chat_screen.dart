@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/design_tokens.dart';
 import '../../../app/router.dart';
 import '../../../core/ui/cmpys/cmpys_primitives.dart';
+import '../../../core/ui/motion/page_transition.dart';
 import '../../session/data/session_repository.dart';
 import '../../session/models/session_models.dart';
 import '../data/cmpys_record_data.dart';
@@ -306,7 +307,7 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
           ),
           GestureDetector(
             onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const CmpysNotesScreen())),
+                CmpysPageRoute(builder: (_) => const CmpysNotesScreen())),
             child: Container(
               width: 38,
               height: 38,

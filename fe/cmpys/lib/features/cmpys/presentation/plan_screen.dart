@@ -6,6 +6,7 @@ import '../../../app/design_tokens.dart';
 import '../../../core/ui/app_shell.dart';
 import '../../../core/ui/cmpys/cmpys_markdown.dart';
 import '../../../core/ui/cmpys/cmpys_primitives.dart';
+import '../../../core/ui/motion/page_transition.dart';
 import '../../plan/data/plan_repository.dart';
 import '../../plan/models/plan_models.dart';
 import '../../plan/presentation/backend_plan_widgets.dart';
@@ -282,7 +283,7 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
   Widget _blueprintCard(CmpysState st) {
     final idol = st.idol;
     return GestureDetector(
-      onTap: () => Navigator.of(context).push(MaterialPageRoute(
+      onTap: () => Navigator.of(context).push(CmpysPageRoute(
         builder: (_) => CmpysMarkdownScreen(
           kicker: 'From ${idol.short}',
           title: 'Your blueprint',
@@ -353,7 +354,7 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
 
     return GestureDetector(
       onTap: () => Navigator.of(context)
-          .push(MaterialPageRoute(builder: (_) => PillarDetailScreen(pillar: pillar))),
+          .push(CmpysPageRoute(builder: (_) => PillarDetailScreen(pillar: pillar))),
       child: Container(
         padding: const EdgeInsets.fromLTRB(20, 20, 18, 20),
         decoration: BoxDecoration(
