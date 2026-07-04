@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../core/ui/app_shell.dart';
+import '../core/ui/motion/page_transition.dart';
 import '../features/auth/presentation/auth_screen.dart';
 import '../features/auth/presentation/forgot_password_screen.dart';
 import '../features/auth/presentation/splash_screen.dart';
@@ -18,7 +19,7 @@ import '../features/cmpys/presentation/you_screen.dart';
 ///
 /// The whole experience is: splash → auth → AI onboarding → the five-tab
 /// shell. Detail screens (record, readers, notes, settings, etc.) are pushed
-/// with `MaterialPageRoute` from within their tabs, so they don't need route
+/// with `CmpysPageRoute` from within their tabs, so they don't need route
 /// entries here.
 abstract final class AppRoutes {
   static const String splash = '/splash';
@@ -52,24 +53,39 @@ final routerProvider = Provider<GoRouter>((ref) {
     routes: [
       GoRoute(
         path: AppRoutes.splash,
-        builder: (context, state) => const SplashScreen(),
+        pageBuilder: (context, state) => CmpysPageTransition.page(
+          key: state.pageKey,
+          child: const SplashScreen(),
+        ),
       ),
       GoRoute(
         path: AppRoutes.auth,
-        builder: (context, state) => const AuthScreen(),
+        pageBuilder: (context, state) => CmpysPageTransition.page(
+          key: state.pageKey,
+          child: const AuthScreen(),
+        ),
       ),
       GoRoute(
         path: AppRoutes.forgotPassword,
-        builder: (context, state) => const ForgotPasswordScreen(),
+        pageBuilder: (context, state) => CmpysPageTransition.page(
+          key: state.pageKey,
+          child: const ForgotPasswordScreen(),
+        ),
       ),
       GoRoute(
         path: AppRoutes.cmpysOnboarding,
-        builder: (context, state) => const CmpysOnboardingFlow(),
+        pageBuilder: (context, state) => CmpysPageTransition.page(
+          key: state.pageKey,
+          child: const CmpysOnboardingFlow(),
+        ),
       ),
       GoRoute(
         path: AppRoutes.ideas,
         parentNavigatorKey: _rootNavigatorKey,
-        builder: (context, state) => const CmpysReelsScreen(),
+        pageBuilder: (context, state) => CmpysPageTransition.page(
+          key: state.pageKey,
+          child: const CmpysReelsScreen(),
+        ),
       ),
 
       // Main app shell with the floating five-tab nav.
@@ -82,7 +98,10 @@ final routerProvider = Provider<GoRouter>((ref) {
             routes: [
               GoRoute(
                 path: AppRoutes.home,
-                builder: (context, state) => const CmpysTodayScreen(),
+                pageBuilder: (context, state) => CmpysPageTransition.page(
+                  key: state.pageKey,
+                  child: const CmpysTodayScreen(),
+                ),
               ),
             ],
           ),
@@ -90,7 +109,10 @@ final routerProvider = Provider<GoRouter>((ref) {
             routes: [
               GoRoute(
                 path: AppRoutes.plan,
-                builder: (context, state) => const CmpysPlanScreen(),
+                pageBuilder: (context, state) => CmpysPageTransition.page(
+                  key: state.pageKey,
+                  child: const CmpysPlanScreen(),
+                ),
               ),
             ],
           ),
@@ -98,7 +120,10 @@ final routerProvider = Provider<GoRouter>((ref) {
             routes: [
               GoRoute(
                 path: AppRoutes.chat,
-                builder: (context, state) => const CmpysChatScreen(),
+                pageBuilder: (context, state) => CmpysPageTransition.page(
+                  key: state.pageKey,
+                  child: const CmpysChatScreen(),
+                ),
               ),
             ],
           ),
@@ -106,7 +131,10 @@ final routerProvider = Provider<GoRouter>((ref) {
             routes: [
               GoRoute(
                 path: AppRoutes.vault,
-                builder: (context, state) => const CmpysCompareScreen(),
+                pageBuilder: (context, state) => CmpysPageTransition.page(
+                  key: state.pageKey,
+                  child: const CmpysCompareScreen(),
+                ),
               ),
             ],
           ),
@@ -114,7 +142,10 @@ final routerProvider = Provider<GoRouter>((ref) {
             routes: [
               GoRoute(
                 path: AppRoutes.profile,
-                builder: (context, state) => const CmpysYouScreen(),
+                pageBuilder: (context, state) => CmpysPageTransition.page(
+                  key: state.pageKey,
+                  child: const CmpysYouScreen(),
+                ),
               ),
             ],
           ),

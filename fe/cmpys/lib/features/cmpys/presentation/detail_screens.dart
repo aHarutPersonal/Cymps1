@@ -11,6 +11,7 @@ import '../../../app/design_tokens.dart';
 import '../../../app/router.dart';
 import '../../../core/ui/app_shell.dart';
 import '../../../core/ui/cmpys/cmpys_primitives.dart';
+import '../../../core/ui/motion/page_transition.dart';
 import '../data/cmpys_seed.dart';
 import '../state/cmpys_store.dart';
 import 'idol_detail_screen.dart';
@@ -398,19 +399,19 @@ class CmpysSavedScreen extends ConsumerWidget {
     // Resolve plan-item readers by id.
     final reading = cmpysReadings[id];
     if (reading != null) {
-      Navigator.of(context).push(MaterialPageRoute(
+      Navigator.of(context).push(CmpysPageRoute(
           builder: (_) => CmpysArticleReaderScreen(reading: reading)));
       return;
     }
     final book = cmpysBooks[id];
     if (book != null) {
       Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => CmpysBookReaderScreen(book: book)));
+          CmpysPageRoute(builder: (_) => CmpysBookReaderScreen(book: book)));
       return;
     }
     final video = cmpysVideos[id];
     if (video != null) {
-      Navigator.of(context).push(MaterialPageRoute(
+      Navigator.of(context).push(CmpysPageRoute(
           builder: (_) => CmpysVideoLessonScreen(video: video)));
     }
   }
@@ -452,7 +453,7 @@ class CmpysSettingsScreen extends ConsumerWidget {
           ]),
           _group('Account', [
             _navRow(context, PhosphorIconsRegular.user, 'Edit profile', null,
-                () => Navigator.of(context).push(MaterialPageRoute(
+                () => Navigator.of(context).push(CmpysPageRoute(
                     builder: (_) => const CmpysEditProfileScreen()))),
             _navRow(context, PhosphorIconsRegular.lock, 'Privacy & data', null,
                 () => showCmpysToast(context, 'Privacy center',
@@ -1218,7 +1219,7 @@ class CmpysTaskDetailScreen extends ConsumerWidget {
 // Helper so other screens can open the active idol's detail.
 void openIdolDetail(BuildContext context, CmpysIdol idol) {
   Navigator.of(context)
-      .push(MaterialPageRoute(builder: (_) => CmpysIdolDetailScreen(idol: idol)));
+      .push(CmpysPageRoute(builder: (_) => CmpysIdolDetailScreen(idol: idol)));
 }
 
 /// Routes a plan item to the right detail screen by kind:
@@ -1228,7 +1229,7 @@ void openCmpysPlanItem(BuildContext context, CmpysPlanItem item) {
     case CmpysItemKind.read:
       final reading = cmpysReadings[item.id];
       if (reading != null) {
-        Navigator.of(context).push(MaterialPageRoute(
+        Navigator.of(context).push(CmpysPageRoute(
             builder: (_) => CmpysArticleReaderScreen(reading: reading)));
         return;
       }
@@ -1237,14 +1238,14 @@ void openCmpysPlanItem(BuildContext context, CmpysPlanItem item) {
       final book = cmpysBooks[item.id];
       if (book != null) {
         Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => CmpysBookReaderScreen(book: book)));
+            CmpysPageRoute(builder: (_) => CmpysBookReaderScreen(book: book)));
         return;
       }
       break;
     case CmpysItemKind.video:
       final video = cmpysVideos[item.id];
       if (video != null) {
-        Navigator.of(context).push(MaterialPageRoute(
+        Navigator.of(context).push(CmpysPageRoute(
             builder: (_) => CmpysVideoLessonScreen(video: video)));
         return;
       }
@@ -1257,6 +1258,6 @@ void openCmpysPlanItem(BuildContext context, CmpysPlanItem item) {
     (p) => p.items.any((it) => it.id == item.id),
     orElse: () => cmpysPlan.pillars.first,
   );
-  Navigator.of(context).push(MaterialPageRoute(
+  Navigator.of(context).push(CmpysPageRoute(
       builder: (_) => CmpysTaskDetailScreen(item: item, pillar: pillar)));
 }

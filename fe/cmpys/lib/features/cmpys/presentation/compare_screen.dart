@@ -10,6 +10,8 @@ import '../../../app/router.dart';
 import '../../../core/ui/app_shell.dart';
 import '../../../core/ui/cmpys/cmpys_markdown.dart';
 import '../../../core/ui/cmpys/cmpys_primitives.dart';
+import '../../../core/ui/motion/entrance.dart';
+import '../../../core/ui/motion/page_transition.dart';
 import '../data/cmpys_seed.dart';
 import '../state/cmpys_store.dart';
 import 'record_screen.dart';
@@ -55,9 +57,10 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
       backgroundColor: AppColors.paper,
       body: SafeArea(
         bottom: false,
-        child: ListView(
+        child: EntranceScope(
+          child: ListView(
           padding: EdgeInsets.fromLTRB(18, 14, 18, AppShell.bottomNavClearance(context)),
-          children: [
+          children: EntranceGroup.wrap([
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -95,7 +98,8 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
               onTap: () => context.go(AppRoutes.plan),
               child: const Text('Work the plan to close the gap'),
             ),
-          ],
+          ]),
+          ),
         ),
       ),
     );
@@ -233,7 +237,7 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
           ),
           const SizedBox(height: 10),
           GestureDetector(
-            onTap: () => Navigator.of(context).push(MaterialPageRoute(
+            onTap: () => Navigator.of(context).push(CmpysPageRoute(
               builder: (_) => CmpysMarkdownScreen(
                 kicker: 'From ${idol.short}',
                 title: 'The verdict',
@@ -267,7 +271,7 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
         children: [
           GestureDetector(
             onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const CmpysRecordScreen())),
+                CmpysSheetRoute(builder: (_) => const CmpysRecordScreen())),
             behavior: HitTestBehavior.opaque,
             child: Padding(
               padding: const EdgeInsets.all(16),

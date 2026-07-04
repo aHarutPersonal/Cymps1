@@ -7,6 +7,7 @@ import 'package:phosphor_flutter/phosphor_flutter.dart';
 
 import '../../../app/design_tokens.dart';
 import '../../../core/ui/cmpys/cmpys_primitives.dart';
+import '../../../core/ui/motion/page_transition.dart';
 import '../models/plan_models.dart';
 import 'plan_item_detail_screen.dart';
 
@@ -15,7 +16,7 @@ void openBackendPlanItem(BuildContext context, BackendPlanItem item) {
 }
 
 void openBackendPlanItemById(BuildContext context, String itemId) {
-  Navigator.of(context).push(MaterialPageRoute(
+  Navigator.of(context).push(CmpysPageRoute(
     builder: (_) => PlanItemDetailScreen(itemId: itemId),
   ));
 }

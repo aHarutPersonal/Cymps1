@@ -7,6 +7,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/design_tokens.dart';
 import '../../../app/router.dart';
 import '../../../core/ui/cmpys/cmpys_primitives.dart';
+import '../../../core/ui/motion/entrance.dart';
+import '../../../core/ui/motion/page_transition.dart';
 import '../../session/data/session_repository.dart';
 import '../../session/models/session_models.dart';
 import '../data/cmpys_record_data.dart';
@@ -306,7 +308,7 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
           ),
           GestureDetector(
             onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const CmpysNotesScreen())),
+                CmpysPageRoute(builder: (_) => const CmpysNotesScreen())),
             child: Container(
               width: 38,
               height: 38,
@@ -325,35 +327,38 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
   }
 
   Widget _messages(CmpysIdol idol) {
-    return ListView(
+    return EntranceScope(
+      child: ListView(
       controller: _scroll,
       padding: const EdgeInsets.fromLTRB(16, 18, 16, 8),
       children: [
-        Center(
-          child: Column(
-            children: [
-              CmpysMentorAvatar(
-                slug: idol.slug,
-                initials: idol.initials,
-                color: idol.color,
-                tint: idol.tint,
-                size: 56,
-              ),
-              const SizedBox(height: 10),
-              Text(idol.name,
-                  style: AppTypography.display.copyWith(
-                      fontSize: 17, fontWeight: FontWeight.w700, height: 1.2)),
-              const SizedBox(height: 6),
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 240),
-                child: Text(
-                  'Ask anything. Useful answers come with quick actions — save them or add them to your plan.',
-                  textAlign: TextAlign.center,
-                  style: AppTypography.caption
-                      .copyWith(color: AppColors.ink3, fontSize: 12.5),
+        Entrance(
+          child: Center(
+            child: Column(
+              children: [
+                CmpysMentorAvatar(
+                  slug: idol.slug,
+                  initials: idol.initials,
+                  color: idol.color,
+                  tint: idol.tint,
+                  size: 56,
                 ),
-              ),
-            ],
+                const SizedBox(height: 10),
+                Text(idol.name,
+                    style: AppTypography.display.copyWith(
+                        fontSize: 17, fontWeight: FontWeight.w700, height: 1.2)),
+                const SizedBox(height: 6),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 240),
+                  child: Text(
+                    'Ask anything. Useful answers come with quick actions — save them or add them to your plan.',
+                    textAlign: TextAlign.center,
+                    style: AppTypography.caption
+                        .copyWith(color: AppColors.ink3, fontSize: 12.5),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
         const SizedBox(height: 18),
@@ -362,6 +367,7 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
         if (_waiting) _waitingBubble(idol),
         if (_error != null) _errorCard(),
       ],
+      ),
     );
   }
 

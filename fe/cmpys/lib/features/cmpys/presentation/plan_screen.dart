@@ -6,6 +6,9 @@ import '../../../app/design_tokens.dart';
 import '../../../core/ui/app_shell.dart';
 import '../../../core/ui/cmpys/cmpys_markdown.dart';
 import '../../../core/ui/cmpys/cmpys_primitives.dart';
+import '../../../core/ui/motion/entrance.dart';
+import '../../../core/ui/motion/page_transition.dart';
+import '../../../core/ui/motion/skeleton.dart';
 import '../../plan/data/plan_repository.dart';
 import '../../plan/models/plan_models.dart';
 import '../../plan/presentation/backend_plan_widgets.dart';
@@ -39,15 +42,17 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
       backgroundColor: AppColors.paper,
       body: SafeArea(
         bottom: false,
-        child: ListView(
+        child: EntranceScope(
+          child: ListView(
           padding: EdgeInsets.fromLTRB(18, 14, 18, AppShell.bottomNavClearance(context)),
-          children: [
+          children: EntranceGroup.wrap([
             _header(st, planState.plan),
             const SizedBox(height: 18),
             _viewToggle(),
             const SizedBox(height: 18),
             if (_view == 0) ..._roadmap(st, planState) else ..._habits(st),
-          ],
+          ]),
+          ),
         ),
       ),
     );
@@ -152,19 +157,11 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
       case CurrentPlanStatus.loading:
         return [
           ...blueprint,
-          const Center(
-            child: Padding(
-              padding: EdgeInsets.symmetric(vertical: 40),
-              child: SizedBox(
-                width: 22,
-                height: 22,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  valueColor: AlwaysStoppedAnimation<Color>(AppColors.green),
-                ),
-              ),
-            ),
-          ),
+          const CmpysSkeleton.block(height: 120),
+          const SizedBox(height: 12),
+          const CmpysSkeleton.block(height: 120),
+          const SizedBox(height: 12),
+          const CmpysSkeleton.block(height: 120),
         ];
       case CurrentPlanStatus.failed:
         return [
@@ -282,7 +279,7 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
   Widget _blueprintCard(CmpysState st) {
     final idol = st.idol;
     return GestureDetector(
-      onTap: () => Navigator.of(context).push(MaterialPageRoute(
+      onTap: () => Navigator.of(context).push(CmpysPageRoute(
         builder: (_) => CmpysMarkdownScreen(
           kicker: 'From ${idol.short}',
           title: 'Your blueprint',
@@ -353,7 +350,7 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
 
     return GestureDetector(
       onTap: () => Navigator.of(context)
-          .push(MaterialPageRoute(builder: (_) => PillarDetailScreen(pillar: pillar))),
+          .push(CmpysPageRoute(builder: (_) => PillarDetailScreen(pillar: pillar))),
       child: Container(
         padding: const EdgeInsets.fromLTRB(20, 20, 18, 20),
         decoration: BoxDecoration(
@@ -518,25 +515,7 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
 
     final today = ref.watch(todayViewProvider).valueOrNull;
     if (today == null) {
-      return [
-        Container(
-          height: 96,
-          decoration: BoxDecoration(
-            color: AppColors.paper2,
-            borderRadius: AppRadii.lg,
-          ),
-          child: const Center(
-            child: SizedBox(
-              width: 18,
-              height: 18,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                valueColor: AlwaysStoppedAnimation<Color>(AppColors.green),
-              ),
-            ),
-          ),
-        ),
-      ];
+      return [const CmpysSkeleton.block(height: 96)];
     }
     if (today.items.isEmpty) {
       return [

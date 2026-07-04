@@ -442,7 +442,13 @@ abstract final class AppDurations {
   static const Duration fast = Duration(milliseconds: 200);
   static const Duration normal = Duration(milliseconds: 300);
   static const Duration slow = Duration(milliseconds: 500);
+  /// Deprecated in practice: page transitions actually use [normal] via
+  /// `CmpysPageTransition.duration`, not this token. Kept for backwards
+  /// compatibility with any existing call sites — don't "fix" the motion
+  /// kit to consume this instead; that would change the shipped timing.
   static const Duration pageTransition = Duration(milliseconds: 400);
+  /// Per-item delay for staggered list entrances (motion kit).
+  static const Duration stagger = Duration(milliseconds: 50);
 }
 
 abstract final class AppCurves {

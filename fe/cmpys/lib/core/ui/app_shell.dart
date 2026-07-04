@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import '../../app/design_tokens.dart';
 import '../../features/cmpys/state/cmpys_backend_sync.dart';
 import 'cmpys/cmpys_nav_icons.dart';
+import 'motion/motion_config.dart';
 
 /// CMPYS floating tab bar.
 ///
@@ -73,7 +74,12 @@ class AppShell extends ConsumerWidget {
       backgroundColor: AppColors.paper,
       body: Stack(
         children: [
-          Positioned.fill(child: navigationShell),
+          Positioned.fill(
+            child: _TabFade(
+              index: navigationShell.currentIndex,
+              child: navigationShell,
+            ),
+          ),
           Positioned(
             left: 0,
             right: 0,
@@ -205,6 +211,50 @@ class _NavChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(999),
         child: active ? activeChip : inactiveChip,
       ),
+    );
+  }
+}
+
+/// Fades the incoming branch in on tab switch (the IndexedStack swap is
+/// otherwise a hard cut). The outgoing branch disappears instantly —
+/// duplicating the shell tree for a cross-fade would break its GlobalKeys.
+class _TabFade extends StatefulWidget {
+  const _TabFade({required this.index, required this.child});
+
+  final int index;
+  final Widget child;
+
+  @override
+  State<_TabFade> createState() => _TabFadeState();
+}
+
+class _TabFadeState extends State<_TabFade>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: AppDurations.fast,
+    value: 1,
+  );
+
+  @override
+  void didUpdateWidget(_TabFade oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.index != widget.index && MotionConfig.enabled(context)) {
+      _controller.forward(from: 0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: CurvedAnimation(parent: _controller, curve: AppCurves.easeOut),
+      child: widget.child,
     );
   }
 }

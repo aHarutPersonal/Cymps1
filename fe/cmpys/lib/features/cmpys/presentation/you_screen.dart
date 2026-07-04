@@ -7,6 +7,8 @@ import '../../../app/design_tokens.dart';
 import '../../../app/router.dart';
 import '../../../core/ui/app_shell.dart';
 import '../../../core/ui/cmpys/cmpys_primitives.dart';
+import '../../../core/ui/motion/entrance.dart';
+import '../../../core/ui/motion/page_transition.dart';
 import '../../auth/controllers/auth_controller.dart';
 import '../../auth/controllers/session_controller.dart';
 import '../data/cmpys_seed.dart';
@@ -32,9 +34,10 @@ class CmpysYouScreen extends ConsumerWidget {
       backgroundColor: AppColors.paper,
       body: SafeArea(
         bottom: false,
-        child: ListView(
+        child: EntranceScope(
+          child: ListView(
           padding: EdgeInsets.fromLTRB(18, 14, 18, AppShell.bottomNavClearance(context)),
-          children: [
+          children: EntranceGroup.wrap([
             Row(
               children: [
                 Expanded(
@@ -52,7 +55,7 @@ class CmpysYouScreen extends ConsumerWidget {
                 Padding(
                   padding: const EdgeInsets.only(top: 4),
                   child: _circleAction(PhosphorIconsRegular.gearSix, () {
-                    Navigator.of(context).push(MaterialPageRoute(
+                    Navigator.of(context).push(CmpysPageRoute(
                         builder: (_) => const CmpysSettingsScreen()));
                   }),
                 ),
@@ -86,16 +89,16 @@ class CmpysYouScreen extends ConsumerWidget {
                 children: [
                   _row(context, PhosphorIconsFill.sparkle, 'Your record',
                       '${st.achievements.length}',
-                      () => Navigator.of(context).push(MaterialPageRoute(
+                      () => Navigator.of(context).push(CmpysSheetRoute(
                           builder: (_) => const CmpysRecordScreen())),
                       first: true),
                   _row(context, PhosphorIconsRegular.note, 'Notes',
                       '${st.notes.length}',
-                      () => Navigator.of(context).push(MaterialPageRoute(
+                      () => Navigator.of(context).push(CmpysPageRoute(
                           builder: (_) => const CmpysNotesScreen()))),
                   _row(context, PhosphorIconsRegular.bookmarkSimple, 'Saved',
                       '${st.saved.length}',
-                      () => Navigator.of(context).push(MaterialPageRoute(
+                      () => Navigator.of(context).push(CmpysPageRoute(
                           builder: (_) => const CmpysSavedScreen()))),
                   _row(context, PhosphorIconsRegular.quotes, 'Idea reels',
                       null, () => context.goToIdeas(),
@@ -112,15 +115,15 @@ class CmpysYouScreen extends ConsumerWidget {
               child: Column(
                 children: [
                   _row(context, PhosphorIconsRegular.user, 'Edit profile', null,
-                      () => Navigator.of(context).push(MaterialPageRoute(
+                      () => Navigator.of(context).push(CmpysPageRoute(
                           builder: (_) => const CmpysEditProfileScreen())),
                       first: true),
                   _row(context, PhosphorIconsRegular.scales, 'Change mentor',
                       null,
-                      () => Navigator.of(context).push(MaterialPageRoute(
+                      () => Navigator.of(context).push(CmpysPageRoute(
                           builder: (_) => const CmpysMentorPickerScreen()))),
                   _row(context, PhosphorIconsRegular.gearSix, 'Settings', null,
-                      () => Navigator.of(context).push(MaterialPageRoute(
+                      () => Navigator.of(context).push(CmpysPageRoute(
                           builder: (_) => const CmpysSettingsScreen())),
                       last: true),
                 ],
@@ -139,7 +142,8 @@ class CmpysYouScreen extends ConsumerWidget {
                   style: AppTypography.monoLabel
                       .copyWith(color: AppColors.ink3, fontSize: 10.5)),
             ),
-          ],
+          ]),
+          ),
         ),
       ),
     );
@@ -189,7 +193,7 @@ class CmpysYouScreen extends ConsumerWidget {
                   .copyWith(color: AppColors.ink2, fontSize: 13.5)),
           const SizedBox(height: 14),
           GestureDetector(
-            onTap: () => Navigator.of(context).push(MaterialPageRoute(
+            onTap: () => Navigator.of(context).push(CmpysPageRoute(
                 builder: (_) => CmpysIdolDetailScreen(idol: idol))),
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
