@@ -7,6 +7,7 @@ import '../../../app/design_tokens.dart';
 import '../../../app/router.dart';
 import '../../../core/ui/app_shell.dart';
 import '../../../core/ui/cmpys/cmpys_primitives.dart';
+import '../../../core/ui/motion/entrance.dart';
 import '../../../core/ui/motion/page_transition.dart';
 import '../../auth/controllers/auth_controller.dart';
 import '../../auth/controllers/session_controller.dart';
@@ -35,7 +36,7 @@ class CmpysYouScreen extends ConsumerWidget {
         bottom: false,
         child: ListView(
           padding: EdgeInsets.fromLTRB(18, 14, 18, AppShell.bottomNavClearance(context)),
-          children: [
+          children: EntranceGroup.wrap([
             Row(
               children: [
                 Expanded(
@@ -140,7 +141,7 @@ class CmpysYouScreen extends ConsumerWidget {
                   style: AppTypography.monoLabel
                       .copyWith(color: AppColors.ink3, fontSize: 10.5)),
             ),
-          ],
+          ]),
         ),
       ),
     );
