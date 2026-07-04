@@ -52,7 +52,9 @@ void main() {
         home: StatefulBuilder(
           builder: (context, setState) {
             rebuild = setState;
-            return const Entrance(child: Text('once'));
+            // Deliberately non-const: each parent rebuild must hand the
+            // element a new widget instance so Entrance really rebuilds.
+            return Entrance(child: const Text('once'));
           },
         ),
       ),
