@@ -7,6 +7,8 @@ import '../../../app/design_tokens.dart';
 import '../../../app/router.dart';
 import '../../../core/ui/app_shell.dart';
 import '../../../core/ui/cmpys/cmpys_primitives.dart';
+import '../../../core/ui/motion/entrance.dart';
+import '../../../core/ui/motion/skeleton.dart';
 import '../../plan/data/plan_repository.dart';
 import '../../plan/models/plan_models.dart';
 import '../../plan/presentation/backend_plan_widgets.dart';
@@ -90,7 +92,7 @@ class CmpysTodayScreen extends ConsumerWidget {
         bottom: false,
         child: ListView(
           padding: EdgeInsets.fromLTRB(18, 14, 18, AppShell.bottomNavClearance(context)),
-          children: [
+          children: EntranceGroup.wrap([
             _topBar(context, st, idol, name),
             const SizedBox(height: 18),
             _heroCard(pct, doneToday, totalToday, st.streak),
@@ -145,7 +147,7 @@ class CmpysTodayScreen extends ConsumerWidget {
             ),
             const SizedBox(height: 22),
             _compareNudge(context, st, idol, name),
-          ],
+          ]),
         ),
       ),
     );
@@ -648,50 +650,18 @@ class CmpysTodayScreen extends ConsumerWidget {
   }
 
   Widget _habitsLoadingCard() {
-    return Container(
-      height: 96,
-      decoration: BoxDecoration(
-        color: AppColors.paper2,
-        borderRadius: AppRadii.lg,
-      ),
-      child: const Center(
-        child: SizedBox(
-          width: 18,
-          height: 18,
-          child: CircularProgressIndicator(
-            strokeWidth: 2,
-            valueColor: AlwaysStoppedAnimation<Color>(AppColors.green),
-          ),
-        ),
-      ),
-    );
+    return const CmpysSkeleton.block(height: 96);
   }
 
   Widget _ideaLoadingCard() {
-    return Column(
+    return const Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Padding(
+        Padding(
           padding: EdgeInsets.only(left: 2, bottom: 12),
           child: CmpysKicker('Idea for you today'),
         ),
-        Container(
-          height: 120,
-          decoration: BoxDecoration(
-            color: AppColors.paper2,
-            borderRadius: AppRadii.lg,
-          ),
-          child: const Center(
-            child: SizedBox(
-              width: 18,
-              height: 18,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                valueColor: AlwaysStoppedAnimation<Color>(AppColors.green),
-              ),
-            ),
-          ),
-        ),
+        CmpysSkeleton.block(height: 120),
       ],
     );
   }
