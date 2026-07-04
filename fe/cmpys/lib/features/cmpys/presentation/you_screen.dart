@@ -87,7 +87,7 @@ class CmpysYouScreen extends ConsumerWidget {
                 children: [
                   _row(context, PhosphorIconsFill.sparkle, 'Your record',
                       '${st.achievements.length}',
-                      () => Navigator.of(context).push(CmpysPageRoute(
+                      () => Navigator.of(context).push(CmpysSheetRoute(
                           builder: (_) => const CmpysRecordScreen())),
                       first: true),
                   _row(context, PhosphorIconsRegular.note, 'Notes',
