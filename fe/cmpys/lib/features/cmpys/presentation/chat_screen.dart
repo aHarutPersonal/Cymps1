@@ -327,7 +327,8 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
   }
 
   Widget _messages(CmpysIdol idol) {
-    return ListView(
+    return EntranceScope(
+      child: ListView(
       controller: _scroll,
       padding: const EdgeInsets.fromLTRB(16, 18, 16, 8),
       children: [
@@ -366,6 +367,7 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
         if (_waiting) _waitingBubble(idol),
         if (_error != null) _errorCard(),
       ],
+      ),
     );
   }
 

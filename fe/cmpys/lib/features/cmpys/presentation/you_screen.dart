@@ -34,7 +34,8 @@ class CmpysYouScreen extends ConsumerWidget {
       backgroundColor: AppColors.paper,
       body: SafeArea(
         bottom: false,
-        child: ListView(
+        child: EntranceScope(
+          child: ListView(
           padding: EdgeInsets.fromLTRB(18, 14, 18, AppShell.bottomNavClearance(context)),
           children: EntranceGroup.wrap([
             Row(
@@ -142,6 +143,7 @@ class CmpysYouScreen extends ConsumerWidget {
                       .copyWith(color: AppColors.ink3, fontSize: 10.5)),
             ),
           ]),
+          ),
         ),
       ),
     );

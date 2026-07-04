@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../app/design_tokens.dart';
+import 'motion_config.dart';
 
 /// Shared fade-through page transition — the CMPYS navigation language.
 ///
@@ -20,7 +21,10 @@ abstract final class CmpysPageTransition {
   ) {
     final curved = CurvedAnimation(parent: animation, curve: AppCurves.easeOut);
     final fade = FadeTransition(opacity: curved, child: child);
-    if (MediaQuery.disableAnimationsOf(context)) return fade;
+    // Reduced motion intentionally keeps the 300ms duration (fade-only, no
+    // slide) per adjudication — only the motion path is removed, not the
+    // timing.
+    if (!MotionConfig.enabled(context)) return fade;
     return SlideTransition(
       position: Tween<Offset>(
         begin: const Offset(0, 0.02), // ~16px on a typical phone height
@@ -69,7 +73,7 @@ class CmpysSheetRoute<T> extends PageRouteBuilder<T> {
           transitionsBuilder: (context, animation, secondaryAnimation, child) {
             final curved =
                 CurvedAnimation(parent: animation, curve: AppCurves.easeOut);
-            if (MediaQuery.disableAnimationsOf(context)) {
+            if (!MotionConfig.enabled(context)) {
               return FadeTransition(opacity: curved, child: child);
             }
             return SlideTransition(

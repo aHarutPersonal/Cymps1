@@ -57,7 +57,8 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
       backgroundColor: AppColors.paper,
       body: SafeArea(
         bottom: false,
-        child: ListView(
+        child: EntranceScope(
+          child: ListView(
           padding: EdgeInsets.fromLTRB(18, 14, 18, AppShell.bottomNavClearance(context)),
           children: EntranceGroup.wrap([
             Column(
@@ -98,6 +99,7 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
               child: const Text('Work the plan to close the gap'),
             ),
           ]),
+          ),
         ),
       ),
     );

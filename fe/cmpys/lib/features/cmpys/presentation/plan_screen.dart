@@ -42,7 +42,8 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
       backgroundColor: AppColors.paper,
       body: SafeArea(
         bottom: false,
-        child: ListView(
+        child: EntranceScope(
+          child: ListView(
           padding: EdgeInsets.fromLTRB(18, 14, 18, AppShell.bottomNavClearance(context)),
           children: EntranceGroup.wrap([
             _header(st, planState.plan),
@@ -51,6 +52,7 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
             const SizedBox(height: 18),
             if (_view == 0) ..._roadmap(st, planState) else ..._habits(st),
           ]),
+          ),
         ),
       ),
     );

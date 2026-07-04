@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import '../../app/design_tokens.dart';
 import '../../features/cmpys/state/cmpys_backend_sync.dart';
 import 'cmpys/cmpys_nav_icons.dart';
+import 'motion/motion_config.dart';
 
 /// CMPYS floating tab bar.
 ///
@@ -238,8 +239,7 @@ class _TabFadeState extends State<_TabFade>
   @override
   void didUpdateWidget(_TabFade oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.index != widget.index &&
-        !MediaQuery.disableAnimationsOf(context)) {
+    if (oldWidget.index != widget.index && MotionConfig.enabled(context)) {
       _controller.forward(from: 0);
     }
   }

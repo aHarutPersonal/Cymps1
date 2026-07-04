@@ -90,7 +90,8 @@ class CmpysTodayScreen extends ConsumerWidget {
       backgroundColor: AppColors.paper,
       body: SafeArea(
         bottom: false,
-        child: ListView(
+        child: EntranceScope(
+          child: ListView(
           padding: EdgeInsets.fromLTRB(18, 14, 18, AppShell.bottomNavClearance(context)),
           children: EntranceGroup.wrap([
             _topBar(context, st, idol, name),
@@ -148,6 +149,7 @@ class CmpysTodayScreen extends ConsumerWidget {
             const SizedBox(height: 22),
             _compareNudge(context, st, idol, name),
           ]),
+          ),
         ),
       ),
     );
