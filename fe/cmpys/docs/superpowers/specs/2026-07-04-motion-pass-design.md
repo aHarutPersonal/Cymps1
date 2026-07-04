@@ -37,7 +37,7 @@ Existing `fast` (200ms), `normal` (300ms), `pageTransition` (400ms → transitio
 |---|---|---|
 | `MotionConfig` | Inherited access to `motionEnabled` (from `MediaQuery.disableAnimations`) | Wraps the app in `app.dart`; every kit widget reads it |
 | `EntranceGroup` / `Entrance` | Fade-in + 12px slide-up per child; stagger 50ms by position, cap 6; curve `AppCurves.easeOut`; duration `AppDurations.normal` | Fires **once per screen visit** (guard in state; Riverpod rebuilds must not re-trigger). Reduced motion → fade only |
-| `CmpysSkeleton` | Shimmer placeholder blocks using `AppColors.hair` base / `AppColors.paper2` sweep, 1.2s loop, card radius `AppRadii.card` | Composable primitives (line, block, circle) so each screen mirrors its real layout |
+| `CmpysSkeleton` | Shimmer placeholder blocks using `AppColors.paper2` base with a soft white sweep (matches existing loading-card grey), 1.2s loop, rounded with `AppRadii` tokens | Composable primitives (line, block, circle) so each screen mirrors its real layout |
 | `CmpysPageTransition` | Fade-through: outgoing fades out, incoming fades in + slides up 16px; 300ms, `AppCurves.easeOut` | Exposed both as a go_router `CustomTransitionPage` helper and a `PageRoute` for imperative pushes |
 
 ### Application map
