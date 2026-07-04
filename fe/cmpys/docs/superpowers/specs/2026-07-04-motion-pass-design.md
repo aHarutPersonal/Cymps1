@@ -64,6 +64,7 @@ Existing `fast` (200ms), `normal` (300ms), `pageTransition` (400ms → transitio
 - **Reduced motion:** centralized in `MotionConfig`; entrances → fade, shimmer → static, transitions → fade (near-instant).
 - **Long lists:** stagger cap of 6 ensures a 30-item list never takes >~600ms to settle.
 - **Navigation correctness:** transition swap must not change route behavior (deep links, back-stack, `parentNavigatorKey` for `/ideas`).
+- **Accepted trade-off (adjudicated 2026-07-05):** fade-through routes (`PageRouteBuilder`/`CustomTransitionPage`) do not support the iOS edge-swipe back gesture or Android predictive-back preview that `MaterialPageRoute` provided. Accepted to keep one coherent motion language; every pushed screen retains an explicit back affordance. Revisit if user feedback flags it.
 
 ## Testing
 
