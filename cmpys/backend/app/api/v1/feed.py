@@ -336,19 +336,7 @@ async def get_feed(
 
     await db.commit()
 
-    # 3. Check which posts current user has liked
-    if db_posts:
-        post_ids = [p.id for p in db_posts]
-        liked_stmt = select(FeedLike.post_id).where(
-            FeedLike.user_id == current_user.id,
-            FeedLike.post_id.in_(post_ids),
-        )
-        liked_result = await db.execute(liked_stmt)
-        liked_ids = {row[0] for row in liked_result.all()}
-    else:
-        liked_ids = set()
-
-    # 4. Shuffle and paginate (deterministic seed for consistent pagination)
+    # 3. Shuffle and paginate (deterministic seed for consistent pagination)
     if seed is None:
         # Use date-based seed so pagination is consistent within a day
         seed = int(datetime.now().strftime("%Y%m%d"))
@@ -360,6 +348,21 @@ async def get_feed(
     end = start + page_size
     page_posts = db_posts[start:end]
     has_more = end < total
+
+    # 4. Check which posts current user has liked
+    # ⚡ Bolt Optimization: Moved the like status query AFTER pagination slicing.
+    # This ensures we only query like status for the ~10 posts being returned,
+    # rather than all 100+ posts in the recent pool.
+    if page_posts:
+        post_ids = [p.id for p in page_posts]
+        liked_stmt = select(FeedLike.post_id).where(
+            FeedLike.user_id == current_user.id,
+            FeedLike.post_id.in_(post_ids),
+        )
+        liked_result = await db.execute(liked_stmt)
+        liked_ids = {row[0] for row in liked_result.all()}
+    else:
+        liked_ids = set()
 
     items = []
     for post in page_posts:
