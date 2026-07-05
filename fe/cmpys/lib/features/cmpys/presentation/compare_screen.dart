@@ -220,17 +220,21 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
             ],
           ),
           const SizedBox(height: 12),
+          // Preview viewport: the markdown lays out at natural height inside
+          // a capped, non-scrollable scroll view — clipping without the
+          // RenderFlex overflow a bare ConstrainedBox would throw.
           ConstrainedBox(
             constraints: const BoxConstraints(maxHeight: 180),
-            child: ClipRect(
-              child: ShaderMask(
-                shaderCallback: (rect) => const LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [Colors.white, Colors.white, Colors.transparent],
-                  stops: [0.0, 0.72, 1.0],
-                ).createShader(rect),
-                blendMode: BlendMode.dstIn,
+            child: ShaderMask(
+              shaderCallback: (rect) => const LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Colors.white, Colors.white, Colors.transparent],
+                stops: [0.0, 0.72, 1.0],
+              ).createShader(rect),
+              blendMode: BlendMode.dstIn,
+              child: SingleChildScrollView(
+                physics: const NeverScrollableScrollPhysics(),
                 child: CmpysMarkdown(md, onDark: true),
               ),
             ),
@@ -247,11 +251,15 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text('Read the full verdict',
-                    style: AppTypography.bodyMedium.copyWith(
-                        color: const Color(0xFFFFD166),
-                        fontWeight: FontWeight.w700,
-                        fontSize: 14)),
+                Flexible(
+                  child: Text('Read the full verdict',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTypography.bodyMedium.copyWith(
+                          color: const Color(0xFFFFD166),
+                          fontWeight: FontWeight.w700,
+                          fontSize: 14)),
+                ),
                 const SizedBox(width: 4),
                 const Icon(Icons.arrow_forward_rounded,
                     size: 16, color: Color(0xFFFFD166)),
@@ -358,8 +366,8 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
         children: [
           Row(
             children: [
-              CmpysKicker('The shape of the gap'),
-              const Spacer(),
+              const Expanded(child: CmpysKicker('The shape of the gap')),
+              const SizedBox(width: 10),
               _legendDot(AppColors.ochre, 'You'),
               const SizedBox(width: 14),
               _legendDot(AppColors.green, idol.short),
