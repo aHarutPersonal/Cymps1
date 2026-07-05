@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:phosphor_flutter/phosphor_flutter.dart';
 
 import '../../../app/design_tokens.dart';
+import '../../../core/network/api_error.dart';
 import '../../../core/ui/app_shell.dart';
 import '../../../core/ui/cmpys/cmpys_markdown.dart';
 import '../../../core/ui/cmpys/cmpys_primitives.dart';
@@ -68,9 +69,20 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
         _poll = Timer.periodic(const Duration(seconds: 4), (_) => _load());
       }
     } catch (e) {
+      debugPrint('⚠️ plan item detail load failed (${widget.itemId}): $e');
       if (!mounted) return;
-      setState(() => _error =
-          'Couldn’t load this task. Check your connection and try again.');
+      // A failed background poll must not replace already-loaded content —
+      // keep the screen and retry on the next tick.
+      if (_detailed != null) {
+        if (!_detailed!.detailsReady) {
+          _poll = Timer.periodic(const Duration(seconds: 4), (_) => _load());
+        }
+        return;
+      }
+      final isConnection = e is TimeoutError || e is NetworkError;
+      setState(() => _error = isConnection
+          ? 'Couldn’t load this task. Check your connection and try again.'
+          : 'Something went wrong loading this task — try again.');
     }
   }
 
