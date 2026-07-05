@@ -237,13 +237,14 @@ class SessionRepository {
   /// - `phase_transition`: bool (for type='done')
   Stream<Map<String, dynamic>> sendInterviewMessage(
     String sessionId,
-    String content,
-  ) async* {
+    String content, {
+    bool isKickoff = false,
+  }) async* {
     debugPrint('💬 Sending interview message to session $sessionId');
 
     final response = await _streamPost(
       '/sessions/$sessionId/interview',
-      {'content': content},
+      {'content': content, 'is_kickoff': isKickoff},
     );
 
     final stream = response.data.stream as Stream<List<int>>;

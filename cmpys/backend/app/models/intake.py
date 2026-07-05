@@ -128,7 +128,14 @@ class IntakeSession(Base, UUIDMixin, TimestampUpdateMixin):
         nullable=True,
         default=None,
     )
-    
+    # The goal the user picked in onboarding (e.g. "Build wealth"). Threaded
+    # into idol suggestion, the interview, and comparison/blueprint prompts.
+    user_goal: Mapped[str | None] = mapped_column(
+        String(200),
+        nullable=True,
+        default=None,
+    )
+
     # Interview tracking (Phase 3)
     interview_thread_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False),

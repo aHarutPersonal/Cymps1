@@ -7,6 +7,7 @@ INPUT:
 - User Age: {user_age}
 - Financial Status: {user_financial_status}
 - Interests: {user_interests_json}
+- Stated Goal: {user_goal}
 
 YOUR TASK:
 Select exactly 3 idols that are the BEST match for this specific person's situation, age, and ambitions.
@@ -21,7 +22,8 @@ SELECTION CRITERIA (in priority order):
    age {user_age}, since the comparison phase contrasts "what the idol did by this age" vs "what the
    user has done." Use this as a relevance signal — but do NOT pick the single most decorated figure
    if their path is unrelatable to where this user is starting.
-3. INTEREST ALIGNMENT: The idol's domain must overlap with the user's stated interests.
+3. INTEREST & GOAL ALIGNMENT: The idol's domain must overlap with the user's stated interests,
+   and their trajectory should exemplify the user's stated goal when one is given.
 4. DIVERSITY: Include at least 2 different domains and at least 1 historical figure (pre-1950).
 5. EVIDENCE-RICH: Prefer idols with extensive Wikipedia/biographical documentation.
 

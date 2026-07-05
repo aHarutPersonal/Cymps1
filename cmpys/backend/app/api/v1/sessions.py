@@ -13,6 +13,7 @@ Endpoints:
 import asyncio
 import json as json_lib
 import logging
+import re
 import uuid
 from datetime import date
 from typing import Annotated
@@ -57,6 +58,18 @@ router = APIRouter(prefix="/sessions", tags=["sessions"])
 # Maximum interview turns before forced transition
 MAX_INTERVIEW_TURNS = 5
 MIN_INTERVIEW_TURNS = 3
+
+# Explicit end-of-interview marker the model is instructed to append to its
+# closing turn. Primary completion signal — unambiguous, unlike phrase
+# matching ("let me show you" appears in ordinary mid-interview turns).
+INTERVIEW_COMPLETE_MARKER = "[INTERVIEW_COMPLETE]"
+
+# Fallback signals for responses where the model forgot the marker. Only
+# phrases that are unambiguous closers belong here.
+_COMPLETION_FALLBACK_SIGNALS = (
+    "now i know the measure of you",
+    "the interview is over",
+)
 
 
 # =============================================================================
@@ -133,6 +146,37 @@ def _fallback_idol_suggestions(interests: list[str]) -> list["IdolSuggestionItem
         )
         for name, era, domains, summary in ranked[:3]
     ]
+
+
+# "10 hours a week", "8-12 hrs/week", "about 15h per week" in a message that
+# mentions a week. Range midpoint is used; values are clamped to a sane band.
+_HOURS_RE = re.compile(
+    r"(\d{1,3})(?:\s*(?:-|–|—|\bto\b)\s*(\d{1,3}))?\s*(?:hours?|hrs?|h)\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_weekly_hours(messages: list[ChatMessage]) -> int | None:
+    """Best-effort weekly-hours commitment from the user's interview answers.
+
+    Scans user turns only (the mentor quotes numbers about its own life), takes
+    the LAST match so later corrections win, and clamps to 2–60. Returns None
+    when nothing parseable was said — callers fall back to the default.
+    """
+    found: int | None = None
+    for msg in messages:
+        if msg.role != MessageRole.USER:
+            continue
+        text = msg.content or ""
+        if "week" not in text.lower():
+            continue
+        for m in _HOURS_RE.finditer(text):
+            lo = int(m.group(1))
+            hi = int(m.group(2)) if m.group(2) else lo
+            hours = round((lo + hi) / 2)
+            if 1 <= hours <= 100:
+                found = max(2, min(60, hours))
+    return found
 
 
 async def _sync_interview_turn_count(session: IntakeSession, db) -> None:
@@ -266,6 +310,7 @@ def _build_session_response(session: IntakeSession) -> dict:
         "user_age": session.user_age,
         "user_financial_status": session.user_financial_status,
         "user_interests": session.user_interests or [],
+        "user_goal": getattr(session, "user_goal", None),
         "selected_idol": selected_idol,
         "interview_turn_count": session.interview_turn_count,
         "comparison_output": session.comparison_output,
@@ -328,6 +373,7 @@ async def create_session(
         user_age=data.age,
         user_financial_status=data.financial_status,
         user_interests=data.interests,
+        user_goal=data.goal,
         status="draft",  # Legacy field compatibility
     )
     db.add(session)
@@ -396,6 +442,7 @@ async def suggest_idols(
         "user_age": str(session.user_age),
         "user_financial_status": session.user_financial_status,
         "user_interests_json": json_lib.dumps(session.user_interests),
+        "user_goal": session.user_goal or "not specified",
     })
 
     # Call Gemini with Google Search for factual grounding. Any failure
@@ -655,15 +702,19 @@ async def interview(
     if not thread:
         raise HTTPException(status_code=404, detail="Interview thread not found")
 
-    # Persist the user's message
-    user_msg = ChatMessage(
-        id=str(uuid.uuid4()),
-        thread_id=thread.id,
-        role=MessageRole.USER,
-        content=data.content,
-    )
-    db.add(user_msg)
-    await db.flush()
+    # Persist the user's message — but never the kickoff protocol message.
+    # It is the client speaking, not the person; persisting it would leak
+    # "Hi — I'm ready. Ask me your first question." into the transcript that
+    # comparison/blueprint later quote as the user's own words.
+    if not data.is_kickoff:
+        user_msg = ChatMessage(
+            id=str(uuid.uuid4()),
+            thread_id=thread.id,
+            role=MessageRole.USER,
+            content=data.content,
+        )
+        db.add(user_msg)
+        await db.flush()
 
     # Build context for the prompt
     chat_history_json = _build_chat_history_json(thread.messages)
@@ -707,6 +758,7 @@ async def interview(
                 "user_age": str(session.user_age),
                 "user_financial_status": session.user_financial_status or "",
                 "user_interests_json": json_lib.dumps(session.user_interests or []),
+                "user_goal": session.user_goal or "not specified",
                 "chat_history_json": chat_history_json,
             })
 
@@ -747,30 +799,31 @@ async def interview(
                 full_response += chunk
                 yield f"data: {json_lib.dumps({'type': 'chunk', 'content': chunk})}\n\n"
 
-            # Persist the AI's response
+            # Persist the AI's response — with the completion marker stripped
+            # so it never pollutes the transcript fed to comparison/blueprint.
+            clean_response = full_response.replace(
+                INTERVIEW_COMPLETE_MARKER, ""
+            ).rstrip()
             async with db.begin_nested():
                 ai_msg = ChatMessage(
                     id=str(uuid.uuid4()),
                     thread_id=thread.id,
                     role=MessageRole.ASSISTANT,
-                    content=full_response,
+                    content=clean_response,
                 )
                 db.add(ai_msg)
 
                 # Update turn count
                 session.interview_turn_count = current_turn
 
-                # Check for soft transition (AI signals completion after min turns)
+                # Soft transition after min turns: the explicit marker the
+                # prompt instructs the model to append is the primary signal;
+                # a couple of unambiguous closing phrases are the fallback.
                 if current_turn >= MIN_INTERVIEW_TURNS:
-                    # Check for completion signals in the response
-                    completion_signals = [
-                        "now I know the measure of you",
-                        "let me show you",
-                        "I've heard enough",
-                        "the interview is over",
-                        "I have my answer",
-                    ]
-                    if any(sig in full_response.lower() for sig in completion_signals):
+                    lower = full_response.lower()
+                    if INTERVIEW_COMPLETE_MARKER.lower() in lower or any(
+                        sig in lower for sig in _COMPLETION_FALLBACK_SIGNALS
+                    ):
                         should_transition = True
 
                 # Hard cap enforcement
@@ -853,7 +906,12 @@ async def generate_results(
         "age": session.user_age,
         "financial_status": session.user_financial_status,
         "interests": session.user_interests,
+        "goal": session.user_goal,
     }
+
+    # Weekly hours the user actually committed to during the interview;
+    # falls back to the historical default when they never gave a number.
+    weekly_hours = _extract_weekly_hours(thread.messages) or 10
 
     # Persona system prompt (reusable for both phases). comparison_generate.txt
     # and blueprint_generate.txt both defer voice, intensity, and era language
@@ -924,6 +982,7 @@ async def generate_results(
             "interview_transcript_json": interview_transcript,
             "comparison_summary": full_comparison[:2000],  # Truncate for context window
             "idol_facts_json": json_lib.dumps(session.idol_facts_json or {}),
+            "weekly_hours": str(weekly_hours),
         })
 
         full_blueprint = ""
@@ -968,7 +1027,7 @@ async def generate_results(
                     session_id=session.id,
                     target_age=session.user_age or 24,
                     duration_weeks=12,
-                    weekly_hours=10,
+                    weekly_hours=weekly_hours,
                     status="pending",
                     progress_percent=0,
                     step="analyzing_gaps",

@@ -207,14 +207,16 @@ PROMPT_PLACEHOLDERS = {
         "user_age",
         "user_financial_status",
         "user_interests_json",
+        "user_goal",
         "chat_history_json",
     ],
-    
+
     "interview_question.txt": [
         "idol_name",
         "user_age",
         "user_financial_status",
         "user_interests_json",
+        "user_goal",
         "chat_history_json",
         "turn_count",
         "max_turns",
@@ -237,12 +239,14 @@ PROMPT_PLACEHOLDERS = {
         "interview_transcript_json",
         "comparison_summary",
         "idol_facts_json",
+        "weekly_hours",
     ],
-    
+
     "idol_suggest.txt": [
         "user_age",
         "user_financial_status",
         "user_interests_json",
+        "user_goal",
     ],
     
     "daily_feed_generate.txt": [

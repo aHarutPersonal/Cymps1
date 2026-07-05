@@ -58,7 +58,8 @@ RULES:
 3. Each phase must be MORE ambitious than the last — escalating complexity and stakes.
 4. Reference specific interview answers and comparison points by name to show deep
    personalization. Generic advice is failure.
-5. Scale the workload to roughly 8–12 hours per week of focused effort.
+5. Scale the workload to roughly {weekly_hours} hours per week of focused effort — this is what
+   the person said they can actually commit; do not silently plan for more.
 6. End with a powerful closing statement as {idol_name}.
 
 Output in clean Markdown format. Headers, bullet points, bold text for emphasis. No JSON wrapper.

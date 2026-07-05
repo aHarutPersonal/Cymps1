@@ -195,7 +195,8 @@ mixin _$Session {
   int get interviewTurnCount => throw _privateConstructorUsedError;
   String? get comparisonOutput => throw _privateConstructorUsedError;
   String? get blueprintOutput => throw _privateConstructorUsedError;
-  Map<String, dynamic>? get comparisonScores => throw _privateConstructorUsedError;
+  Map<String, dynamic>? get comparisonScores =>
+      throw _privateConstructorUsedError;
   String? get interviewThreadId => throw _privateConstructorUsedError;
   DateTime? get createdAt => throw _privateConstructorUsedError;
   DateTime? get updatedAt => throw _privateConstructorUsedError;
@@ -428,7 +429,7 @@ class __$$SessionImplCopyWithImpl<$Res>
             : blueprintOutput // ignore: cast_nullable_to_non_nullable
                   as String?,
         comparisonScores: freezed == comparisonScores
-            ? _value.comparisonScores
+            ? _value._comparisonScores
             : comparisonScores // ignore: cast_nullable_to_non_nullable
                   as Map<String, dynamic>?,
         interviewThreadId: freezed == interviewThreadId
@@ -461,11 +462,12 @@ class _$SessionImpl extends _Session {
     this.interviewTurnCount = 0,
     this.comparisonOutput,
     this.blueprintOutput,
-    this.comparisonScores,
+    final Map<String, dynamic>? comparisonScores,
     this.interviewThreadId,
     this.createdAt,
     this.updatedAt,
   }) : _userInterests = userInterests,
+       _comparisonScores = comparisonScores,
        super._();
 
   @override
@@ -493,8 +495,16 @@ class _$SessionImpl extends _Session {
   final String? comparisonOutput;
   @override
   final String? blueprintOutput;
+  final Map<String, dynamic>? _comparisonScores;
   @override
-  final Map<String, dynamic>? comparisonScores;
+  Map<String, dynamic>? get comparisonScores {
+    final value = _comparisonScores;
+    if (value == null) return null;
+    if (_comparisonScores is EqualUnmodifiableMapView) return _comparisonScores;
+    // ignore: implicit_dynamic_type
+    return EqualUnmodifiableMapView(value);
+  }
+
   @override
   final String? interviewThreadId;
   @override
@@ -530,8 +540,8 @@ class _$SessionImpl extends _Session {
             (identical(other.blueprintOutput, blueprintOutput) ||
                 other.blueprintOutput == blueprintOutput) &&
             const DeepCollectionEquality().equals(
-              other.comparisonScores,
-              comparisonScores,
+              other._comparisonScores,
+              _comparisonScores,
             ) &&
             (identical(other.interviewThreadId, interviewThreadId) ||
                 other.interviewThreadId == interviewThreadId) &&
@@ -553,7 +563,7 @@ class _$SessionImpl extends _Session {
     interviewTurnCount,
     comparisonOutput,
     blueprintOutput,
-    const DeepCollectionEquality().hash(comparisonScores),
+    const DeepCollectionEquality().hash(_comparisonScores),
     interviewThreadId,
     createdAt,
     updatedAt,
@@ -894,6 +904,7 @@ mixin _$SessionCreateRequest {
   int get age => throw _privateConstructorUsedError;
   String get financialStatus => throw _privateConstructorUsedError;
   List<String> get interests => throw _privateConstructorUsedError;
+  String? get goal => throw _privateConstructorUsedError;
 
   /// Create a copy of SessionCreateRequest
   /// with the given fields replaced by the non-null parameter values.
@@ -909,7 +920,12 @@ abstract class $SessionCreateRequestCopyWith<$Res> {
     $Res Function(SessionCreateRequest) then,
   ) = _$SessionCreateRequestCopyWithImpl<$Res, SessionCreateRequest>;
   @useResult
-  $Res call({int age, String financialStatus, List<String> interests});
+  $Res call({
+    int age,
+    String financialStatus,
+    List<String> interests,
+    String? goal,
+  });
 }
 
 /// @nodoc
@@ -933,6 +949,7 @@ class _$SessionCreateRequestCopyWithImpl<
     Object? age = null,
     Object? financialStatus = null,
     Object? interests = null,
+    Object? goal = freezed,
   }) {
     return _then(
       _value.copyWith(
@@ -948,6 +965,10 @@ class _$SessionCreateRequestCopyWithImpl<
                 ? _value.interests
                 : interests // ignore: cast_nullable_to_non_nullable
                       as List<String>,
+            goal: freezed == goal
+                ? _value.goal
+                : goal // ignore: cast_nullable_to_non_nullable
+                      as String?,
           )
           as $Val,
     );
@@ -963,7 +984,12 @@ abstract class _$$SessionCreateRequestImplCopyWith<$Res>
   ) = __$$SessionCreateRequestImplCopyWithImpl<$Res>;
   @override
   @useResult
-  $Res call({int age, String financialStatus, List<String> interests});
+  $Res call({
+    int age,
+    String financialStatus,
+    List<String> interests,
+    String? goal,
+  });
 }
 
 /// @nodoc
@@ -983,6 +1009,7 @@ class __$$SessionCreateRequestImplCopyWithImpl<$Res>
     Object? age = null,
     Object? financialStatus = null,
     Object? interests = null,
+    Object? goal = freezed,
   }) {
     return _then(
       _$SessionCreateRequestImpl(
@@ -998,6 +1025,10 @@ class __$$SessionCreateRequestImplCopyWithImpl<$Res>
             ? _value._interests
             : interests // ignore: cast_nullable_to_non_nullable
                   as List<String>,
+        goal: freezed == goal
+            ? _value.goal
+            : goal // ignore: cast_nullable_to_non_nullable
+                  as String?,
       ),
     );
   }
@@ -1010,6 +1041,7 @@ class _$SessionCreateRequestImpl extends _SessionCreateRequest {
     required this.age,
     required this.financialStatus,
     required final List<String> interests,
+    this.goal,
   }) : _interests = interests,
        super._();
 
@@ -1026,8 +1058,11 @@ class _$SessionCreateRequestImpl extends _SessionCreateRequest {
   }
 
   @override
+  final String? goal;
+
+  @override
   String toString() {
-    return 'SessionCreateRequest(age: $age, financialStatus: $financialStatus, interests: $interests)';
+    return 'SessionCreateRequest(age: $age, financialStatus: $financialStatus, interests: $interests, goal: $goal)';
   }
 
   @override
@@ -1041,7 +1076,8 @@ class _$SessionCreateRequestImpl extends _SessionCreateRequest {
             const DeepCollectionEquality().equals(
               other._interests,
               _interests,
-            ));
+            ) &&
+            (identical(other.goal, goal) || other.goal == goal));
   }
 
   @override
@@ -1050,6 +1086,7 @@ class _$SessionCreateRequestImpl extends _SessionCreateRequest {
     age,
     financialStatus,
     const DeepCollectionEquality().hash(_interests),
+    goal,
   );
 
   /// Create a copy of SessionCreateRequest
@@ -1070,6 +1107,7 @@ abstract class _SessionCreateRequest extends SessionCreateRequest {
     required final int age,
     required final String financialStatus,
     required final List<String> interests,
+    final String? goal,
   }) = _$SessionCreateRequestImpl;
   const _SessionCreateRequest._() : super._();
 
@@ -1079,6 +1117,8 @@ abstract class _SessionCreateRequest extends SessionCreateRequest {
   String get financialStatus;
   @override
   List<String> get interests;
+  @override
+  String? get goal;
 
   /// Create a copy of SessionCreateRequest
   /// with the given fields replaced by the non-null parameter values.

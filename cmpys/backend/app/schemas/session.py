@@ -33,6 +33,10 @@ class SessionCreate(BaseModel):
         ..., min_length=1, max_length=10,
         description="User's interest keywords"
     )
+    goal: str | None = Field(
+        None, max_length=200,
+        description="The goal the user picked in onboarding (e.g. 'Build wealth')"
+    )
 
 
 class SelectIdolRequest(BaseModel):
@@ -44,8 +48,12 @@ class SelectIdolRequest(BaseModel):
 
 class InterviewMessageRequest(BaseModel):
     """Send a message during the interview phase."""
-    
+
     content: str = Field(..., max_length=10000)
+    # True for the hidden client protocol message that elicits the mentor's
+    # opening question — it is not the user speaking, so it must not be
+    # persisted into the transcript that comparison/blueprint later quote.
+    is_kickoff: bool = False
 
 class LearningTopicRequest(BaseModel):
     """Request a Socratic learning session on a topic."""
@@ -80,6 +88,7 @@ class SessionResponse(BaseModel):
     user_age: int
     user_financial_status: str
     user_interests: list[str]
+    user_goal: str | None = None
     selected_idol: SelectedIdolInfo | None = None
     interview_turn_count: int = 0
     comparison_output: str | None = None

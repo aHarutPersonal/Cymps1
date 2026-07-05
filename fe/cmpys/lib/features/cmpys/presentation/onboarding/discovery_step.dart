@@ -79,6 +79,7 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
             age: widget.age,
             financialStatus: _financialStatusForGoal(widget.goalId),
             interests: widget.interests.toList(),
+            goal: _goalLabelForId(widget.goalId),
           ),
         );
         sessionId = session.id;
@@ -120,6 +121,16 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
         ? 'Chosen by your mentor AI as a strong match for your goals.'
         : s.relevanceSummary.trim();
     return CmpysIdolSuggestion(idol: idol, score: score, reason: reason);
+  }
+
+  /// Human-readable goal label sent to the backend verbatim, so prompts see
+  /// "Build wealth" rather than a lossy financial-status bucket.
+  String? _goalLabelForId(String? goalId) {
+    if (goalId == null) return null;
+    for (final g in cmpysGoals) {
+      if (g.id == goalId) return g.label;
+    }
+    return null;
   }
 
   String _financialStatusForGoal(String? goalId) {

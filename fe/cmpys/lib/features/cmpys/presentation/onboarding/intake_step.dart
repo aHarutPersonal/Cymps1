@@ -47,11 +47,21 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
   bool _finished = false; // phase transitioned, advancing
   String? _error; // visible error; retry re-sends _lastSent
   String? _lastSent;
+  bool _lastSentWasKickoff = false;
   int _turns = 0;
   int _maxTurns = 5;
 
   /// Hidden protocol message that elicits the mentor's opening question.
+  /// Sent with `isKickoff: true` so the backend never persists it as the
+  /// user's own words.
   static const _kickoff = 'Hi — I’m ready. Ask me your first question.';
+
+  /// Machine-read end-of-interview token the mentor appends to its closing
+  /// turn. Stripped from anything shown to the user.
+  static const _completionMarker = '[INTERVIEW_COMPLETE]';
+
+  String _stripMarker(String text) =>
+      text.replaceAll(_completionMarker, '').trimRight();
 
   String? get _sessionId => widget.draft.sessionId;
 
@@ -99,7 +109,7 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
         _advance();
         return;
       }
-      await _sendTurn(_kickoff, showAsUser: false);
+      await _sendTurn(_kickoff, showAsUser: false, isKickoff: true);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -107,6 +117,7 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
         _streaming = false;
         _error = 'Couldn’t reach ${widget.idol.short}. Check your connection.';
         _lastSent = _kickoff;
+        _lastSentWasKickoff = true;
       });
     }
   }
@@ -130,11 +141,14 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
       return;
     }
     setState(() => _error = null);
-    await _sendTurn(last, showAsUser: false, isRetry: true);
+    await _sendTurn(last,
+        showAsUser: false, isRetry: true, isKickoff: _lastSentWasKickoff);
   }
 
   Future<void> _sendTurn(String content,
-      {required bool showAsUser, bool isRetry = false}) async {
+      {required bool showAsUser,
+      bool isRetry = false,
+      bool isKickoff = false}) async {
     setState(() {
       _typing = true;
       _streaming = false;
@@ -142,14 +156,15 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
       _error = null;
     });
     _lastSent = content;
+    _lastSentWasKickoff = isKickoff;
 
     final repo = ref.read(sessionRepositoryProvider);
     String acc = '';
     bool transition = false;
 
     try {
-      await for (final ev
-          in repo.sendInterviewMessage(_sessionId!, content)) {
+      await for (final ev in repo.sendInterviewMessage(_sessionId!, content,
+          isKickoff: isKickoff)) {
         if (!mounted) return;
         final type = ev['type'] as String? ?? '';
         if (type == 'chunk') {
@@ -160,7 +175,7 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
               _streaming = true;
             });
           }
-          _streamingText.value = acc;
+          _streamingText.value = _stripMarker(acc);
           _scrollToBottom();
         } else if (type == 'done') {
           transition = ev['phase_transition'] == true;
@@ -171,12 +186,13 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
         }
       }
       if (!mounted) return;
-      if (acc.trim().isEmpty) {
+      final display = _stripMarker(acc).trim();
+      if (display.isEmpty) {
         throw StateError('empty interview response');
       }
 
       setState(() {
-        _msgs.add(_M(me: false, text: acc.trim()));
+        _msgs.add(_M(me: false, text: display));
         _typing = false;
         _streaming = false;
         _streamingText.value = '';

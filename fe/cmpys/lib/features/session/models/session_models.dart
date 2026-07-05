@@ -224,12 +224,14 @@ class SessionCreateRequest with _$SessionCreateRequest {
     required int age,
     required String financialStatus,
     required List<String> interests,
+    String? goal,
   }) = _SessionCreateRequest;
 
   Map<String, dynamic> toJson() => {
     'age': age,
     'financial_status': financialStatus,
     'interests': interests,
+    if (goal != null) 'goal': goal,
   };
 }
 
