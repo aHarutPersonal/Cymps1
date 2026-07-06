@@ -853,11 +853,14 @@ class _CmpysEditProfileScreenState
         onChanged: (_) => setState(() {}),
         style: AppTypography.body.copyWith(fontSize: 16),
         cursorColor: AppColors.green,
+        // The 52px pill gives the field tight constraints; without this the
+        // decorator top-aligns the text (InputBorder.none ⇒ non-outline).
+        textAlignVertical: TextAlignVertical.center,
         decoration: const InputDecoration(
           hintText: 'Your name',
           border: InputBorder.none,
           isDense: true,
-          contentPadding: EdgeInsets.symmetric(vertical: 15),
+          contentPadding: EdgeInsets.zero,
         ),
       ),
     );

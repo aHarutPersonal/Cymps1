@@ -6,8 +6,10 @@ from app.api.v1.sessions import (
     INTERVIEW_COMPLETE_MARKER,
     _COMPLETION_FALLBACK_SIGNALS,
     _extract_weekly_hours,
+    _interview_question_params,
 )
 from app.models.chat import MessageRole
+from app.services.llm.prompt_loader import validate_prompt_params
 
 
 def _user(text: str) -> SimpleNamespace:
@@ -53,6 +55,54 @@ class TestExtractWeeklyHours:
     def test_clamped_to_sane_band(self):
         msgs = [_user("I will grind 95 hours a week.")]
         assert _extract_weekly_hours(msgs) == 60
+
+
+def _session(**overrides) -> SimpleNamespace:
+    defaults = dict(
+        user_age=25,
+        user_financial_status="student",
+        user_interests=["chess"],
+        user_goal="become a grandmaster",
+        idol_facts_json={"raw_facts": "..."},
+    )
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
+class TestInterviewQuestionParams:
+    """The per-turn interview prompt must satisfy every param the registry
+    declares for interview_question.txt — a missing one aborts the SSE stream
+    with PROMPT_PARAMS_MISSING (the user_goal regression)."""
+
+    def test_covers_all_registry_params(self):
+        params = _interview_question_params(
+            _session(),
+            idol_name="Andrew Carnegie",
+            chat_history_json="[]",
+            current_turn=1,
+            user_message="I want to build wealth.",
+        )
+        assert validate_prompt_params("interview_question", params) == []
+
+    def test_user_goal_passes_through(self):
+        params = _interview_question_params(
+            _session(),
+            idol_name="Andrew Carnegie",
+            chat_history_json="[]",
+            current_turn=1,
+            user_message="hi",
+        )
+        assert params["user_goal"] == "become a grandmaster"
+
+    def test_missing_goal_falls_back_to_not_specified(self):
+        params = _interview_question_params(
+            _session(user_goal=None),
+            idol_name="Andrew Carnegie",
+            chat_history_json="[]",
+            current_turn=1,
+            user_message="hi",
+        )
+        assert params["user_goal"] == "not specified"
 
 
 class TestCompletionSignals:

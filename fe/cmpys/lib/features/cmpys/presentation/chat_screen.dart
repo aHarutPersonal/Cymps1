@@ -652,6 +652,7 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
                                 : 'Message ${idol.short}…',
                             border: InputBorder.none,
                             isDense: true,
+                            filled: false,
                             contentPadding:
                                 const EdgeInsets.symmetric(vertical: 11),
                           ),

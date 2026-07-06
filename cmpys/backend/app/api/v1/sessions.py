@@ -672,6 +672,31 @@ async def get_session(
 # =============================================================================
 
 
+def _interview_question_params(
+    session,
+    *,
+    idol_name: str,
+    chat_history_json: str,
+    current_turn: int,
+    user_message: str,
+) -> dict[str, str]:
+    """Params for interview_question.txt. Must cover every key the
+    PROMPT_PLACEHOLDERS registry declares for it — a missing key raises
+    PROMPT_PARAMS_MISSING mid-stream and kills the interview turn."""
+    return {
+        "idol_name": idol_name,
+        "user_age": str(session.user_age),
+        "user_financial_status": session.user_financial_status or "",
+        "user_interests_json": json_lib.dumps(session.user_interests or []),
+        "user_goal": session.user_goal or "not specified",
+        "chat_history_json": chat_history_json,
+        "turn_count": str(current_turn),
+        "max_turns": str(MAX_INTERVIEW_TURNS),
+        "idol_facts_json": json_lib.dumps(session.idol_facts_json or {}),
+        "user_message": sanitize_untrusted_input(user_message),
+    }
+
+
 @router.post("/{session_id}/interview")
 async def interview(
     session_id: str,
@@ -779,17 +804,16 @@ async def interview(
                 session.idol_facts_json = {"raw_facts": facts_response}
 
             # Render the per-turn user prompt (depends on idol facts).
-            user_prompt = load_and_render("interview_question.txt", {
-                "idol_name": idol_name,
-                "user_age": str(session.user_age),
-                "user_financial_status": session.user_financial_status or "",
-                "user_interests_json": json_lib.dumps(session.user_interests or []),
-                "chat_history_json": chat_history_json,
-                "turn_count": str(current_turn),
-                "max_turns": str(MAX_INTERVIEW_TURNS),
-                "idol_facts_json": json_lib.dumps(session.idol_facts_json or {}),
-                "user_message": sanitize_untrusted_input(data.content),
-            })
+            user_prompt = load_and_render(
+                "interview_question.txt",
+                _interview_question_params(
+                    session,
+                    idol_name=idol_name,
+                    chat_history_json=chat_history_json,
+                    current_turn=current_turn,
+                    user_message=data.content,
+                ),
+            )
 
             async for chunk in interview_stream(
                 system_prompt=system_prompt,

@@ -754,7 +754,9 @@ class CmpysTodayScreen extends ConsumerWidget {
       child: Row(
         children: [
           SizedBox(
-            width: 70,
+            // 34px offset + 44px avatar — anything narrower clips the idol
+            // avatar against the Stack's hard edge.
+            width: 78,
             height: 44,
             child: Stack(
               children: [

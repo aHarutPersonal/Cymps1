@@ -400,6 +400,8 @@ class _CmpysReelsScreenState extends ConsumerState<CmpysReelsScreen> {
                             hintText: 'Add a comment…',
                             border: InputBorder.none,
                             isDense: true,
+                            filled: false,
+                            contentPadding: EdgeInsets.zero,
                           ),
                           onSubmitted: (_) => _submitComment(
                               store, idea.id, controller, setSheet),

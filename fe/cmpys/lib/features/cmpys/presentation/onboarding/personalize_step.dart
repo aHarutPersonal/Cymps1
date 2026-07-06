@@ -184,6 +184,9 @@ class _CmpysPersonalizeStepState extends State<CmpysPersonalizeStep> {
             },
             style: AppTypography.body.copyWith(fontSize: 16),
             cursorColor: AppColors.green,
+            // The 56px pill gives the field tight constraints; without this the
+            // decorator top-aligns the text (InputBorder.none ⇒ non-outline).
+            textAlignVertical: TextAlignVertical.center,
             decoration: InputDecoration(
               hintText: 'Your first name',
               hintStyle: AppTypography.body.copyWith(

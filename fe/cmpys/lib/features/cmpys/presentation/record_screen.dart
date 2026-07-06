@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:phosphor_flutter/phosphor_flutter.dart';
 
 import '../../../app/design_tokens.dart';
+import '../../../core/ui/app_shell.dart';
 import '../../../core/ui/cmpys/cmpys_primitives.dart';
 import '../data/cmpys_record_data.dart';
 import '../data/cmpys_seed.dart';
@@ -109,7 +110,8 @@ class _CmpysRecordScreenState extends ConsumerState<CmpysRecordScreen> {
             ),
             Expanded(
               child: ListView(
-                padding: const EdgeInsets.fromLTRB(22, 0, 22, 110),
+                padding: EdgeInsets.fromLTRB(
+                    22, 0, 22, AppShell.bottomNavClearance(context, extra: 12)),
                 children: [
                   if (pending > 0) _pendingBanner(idol, pending),
                   _filterChips(),
@@ -844,6 +846,8 @@ class _AddWinSheetState extends ConsumerState<AddWinSheet> {
               .copyWith(color: AppColors.ink3, fontSize: 15),
           border: InputBorder.none,
           isDense: true,
+          filled: false,
+          contentPadding: const EdgeInsets.symmetric(vertical: 10),
         ),
       ),
     );
@@ -1066,6 +1070,8 @@ class _ClaimSheetState extends ConsumerState<ClaimSheet> {
                     .copyWith(color: AppColors.ink3, fontSize: 15),
                 border: InputBorder.none,
                 isDense: true,
+                filled: false,
+                contentPadding: const EdgeInsets.symmetric(vertical: 10),
               ),
             ),
           ),

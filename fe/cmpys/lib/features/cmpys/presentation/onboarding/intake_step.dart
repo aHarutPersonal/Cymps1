@@ -520,6 +520,7 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
                   hintText: 'Type your answer…',
                   border: InputBorder.none,
                   isDense: true,
+                  filled: false,
                   contentPadding: EdgeInsets.symmetric(vertical: 11),
                 ),
               ),
