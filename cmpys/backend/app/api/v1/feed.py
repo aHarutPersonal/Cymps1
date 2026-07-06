@@ -20,13 +20,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.api.dependencies import get_current_user
 from app.core.db import get_db
 from app.models.feed_comment import FeedComment
 from app.models.feed_like import FeedLike
 from app.models.feed_post import FeedPost
+from app.models.idol import Idol
 from app.models.plan import Plan
 from app.models.user import User
 from app.services.llm.prompt_loader import load_and_render
@@ -91,17 +91,21 @@ async def _get_user_context(user: User, db: AsyncSession) -> dict:
         interests = profile.interests or profile.focus_areas or []
         goals = profile.goals or []
 
+    # ⚡ Bolt Optimization: Avoid loading the entire Plan and triggering a selectinload for Idol.
+    # By querying Idol.name directly with a join, we skip hydrating unnecessary ORM objects
+    # and reduce DB queries from 2 to 1.
     stmt = (
-        select(Plan)
-        .options(selectinload(Plan.idol))
+        select(Idol.name)
+        .select_from(Plan)
+        .outerjoin(Idol, Plan.idol_id == Idol.id)
         .where(Plan.user_id == user.id)
         .order_by(Plan.created_at.desc())
         .limit(1)
     )
     result = await db.execute(stmt)
-    plan = result.scalar_one_or_none()
-    if plan and plan.idol:
-        idol_name = plan.idol.name
+    fetched_idol_name = result.scalar_one_or_none()
+    if fetched_idol_name:
+        idol_name = fetched_idol_name
 
     return {
         "interests": interests,
@@ -336,19 +340,7 @@ async def get_feed(
 
     await db.commit()
 
-    # 3. Check which posts current user has liked
-    if db_posts:
-        post_ids = [p.id for p in db_posts]
-        liked_stmt = select(FeedLike.post_id).where(
-            FeedLike.user_id == current_user.id,
-            FeedLike.post_id.in_(post_ids),
-        )
-        liked_result = await db.execute(liked_stmt)
-        liked_ids = {row[0] for row in liked_result.all()}
-    else:
-        liked_ids = set()
-
-    # 4. Shuffle and paginate (deterministic seed for consistent pagination)
+    # 3. Shuffle and paginate (deterministic seed for consistent pagination)
     if seed is None:
         # Use date-based seed so pagination is consistent within a day
         seed = int(datetime.now().strftime("%Y%m%d"))
@@ -360,6 +352,21 @@ async def get_feed(
     end = start + page_size
     page_posts = db_posts[start:end]
     has_more = end < total
+
+    # 4. Check which posts current user has liked
+    # ⚡ Bolt Optimization: Moved FeedLike querying to AFTER pagination.
+    # We now only query the DB for the up to `page_size` posts actually rendered,
+    # rather than for all 100 posts fetched from the DB, reducing the IN clause payload.
+    if page_posts:
+        post_ids = [p.id for p in page_posts]
+        liked_stmt = select(FeedLike.post_id).where(
+            FeedLike.user_id == current_user.id,
+            FeedLike.post_id.in_(post_ids),
+        )
+        liked_result = await db.execute(liked_stmt)
+        liked_ids = {row[0] for row in liked_result.all()}
+    else:
+        liked_ids = set()
 
     items = []
     for post in page_posts:
