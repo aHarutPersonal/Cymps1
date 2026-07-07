@@ -197,8 +197,9 @@ class _PlanJobRepository implements AgenticSessionRepository {
   @override
   Stream<Map<String, dynamic>> sendInterviewMessage(
     String sessionId,
-    String content,
-  ) {
+    String content, {
+    bool isKickoff = false,
+  }) {
     throw UnimplementedError();
   }
 

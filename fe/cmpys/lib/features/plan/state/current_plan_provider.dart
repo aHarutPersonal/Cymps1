@@ -165,12 +165,13 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
       // both names originate from the backend idol record.
       final wantIdol = _readIdolName?.call()?.toLowerCase().trim();
       final planIdol = fetched?.idolName?.toLowerCase().trim();
+      // When the active idol is known, the plan must name the same idol —
+      // a plan with no idol name cannot be verified and is treated as stale
+      // rather than shown to the wrong mentor's user.
       final matchesActiveIdol = fetched == null ||
           wantIdol == null ||
           wantIdol.isEmpty ||
-          planIdol == null ||
-          planIdol.isEmpty ||
-          planIdol == wantIdol;
+          (planIdol != null && planIdol.isNotEmpty && planIdol == wantIdol);
       if (fetched != null && fetched.items.isNotEmpty && matchesActiveIdol) {
         state =
             CurrentPlanState(status: CurrentPlanStatus.ready, plan: fetched);
