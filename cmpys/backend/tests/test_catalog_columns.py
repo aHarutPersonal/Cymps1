@@ -1,5 +1,6 @@
 from app.models.idol import Idol, CatalogStatus
 from app.models.content_resource import ContentResource
+from app.models.llm_usage_event import LLMUsageEvent
 
 
 def test_idol_has_catalog_fields():
@@ -14,3 +15,7 @@ def test_content_resource_has_catalog_fields():
     for col in ("status", "embedding", "is_public_domain", "source_provider",
                 "source_external_id", "read_minutes"):
         assert col in ContentResource.__table__.columns
+
+
+def test_llm_usage_event_tracks_estimated_cost():
+    assert "estimated_cost_usd" in LLMUsageEvent.__table__.columns

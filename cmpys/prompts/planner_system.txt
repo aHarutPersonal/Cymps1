@@ -11,5 +11,5 @@ OUTPUT CONTRACT:
 - Output MUST be valid JSON only. No markdown fences, no prose before or after the JSON.
 - Match the schema in the user prompt EXACTLY: correct keys, correct types, no extra keys.
 - Never include trailing commas or comments.
-- Follow every count, length, and word-range constraint in the user prompt. Word ranges are
-  ceilings, not targets — never pad to fill them.
+- Follow every count, length, and word-range constraint in the user prompt. When a prompt marks
+  a range as a hard minimum/maximum, satisfy both bounds. Otherwise ranges are ceilings: never pad.

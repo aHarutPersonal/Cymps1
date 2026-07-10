@@ -550,6 +550,11 @@ class CmpysIdea {
     required this.tone,
     required this.likes,
     this.comments = const [],
+    this.isSourced = false,
+    this.isVerified = false,
+    this.sourceUrl,
+    this.sourceTitle,
+    this.sourceReference,
   });
   final String id;
   final String text;
@@ -558,6 +563,11 @@ class CmpysIdea {
   final Color tone;
   final int likes;
   final List<({String who, String text})> comments;
+  final bool isSourced;
+  final bool isVerified;
+  final String? sourceUrl;
+  final String? sourceTitle;
+  final String? sourceReference;
 }
 
 const cmpysIdeas = <CmpysIdea>[

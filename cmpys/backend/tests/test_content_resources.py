@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app.models.content_resource import ContentResourceKind, LicenseStatus
+from app.models.idol import CatalogStatus
 from app.services.content_resources import (
     canonical_book_key,
     canonical_video_query_key,
@@ -45,6 +46,36 @@ def _book_module_markdown(title: str, words: int = 3000) -> str:
     return f"# {title}\n\n" + " ".join(["insight"] * words)
 
 
+def _valid_book_module(title: str = "Deep Work", author: str = "Cal Newport") -> dict:
+    sections = []
+    markdown_parts = []
+    for index in range(5):
+        sections.append(
+            {
+                "title": f"Framework {index + 1}",
+                "summary": " ".join(["mechanism"] * 80),
+                "exercise": " ".join(["practice"] * 40),
+            }
+        )
+        markdown_parts.append(
+            f"## Framework {index + 1}\n\n"
+            + " ".join([f"concept{index}"] * 510)
+            + "\n\n### Practice This\n1. Apply the framework.\n2. Record the result."
+        )
+    markdown_parts.append("## Closing Synthesis\n\nConnect the five frameworks into one practice.")
+    return {
+        "title": title,
+        "author_or_creator": author,
+        "promise": "Apply the book's central framework.",
+        "sections": sections,
+        "ideas": [
+            {"title": f"Idea {index + 1}", "content": " ".join(["application"] * 40)}
+            for index in range(6)
+        ],
+        "content_markdown": f"# {title}\n\n" + "\n\n".join(markdown_parts),
+    }
+
+
 def test_canonical_book_key_is_stable_for_title_and_author_variants():
     assert (
         canonical_book_key("The Intelligent Investor", "Benjamin Graham")
@@ -74,7 +105,7 @@ def test_canonical_video_query_key_is_stable():
     )
 
 
-def test_material_to_resource_payload_converts_book_summary_material():
+def test_material_to_resource_payload_keeps_in_app_lesson_distinct_from_book():
     payload = material_to_resource_payload(
         {
             "title": "The Intelligent Investor",
@@ -87,10 +118,21 @@ def test_material_to_resource_payload_converts_book_summary_material():
     )
 
     assert payload is not None
-    assert payload["kind"] == ContentResourceKind.LLM_BOOK_SUMMARY
-    assert payload["license_status"] == LicenseStatus.LLM_SUMMARY
-    assert payload["canonical_key"] == "book:benjamin_graham:the_intelligent_investor"
+    assert payload["kind"] == ContentResourceKind.IN_APP_LESSON
+    assert payload["canonical_key"] == "in_app_lesson:the_intelligent_investor"
     assert payload["summary_json"]["ideas"][0]["title"] == "Margin"
+
+
+def test_material_to_resource_payload_rejects_short_book_summary():
+    assert material_to_resource_payload(
+        {
+            "title": "Deep Work",
+            "type": "book",
+            "author": "Cal Newport",
+            "content_markdown": "short " * 500,
+            "ideas": [{"title": "Depth"}],
+        }
+    ) is None
 
 
 @pytest.mark.asyncio
@@ -101,16 +143,17 @@ async def test_generate_book_module_retries_until_prd_minimum(monkeypatch):
     class Client:
         async def generate_json(self, **kwargs):
             calls.append(kwargs["user_prompt"])
-            word_count = 2000 if len(calls) == 1 else 2600
-            return LLMResponse(
-                {
-                    "title": "Deep Work",
-                    "author_or_creator": "Cal Newport",
-                    "content_markdown": "word " * word_count,
-                    "sections": [],
-                    "ideas": [],
-                }
-            )
+            if len(calls) == 1:
+                return LLMResponse(
+                    {
+                        "title": "Deep Work",
+                        "author_or_creator": "Cal Newport",
+                        "content_markdown": "word " * 2000,
+                        "sections": [],
+                        "ideas": [],
+                    }
+                )
+            return LLMResponse(_valid_book_module())
 
     monkeypatch.setattr(
         "app.services.llm.client.get_llm_client",
@@ -124,8 +167,120 @@ async def test_generate_book_module_retries_until_prd_minimum(monkeypatch):
     )
 
     assert len(calls) == 2
-    assert len(result["content_markdown"].split()) == 2600
+    assert len(result["content_markdown"].split()) >= 2500
     assert result["duration_minutes"] == 13
+    assert result["quality_report"]["passed"] is True
+
+
+@pytest.mark.asyncio
+async def test_generate_book_module_repairs_metadata_without_regenerating_lesson(monkeypatch):
+    draft = _valid_book_module()
+    draft["ideas"] = [
+        {"title": f"Idea {index + 1}", "content": "Too short.", "category": "Strategy"}
+        for index in range(6)
+    ]
+    calls = []
+
+    class BalancedClient:
+        async def generate_json(self, **kwargs):
+            calls.append("balanced")
+            return LLMResponse(draft)
+
+    class FastClient:
+        async def generate_json(self, **kwargs):
+            calls.append("fast")
+            return LLMResponse(
+                {
+                    "sections": draft["sections"],
+                    "ideas": [
+                        {
+                            "title": f"Idea {index + 1}",
+                            "content": " ".join(["application"] * 40),
+                            "category": "Strategy",
+                        }
+                        for index in range(6)
+                    ],
+                }
+            )
+
+    def client_factory(**kwargs):
+        tier = kwargs.get("tier")
+        if tier == "balanced":
+            return BalancedClient()
+        if tier == "fast":
+            return FastClient()
+        raise AssertionError("quality tier must not rewrite a sound long lesson")
+
+    monkeypatch.setattr("app.services.llm.client.get_llm_client", client_factory)
+
+    result = await generate_book_module(
+        title="Deep Work",
+        author="Cal Newport",
+        user_goal="understand focused work",
+    )
+
+    assert calls == ["balanced", "fast"]
+    assert result["quality_report"]["passed"] is True
+    assert result["content_markdown"] == draft["content_markdown"]
+
+
+@pytest.mark.asyncio
+async def test_fast_book_canary_falls_back_to_balanced_on_quality_failure(monkeypatch):
+    from app.services.llm.client import LLMResponse
+    from app.services.llm.routing import RoutingDecision, RoutingStats
+
+    calls = []
+
+    class Client:
+        def __init__(self, tier):
+            self.tier = tier
+            self.model = None
+
+        async def generate_json(self, **kwargs):
+            calls.append(self.tier)
+            if self.tier == "fast":
+                return LLMResponse(
+                    data={
+                        "title": "Deep Work",
+                        "author_or_creator": "Cal Newport",
+                        "content_markdown": "thin " * 1500,
+                        "sections": [],
+                        "ideas": [],
+                    },
+                )
+            return LLMResponse(data=_valid_book_module())
+
+    async def choose_canary(**kwargs):
+        return RoutingDecision(
+            tier="fast",
+            reason="fast_canary",
+            fast_model="fast-model",
+            stats=RoutingStats(),
+            exploration_bucket=1,
+        )
+
+    monkeypatch.setattr(
+        "app.services.llm.routing.choose_llm_tier",
+        choose_canary,
+    )
+    monkeypatch.setattr(
+        "app.services.llm.client.get_llm_client",
+        lambda **kwargs: Client(kwargs.get("tier", "balanced")),
+    )
+
+    result = await generate_book_module(
+        title="Deep Work",
+        author="Cal Newport",
+        user_goal="understand focused work",
+    )
+
+    assert calls == ["fast", "balanced"]
+    assert result["quality_report"]["passed"] is True
+    stages = result["quality_report"]["generation"]["calls"]
+    assert stages[0]["routing_reason"] == "fast_canary"
+    assert stages[0]["quality_score"] < 0.85
+    assert stages[1]["routing_reason"] == "fast_quality_fallback"
+    assert stages[1]["quality_score"] >= 0.85
 
 
 def test_material_to_resource_payload_converts_valid_youtube_video():
@@ -183,8 +338,11 @@ async def test_get_or_create_content_resource_reuses_existing_record():
 
 @pytest.mark.asyncio
 async def test_get_or_create_book_module_resource_reuses_existing_without_generation():
-    existing = AsyncMock()
+    existing = MagicMock()
     existing.id = "book-resource-1"
+    existing.content_markdown = "word " * 2600
+    existing.status = CatalogStatus.PUBLISHED
+    existing.metadata_json = {"quality_report": {"passed": True}}
     db = AsyncMock()
     db.execute.return_value = ScalarResult(existing)
 
@@ -213,15 +371,7 @@ async def test_get_or_create_book_module_resource_generates_and_saves_once_when_
 
     async def factory(**kwargs):
         factory_calls.append(kwargs)
-        return {
-            "title": "Deep Work",
-            "author_or_creator": "Cal Newport",
-            "duration_minutes": 15,
-            "promise": "Build a distraction-resistant work ritual.",
-            "sections": [{"title": "Protect Focus", "summary": "Batch shallow work."}],
-            "ideas": [{"title": "Depth Wins", "content": "Schedule deep work first."}],
-            "content_markdown": _book_module_markdown("Deep Work"),
-        }
+        return _valid_book_module()
 
     async def no_source(**kwargs):
         return None
@@ -241,15 +391,46 @@ async def test_get_or_create_book_module_resource_generates_and_saves_once_when_
     assert result.canonical_key == "book:cal_newport:deep_work"
     assert result.kind == ContentResourceKind.LLM_BOOK_SUMMARY
     assert result.license_status == LicenseStatus.LLM_SUMMARY
-    assert result.duration_minutes == 15
+    assert result.is_public_domain is False
+    assert result.duration_minutes == 13
     assert result.content_markdown.startswith("# Deep Work")
-    assert result.summary_json["ideas"][0]["title"] == "Depth Wins"
+    assert result.summary_json["ideas"][0]["title"] == "Idea 1"
     db.add.assert_called_once_with(result)
     db.flush.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_get_or_create_book_module_resource_prefers_public_domain_source_before_llm():
+async def test_book_module_upgrade_never_writes_null_public_domain_flag():
+    existing = MagicMock()
+    existing.id = "legacy-book-resource"
+    existing.content_markdown = "thin"
+    existing.status = CatalogStatus.PENDING
+    existing.metadata_json = {}
+    db = AsyncMock()
+    db.execute.return_value = ScalarResult(existing)
+
+    async def factory(**kwargs):
+        return _valid_book_module(kwargs["title"], kwargs["author"])
+
+    async def no_source(**kwargs):
+        return None
+
+    result = await get_or_create_book_module_resource(
+        db,
+        title="Deep Work",
+        author="Cal Newport",
+        user_goal="focus better",
+        source_lookup=no_source,
+        module_factory=factory,
+    )
+
+    assert result is existing
+    assert existing.is_public_domain is False
+    db.flush.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_book_module_resource_grounds_public_domain_source_before_llm():
     db = AsyncMock()
     db.add = MagicMock()
     db.execute.return_value = ScalarResult(None)
@@ -262,14 +443,16 @@ async def test_get_or_create_book_module_resource_prefers_public_domain_source_b
             "author_or_creator": "Marcus Aurelius",
             "source_url": "https://www.gutenberg.org/ebooks/2680",
             "license_status": "public_domain",
-            "content_markdown": "# Meditations\n\nA public-domain reading source.",
+            "content_markdown": None,
+            "source_context": "A sampled passage from the public-domain source.",
             "summary_json": {"source": "project_gutenberg"},
             "duration_minutes": 15,
             "metadata_json": {"provider": "gutenberg"},
         }
 
     async def factory(**kwargs):
-        raise AssertionError("LLM fallback should not run when public source exists")
+        assert "sampled passage" in kwargs["source_context"]
+        return _valid_book_module("Meditations", "Marcus Aurelius")
 
     result = await get_or_create_book_module_resource(
         db,
@@ -297,15 +480,7 @@ async def test_attach_content_resources_generates_missing_book_module():
     db.execute.return_value = ScalarResult(None)
 
     async def factory(**kwargs):
-        return {
-            "title": kwargs["title"],
-            "author_or_creator": kwargs["author"],
-            "duration_minutes": 15,
-            "promise": "Apply one durable idea.",
-            "sections": [],
-            "ideas": [{"title": "Practice", "content": "Use the idea today."}],
-            "content_markdown": _book_module_markdown("Atomic Habits"),
-        }
+        return _valid_book_module(kwargs["title"], kwargs["author"])
 
     async def no_source(**kwargs):
         return None
@@ -328,8 +503,40 @@ async def test_attach_content_resources_generates_missing_book_module():
     assert materials[0]["content_resource_id"] == db.add.call_args.args[0].id
     assert materials[0]["canonical_key"] == "book:james_clear:atomic_habits"
     assert materials[0]["content_markdown"].startswith("# Atomic Habits")
-    assert materials[0]["duration_minutes"] == 15
-    assert materials[0]["ideas"][0]["title"] == "Practice"
+    assert materials[0]["duration_minutes"] == 13
+    assert materials[0]["ideas"][0]["title"] == "Idea 1"
+
+
+@pytest.mark.asyncio
+async def test_attach_content_resources_does_not_serve_failed_book_module():
+    from app.services.content_resources import attach_content_resources_to_materials
+
+    db = AsyncMock()
+    db.add = MagicMock()
+    db.execute.return_value = ScalarResult(None)
+
+    async def no_source(**kwargs):
+        return None
+
+    async def thin_factory(**kwargs):
+        return {
+            "title": kwargs["title"],
+            "author_or_creator": kwargs["author"],
+            "sections": [],
+            "ideas": [],
+            "content_markdown": "thin " * 200,
+        }
+
+    materials = await attach_content_resources_to_materials(
+        db,
+        [{"title": "Thin Book", "type": "book", "author": "A. Author"}],
+        book_source_lookup=no_source,
+        book_module_factory=thin_factory,
+    )
+
+    assert "content_resource_id" not in materials[0]
+    assert materials[0]["resource_unavailable"] is True
+    assert materials[0]["quality_status"] == "flagged"
 
 
 @pytest.mark.asyncio
@@ -346,13 +553,15 @@ async def test_attach_content_resources_prefers_public_domain_book_source():
             "author_or_creator": "Marcus Aurelius",
             "source_url": "https://www.gutenberg.org/ebooks/2680",
             "license_status": "public_domain",
-            "content_markdown": "# Meditations\n\nPublic-domain source.",
+            "content_markdown": None,
+            "source_context": "Sampled public-domain source text.",
             "summary_json": {"source": "project_gutenberg"},
             "duration_minutes": 15,
         }
 
     async def factory(**kwargs):
-        raise AssertionError("LLM fallback should not run")
+        assert kwargs["source_context"] == "Sampled public-domain source text."
+        return _valid_book_module("Meditations", "Marcus Aurelius")
 
     materials = await attach_content_resources_to_materials(
         db,
@@ -516,9 +725,12 @@ async def test_attach_content_resources_attaches_cached_book_without_enqueue(mon
     cached.source_url = "https://example.com/atomic-habits"
     cached.thumbnail_url = None
     cached.license_status = LicenseStatus.LLM_SUMMARY
-    cached.content_markdown = "# Atomic Habits\n\nCached module."
+    cached.content_markdown = _valid_book_module("Atomic Habits", "James Clear")[
+        "content_markdown"
+    ]
     cached.duration_minutes = 15
     cached.summary_json = {"ideas": [], "promise": "Small habits compound.", "sections": []}
+    cached.status = CatalogStatus.PUBLISHED
 
     db = AsyncMock()
     db.add = MagicMock()
@@ -570,15 +782,7 @@ async def test_attach_content_resources_runs_independent_book_prep_concurrently(
         # Each factory only completes once the other has started, which
         # deadlocks (and times out) unless the prep work runs concurrently.
         await asyncio.wait_for(started[other].wait(), timeout=1.0)
-        return {
-            "title": title,
-            "author_or_creator": kwargs["author"],
-            "duration_minutes": 15,
-            "promise": "Apply one durable idea.",
-            "sections": [],
-            "ideas": [],
-            "content_markdown": _book_module_markdown(title),
-        }
+        return _valid_book_module(title, kwargs["author"])
 
     materials = await attach_content_resources_to_materials(
         db,

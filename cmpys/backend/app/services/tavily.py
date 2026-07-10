@@ -13,8 +13,6 @@ from urllib.parse import quote_plus
 
 import httpx
 
-from app.core.config import settings
-
 logger = logging.getLogger("cmpys.services.video_search")
 
 YOUTUBE_OEMBED_URL = "https://www.youtube.com/oembed"

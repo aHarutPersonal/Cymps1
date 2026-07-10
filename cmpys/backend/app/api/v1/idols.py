@@ -17,29 +17,26 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
 from google import genai
 from google.genai import types
-
-logger = logging.getLogger(__name__)
-from app.api.dependencies import get_current_user
+from pydantic import BaseModel
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.api.dependencies import get_current_user
 from app.core.db import get_db
+from app.core.validation import is_valid_uuid
 from app.models.idol import CatalogStatus, Idol
 from app.models.idol_alias import IdolAlias
 from app.models.idol_external_id import IdolExternalId
 from app.models.idol_job import IdolImportJob
-from app.models.suggest_job import IdolSuggestJob
 from app.models.idol_persona import IdolPersona
 from app.models.idol_profile import IdolProfile
 from app.models.idol_tag import IdolTag
 from app.models.idol_tag_link import IdolTagLink
 from app.models.idol_timeline import IdolTimelineEvent
 from app.models.user import User
-from app.core.validation import is_valid_uuid
 from app.providers import DiscoveryResponse, search_candidates
 from app.providers.wikidata import fetch_entity_by_id
 from app.schemas.idol import (
@@ -58,6 +55,8 @@ from app.schemas.idol import (
     TimelineEventResponse,
     TimelineResponse,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/idols", tags=["idols"])
 

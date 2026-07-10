@@ -729,11 +729,28 @@ class _ReelState extends ConsumerState<_Reel>
             ),
           ),
           const SizedBox(width: 9),
-          Text(idea.author,
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 14.5)),
+          Flexible(
+            child: Text(idea.author,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 14.5)),
+          ),
+          if (idea.isSourced) ...[
+            const SizedBox(width: 6),
+            Tooltip(
+              message: idea.isVerified
+                  ? 'Independently cross-checked'
+                  : 'Source-backed quote',
+              child: Icon(
+                idea.isVerified ? Icons.verified : Icons.verified_outlined,
+                size: 17,
+                color: Colors.white.withValues(alpha: 0.88),
+              ),
+            ),
+          ],
         ],
       ),
     ];

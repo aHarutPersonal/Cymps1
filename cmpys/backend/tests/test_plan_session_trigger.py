@@ -168,6 +168,7 @@ class TestPlanPromptSessionContext:
             "learning_preferences": "reading",
             "idol_name": "Warren Buffett",
             "idol_domain": "investing",
+            "idol_evidence_json": {"timeline": []},
             "session_context": "Blueprint phase for this mission: Weeks 1-3: Foundation",
         }, strict=True)
 

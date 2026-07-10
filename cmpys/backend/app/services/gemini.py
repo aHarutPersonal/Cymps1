@@ -16,6 +16,7 @@ Both return async generators that yield text chunks for SSE streaming.
 
 import inspect
 import logging
+import time
 from typing import AsyncGenerator
 
 from google import genai
@@ -74,6 +75,7 @@ async def generate_with_grounding(
     system_prompt: str,
     user_message: str,
     conversation_history: str = "",
+    operation: str = "grounded_generation",
 ) -> str:
     """
     Single Gemini 2.5 Flash call with Google Search grounding.
@@ -83,6 +85,7 @@ async def generate_with_grounding(
     Google before responding and cites real URLs.
     """
     client = _gemini_client()
+    started = time.perf_counter()
 
     if conversation_history:
         contents = f"Previous conversation:\n{conversation_history}\n\n{user_message}"
@@ -101,7 +104,44 @@ async def generate_with_grounding(
                 temperature=0.7,
             ),
         )
-        return response.text or ""
+        text = response.text or ""
+        duration_ms = (time.perf_counter() - started) * 1000
+        usage = getattr(response, "usage_metadata", None)
+        queries: set[str] = set()
+        grounded_source_count = 0
+        for candidate in getattr(response, "candidates", None) or []:
+            metadata = getattr(candidate, "grounding_metadata", None)
+            grounded_source_count += len(
+                getattr(metadata, "grounding_chunks", None) or []
+            )
+            for query in getattr(metadata, "web_search_queries", None) or []:
+                if str(query).strip():
+                    queries.add(str(query).strip())
+
+        from app.services.llm.telemetry import UsageRecord, record_usage_records
+
+        await record_usage_records(
+            [
+                UsageRecord(
+                    operation=operation,
+                    model="gemini-2.5-flash",
+                    provider="gemini",
+                    prompt_tokens=getattr(usage, "prompt_token_count", None),
+                    completion_tokens=getattr(usage, "candidates_token_count", None),
+                    total_tokens=getattr(usage, "total_token_count", None),
+                    duration_ms=duration_ms,
+                    grounded=True,
+                    search_queries=len(queries),
+                    success=bool(text),
+                    result_status="generated" if text else "empty",
+                    metadata={
+                        "grounded_source_count": grounded_source_count,
+                        "response_chars": len(text),
+                    },
+                )
+            ]
+        )
+        return text
     except Exception as e:
         logger.error(f"[GEMINI] Grounded generate error: {e}")
         raise

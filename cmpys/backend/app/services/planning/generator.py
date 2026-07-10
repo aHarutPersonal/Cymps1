@@ -15,6 +15,7 @@ from app.models.plan import PlanItemType
 from app.services.llm import get_llm_client
 from app.services.llm.prompt_loader import load_prompt, render_prompt, sanitize_untrusted_input
 from app.services.llm.schemas import PlanGenerationResponse
+from app.services.llm.telemetry import record_llm_response
 
 logger = logging.getLogger(__name__)
 
@@ -167,7 +168,10 @@ async def _generate_llm_items(
 
     Falls back to deterministic if LLM fails.
     """
-    client = get_llm_client(fast=True)
+    # Plans are a core user-visible artifact. Use the balanced model; the fast
+    # tier is reserved for extraction/classification where source constraints
+    # make the smaller model reliable.
+    client = get_llm_client(tier="balanced", thinking_budget=1024)
 
     try:
         # Load prompt templates. planner_system.txt (not extractor_system.txt):
@@ -206,6 +210,26 @@ async def _generate_llm_items(
             user_prompt=user_prompt,
             output_model=PlanGenerationResponse,
             repair_on_failure=True,
+        )
+
+        week_count = len(validated.weeks) if validated else 0
+        nonempty_weeks = (
+            sum(1 for week in validated.weeks if week.binary_tasks) if validated else 0
+        )
+        structure_score = min(1.0, week_count / 12) * (
+            nonempty_weeks / max(week_count, 1)
+        )
+        await record_llm_response(
+            operation="plan_generation",
+            response=response,
+            model=getattr(client, "model", None),
+            result_status="schema_valid" if validated and validated.weeks else "fallback",
+            quality_score=structure_score,
+            metadata={
+                "week_count": week_count,
+                "nonempty_week_count": nonempty_weeks,
+                "retried": response.retried,
+            },
         )
 
         if validated and validated.weeks:

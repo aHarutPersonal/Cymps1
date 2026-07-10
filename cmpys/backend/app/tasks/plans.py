@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from typing import Any
 
 from sqlalchemy import and_, select
 from sqlalchemy.orm import selectinload
@@ -15,17 +16,66 @@ from app.models.user_achievement import UserAchievement
 from app.models.user import User
 from app.models.user_profile import UserProfile
 from app.services.planning.generator import generate_plan
+from app.services.content_quality import (
+    MIN_PLAN_DETAIL_LESSON_WORDS,
+    MIN_PLAN_DETAIL_MATERIAL_WORDS,
+)
 from app.services.transcripts import build_chat_history_json
 
 logger = logging.getLogger(__name__)
 
-# "Too thin -> retry" floors. These are LOWER bounds, aligned with the focused
-# word ceilings in plan_item_details.txt (lessons 250-550, materials 400-600).
-# The prompt was deliberately tightened to avoid truncation and padded filler, so
-# the floors sit at the bottom of those ranges rather than the old 500/600.
-MIN_PLAN_DETAIL_LESSON_WORDS = 250
-MIN_PLAN_DETAIL_MATERIAL_WORDS = 350
 
+def _build_idol_plan_context(
+    *,
+    idol: Any,
+    profile: Any | None,
+    persona: Any | None,
+    milestones: list[Any],
+    gaps: list[str],
+) -> dict[str, Any]:
+    """Build the evidence-backed idol context passed to the plan prompt."""
+    profile_payload = {
+        "name": idol.name,
+        "domain": idol.domain,
+    }
+    if profile:
+        profile_payload.update(
+            {
+                "display_name": profile.display_name,
+                "short_description": profile.short_description,
+                "domains": profile.domains,
+                "primary_roles": profile.primary_roles,
+                "notable_themes": profile.notable_themes,
+            }
+        )
+
+    persona_payload = {}
+    if persona:
+        persona_payload = {
+            "voice_style": persona.voice_style,
+            "principles": persona.principles,
+            "topics_of_strength": persona.topics_of_strength,
+            "era_context": persona.era_context or "contemporary",
+        }
+
+    milestone_payload = [
+        {
+            "title": milestone.canonical_title,
+            "description": milestone.canonical_description,
+            "age": milestone.age_at_event,
+            "category": milestone.category,
+            "importance": milestone.importance_score,
+        }
+        for milestone in milestones
+        if milestone.age_at_event is not None
+    ]
+    return {
+        "idol_profile": profile_payload,
+        "idol_persona": persona_payload,
+        "idol_milestones": milestone_payload,
+        "gaps": gaps,
+        "readiness_by_gap": {gap: "beginner" for gap in gaps},
+    }
 
 def build_previous_cycle_block(
     cycle_number: int,
@@ -194,6 +244,9 @@ async def _run_plan_generation_async(job_id: str) -> dict:
                     IdolTimelineEvent.idol_id == job.idol_id,
                     IdolTimelineEvent.age_at_event <= job.target_age,
                 )
+            ).order_by(
+                IdolTimelineEvent.age_at_event.asc(),
+                IdolTimelineEvent.importance_score.desc(),
             )
             milestone_result = await db.execute(milestone_stmt)
             idol_milestones = list(milestone_result.scalars().all())
@@ -208,7 +261,7 @@ async def _run_plan_generation_async(job_id: str) -> dict:
             # Gap analysis
             user_cats = {a.category.value for a in user_achievements}
             idol_cats = {m.category for m in idol_milestones}
-            gaps = list(idol_cats - user_cats)
+            gaps = sorted(idol_cats - user_cats)
             if not gaps:
                 gaps = ["learning", "career", "mindset"]
             
@@ -217,116 +270,29 @@ async def _run_plan_generation_async(job_id: str) -> dict:
             # Step 2: Structuring curriculum (30-60%)
             await _update_job(db, job, step="structuring_curriculum", progress=40)
             
-            # Prepare data for LLM
-            milestones_for_llm = [
-                {
-                    "title": m.canonical_title,
-                    "description": m.canonical_description,
-                    "age": m.age_at_event,
-                    "category": m.category,
-                    "importance": m.importance_score,
-                }
-                for m in idol_milestones
-                if m.age_at_event is not None
-            ]
-            
-            profile_for_llm = {
-                "name": idol.name,
-                "domain": idol.domain,
-            }
-            if idol_profile:
-                profile_for_llm.update({
-                    "display_name": idol_profile.display_name,
-                    "short_description": idol_profile.short_description,
-                    "domains": idol_profile.domains,
-                    "primary_roles": idol_profile.primary_roles,
-                    "notable_themes": idol_profile.notable_themes,
-                })
-            
-            persona_for_llm = {}
-            if idol_persona:
-                persona_for_llm = {
-                    "voice_style": idol_persona.voice_style,
-                    "principles": idol_persona.principles,
-                    "topics_of_strength": idol_persona.topics_of_strength,
-                    "era_context": idol_persona.era_context or "contemporary",
-                }
+            idol_plan_context = _build_idol_plan_context(
+                idol=idol,
+                profile=idol_profile,
+                persona=idol_persona,
+                milestones=idol_milestones,
+                gaps=gaps,
+            )
             
             await _update_job(db, job, progress=50)
 
             # Step 3: Balancing workload (60-85%)
             await _update_job(db, job, step="balancing_workload", progress=65)
             
-            # Generate human-readable thinking concurrently
-            try:
-                import openai
-                from app.core.config import settings as app_settings
-                from app.services.llm.prompt_loader import load_prompt, render_prompt
-                
-                thinking_template = load_prompt("thinking_plan")
-                thinking_prompt = render_prompt(thinking_template, {
-                    "idol_name": idol.name,
-                }, prompt_name="thinking_plan.txt")
-                
-                thinking_system = "You are an inspiring AI coach who thinks out loud while crafting personalized development plans. Be warm and insightful."
-                
-                async def _generate_thinking_stream_concurrently():
-                    try:
-                        async with async_session_maker() as stream_db:
-                            stream_stmt = select(PlanGenerationJob).where(PlanGenerationJob.id == job_id)
-                            stream_res = await stream_db.execute(stream_stmt)
-                            stream_job = stream_res.scalar_one_or_none()
-                            
-                            if not stream_job:
-                                return
-                                
-                            openai_client = openai.AsyncOpenAI(api_key=app_settings.openai_api_key)
-                            thinking_text = ""
-                            buffer = ""
-                            last_update_time = asyncio.get_event_loop().time()
-                            
-                            stream = await openai_client.chat.completions.create(
-                                model="gpt-4o-mini",
-                                messages=[
-                                    {"role": "system", "content": thinking_system},
-                                    {"role": "user", "content": thinking_prompt},
-                                ],
-                                stream=True,
-                                max_tokens=80,
-                                temperature=0.7,
-                            )
-                            
-                            async for chunk in stream:
-                                delta = chunk.choices[0].delta
-                                if delta.content:
-                                    content_piece = delta.content
-                                    thinking_text += content_piece
-                                    buffer += content_piece
-                                    
-                                    current_time = asyncio.get_event_loop().time()
-                                    
-                                    # Buffer updates to avoid slamming the DB (every 20 chars or 200ms)
-                                    if len(buffer) >= 20 or (current_time - last_update_time) > 0.2:
-                                        stream_job.thinking_text = thinking_text
-                                        await stream_db.commit()
-                                        buffer = ""
-                                        last_update_time = current_time
-                                        
-                            # Final flush
-                            if buffer:
-                                stream_job.thinking_text = thinking_text
-                                await stream_db.commit()
-                            
-                            logger.info(f"[PLANNING] Thinking generated: {len(thinking_text)} chars")
-                    except Exception as e:
-                        logger.warning(f"[PLANNING] Concurrent thinking stream failed: {e}")
-                
-                logger.info("[PLANNING] Starting concurrent thinking stream...")
-                asyncio.create_task(_generate_thinking_stream_concurrently())
-            except Exception as e:
-                logger.warning(f"[PLANNING] Failed to start thinking stream: {e}")
-                job.thinking_text = f"Let me analyze {idol.name}'s journey and craft a personalized plan for you..."
-                await db.commit()
+            # Keep progress copy deterministic. The previous implementation
+            # launched an untracked OpenAI stream even when Gemini was the
+            # configured provider; it was not metered and could be destroyed
+            # when the Celery event loop closed.
+            gap_summary = ", ".join(gaps[:3])
+            job.thinking_text = (
+                f"Analyzing {idol.name}'s journey and building a plan around "
+                f"your highest-priority gaps: {gap_summary}."
+            )
+            await db.commit()
             
             await _update_job(db, job, progress=70)
             
@@ -421,16 +387,7 @@ async def _run_plan_generation_async(job_id: str) -> dict:
                 duration_weeks=job.duration_weeks,
                 target_age=job.target_age,
                 user_context=user_context_str,
-                idol_profile={
-                    "display_name": idol_profile.display_name,
-                    "domains": idol_profile.domains,
-                    "notable_themes": idol_profile.notable_themes,
-                    "primary_roles": idol_profile.primary_roles,
-                } if idol_profile else {},
-                idol_persona={},
-                idol_milestones=[],
-                gaps=[],
-                readiness_by_gap={},
+                **idol_plan_context,
                 interview_transcript_json=session_ctx.get("interview_transcript_json", ""),
                 comparison_summary=session_ctx.get("comparison_summary", ""),
                 blueprint_markdown=session_ctx.get("blueprint_markdown", ""),
@@ -530,6 +487,11 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
     from app.models.user_profile import UserProfile
     from app.services.llm.client import get_llm_client
     from app.services.llm.prompt_loader import load_and_render
+    from app.services.llm.routing import choose_llm_tier
+    from app.services.llm.telemetry import (
+        record_usage_records,
+        usage_record_from_response,
+    )
     
     async with async_session_maker() as db:
         # Load job
@@ -572,6 +534,41 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                     "lexicon_allow": persona.lexicon_allow or [],
                     "lexicon_ban": persona.lexicon_ban or [],
                 }
+
+        # Give the lesson writer actual evidence instead of asking it to recall
+        # biographical examples from the idol's name alone.
+        idol_evidence: dict = {"persona": idol_persona_dict}
+        if idol:
+            profile_result = await db.execute(
+                select(IdolProfile).where(IdolProfile.idol_id == idol.id)
+            )
+            profile = profile_result.scalar_one_or_none()
+            if profile:
+                idol_evidence["profile"] = {
+                    "display_name": profile.display_name,
+                    "short_description": profile.short_description,
+                    "domains": profile.domains or [],
+                    "primary_roles": profile.primary_roles or [],
+                    "notable_themes": profile.notable_themes or [],
+                }
+            timeline_result = await db.execute(
+                select(IdolTimelineEvent)
+                .where(
+                    IdolTimelineEvent.idol_id == idol.id,
+                    IdolTimelineEvent.confidence >= 0.55,
+                )
+                .order_by(IdolTimelineEvent.importance_score.desc())
+                .limit(8)
+            )
+            idol_evidence["timeline"] = [
+                {
+                    "title": event.canonical_title,
+                    "description": event.canonical_description,
+                    "age_at_event": event.age_at_event,
+                    "confidence": event.confidence,
+                }
+                for event in timeline_result.scalars().all()
+            ]
         
         await _update_job(db, job, progress=25)
 
@@ -695,6 +692,7 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                 "learning_preferences": user_learning_pref,
                 "idol_name": idol_name,
                 "idol_domain": idol_domain,
+                "idol_evidence_json": idol_evidence,
                 "session_context": session_context,
             },
             strict=True,
@@ -707,10 +705,90 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
             # generation needs world knowledge of real resources, which the
             # extraction prompt forbids.
             system_prompt = load_and_render("planner_system.txt", {}, strict=False)
-            client = get_llm_client(max_tokens=16000)
+            routing_decision = await choose_llm_tier(
+                operation="plan_item_detail_generation",
+                routing_key=str(item.id),
+                default_tier="balanced",
+                db=db,
+            )
+            active_tier = routing_decision.tier
+            client = get_llm_client(
+                max_tokens=16000,
+                tier=active_tier,
+                thinking_budget=0,
+            )
+            detail_llm_calls = []
+            call_quality: dict[int, float] = {}
+
+            def _score_detail_payload(payload: dict) -> float:
+                components: list[float] = []
+                for payload_step in payload.get("steps", []):
+                    lesson = payload_step.get("lesson_content", "")
+                    if lesson:
+                        components.append(
+                            min(
+                                1.0,
+                                len(lesson.split()) / MIN_PLAN_DETAIL_LESSON_WORDS,
+                            )
+                        )
+                for payload_material in payload.get("materials", []):
+                    content = payload_material.get("content_markdown", "")
+                    if content:
+                        components.append(
+                            min(
+                                1.0,
+                                len(content.split()) / MIN_PLAN_DETAIL_MATERIAL_WORDS,
+                            )
+                        )
+                return sum(components) / len(components) if components else 0.0
+
+            async def _persist_detail_usage(
+                result_status: str,
+                quality_score: float,
+            ) -> None:
+                await record_usage_records(
+                    [
+                        usage_record_from_response(
+                            operation="plan_item_detail_generation",
+                            response=call_response,
+                            model=call_model,
+                            result_status=(
+                                (
+                                    "quality_passed"
+                                    if call_quality[id(call_response)] >= 1.0
+                                    else "quality_failed"
+                                )
+                                if id(call_response) in call_quality
+                                else result_status
+                            ),
+                            quality_score=call_quality.get(
+                                id(call_response), quality_score
+                            ),
+                            metadata={
+                                "stage": stage,
+                                "selected_tier": selected_tier,
+                                "routing_reason": route_reason,
+                                "plan_item_id": str(item.id),
+                                "item_type": getattr(item.type, "value", str(item.type)),
+                            },
+                        )
+                        for stage, call_response, selected_tier, route_reason, call_model in detail_llm_calls
+                    ],
+                    db=db,
+                )
+
             llm_response = await client.generate_json(
                 system_prompt=system_prompt,
                 user_prompt=prompt,
+            )
+            detail_llm_calls.append(
+                (
+                    "draft",
+                    llm_response,
+                    active_tier,
+                    routing_decision.reason,
+                    getattr(client, "model", None),
+                )
             )
 
             # Gemini occasionally emits JSON that survives neither the parser nor
@@ -722,15 +800,36 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                     f"[PLAN_DETAILS] LLM JSON error for '{item.title}': "
                     f"{llm_response.error}. Retrying once."
                 )
-                llm_response = await client.generate_json(
+                if active_tier == "fast":
+                    active_tier = "balanced"
+                    client = get_llm_client(
+                        max_tokens=16000,
+                        tier="balanced",
+                        thinking_budget=0,
+                    )
+                    recovery_reason = "fast_schema_fallback"
+                else:
+                    recovery_reason = "balanced_schema_retry"
+                json_retry_response = await client.generate_json(
                     system_prompt=system_prompt,
                     user_prompt=prompt
                     + "\n\nIMPORTANT: Return ONLY strictly valid, minified JSON. "
                     "Escape every quote and newline inside string values. No "
                     "trailing commas, no commentary, no markdown fences.",
                 )
+                detail_llm_calls.append(
+                    (
+                        "json_recovery",
+                        json_retry_response,
+                        active_tier,
+                        recovery_reason,
+                        getattr(client, "model", None),
+                    )
+                )
+                llm_response = json_retry_response
 
             if llm_response.error:
+                await _persist_detail_usage("generation_failed", 0.0)
                 await _update_job(db, job, status="failed", step="error", error_message=llm_response.error)
                 return {"status": "failed", "error": llm_response.error}
             
@@ -740,6 +839,7 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
             # and book/video resources can be deduplicated reliably.
             from app.tasks.ingestion import _normalize_plan_item_details
             details = _normalize_plan_item_details(details)
+            call_quality[id(llm_response)] = _score_detail_payload(details)
 
             # Validate content depth — retry once if lesson_content is too thin
             min_lesson_words = MIN_PLAN_DETAIL_LESSON_WORDS
@@ -769,12 +869,34 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                     "Strengthen thin sections with a real example from the idol's life and a "
                     "concrete practice exercise — but stay within those ranges and do NOT pad."
                 )
+                if active_tier == "fast":
+                    active_tier = "balanced"
+                    client = get_llm_client(
+                        max_tokens=16000,
+                        tier="balanced",
+                        thinking_budget=0,
+                    )
+                    quality_retry_reason = "fast_quality_fallback"
+                else:
+                    quality_retry_reason = "balanced_quality_retry"
                 retry_response = await client.generate_json(
                     system_prompt=system_prompt,
                     user_prompt=retry_prompt,
                 )
+                detail_llm_calls.append(
+                    (
+                        "quality_retry",
+                        retry_response,
+                        active_tier,
+                        quality_retry_reason,
+                        getattr(client, "model", None),
+                    )
+                )
                 if not retry_response.error:
                     retry_details = _normalize_plan_item_details(retry_response.data)
+                    call_quality[id(retry_response)] = _score_detail_payload(
+                        retry_details
+                    )
                     # Check if retry produced deeper content
                     retry_ok = True
                     for step in retry_details.get("steps", []):
@@ -790,6 +912,8 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                                 break
                     if retry_ok:
                         details = retry_details
+
+            detail_quality_score = _score_detail_payload(details)
             
             # Step 3: Resolve material URLs via Tavily (real web search)
             await _update_job(db, job, step="resolving_materials", progress=75)
@@ -823,6 +947,11 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
             
             from app.tasks.ingestion import sanitize_for_postgres
             item.details_json = sanitize_for_postgres(details)
+
+            await _persist_detail_usage(
+                "quality_passed" if detail_quality_score >= 1.0 else "quality_partial",
+                detail_quality_score,
+            )
             
             # Finalize
             await _update_job(db, job, status="completed", step="done", progress=100)

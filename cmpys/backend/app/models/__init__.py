@@ -45,6 +45,8 @@ from app.models.content_resource import (
     UserContentSave,
 )
 from app.models.ingest_job import IngestJob, IngestKind, IngestState
+from app.models.llm_usage_event import LLMUsageEvent
+from app.models.verified_quote import QuoteType, QuoteVerificationState, VerifiedQuote
 
 __all__ = [
     "Base",
@@ -99,4 +101,8 @@ __all__ = [
     "IngestJob",
     "IngestKind",
     "IngestState",
+    "QuoteType",
+    "QuoteVerificationState",
+    "VerifiedQuote",
+    "LLMUsageEvent",
 ]

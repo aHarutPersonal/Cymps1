@@ -108,7 +108,12 @@ Include specific resources that are:
 - Books written BY the idol or considered foundational in their field
 - Biographies or papers about the idol's actual methods
 - Techniques the idol used (name them specifically)
-- The idol's actual habits and routines when relevant
+- The idol's actual habits and routines only when supported by the supplied profile, persona, milestones,
+  comparison, or blueprint. Otherwise recommend a domain-standard method without attributing it to the idol.
+
+Never invent a quotation, chapter number, paper title, routine, date, or anecdote. If you know a real book
+but are not certain about its chapter numbering, name the exact book and the concept/section to study rather
+than guessing a chapter number.
 
 Example for Einstein: reference "The Feynman Lectures on Physics", Einstein's 1905 papers, "Spacetime Physics" by Taylor & Wheeler, thought experiment methodology.
 Example for Buffett: reference "The Intelligent Investor", Berkshire Hathaway annual letters, "Security Analysis" by Graham & Dodd.

@@ -17,6 +17,7 @@ import logging
 from app.models.source_chunk import SourceChunk
 from app.services.llm import BaseLLMClient, get_llm_client
 from app.services.llm.prompt_loader import load_prompt, render_prompt
+from app.services.llm.telemetry import record_llm_response
 from app.services.llm.schemas import (
     AchievementsExtractionResponse,
     MilestoneMode,
@@ -27,6 +28,11 @@ from app.services.llm.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _average_confidence(items: list) -> float:
+    values = [float(item.confidence) for item in items if hasattr(item, "confidence")]
+    return sum(values) / len(values) if values else 0.0
 
 
 def _chunks_to_json(chunks: list[SourceChunk], source_url: str, source_id: str) -> str:
@@ -87,7 +93,7 @@ async def run_profile_extraction(
     Returns:
         ProfileExtractionResponse or None if extraction fails
     """
-    client = client or get_llm_client(max_tokens=2000)
+    client = client or get_llm_client(max_tokens=2000, tier="fast")
     
     # Load prompt templates using prompt_loader
     system_prompt = load_prompt("extractor_system")
@@ -110,6 +116,14 @@ async def run_profile_extraction(
         user_prompt=user_prompt,
         output_model=ProfileExtractionResponse,
         repair_on_failure=True,
+    )
+    await record_llm_response(
+        operation="idol_profile_extraction",
+        response=response,
+        model=getattr(client, "model", None),
+        result_status="schema_valid" if validated else "failed",
+        quality_score=validated.profile.confidence if validated else 0.0,
+        metadata={"source_provider": provider, "source_chunk_count": len(chunks)},
     )
     
     if response.error:
@@ -153,7 +167,7 @@ async def run_achievements_extraction(
     Returns:
         AchievementsExtractionResponse or None if extraction fails
     """
-    client = client or get_llm_client(max_tokens=4000)
+    client = client or get_llm_client(max_tokens=4000, tier="fast")
     
     # Load prompt templates
     system_prompt = load_prompt("extractor_system")
@@ -173,6 +187,17 @@ async def run_achievements_extraction(
         user_prompt=user_prompt,
         output_model=AchievementsExtractionResponse,
         repair_on_failure=True,
+    )
+    await record_llm_response(
+        operation="idol_achievements_extraction",
+        response=response,
+        model=getattr(client, "model", None),
+        result_status="schema_valid" if validated else "failed",
+        quality_score=_average_confidence(validated.candidates) if validated else 0.0,
+        metadata={
+            "source_chunk_count": len(chunks),
+            "candidate_count": len(validated.candidates) if validated else 0,
+        },
     )
     
     if response.error:
@@ -212,7 +237,7 @@ async def run_timeline_normalization(
     Returns:
         TimelineNormalizationResponse or None if normalization fails
     """
-    client = client or get_llm_client(max_tokens=4000)
+    client = client or get_llm_client(max_tokens=4000, tier="fast")
     
     # Load prompt templates
     system_prompt = load_prompt("extractor_system")
@@ -238,6 +263,14 @@ async def run_timeline_normalization(
         user_prompt=user_prompt,
         output_model=TimelineNormalizationResponse,
         repair_on_failure=True,
+    )
+    await record_llm_response(
+        operation="idol_timeline_normalization",
+        response=response,
+        model=getattr(client, "model", None),
+        result_status="schema_valid" if validated else "failed",
+        quality_score=_average_confidence(validated.timeline) if validated else 0.0,
+        metadata={"event_count": len(validated.timeline) if validated else 0},
     )
     
     if response.error:
@@ -280,7 +313,7 @@ async def run_milestones_by_age(
     Returns:
         MilestonesByAgeResponse or None if query fails
     """
-    client = client or get_llm_client(max_tokens=4000)
+    client = client or get_llm_client(max_tokens=4000, tier="fast")
     
     # Load prompt templates
     system_prompt = load_prompt("extractor_system")
@@ -304,6 +337,17 @@ async def run_milestones_by_age(
         user_prompt=user_prompt,
         output_model=MilestonesByAgeResponse,
         repair_on_failure=True,
+    )
+    await record_llm_response(
+        operation="idol_milestones_by_age",
+        response=response,
+        model=getattr(client, "model", None),
+        result_status="schema_valid" if validated else "failed",
+        quality_score=validated.completeness_estimate if validated else 0.0,
+        metadata={
+            "target_age": target_age,
+            "milestone_count": len(validated.milestones) if validated else 0,
+        },
     )
     
     if response.error:
@@ -343,7 +387,7 @@ async def run_persona_pack(
     Returns:
         PersonaPackResponse or None if generation fails
     """
-    client = client or get_llm_client(max_tokens=2000)
+    client = client or get_llm_client(max_tokens=2000, tier="fast")
     
     # Load prompt templates
     system_prompt = load_prompt("extractor_system")
@@ -366,6 +410,20 @@ SOURCES (chunked):
         user_prompt=user_prompt,
         output_model=PersonaPackResponse,
         repair_on_failure=True,
+    )
+    evidence_count = (
+        len(validated.persona.grounding_evidence) if validated else 0
+    )
+    await record_llm_response(
+        operation="idol_persona_generation",
+        response=response,
+        model=getattr(client, "model", None),
+        result_status="schema_valid" if validated else "failed",
+        quality_score=min(1.0, evidence_count / 5),
+        metadata={
+            "source_chunk_count": len(chunks),
+            "grounding_evidence_count": evidence_count,
+        },
     )
     
     if response.error:

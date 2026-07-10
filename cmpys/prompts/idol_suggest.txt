@@ -24,7 +24,8 @@ SELECTION CRITERIA (in priority order):
    if their path is unrelatable to where this user is starting.
 3. INTEREST & GOAL ALIGNMENT: The idol's domain must overlap with the user's stated interests,
    and their trajectory should exemplify the user's stated goal when one is given.
-4. DIVERSITY: Include at least 2 different domains and at least 1 historical figure (pre-1950).
+4. USEFUL DIVERSITY: Use domain, era, and background diversity only as a tie-breaker between equally
+   relevant candidates. Never force a historical figure or unrelated domain at the expense of a better match.
 5. EVIDENCE-RICH: Prefer idols with extensive Wikipedia/biographical documentation.
 
 HARD RULES:

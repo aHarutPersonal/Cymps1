@@ -8,10 +8,14 @@ import asyncio
 import json
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ValidationError
+
+if TYPE_CHECKING:
+    import openai
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +47,7 @@ def _repair_json(raw: str) -> dict | None:
     Handles common Gemini failure modes:
     - Markdown code fences (```json ... ```)
     - Trailing commas before } or ]
-    - Invalid \escape sequences (unescaped backslashes)
+    - Invalid backslash escape sequences
     - Unterminated strings at EOF
     - Missing closing braces/brackets
     """
@@ -140,6 +144,11 @@ class LLMResponse(BaseModel):
     raw_response: str | None = None
     retried: bool = False
     error: str | None = None
+    model: str | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    duration_ms: float | None = None
 
 
 class BaseLLMClient(ABC):
@@ -221,6 +230,19 @@ class BaseLLMClient(ABC):
                 output_model=output_model,
             )
             repair_response.retried = True
+            repair_response.prompt_tokens = int(response.prompt_tokens or 0) + int(
+                repair_response.prompt_tokens or 0
+            )
+            repair_response.completion_tokens = int(
+                response.completion_tokens or 0
+            ) + int(repair_response.completion_tokens or 0)
+            repair_response.total_tokens = int(response.total_tokens or 0) + int(
+                repair_response.total_tokens or 0
+            )
+            repair_response.duration_ms = float(response.duration_ms or 0.0) + float(
+                repair_response.duration_ms or 0.0
+            )
+            repair_response.model = repair_response.model or response.model
             
             if repair_response.error:
                 return None, repair_response
@@ -454,6 +476,11 @@ class OpenAILLMClient(BaseLLMClient):
                 return LLMResponse(
                     data=data,
                     raw_response=raw_content,
+                    model=self.model,
+                    prompt_tokens=usage.prompt_tokens if usage else None,
+                    completion_tokens=usage.completion_tokens if usage else None,
+                    total_tokens=usage.total_tokens if usage else None,
+                    duration_ms=duration_ms,
                 )
             except json.JSONDecodeError as e:
                 logger.warning(f"[LLM] Invalid JSON in response: {e}, attempting repair...")
@@ -466,6 +493,11 @@ class OpenAILLMClient(BaseLLMClient):
                         data=repaired,
                         raw_response=raw_content,
                         retried=True,
+                        model=self.model,
+                        prompt_tokens=usage.prompt_tokens if usage else None,
+                        completion_tokens=usage.completion_tokens if usage else None,
+                        total_tokens=usage.total_tokens if usage else None,
+                        duration_ms=duration_ms,
                     )
                 
                 logger.error("[LLM] JSON repair failed for OpenAI response")
@@ -474,6 +506,11 @@ class OpenAILLMClient(BaseLLMClient):
                     data={},
                     raw_response=raw_content,
                     error=f"Invalid JSON in response: {e}",
+                    model=self.model,
+                    prompt_tokens=usage.prompt_tokens if usage else None,
+                    completion_tokens=usage.completion_tokens if usage else None,
+                    total_tokens=usage.total_tokens if usage else None,
+                    duration_ms=duration_ms,
                 )
                 
         except openai.APITimeoutError:
@@ -640,11 +677,15 @@ class GeminiLLMClient(BaseLLMClient):
         api_key: str | None = None,
         timeout: float = 60.0,
         max_tokens: int | None = None,
+        thinking_budget: int | None = None,
+        temperature: float = 0.1,
     ):
         self.model = model
         self.api_key = api_key
         self.timeout = timeout
         self.max_tokens = max_tokens
+        self.thinking_budget = thinking_budget
+        self.temperature = temperature
     
     async def generate_json(
         self,
@@ -690,12 +731,22 @@ class GeminiLLMClient(BaseLLMClient):
 
             # Build config
             config_kwargs: dict[str, Any] = {
-                "temperature": 0.1,
+                "temperature": self.temperature,
                 "response_mime_type": "application/json",
                 "http_options": types.HttpOptions(timeout=int(self.timeout * 1000)),
             }
             if self.max_tokens:
                 config_kwargs["max_output_tokens"] = self.max_tokens
+            if output_model is not None:
+                # Native schema-constrained decoding prevents most malformed
+                # JSON responses and avoids an otherwise expensive repair call.
+                config_kwargs["response_schema"] = output_model
+            elif json_schema is not None:
+                config_kwargs["response_json_schema"] = json_schema
+            if self.thinking_budget is not None:
+                config_kwargs["thinking_config"] = types.ThinkingConfig(
+                    thinking_budget=self.thinking_budget,
+                )
             
             config = types.GenerateContentConfig(
                 system_instruction=system_prompt,
@@ -734,6 +785,23 @@ class GeminiLLMClient(BaseLLMClient):
                 return LLMResponse(
                     data=data,
                     raw_response=raw_content,
+                    model=self.model,
+                    prompt_tokens=(
+                        response.usage_metadata.prompt_token_count
+                        if response.usage_metadata
+                        else None
+                    ),
+                    completion_tokens=(
+                        response.usage_metadata.candidates_token_count
+                        if response.usage_metadata
+                        else None
+                    ),
+                    total_tokens=(
+                        response.usage_metadata.total_token_count
+                        if response.usage_metadata
+                        else None
+                    ),
+                    duration_ms=duration_ms,
                 )
             except json.JSONDecodeError as e:
                 logger.warning(f"[LLM] Invalid JSON in Gemini response: {e}, attempting repair...")
@@ -746,6 +814,23 @@ class GeminiLLMClient(BaseLLMClient):
                         data=repaired,
                         raw_response=raw_content,
                         retried=True,
+                        model=self.model,
+                        prompt_tokens=(
+                            response.usage_metadata.prompt_token_count
+                            if response.usage_metadata
+                            else None
+                        ),
+                        completion_tokens=(
+                            response.usage_metadata.candidates_token_count
+                            if response.usage_metadata
+                            else None
+                        ),
+                        total_tokens=(
+                            response.usage_metadata.total_token_count
+                            if response.usage_metadata
+                            else None
+                        ),
+                        duration_ms=duration_ms,
                     )
                 
                 logger.error("[LLM] JSON repair failed for Gemini response")
@@ -754,6 +839,23 @@ class GeminiLLMClient(BaseLLMClient):
                     data={},
                     raw_response=raw_content,
                     error=f"Invalid JSON in response: {e}",
+                    model=self.model,
+                    prompt_tokens=(
+                        response.usage_metadata.prompt_token_count
+                        if response.usage_metadata
+                        else None
+                    ),
+                    completion_tokens=(
+                        response.usage_metadata.candidates_token_count
+                        if response.usage_metadata
+                        else None
+                    ),
+                    total_tokens=(
+                        response.usage_metadata.total_token_count
+                        if response.usage_metadata
+                        else None
+                    ),
+                    duration_ms=duration_ms,
                 )
         
         except Exception as e:
@@ -769,6 +871,9 @@ def get_llm_client(
     timeout: float = 60.0,
     max_tokens: int | None = None,
     fast: bool = False,
+    tier: str | None = None,
+    thinking_budget: int | None = None,
+    temperature: float = 0.1,
 ) -> BaseLLMClient:
     """
     Factory function to get the configured LLM client.
@@ -778,11 +883,17 @@ def get_llm_client(
     Args:
         timeout: Request timeout in seconds (default: 60s)
         max_tokens: Optional max tokens to generate (limits response size)
-        fast: If True, use the faster model for quicker responses
+        fast: Backward-compatible alias for ``tier="fast"``
+        tier: ``fast`` (Flash-Lite), ``balanced`` (Flash), or ``quality`` (Pro)
+        thinking_budget: Gemini thinking-token budget. Use 0 for extraction or
+            long-form writing where the prompt already supplies the structure.
     """
     from app.core.config import settings
     
     provider = settings.llm_provider
+    resolved_tier = tier or ("fast" if fast else "balanced")
+    if resolved_tier not in {"fast", "balanced", "quality"}:
+        raise ValueError(f"Unknown LLM tier: {resolved_tier}")
     
     if provider == "gemini":
         if not settings.gemini_api_key:
@@ -792,11 +903,19 @@ def get_llm_client(
             )
             return DummyLLMClient()
         
-        model = settings.gemini_fast_model if fast else settings.gemini_model
+        model = {
+            "fast": settings.gemini_fast_model,
+            "balanced": settings.gemini_model,
+            "quality": settings.gemini_quality_model,
+        }[resolved_tier]
+        if thinking_budget is None and resolved_tier == "fast":
+            thinking_budget = 0
         return GeminiLLMClient(
             model=model,
             timeout=timeout,
             max_tokens=max_tokens,
+            thinking_budget=thinking_budget,
+            temperature=temperature,
         )
     elif provider == "openai":
         if not settings.openai_api_key:
@@ -806,7 +925,11 @@ def get_llm_client(
             )
             return DummyLLMClient()
         
-        model = settings.openai_fast_model if fast else settings.openai_model
+        model = {
+            "fast": settings.openai_fast_model,
+            "balanced": settings.openai_model,
+            "quality": settings.openai_quality_model,
+        }[resolved_tier]
         return OpenAILLMClient(
             model=model,
             timeout=timeout,

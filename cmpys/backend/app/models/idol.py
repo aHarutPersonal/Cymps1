@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from app.models.idol_timeline import IdolTimelineEvent
     from app.models.intake import IntakeSession
     from app.models.idea_card import IdeaCard
+    from app.models.verified_quote import VerifiedQuote
 
 
 class Idol(Base, UUIDMixin, TimestampMixin):
@@ -104,4 +105,7 @@ class Idol(Base, UUIDMixin, TimestampMixin):
     # Idea cards (atomic insights)
     idea_cards: Mapped[list["IdeaCard"]] = relationship(
         "IdeaCard", back_populates="idol", cascade="all, delete-orphan"
+    )
+    verified_quotes: Mapped[list["VerifiedQuote"]] = relationship(
+        "VerifiedQuote", back_populates="idol", cascade="all, delete-orphan"
     )

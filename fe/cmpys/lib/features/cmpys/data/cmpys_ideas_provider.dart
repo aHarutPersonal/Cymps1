@@ -1,8 +1,7 @@
-// AI-generated idea cards.
+// Database-first idea cards.
 //
-// Fetches quote cards from the backend `/feed` endpoint — which uses the LLM
-// (Gemini/OpenAI) to generate quotes tuned to the user's interests, goals, and
-// mentor — and maps them to [CmpysIdea] for the Reels + Today surfaces.
+// Fetches source-backed catalog quotes first; the backend uses an LLM only to
+// fill any remaining capacity. Provenance is mapped through to the UI.
 // There is no static fallback: failures surface as errors with retry.
 
 import 'package:flutter/material.dart';
@@ -49,17 +48,22 @@ CmpysIdea? _ideaFromFeedItem(Map<String, dynamic> m) {
   return CmpysIdea(
     id: id,
     text: text,
-    author: (m['source'] ?? 'Unknown').toString(),
+    author: (m['speaker'] ?? m['source'] ?? 'Unknown').toString(),
     tag: category,
     tone: _toneFor(category),
     likes: (m['like_count'] as num?)?.toInt() ?? 0,
     comments: const [],
+    isSourced: m['is_sourced'] == true,
+    isVerified: m['is_verified'] == true,
+    sourceUrl: m['source_url']?.toString(),
+    sourceTitle: m['source_title']?.toString(),
+    sourceReference: m['source_reference']?.toString(),
   );
 }
 
-/// Loads AI idea cards via [dio]. Throws when the backend is unreachable or
-/// returns nothing — callers show error + retry, never canned quotes.
-/// `refresh` forces the backend to generate brand-new content.
+/// Loads database-first idea cards via [dio]. Throws when the backend is
+/// unreachable or returns nothing — callers show error + retry, never canned
+/// quotes. `refresh` asks the backend for additional content.
 Future<List<CmpysIdea>> fetchCmpysIdeasFromDio(DioClient dio,
     {bool refresh = false}) async {
   final res = await dio.get(

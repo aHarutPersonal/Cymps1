@@ -1,6 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:cmpys/features/cmpys/state/cmpys_store.dart';
-import 'package:cmpys/features/cmpys/data/cmpys_seed.dart';
 
 void main() {
   test('dimsFromScores maps the raw map to CmpysDimension list', () {

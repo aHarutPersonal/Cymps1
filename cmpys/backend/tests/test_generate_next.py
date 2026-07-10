@@ -1,6 +1,5 @@
 """Idempotency helper: an existing job for the parent is reused."""
 from types import SimpleNamespace
-import pytest
 
 from app.api.v1.plans import _next_cycle_fields
 

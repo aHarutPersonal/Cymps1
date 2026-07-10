@@ -159,6 +159,7 @@ PROMPT_PLACEHOLDERS = {
         "learning_preferences",
         "idol_name",
         "idol_domain",
+        "idol_evidence_json",
         "session_context",
     ],
 

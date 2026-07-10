@@ -30,16 +30,18 @@ class Settings(BaseSettings):
     # LLM Configuration
     llm_provider: str = "dummy"  # "dummy", "openai", or "gemini"
     openai_api_key: str | None = None
-    openai_model: str = "gpt-4.1-mini"  # Fast model for structured extraction
+    openai_model: str = "gpt-4.1-mini"  # Balanced model for user-visible generation
     openai_fast_model: str = "gpt-4o-mini"  # Lightweight model for thinking/discovery
+    openai_quality_model: str = "gpt-4.1"  # Selective fallback for failed quality gates
     
     # Tavily (real-time web search for material URL resolution)
     tavily_api_key: str | None = None
     
     # Google Gemini (search grounding + LearnLM tutoring + structured extraction)
     gemini_api_key: str | None = None
-    gemini_model: str = "gemini-2.5-flash"  # Main model for structured extraction
-    gemini_fast_model: str = "gemini-2.5-flash"  # Lightweight model for thinking/discovery
+    gemini_model: str = "gemini-2.5-flash"  # User-visible plans and long-form content
+    gemini_fast_model: str = "gemini-3.1-flash-lite"  # Extraction, tagging, and cheap checks
+    gemini_quality_model: str = "gemini-3.1-pro-preview"  # Selective quality fallback, never the default
     
     # Plan generation
     plan_generator_mode: str = "deterministic"  # "deterministic" or "llm"
@@ -48,6 +50,47 @@ class Settings(BaseSettings):
     local_llm_base_url: str | None = None   # e.g. http://gpu-box:8000/v1 (Spec 2)
     local_llm_model: str | None = None       # e.g. qwen2.5-32b-instruct (Spec 2)
     embedding_model: str = "bge-m3"           # used by Spec 2 ingestion
+
+    # 24/7 catalog scheduler. Conservative defaults keep a small deployment
+    # within a predictable LLM budget while still draining demand continuously.
+    catalog_scheduler_enabled: bool = True
+    catalog_tick_seconds: int = 60
+    catalog_dispatch_per_tick: int = 2
+    catalog_daily_job_limit: int = 50
+    catalog_seed_per_tick: int = 25
+    catalog_max_attempts: int = 3
+    catalog_stale_job_minutes: int = 20
+    catalog_quotes_per_idol_limit: int = 30
+    catalog_quote_min_confidence: float = 0.84
+    catalog_quote_verification_enabled: bool = True
+    catalog_quote_verification_batch_size: int = 4
+    catalog_quote_verification_daily_limit: int = 2
+
+    # Persist model usage and downstream quality outcomes. Recording failures
+    # never fail the user-facing operation.
+    llm_usage_telemetry_enabled: bool = True
+
+    # Autonomous catalog spend guard. The default caps background generation
+    # at roughly $15/month while leaving user-triggered requests untouched.
+    # At the soft threshold only zero-LLM-cost source imports continue; the
+    # remaining headroom protects against in-flight calls and retries.
+    llm_background_daily_budget_usd: float = 0.50
+    llm_background_budget_soft_ratio: float = 0.85
+    llm_budget_include_search_overage: bool = False
+    llm_unknown_input_price_usd_per_million: float = 1.25
+    llm_unknown_output_price_usd_per_million: float = 10.00
+    catalog_book_budget_reserve_usd: float = 0.06
+    catalog_idol_budget_reserve_usd: float = 0.12
+    catalog_quote_verification_budget_reserve_usd: float = 0.04
+
+    # Conservative adaptive routing: production may enable a small Fast-Lite
+    # canary; quality-gated operations fall back to the balanced tier.
+    adaptive_routing_enabled: bool = False
+    adaptive_routing_lookback_days: int = 30
+    adaptive_routing_min_samples: int = 20
+    adaptive_routing_canary_percent: int = 10
+    adaptive_routing_min_success_rate: float = 0.90
+    adaptive_routing_min_quality_score: float = 0.90
     
     @property
     def llm_configured(self) -> bool:

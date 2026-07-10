@@ -732,10 +732,33 @@ class CmpysTodayScreen extends ConsumerWidget {
                         height: 1.35,
                         letterSpacing: -0.2)),
                 const SizedBox(height: 12),
-                Text('— ${idea.author}',
-                    style: AppTypography.caption.copyWith(
-                        color: Colors.white.withValues(alpha: 0.8),
-                        fontSize: 13)),
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text('— ${idea.author}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppTypography.caption.copyWith(
+                              color: Colors.white.withValues(alpha: 0.8),
+                              fontSize: 13)),
+                    ),
+                    if (idea.isSourced) ...[
+                      const SizedBox(width: 5),
+                      Tooltip(
+                        message: idea.isVerified
+                            ? 'Independently cross-checked'
+                            : 'Source-backed quote',
+                        child: Icon(
+                          idea.isVerified
+                              ? Icons.verified
+                              : Icons.verified_outlined,
+                          size: 15,
+                          color: Colors.white.withValues(alpha: 0.78),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
               ],
             ),
           ),

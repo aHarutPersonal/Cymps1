@@ -1,10 +1,15 @@
 """Feed post — persisted feed content (quotes, videos)."""
 import hashlib
+from typing import TYPE_CHECKING
 
-from sqlalchemy import Index, Integer, String, Text
+from sqlalchemy import ForeignKey, Index, Integer, String, Text
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDMixin
+
+if TYPE_CHECKING:
+    from app.models.verified_quote import VerifiedQuote
 
 
 class FeedPost(Base, UUIDMixin, TimestampMixin):
@@ -28,12 +33,21 @@ class FeedPost(Base, UUIDMixin, TimestampMixin):
     )
     # Optional: track which user triggered generation (for personalization)
     generated_by_user_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    quote_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("verified_quotes.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
+    )
 
     like_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     comment_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
     likes = relationship("FeedLike", back_populates="post", cascade="all, delete-orphan")
     comments = relationship("FeedComment", back_populates="post", cascade="all, delete-orphan")
+    quote: Mapped["VerifiedQuote | None"] = relationship(
+        "VerifiedQuote", back_populates="feed_post"
+    )
 
     @staticmethod
     def compute_hash(title: str, content: str | None) -> str:

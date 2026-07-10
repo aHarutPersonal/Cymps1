@@ -1,7 +1,9 @@
 """IngestJob model — catalog work-queue for background ingestion tasks."""
+from datetime import datetime
 from enum import Enum
 
-from sqlalchemy import Enum as SQLEnum, Integer, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, Enum as SQLEnum, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, UUIDMixin, TimestampUpdateMixin
@@ -10,6 +12,8 @@ from app.models.base import Base, UUIDMixin, TimestampUpdateMixin
 class IngestKind(str, Enum):
     IDOL = "idol"
     BOOK = "book"
+    QUOTE = "quote"
+    QUOTE_VERIFICATION = "quote_verification"
 
 
 class IngestState(str, Enum):
@@ -26,22 +30,38 @@ class IngestJob(Base, UUIDMixin, TimestampUpdateMixin):
     __tablename__ = "ingest_jobs"
     __table_args__ = (
         UniqueConstraint("kind", "source", "external_id", name="uq_ingest_identity"),
+        Index("ix_ingest_jobs_state_due_priority", "state", "next_attempt_at", "priority"),
     )
 
     kind: Mapped[IngestKind] = mapped_column(
-        SQLEnum(IngestKind, name="ingestkind", values_callable=lambda x: [e.value for e in x]),
+        SQLEnum(
+            IngestKind,
+            name="ingest_kind",
+            create_type=False,
+            values_callable=lambda x: [e.value for e in x],
+        ),
         nullable=False,
     )
     source: Mapped[str] = mapped_column(String(50), nullable=False)
     external_id: Mapped[str] = mapped_column(String(255), nullable=False)
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     state: Mapped[IngestState] = mapped_column(
-        SQLEnum(IngestState, name="ingeststate", values_callable=lambda x: [e.value for e in x]),
+        SQLEnum(
+            IngestState,
+            name="ingest_state",
+            create_type=False,
+            values_callable=lambda x: [e.value for e in x],
+        ),
         nullable=False,
         default=IngestState.QUEUED,
     )
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    payload_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     def __init__(
         self,
@@ -52,6 +72,8 @@ class IngestJob(Base, UUIDMixin, TimestampUpdateMixin):
         state: IngestState = IngestState.QUEUED,
         attempts: int = 0,
         last_error: str | None = None,
+        payload_json: dict | None = None,
+        next_attempt_at: datetime | None = None,
         **kwargs,
     ) -> None:
         super().__init__(
@@ -62,5 +84,7 @@ class IngestJob(Base, UUIDMixin, TimestampUpdateMixin):
             state=state,
             attempts=attempts,
             last_error=last_error,
+            payload_json=payload_json,
+            next_attempt_at=next_attempt_at,
             **kwargs,
         )

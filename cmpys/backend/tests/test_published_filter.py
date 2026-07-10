@@ -1,5 +1,5 @@
 from sqlalchemy import select
-from app.models.idol import Idol, CatalogStatus
+from app.models.idol import Idol
 from app.api.v1.idols import _published_only
 
 

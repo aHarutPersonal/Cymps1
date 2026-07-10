@@ -1,4 +1,5 @@
 """Comparison endpoint for user vs idol achievements."""
+import json
 import logging
 from typing import Annotated
 
@@ -7,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_user
+from app.core.config import settings
 from app.core.db import get_db
 from app.models.idol import Idol
 from app.models.idol_timeline import IdolTimelineEvent
@@ -16,9 +18,14 @@ from app.schemas.comparison import (
     CategoryBreakdown,
     ComparisonMode,
     ComparisonResponse,
+    ComparisonGap,
+    ComparisonStrength,
     MilestoneItem,
+    NextMilestone,
     UserAchievementItem,
 )
+from app.services.llm import get_llm_client
+from app.services.llm.prompt_loader import load_prompt, render_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -339,12 +346,6 @@ async def compare_to_idol(
 # ============================================================================
 # AI-ENHANCED COMPARISON
 # ============================================================================
-
-from app.core.config import settings
-from app.schemas.comparison import ComparisonStrength, ComparisonGap, NextMilestone
-from app.services.llm import get_llm_client
-from app.services.llm.prompt_loader import load_prompt, render_prompt
-
 
 async def _run_ai_comparison(
     idol_name: str,

@@ -6,6 +6,9 @@ Their preferred learning style: {learning_preferences}
 Mentor/idol context: {idol_name}
 Mentor/idol domain: {idol_domain}
 
+DOCUMENTED MENTOR EVIDENCE (profile, principles, and timeline; may be empty):
+{idol_evidence_json}
+
 SESSION CONTEXT (from the user's diagnostic interview and strategic blueprint — may be empty):
 {session_context}
 
@@ -32,7 +35,7 @@ CRITICAL RULES:
 2. **EACH STEP HAS A FOCUSED LESSON (250-550 WORDS, ceiling not target).** Every step MUST include a `lesson_content` field — a markdown lesson that teaches the user exactly how to execute that step. This is the CORE VALUE of the app — aim for a tight 2-3 minute read. Structure it as:
    - **Opening context** (1-2 sentences): Why this skill matters for the mission
    - **Core concept explanation** (2-3 paragraphs): The key framework, model, or technique with concrete details
-   - **Real-world example** (1 paragraph): A specific, named case study from {idol_name}'s career or the book's content that demonstrates this concept. NO generic examples.
+   - **Real-world example** (1 paragraph): Use a specific event from DOCUMENTED MENTOR EVIDENCE when available. Otherwise use a clearly labeled domain scenario. Never invent an anecdote, quotation, date, or result and attribute it to {idol_name}.
    - **Practice guide** (3 numbered steps): Exactly what to do, with specific tools, time estimates, and success criteria
    - **Reflection prompt** (1 sentence): A question that forces the user to apply this to their own situation
 
@@ -49,9 +52,9 @@ CRITICAL RULES:
 
 7. **NO HALLUCINATIONS.** Only recommend REAL, existing books, courses, and tools.
 
-8. **IN-APP BOOK MODULES.** For any book material, set `type` to `"book"` and provide an `ideas` array (4-6 cards) plus `content_markdown` for a reusable book summary module (400-600 words). Each idea: `title` (max 50 chars), `content` (40-80 words with specific example and actionable takeaway), `category` (Mindset|Strategy|Productivity|Leadership|Creativity|Finance|Communication|Habits).
+8. **BOOKS ARE REFERENCES, NOT MINI-SUMMARIES.** For a book material, output only exact discovery metadata. Set `type` to `"book"`, `content_markdown` to null, and `ideas` to an empty array. The backend creates or reuses one canonical 2,500+ word book module separately. Writing a short book summary here is a hard failure because it bypasses that quality-controlled pipeline.
 
-9. **LESSON CONTENT FOR MATERIALS (400-600 WORDS, ceiling not target).** For `book` and `in_app_lesson` materials, provide a `content_markdown` field — a focused 400-600 word markdown lesson that teaches the key concept from the resource. This is NOT a summary — it must include:
+9. **LESSON CONTENT FOR IN-APP LESSONS ONLY (400-600 WORDS, ceiling not target).** For `in_app_lesson` materials, provide a focused 400-600 word `content_markdown` lesson. For every other material type, set `content_markdown` to null. An in-app lesson must include:
    - An opening hook connecting the resource to the user's mission
    - The core framework or concept with detailed explanation
    - A specific example or case study
@@ -92,7 +95,7 @@ OUTPUT FORMAT (strict JSON, no extra keys, no markdown):
       "canonical_hint": "book:author_slug:title_slug or youtube search phrase if URL is unresolved",
       "source_strategy": "public_domain_or_licensed_lookup|youtube_lookup|external_link_lookup|llm_summary_fallback",
       "reason": "One sentence on how this resource helps with this specific mission.",
-      "content_markdown": "600-1,000 word reusable lesson/module (REQUIRED for book and in_app_lesson). Must include opening hook, core concept explanation, real example, 2-3 practice exercises, and key takeaways.",
+      "content_markdown": null,
       "ideas": [
         {
           "title": "Punchy headline (max 50 chars)",
@@ -106,4 +109,4 @@ OUTPUT FORMAT (strict JSON, no extra keys, no markdown):
   "mental_model": "Name of 1 specific mental model that unlocks efficiency for this task."
 }
 
-Provide exactly 3 focused steps (30-60 minutes each). Each step MUST be a skill-building lesson with focused lesson_content (250-550 words) and 2-3 practice substeps. Steps must TEACH, not advise. Provide 3 elite materials. Prefer at least 1 material type "book" with exact author, 4-6 ideas, and content_markdown (400-600 words). At least 1 MUST be type "video". Word ranges are ceilings — never pad to fill them.
+Provide exactly 3 focused steps (30-60 minutes each). Each step MUST be a skill-building lesson with focused lesson_content (250-550 words) and 2-3 practice substeps. Steps must TEACH, not advise. Provide exactly 3 elite materials: exactly 1 book with exact title/author and no generated content, exactly 1 video, and 1 article/course/tool/in_app_lesson. Word ranges are ceilings — never pad to fill them.

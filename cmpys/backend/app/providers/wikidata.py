@@ -4,6 +4,7 @@ Wikidata provider for idol discovery.
 Uses the Wikidata API to search for entities and fetch their details.
 """
 from datetime import date
+import time
 from urllib.parse import quote
 
 import httpx
@@ -141,8 +142,6 @@ async def fetch_entity_by_id(qid: str) -> dict | None:
             "wikipedia_url": wikipedia_url,
             "image_url": image_url,
         }
-
-import time
 
 _SEARCH_CACHE = {}
 _SEARCH_CACHE_TTL = 3600  # 1 hour

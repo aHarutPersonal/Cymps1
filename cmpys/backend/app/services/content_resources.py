@@ -2,26 +2,94 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import re
 import unicodedata
 from collections.abc import Awaitable, Callable
+from difflib import SequenceMatcher
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.content_resource import ContentResource, ContentResourceKind, LicenseStatus
+from app.models.idol import CatalogStatus
 from app.models.plan import PlanItemContentResource
+from app.services.content_quality import (
+    MAX_BOOK_MODULE_WORDS,
+    MIN_BOOK_MODULE_WORDS,
+    build_book_retry_instruction,
+    evaluate_book_module,
+)
 
 BookModuleFactory = Callable[..., Awaitable[dict[str, Any]]]
 BookSourceLookup = Callable[..., Awaitable[dict[str, Any] | None]]
 VideoResolver = Callable[[str], Awaitable[str | None]]
 
 
-MIN_BOOK_MODULE_WORDS = 2500
+logger = logging.getLogger(__name__)
+
+SHARED_BOOK_GOAL = (
+    "Build an accurate, practical understanding of the book's central frameworks "
+    "for a general adult reader. Keep the module reusable across users."
+)
+MAX_BOOK_SOURCE_CONTEXT_CHARS = 60_000
 
 _YOUTUBE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
+
+
+class BookModuleSectionOutput(BaseModel):
+    title: str
+    summary: str
+    exercise: str
+
+
+class BookModuleIdeaOutput(BaseModel):
+    title: str
+    content: str
+    category: str
+
+
+class BookModuleOutput(BaseModel):
+    """Native response schema for long Markdown embedded inside JSON."""
+
+    title: str
+    author_or_creator: str
+    kind: str = "llm_book_summary"
+    license_status: str = "llm_summary"
+    duration_minutes: int = 15
+    promise: str
+    sections: list[BookModuleSectionOutput] = Field(min_length=6, max_length=6)
+    ideas: list[BookModuleIdeaOutput] = Field(min_length=7, max_length=9)
+    grounding_notes: list[str] = Field(default_factory=list)
+    content_markdown: str
+
+
+class BookModuleMetadataOutput(BaseModel):
+    """Small repair schema that avoids regenerating a good 3,000-word lesson."""
+
+    sections: list[BookModuleSectionOutput] = Field(min_length=6, max_length=6)
+    ideas: list[BookModuleIdeaOutput] = Field(min_length=7, max_length=9)
+
+
+def _book_core_is_sound(report: Any) -> bool:
+    metrics = report.metrics
+    section_count = int(metrics.get("section_count", 0))
+    required_practices = min(max(section_count, 5), 7)
+    return (
+        MIN_BOOK_MODULE_WORDS
+        <= int(metrics.get("word_count", 0))
+        <= MAX_BOOK_MODULE_WORDS
+        and 5 <= section_count <= 7
+        and 6 <= int(metrics.get("idea_count", 0)) <= 10
+        and int(metrics.get("heading_count", 0)) >= 6
+        and int(metrics.get("practice_block_count", 0)) >= required_practices
+        and int(metrics.get("filler_phrase_count", 0)) == 0
+        and float(metrics.get("duplicate_paragraph_ratio", 0)) <= 0.12
+    )
 
 
 def _slug(value: str | None, fallback: str = "unknown") -> str:
@@ -33,6 +101,34 @@ def _slug(value: str | None, fallback: str = "unknown") -> str:
 def canonical_book_key(title: str, author: str | None = None) -> str:
     """Return a stable shared-resource key for a book title and author."""
     return f"book:{_slug(author)}:{_slug(title)}"
+
+
+def _book_identity_score(
+    requested_title: str,
+    requested_author: str | None,
+    candidate_title: str,
+    candidate_authors: list[str],
+) -> float:
+    """Score catalog metadata so a fuzzy provider result cannot poison the cache."""
+    title_score = SequenceMatcher(
+        None,
+        _slug(requested_title),
+        _slug(candidate_title),
+    ).ratio()
+    if not requested_author:
+        return title_score
+    requested_tokens = set(_slug(requested_author).split("_"))
+    candidate_tokens = set(
+        token
+        for author in candidate_authors
+        for token in _slug(author).split("_")
+    )
+    author_score = (
+        len(requested_tokens & candidate_tokens) / len(requested_tokens | candidate_tokens)
+        if requested_tokens and candidate_tokens
+        else 0.0
+    )
+    return title_score * 0.75 + author_score * 0.25
 
 
 def _youtube_video_id(url: str | None) -> str | None:
@@ -105,12 +201,15 @@ def material_to_resource_payload(material: dict[str, Any]) -> dict[str, Any] | N
             "metadata_json": metadata,
         }
 
-    if raw_type in {"book", "in_app_lesson"} and (
+    if raw_type == "book" and (
         material.get("ideas") or material.get("content_markdown")
     ):
-        # Calculate duration from actual word count (200 wpm reading speed)
+        # A short plan-detail snippet is not a canonical book module. Returning
+        # None sends it through the dedicated 2,500+ word generation/cache path.
         content_md = material.get("content_markdown", "") or ""
         word_count = len(content_md.split()) if content_md else 0
+        if word_count < MIN_BOOK_MODULE_WORDS:
+            return None
         calculated_duration = max(5, round(word_count / 200)) if word_count > 0 else (material.get("duration_minutes") or 15)
 
         return {
@@ -204,6 +303,7 @@ async def generate_book_module(
     """Generate a reusable 15-minute book module via the configured LLM."""
     from app.services.llm.client import get_llm_client
     from app.services.llm.prompt_loader import load_and_render
+    from app.services.llm.routing import choose_llm_tier
 
     # planner_system.txt, not extractor_system.txt: writing a book module needs
     # world knowledge of the book, which the extraction prompt forbids.
@@ -218,48 +318,346 @@ async def generate_book_module(
         },
         strict=True,
     )
-    client = get_llm_client(max_tokens=16000)
+    # This is long-form writing, not a reasoning task. A zero thinking budget
+    # keeps latency and billed output tokens down without weakening the source
+    # context or the explicit structure in the prompt.
+    routing_decision = await choose_llm_tier(
+        operation="book_module_generation",
+        routing_key=canonical_book_key(title, author),
+        default_tier="balanced",
+    )
+    active_tier = routing_decision.tier
+    client = get_llm_client(
+        timeout=180.0,
+        max_tokens=16000,
+        tier=active_tier,
+        thinking_budget=0,
+        temperature=0.2,
+    )
+    generation_calls: list[dict[str, Any]] = []
+
+    def _record_call(
+        stage: str,
+        call_client: Any,
+        call_response: Any,
+        *,
+        selected_tier: str,
+        routing_reason: str,
+    ) -> None:
+        generation_calls.append(
+            {
+                "stage": stage,
+                "selected_tier": selected_tier,
+                "routing_reason": routing_reason,
+                "model": getattr(call_response, "model", None)
+                or getattr(call_client, "model", None),
+                "prompt_tokens": getattr(call_response, "prompt_tokens", None),
+                "completion_tokens": getattr(call_response, "completion_tokens", None),
+                "total_tokens": getattr(call_response, "total_tokens", None),
+                "duration_ms": getattr(call_response, "duration_ms", None),
+                "succeeded": not bool(getattr(call_response, "error", None)),
+                "error": getattr(call_response, "error", None),
+            }
+        )
+
+    async def _persist_usage(result_status: str, quality_score: float | None) -> None:
+        from app.services.llm.telemetry import (
+            UsageRecord,
+            infer_provider,
+            record_usage_records,
+        )
+
+        records = [
+            UsageRecord(
+                operation="book_module_generation",
+                model=str(call.get("model") or "unknown"),
+                provider=infer_provider(call.get("model")),
+                prompt_tokens=call.get("prompt_tokens"),
+                completion_tokens=call.get("completion_tokens"),
+                total_tokens=call.get("total_tokens"),
+                duration_ms=call.get("duration_ms"),
+                success=bool(call.get("succeeded")),
+                error_code="llm_error" if call.get("error") else None,
+                result_status=call.get("result_status") or result_status,
+                quality_score=(
+                    call.get("quality_score")
+                    if call.get("quality_score") is not None
+                    else quality_score
+                ),
+                metadata={
+                    "stage": call.get("stage"),
+                    "selected_tier": call.get("selected_tier"),
+                    "routing_reason": call.get("routing_reason"),
+                    "book_title": title,
+                    "author": author,
+                },
+            )
+            for call in generation_calls
+        ]
+        await record_usage_records(records)
+
     response = await client.generate_json(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
+        output_model=BookModuleOutput,
+    )
+    _record_call(
+        "draft",
+        client,
+        response,
+        selected_tier=active_tier,
+        routing_reason=routing_decision.reason,
     )
     if response.error:
-        raise RuntimeError(response.error)
+        logger.warning(
+            "[BOOK_MODULE] Structured response failed for '%s': %s. Retrying once.",
+            title,
+            response.error,
+        )
+        if active_tier == "fast":
+            active_tier = "balanced"
+            client = get_llm_client(
+                timeout=180.0,
+                max_tokens=16000,
+                tier="balanced",
+                thinking_budget=0,
+                temperature=0.2,
+            )
+            recovery_reason = "fast_schema_fallback"
+        else:
+            recovery_reason = "balanced_schema_retry"
+        response = await client.generate_json(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt
+            + "\n\nJSON RECOVERY: Return one complete response matching the required schema. "
+            "Do not truncate content_markdown and do not emit literal control characters.",
+            output_model=BookModuleOutput,
+        )
+        _record_call(
+            "json_recovery",
+            client,
+            response,
+            selected_tier=active_tier,
+            routing_reason=recovery_reason,
+        )
+        if response.error:
+            await _persist_usage("generation_failed", None)
+            raise RuntimeError(response.error)
 
     data = response.data
+    report = evaluate_book_module(data, source_context=source_context)
+    generation_calls[-1]["quality_score"] = report.score
+    generation_calls[-1]["result_status"] = (
+        "quality_passed" if report.passed else "quality_failed"
+    )
 
-    # Validate content depth — retry once if content_markdown is too thin
-    md = data.get("content_markdown", "")
-    word_count = len(md.split()) if md else 0
-    if word_count < MIN_BOOK_MODULE_WORDS:
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.warning(
-            f"[BOOK_MODULE] Generated module for '{title}' has only {word_count} words "
-            f"in content_markdown (minimum {MIN_BOOK_MODULE_WORDS}). Retrying with stronger prompt."
+    async def _repair_metadata_if_possible(
+        current_data: dict[str, Any], current_report: Any
+    ) -> tuple[dict[str, Any], Any]:
+        factual_issue = (
+            int(current_report.metrics.get("unmatched_attributed_quote_count", 0)) > 0
+            or int(current_report.metrics.get("unmatched_year_count", 0)) >= 2
         )
-        retry_prompt = user_prompt + (
-            "\n\nIMPORTANT: Your previous attempt produced only {wc} words for content_markdown. "
-            "A proper 15-minute module requires 2,500-4,000 words. You MUST expand each section "
-            "with real examples from {author}'s life, detailed practice exercises, and concrete "
-            "case studies. Every section MUST have a 'Practice This' exercise block."
-        ).format(wc=word_count, author=author or "the author")
+        if (
+            current_report.passed
+            or factual_issue
+            or not _book_core_is_sound(current_report)
+        ):
+            return current_data, current_report
+        metadata_client = get_llm_client(
+            timeout=60.0,
+            max_tokens=5000,
+            tier="fast",
+            thinking_budget=0,
+            temperature=0.1,
+        )
+        metadata_prompt = (
+            "Repair the following book-module metadata so every section summary is 80-150 "
+            "words, every section exercise is 40-80 words, and every idea content is 40-80 "
+            "words. Preserve existing claims; add practical explanation and application, "
+            "not new quotations, dates, anecdotes, or factual claims. Return JSON only.\n\n"
+            "SECTIONS AND IDEAS:\n"
+            + json.dumps(
+                {
+                    "sections": current_data.get("sections", []),
+                    "ideas": current_data.get("ideas", []),
+                },
+                ensure_ascii=False,
+            )
+        )
+        metadata_response = await metadata_client.generate_json(
+            system_prompt="You edit learning metadata without changing its factual claims.",
+            user_prompt=metadata_prompt,
+            output_model=BookModuleMetadataOutput,
+        )
+        _record_call(
+            "metadata_repair",
+            metadata_client,
+            metadata_response,
+            selected_tier="fast",
+            routing_reason="fixed_metadata_tier",
+        )
+        if metadata_response.error:
+            return current_data, current_report
+        candidate = dict(current_data)
+        candidate["sections"] = metadata_response.data.get(
+            "sections", current_data.get("sections", [])
+        )
+        candidate["ideas"] = metadata_response.data.get(
+            "ideas", current_data.get("ideas", [])
+        )
+        candidate_report = evaluate_book_module(candidate, source_context=source_context)
+        generation_calls[-1]["quality_score"] = candidate_report.score
+        generation_calls[-1]["result_status"] = (
+            "quality_passed" if candidate_report.passed else "quality_failed"
+        )
+        if candidate_report.score >= current_report.score:
+            return candidate, candidate_report
+        return current_data, current_report
+
+    # A structurally sound long lesson should never be regenerated merely to
+    # lengthen compact cards or summaries.
+    data, report = await _repair_metadata_if_possible(data, report)
+
+    # Retry once only when a deterministic, user-visible requirement failed.
+    # The retry receives the exact failures, which is both cheaper and more
+    # reliable than a generic "make it longer" instruction.
+    if not report.passed:
+        logger.warning(
+            "[BOOK_MODULE] Quality gate failed for '%s' (score=%.3f): %s",
+            title,
+            report.score,
+            "; ".join(report.issues),
+        )
+        retry_prompt = user_prompt + build_book_retry_instruction(report)
+        if active_tier == "fast":
+            active_tier = "balanced"
+            client = get_llm_client(
+                timeout=180.0,
+                max_tokens=16000,
+                tier="balanced",
+                thinking_budget=0,
+                temperature=0.2,
+            )
+            retry_reason = "fast_quality_fallback"
+        else:
+            retry_reason = "balanced_quality_retry"
         retry_response = await client.generate_json(
             system_prompt=system_prompt,
             user_prompt=retry_prompt,
+            output_model=BookModuleOutput,
+        )
+        _record_call(
+            "quality_retry",
+            client,
+            retry_response,
+            selected_tier=active_tier,
+            routing_reason=retry_reason,
         )
         if not retry_response.error:
-            retry_md = retry_response.data.get("content_markdown", "")
-            if len(retry_md.split()) > word_count:
+            retry_report = evaluate_book_module(
+                retry_response.data, source_context=source_context
+            )
+            generation_calls[-1]["quality_score"] = retry_report.score
+            generation_calls[-1]["result_status"] = (
+                "quality_passed" if retry_report.passed else "quality_failed"
+            )
+            if retry_report.score > report.score:
                 data = retry_response.data
+                report = retry_report
+
+    data, report = await _repair_metadata_if_possible(data, report)
+
+    # Escalate only drafts that still fail after the economical Flash retry.
+    # In a healthy pipeline this is a small minority, so Pro improves the tail
+    # without becoming the default cost for every catalog item.
+    if not report.passed:
+        quality_client = get_llm_client(
+            timeout=180.0,
+            max_tokens=16000,
+            tier="quality",
+            temperature=0.15,
+        )
+        quality_response = await quality_client.generate_json(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt + build_book_retry_instruction(report),
+            output_model=BookModuleOutput,
+        )
+        _record_call(
+            "quality_fallback",
+            quality_client,
+            quality_response,
+            selected_tier="quality",
+            routing_reason="balanced_quality_fallback",
+        )
+        if not quality_response.error:
+            quality_report = evaluate_book_module(
+                quality_response.data, source_context=source_context
+            )
+            generation_calls[-1]["quality_score"] = quality_report.score
+            generation_calls[-1]["result_status"] = (
+                "quality_passed" if quality_report.passed else "quality_failed"
+            )
+            if quality_report.score > report.score:
+                data = quality_response.data
+                report = quality_report
 
     # Recalculate duration from actual word count (200 wpm reading speed)
     md = data.get("content_markdown", "")
     word_count = len(md.split()) if md else 0
     if word_count > 0:
         data["duration_minutes"] = max(5, round(word_count / 200))
+    report_data = report.to_dict()
+    report_data["generation"] = {
+        "call_count": len(generation_calls),
+        "prompt_tokens": sum(int(call.get("prompt_tokens") or 0) for call in generation_calls),
+        "completion_tokens": sum(
+            int(call.get("completion_tokens") or 0) for call in generation_calls
+        ),
+        "total_tokens": sum(int(call.get("total_tokens") or 0) for call in generation_calls),
+        "duration_ms": round(
+            sum(float(call.get("duration_ms") or 0) for call in generation_calls),
+            1,
+        ),
+        "calls": generation_calls,
+    }
+    data["quality_report"] = report_data
+    await _persist_usage(
+        "quality_passed" if report.passed else "quality_failed",
+        report.score,
+    )
 
     return data
+
+
+def _strip_gutenberg_boilerplate(text: str) -> str:
+    """Remove the common Project Gutenberg header/footer when markers exist."""
+    upper = text.upper()
+    start_marker = "*** START OF THE PROJECT GUTENBERG EBOOK"
+    end_marker = "*** END OF THE PROJECT GUTENBERG EBOOK"
+    start = upper.find(start_marker)
+    if start >= 0:
+        line_end = text.find("\n", start)
+        text = text[line_end + 1 :] if line_end >= 0 else text[start:]
+        upper = text.upper()
+    end = upper.find(end_marker)
+    if end >= 0:
+        text = text[:end]
+    return text.strip()
+
+
+def _sample_book_text(text: str, max_chars: int = MAX_BOOK_SOURCE_CONTEXT_CHARS) -> str:
+    """Sample the whole book evenly so one prompt does not contain only chapter one."""
+    cleaned = _strip_gutenberg_boilerplate(text)
+    if len(cleaned) <= max_chars:
+        return cleaned
+
+    sample_count = 6
+    chunk_size = max_chars // sample_count
+    max_start = max(len(cleaned) - chunk_size, 0)
+    starts = [round(i * max_start / (sample_count - 1)) for i in range(sample_count)]
+    chunks = [cleaned[start : start + chunk_size] for start in starts]
+    return "\n\n[... SOURCE SAMPLE ...]\n\n".join(chunks)
 
 
 async def lookup_public_domain_book(
@@ -282,10 +680,14 @@ async def lookup_public_domain_book(
     except Exception:
         return None
 
-    for item in data.get("results", [])[:5]:
+    candidates = []
+    for item in data.get("results", [])[:8]:
         item_title = str(item.get("title") or "")
         authors = item.get("authors") or []
         author_names = [str(a.get("name")) for a in authors if a.get("name")]
+        identity_score = _book_identity_score(title, author, item_title, author_names)
+        if identity_score < 0.72:
+            continue
         formats = item.get("formats") or {}
         text_url = next(
             (
@@ -297,27 +699,33 @@ async def lookup_public_domain_book(
         )
         if not text_url:
             continue
+        candidates.append((identity_score, item, item_title, author_names, text_url))
+
+    for _, item, item_title, author_names, text_url in sorted(
+        candidates, key=lambda candidate: candidate[0], reverse=True
+    ):
         source_url = f"https://www.gutenberg.org/ebooks/{item.get('id')}"
-        content_md = (
-            f"# {item_title or title}\n\n"
-            f"This public-domain book is available for in-app reading via Project Gutenberg.\n\n"
-            f"Source text: {text_url}"
-        )
-        # Calculate duration from content length (200 wpm reading speed)
-        word_count = len(content_md.split())
-        duration = max(5, round(word_count / 200))
+        try:
+            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+                text_response = await client.get(text_url)
+                text_response.raise_for_status()
+                source_context = _sample_book_text(text_response.text)
+        except Exception:
+            # Metadata is still useful, but an ungrounded public-domain stub is
+            # not a finished learning module and must never be published as one.
+            source_context = ""
         return {
             "title": item_title or title,
             "author_or_creator": ", ".join(author_names) or author,
             "source_url": source_url,
             "license_status": "public_domain",
-            "content_markdown": content_md,
+            "content_markdown": None,
+            "source_context": source_context,
             "summary_json": {
                 "source": "project_gutenberg",
                 "text_url": text_url,
                 "subjects": item.get("subjects", []),
             },
-            "duration_minutes": duration,
             "metadata_json": {
                 "provider": "gutendex",
                 "gutenberg_id": item.get("id"),
@@ -326,6 +734,96 @@ async def lookup_public_domain_book(
         }
 
     return None
+
+
+async def lookup_book_reference_context(
+    *,
+    title: str,
+    author: str | None,
+) -> dict[str, Any] | None:
+    """Fetch free canonical metadata for a modern book from Google Books.
+
+    The description verifies identity and themes; it is not treated as the full
+    book. This small lookup improves title/author accuracy before the LLM call
+    without paying for search grounding.
+    """
+    import httpx
+
+    query = f'intitle:"{title}"' + (f' inauthor:"{author}"' if author else "")
+    try:
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+            response = await client.get(
+                "https://www.googleapis.com/books/v1/volumes",
+                params={"q": query, "maxResults": 8, "printType": "books"},
+            )
+            response.raise_for_status()
+            items = response.json().get("items", [])
+    except Exception:
+        return None
+
+    ranked: list[tuple[float, dict[str, Any], dict[str, Any]]] = []
+    for item in items:
+        volume = item.get("volumeInfo") or {}
+        candidate_title = str(volume.get("title") or "")
+        candidate_authors = [str(value) for value in (volume.get("authors") or [])]
+        score = _book_identity_score(title, author, candidate_title, candidate_authors)
+        if score >= 0.72:
+            ranked.append((score, item, volume))
+    if not ranked:
+        return None
+
+    _, item, volume = max(ranked, key=lambda candidate: candidate[0])
+    identifiers = {
+        value.get("type"): value.get("identifier")
+        for value in volume.get("industryIdentifiers") or []
+        if value.get("type") and value.get("identifier")
+    }
+    description = re.sub(r"<[^>]+>", " ", str(volume.get("description") or ""))
+    description = re.sub(r"\s+", " ", description).strip()
+    source_context = (
+        "GOOGLE BOOKS CATALOG METADATA (identity and overview only; not full source text):\n"
+        f"Title: {volume.get('title') or title}\n"
+        f"Authors: {', '.join(volume.get('authors') or ([author] if author else []))}\n"
+        f"Publisher: {volume.get('publisher') or 'unknown'}\n"
+        f"Published date: {volume.get('publishedDate') or 'unknown'}\n"
+        f"Categories: {', '.join(volume.get('categories') or [])}\n"
+        f"Catalog description: {description or 'not available'}"
+    )
+    return {
+        "title": volume.get("title") or title,
+        "author_or_creator": ", ".join(volume.get("authors") or []) or author,
+        "source_url": volume.get("infoLink") or volume.get("canonicalVolumeLink"),
+        "thumbnail_url": (volume.get("imageLinks") or {}).get("thumbnail"),
+        "license_status": "llm_summary",
+        "content_markdown": None,
+        "source_context": source_context,
+        "summary_json": {
+            "source": "google_books",
+            "categories": volume.get("categories") or [],
+            "published_date": volume.get("publishedDate"),
+        },
+        "metadata_json": {
+            "provider": "google_books",
+            "google_books_id": item.get("id"),
+            "isbn_10": identifiers.get("ISBN_10"),
+            "isbn_13": identifiers.get("ISBN_13"),
+        },
+    }
+
+
+async def lookup_book_source(
+    *,
+    title: str,
+    author: str | None,
+) -> dict[str, Any] | None:
+    """Prefer full public-domain text, then fall back to canonical metadata."""
+    public_domain, reference = await asyncio.gather(
+        lookup_public_domain_book(title=title, author=author),
+        lookup_book_reference_context(title=title, author=author),
+    )
+    if public_domain:
+        return public_domain
+    return reference
 
 
 async def get_or_create_book_module_resource(
@@ -345,45 +843,151 @@ async def get_or_create_book_module_resource(
     )
     existing = result.scalar_one_or_none()
     if existing:
+        existing_words = len((existing.content_markdown or "").split())
+        existing_quality = (existing.metadata_json or {}).get("quality_report", {})
+        if existing_words >= MIN_BOOK_MODULE_WORDS and (
+            existing.status == CatalogStatus.PUBLISHED or existing_quality.get("passed")
+        ):
+            return existing
+
+    async def _save(resource: ContentResource) -> ContentResource:
+        """Replace a thin legacy row in place, preserving all foreign keys."""
+        if existing is None:
+            db.add(resource)
+            await db.flush()
+            return resource
+        for column in (
+            "kind",
+            "title",
+            "author_or_creator",
+            "source_url",
+            "thumbnail_url",
+            "license_status",
+            "content_markdown",
+            "summary_json",
+            "duration_minutes",
+            "metadata_json",
+            "status",
+            "is_public_domain",
+            "source_provider",
+            "source_external_id",
+            "read_minutes",
+        ):
+            value = getattr(resource, column)
+            if column == "is_public_domain":
+                value = bool(value)
+            setattr(existing, column, value)
+        await db.flush()
         return existing
 
-    lookup = source_lookup or lookup_public_domain_book
+    lookup = source_lookup or lookup_book_source
     source = await lookup(title=title, author=author)
     if source:
-        # Calculate duration from word count (200 wpm reading speed)
         source_md = source.get("content_markdown", "") or ""
         source_words = len(source_md.split()) if source_md else 0
-        source_duration = max(5, round(source_words / 200)) if source_words > 0 else (source.get("duration_minutes") or 15)
-        license_status = (
-            LicenseStatus.PUBLIC_DOMAIN
-            if source.get("license_status") == "public_domain"
-            else LicenseStatus.LICENSED
+        source_metadata = source.get("metadata_json") or {}
+        source_external_id = (
+            source_metadata.get("gutenberg_id")
+            or source_metadata.get("google_books_id")
         )
+        source_license = source.get("license_status")
+        license_status = {
+            "public_domain": LicenseStatus.PUBLIC_DOMAIN,
+            "licensed": LicenseStatus.LICENSED,
+            "external_link": LicenseStatus.EXTERNAL_LINK,
+            "llm_summary": LicenseStatus.LLM_SUMMARY,
+        }.get(source_license, LicenseStatus.UNKNOWN)
+
+        # A provider result may be a complete licensed module, or merely a raw
+        # source. Only complete modules bypass generation. This prevents the old
+        # Gutenberg link stub from masquerading as a 15-minute reading.
+        if source_words >= MIN_BOOK_MODULE_WORDS:
+            source_duration = max(5, round(source_words / 200))
+            resource = ContentResource(
+                kind=ContentResourceKind.PUBLIC_DOMAIN_BOOK
+                if license_status == LicenseStatus.PUBLIC_DOMAIN
+                else ContentResourceKind.LLM_BOOK_SUMMARY,
+                canonical_key=canonical_key,
+                title=str(source.get("title") or title),
+                author_or_creator=source.get("author_or_creator") or author,
+                source_url=source.get("source_url"),
+                thumbnail_url=source.get("thumbnail_url"),
+                license_status=license_status,
+                content_markdown=source_md,
+                summary_json=source.get("summary_json"),
+                duration_minutes=source_duration,
+                metadata_json=source.get("metadata_json"),
+                status=CatalogStatus.PUBLISHED,
+                is_public_domain=license_status == LicenseStatus.PUBLIC_DOMAIN,
+                source_provider=source_metadata.get("provider"),
+                source_external_id=str(source_external_id or "") or None,
+                read_minutes=source_duration,
+            )
+            return await _save(resource)
+
+        factory = module_factory or generate_book_module
+        module = await factory(
+            title=str(source.get("title") or title),
+            author=source.get("author_or_creator") or author,
+            user_goal=SHARED_BOOK_GOAL,
+            source_context=source.get("source_context") or source_md or (
+                "Only bibliographic metadata was available. Stay conservative and do not "
+                "invent scenes, quotations, chapter names, or author anecdotes."
+            ),
+        )
+        module_md = module.get("content_markdown", "") or ""
+        module_words = len(module_md.split())
+        module_duration = max(5, round(module_words / 200)) if module_words else 5
+        quality_report = module.get("quality_report") or evaluate_book_module(module).to_dict()
         resource = ContentResource(
             kind=ContentResourceKind.PUBLIC_DOMAIN_BOOK
             if license_status == LicenseStatus.PUBLIC_DOMAIN
             else ContentResourceKind.LLM_BOOK_SUMMARY,
             canonical_key=canonical_key,
-            title=str(source.get("title") or title),
-            author_or_creator=source.get("author_or_creator") or author,
+            title=str(module.get("title") or source.get("title") or title),
+            author_or_creator=str(
+                module.get("author_or_creator") or source.get("author_or_creator") or author or ""
+            ),
             source_url=source.get("source_url"),
-            thumbnail_url=source.get("thumbnail_url"),
+            thumbnail_url=source.get("thumbnail_url") or module.get("thumbnail_url"),
             license_status=license_status,
-            content_markdown=source_md,
-            summary_json=source.get("summary_json"),
-            duration_minutes=source_duration,
-            metadata_json=source.get("metadata_json"),
+            content_markdown=module_md,
+            summary_json={
+                "promise": module.get("promise"),
+                "sections": module.get("sections", []),
+                "ideas": module.get("ideas", []),
+                "grounding_notes": module.get("grounding_notes", []),
+                **(source.get("summary_json") or {}),
+            },
+            duration_minutes=module_duration,
+            metadata_json={
+                **(source.get("metadata_json") or {}),
+                "source": "source_grounded_book_module",
+                "quality_report": quality_report,
+            },
+            status=CatalogStatus.PUBLISHED
+            if quality_report.get("passed")
+            else CatalogStatus.FLAGGED,
+            is_public_domain=license_status == LicenseStatus.PUBLIC_DOMAIN,
+            source_provider=source_metadata.get("provider"),
+            source_external_id=str(source_external_id or "") or None,
+            read_minutes=module_duration,
         )
-        db.add(resource)
-        await db.flush()
-        return resource
+        return await _save(resource)
 
     factory = module_factory or generate_book_module
     module = await factory(
         title=title,
         author=author,
-        user_goal=user_goal,
-        source_context=source_context,
+        # Shared resources must not inherit the first requester's goal. A short
+        # personalized wrapper can be generated elsewhere; the expensive core
+        # module is neutral and reusable for every user.
+        user_goal=SHARED_BOOK_GOAL,
+        source_context=(
+            "No licensed source text was provided. Use only well-established concepts "
+            "you are confident belong to this exact book. Do not invent quotations, "
+            "chapter names, studies, scenes, or author anecdotes."
+        ),
     )
 
     # Calculate duration from actual word count (200 wpm reading speed)
@@ -391,6 +995,7 @@ async def get_or_create_book_module_resource(
     module_words = len(module_md.split()) if module_md else 0
     module_duration = max(5, round(module_words / 200)) if module_words > 0 else (module.get("duration_minutes") or 15)
 
+    quality_report = module.get("quality_report") or evaluate_book_module(module).to_dict()
     resource = ContentResource(
         kind=ContentResourceKind.LLM_BOOK_SUMMARY,
         canonical_key=canonical_key,
@@ -404,16 +1009,20 @@ async def get_or_create_book_module_resource(
             "promise": module.get("promise"),
             "sections": module.get("sections", []),
             "ideas": module.get("ideas", []),
+            "grounding_notes": module.get("grounding_notes", []),
         },
         duration_minutes=module_duration,
         metadata_json={
             "source": "llm_book_module",
-            "user_goal_seed": user_goal,
+            "quality_report": quality_report,
         },
+        status=CatalogStatus.PUBLISHED
+        if quality_report.get("passed")
+        else CatalogStatus.FLAGGED,
+        is_public_domain=False,
+        read_minutes=module_duration,
     )
-    db.add(resource)
-    await db.flush()
-    return resource
+    return await _save(resource)
 
 
 async def resolve_youtube_url(query: str) -> str | None:
@@ -509,17 +1118,17 @@ def enqueue_book_module_generation(
     user_goal: str,
     source_context: str | None,
 ) -> None:
-    """Queue background generation of one shared book-module resource."""
-    from app.tasks.content_resources import generate_book_module_resource
+    """Queue tracked, idempotent background generation of a shared book module."""
+    from app.tasks.catalog import enqueue_catalog_book
 
-    generate_book_module_resource.apply_async(
+    enqueue_catalog_book.apply_async(
         kwargs={
             "title": title,
             "author": author,
             "user_goal": user_goal,
             "source_context": source_context,
         },
-        queue="low_priority",
+        queue="catalog_control",
     )
 
 
@@ -617,10 +1226,23 @@ async def attach_content_resources_to_materials(
     async def _prepare_book(
         title: str, author: str | None, source_context: str | None
     ) -> dict[str, Any]:
-        lookup = book_source_lookup or lookup_public_domain_book
+        lookup = book_source_lookup or lookup_book_source
         source = await lookup(title=title, author=author)
         if source is not None:
-            return {"source": source, "module": None}
+            source_md = source.get("content_markdown", "") or ""
+            if len(source_md.split()) >= MIN_BOOK_MODULE_WORDS:
+                return {"source": source, "module": None}
+            factory = book_module_factory or generate_book_module
+            module = await factory(
+                title=str(source.get("title") or title),
+                author=source.get("author_or_creator") or author,
+                user_goal=SHARED_BOOK_GOAL,
+                source_context=source.get("source_context") or source_md or (
+                    "Only bibliographic metadata was available. Stay conservative and do not "
+                    "invent scenes, quotations, chapter names, or author anecdotes."
+                ),
+            )
+            return {"source": source, "module": module}
         factory = book_module_factory or generate_book_module
         module = await factory(
             title=title,
@@ -723,6 +1345,29 @@ async def attach_content_resources_to_materials(
                     module_factory=_prepared_factory,
                 )
                 cached[resource.canonical_key] = resource
+            resource_words = len((resource.content_markdown or "").split())
+            if (
+                resource.status != CatalogStatus.PUBLISHED
+                or resource_words < MIN_BOOK_MODULE_WORDS
+            ):
+                # Keep the recommendation, but never attach/serve a module that
+                # still failed quality gates after the selective Pro fallback.
+                item["canonical_key"] = resource.canonical_key
+                item["resource_unavailable"] = True
+                item["quality_status"] = (
+                    resource.status.value
+                    if hasattr(resource.status, "value")
+                    else str(resource.status)
+                )
+                item["quality_word_count"] = resource_words
+                if defer_book_generation:
+                    enqueue_book_module_generation(
+                        title=str(item.get("title") or ""),
+                        author=_material_author(item),
+                        user_goal=user_goal,
+                        source_context=None,
+                    )
+                continue
             _apply_book_resource(item, resource)
     return items
 

@@ -899,7 +899,7 @@ async def regenerate_item_details(
     
     Returns job_id to poll for completion.
     """
-    item = await _get_item_for_user(db, item_id, current_user.id)
+    await _get_item_for_user(db, item_id, current_user.id)
     
     # Create job
     job = PlanItemDetailJob(

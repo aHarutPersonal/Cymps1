@@ -27,14 +27,20 @@ from sqlalchemy.orm import selectinload
 from app.api.dependencies import get_current_user
 from app.core.db import get_db
 from app.models.chat import ChatThread, ChatMessage, MessageRole
-from app.models.idol import Idol
+from app.models.idol import CatalogStatus, Idol
 from app.models.intake import IntakeSession, SessionPhase
 from app.models.plan_job import PlanGenerationJob
 from app.models.user import User
 from app.schemas.session import (
+    DailyFeedResponse,
+    DailyInsightResponse,
+    GuidedLearningMessageRequest,
     IdolSuggestionItem,
     IdolSuggestionsResponse,
     InterviewMessageRequest,
+    LearningMaterialResponse,
+    LearningMaterialsResponse,
+    LearningTopicRequest,
     SelectIdolRequest,
     SessionCreate,
     SessionResponse,
@@ -44,6 +50,7 @@ from app.services.gemini import (
     comparison_stream,
     interview_stream,
     generate_with_grounding,
+    stream_learnlm,
 )
 from app.services.comparison.scoring import generate_comparison_scores
 from app.services.content_resources import attach_content_resources_to_materials
@@ -146,6 +153,168 @@ def _fallback_idol_suggestions(interests: list[str]) -> list["IdolSuggestionItem
         )
         for name, era, domains, summary in ranked[:3]
     ]
+
+
+def _match_terms(values: list[str]) -> tuple[set[str], set[str]]:
+    """Return normalized phrases and useful tokens for deterministic matching."""
+    phrases = {str(value).strip().lower() for value in values if str(value).strip()}
+    tokens: set[str] = set()
+    for phrase in phrases:
+        tokens.update(
+            token
+            for token in re.findall(r"[a-z0-9+#-]{3,}", phrase)
+            if token not in {"and", "the", "with", "from", "that", "this", "want"}
+        )
+    return phrases, tokens
+
+
+def _idol_era(idol: Idol) -> str:
+    profile = idol.profile
+    birth = getattr(profile, "birth_date", None) or idol.birth_date
+    death = getattr(profile, "death_date", None)
+    if birth and death:
+        return f"{birth.year}-{death.year}"
+    if birth:
+        return f"born {birth.year}"
+    era_tags = list(getattr(profile, "era_tags", None) or [])
+    return era_tags[0] if era_tags else "documented biography"
+
+
+async def _catalog_idol_suggestions(
+    db: AsyncSession | None,
+    *,
+    interests: list[str],
+    user_goal: str | None,
+    user_age: int | None,
+    limit: int = 3,
+) -> list["IdolSuggestionItem"]:
+    """Return strong, age-grounded matches from the published local catalog.
+
+    The catalog path is intentionally conservative: it only wins over the
+    grounded LLM fallback when at least three entries match the user's domain
+    and contain a sufficiently confident milestone at or before their age.
+    """
+    if db is None or user_age is None:
+        return []
+
+    from app.models.idol_tag_link import IdolTagLink
+
+    stmt = (
+        select(Idol)
+        .options(
+            selectinload(Idol.profile),
+            selectinload(Idol.timeline_events),
+            selectinload(Idol.external_ids),
+            selectinload(Idol.tag_links).selectinload(IdolTagLink.tag),
+        )
+        .where(Idol.status == CatalogStatus.PUBLISHED)
+        .limit(200)
+    )
+    result = await db.execute(stmt)
+    idols = list(result.scalars().unique().all())
+
+    phrases, wanted_tokens = _match_terms(
+        [*(interests or []), *([user_goal] if user_goal else [])]
+    )
+    if not phrases and not wanted_tokens:
+        return []
+
+    ranked: list[tuple[float, str, IdolSuggestionItem]] = []
+    for idol in idols:
+        if idol.quality_score is not None and idol.quality_score < 0.55:
+            continue
+
+        profile = idol.profile
+        tags = [link.tag.name for link in idol.tag_links if getattr(link, "tag", None)]
+        labels = [
+            idol.domain,
+            *(getattr(profile, "domains", None) or []),
+            *(getattr(profile, "primary_roles", None) or []),
+            *(getattr(profile, "notable_themes", None) or []),
+            *tags,
+        ]
+        label_phrases, label_tokens = _match_terms(labels)
+        exact_matches = phrases & label_phrases
+        token_matches = wanted_tokens & label_tokens
+        match_score = len(exact_matches) * 4 + len(token_matches)
+        if match_score < 2:
+            continue
+
+        milestones = [
+            event
+            for event in idol.timeline_events
+            if event.age_at_event is not None
+            and event.age_at_event <= user_age
+            and event.confidence >= 0.55
+        ]
+        if not milestones:
+            continue
+        milestone = max(
+            milestones,
+            key=lambda event: (
+                event.importance_score,
+                event.age_at_event or 0,
+                event.confidence,
+            ),
+        )
+
+        primary_domains = list(getattr(profile, "domains", None) or [])
+        if not primary_domains and idol.domain:
+            primary_domains = [idol.domain]
+        matched = sorted(exact_matches or token_matches)
+        match_label = matched[0] if matched else (primary_domains[0] if primary_domains else idol.domain)
+        achievement = re.sub(r"\s+", " ", milestone.canonical_description).strip()
+        if len(achievement) > 260:
+            achievement = achievement[:257].rsplit(" ", 1)[0] + "..."
+        relevance = (
+            f"By age {milestone.age_at_event}, {achievement} "
+            f"This directly connects to your interest in {match_label}."
+        )
+        wikidata_id = next(
+            (
+                external.external_id
+                for external in idol.external_ids
+                if external.provider == "wikidata"
+            ),
+            None,
+        )
+        confidence = min(
+            0.98,
+            0.70
+            + min(match_score, 8) * 0.02
+            + milestone.confidence * 0.08
+            + (idol.quality_score or 0.7) * 0.08,
+        )
+        primary_domain = primary_domains[0].lower() if primary_domains else idol.domain.lower()
+        ranked.append(
+            (
+                match_score + milestone.importance_score + (idol.quality_score or 0.0),
+                primary_domain,
+                IdolSuggestionItem(
+                    name=idol.name,
+                    era=_idol_era(idol),
+                    relevance_summary=relevance,
+                    wikidata_id=wikidata_id,
+                    domains=primary_domains[:4],
+                    confidence=round(confidence, 2),
+                ),
+            )
+        )
+
+    ranked.sort(key=lambda entry: entry[0], reverse=True)
+    if len(ranked) < limit:
+        return []
+
+    # Greedily prefer a second domain while retaining score order.
+    selected: list[tuple[float, str, IdolSuggestionItem]] = [ranked.pop(0)]
+    while ranked and len(selected) < limit:
+        used_domains = {entry[1] for entry in selected}
+        diverse_index = next(
+            (index for index, entry in enumerate(ranked) if entry[1] not in used_domains),
+            0,
+        )
+        selected.append(ranked.pop(diverse_index))
+    return [entry[2] for entry in selected]
 
 
 # "10 hours a week", "8-12 hrs/week", "about 15h per week" in a message that
@@ -437,6 +606,28 @@ async def suggest_idols(
         logger.info(f"[SESSION] Returning {len(cached)} cached idol suggestions for session {session_id}")
         return IdolSuggestionsResponse(suggestions=cached)
 
+    # Fast path: use high-quality, age-grounded entries already paid for and
+    # verified in the shared catalog. The helper returns an empty list unless
+    # it can satisfy the full three-item quality bar, so weak local data never
+    # displaces the grounded Gemini fallback.
+    catalog_suggestions = await _catalog_idol_suggestions(
+        db,
+        interests=session.user_interests or [],
+        user_goal=session.user_goal,
+        user_age=session.user_age,
+    )
+    if len(catalog_suggestions) >= 3:
+        session.idol_suggestions_json = [
+            suggestion.model_dump(mode="json") for suggestion in catalog_suggestions
+        ]
+        await db.commit()
+        logger.info(
+            "[SESSION] Returning %s published catalog suggestions for session %s",
+            len(catalog_suggestions),
+            session_id,
+        )
+        return IdolSuggestionsResponse(suggestions=catalog_suggestions)
+
     # Render the idol suggestion prompt
     prompt = load_and_render("idol_suggest.txt", {
         "user_age": str(session.user_age),
@@ -453,6 +644,7 @@ async def suggest_idols(
         full_response = await generate_with_grounding(
             system_prompt=load_and_render("idol_suggest_system.txt", {}),
             user_message=prompt,
+            operation="idol_suggestion",
         )
 
         parsed = json_lib.loads(_strip_json_fences(full_response))
@@ -585,6 +777,7 @@ async def _prefetch_idol_facts(session_id: str, idol_name: str, user_age: int | 
         facts_response = await generate_with_grounding(
             system_prompt="You are a historical fact checker. Return accurate, sourced facts.",
             user_message=facts_prompt,
+            operation="idol_fact_lookup",
         )
         if not facts_response:
             return
@@ -747,7 +940,6 @@ async def interview(
     idol_name = session.idol.name if session.idol else "Unknown"
     idol_persona_obj = getattr(session.idol, "persona", None)
     idol_persona = _persona_to_dict(idol_persona_obj)
-    idol_persona_data = json_lib.dumps(idol_persona)
 
     # Determine if this should be the last turn
     current_turn = session.interview_turn_count + 1
@@ -800,6 +992,7 @@ async def interview(
                 facts_response = await generate_with_grounding(
                     system_prompt="You are a historical fact checker. Return accurate, sourced facts.",
                     user_message=facts_prompt,
+                    operation="interview_idol_fact_lookup",
                 )
                 session.idol_facts_json = {"raw_facts": facts_response}
 
@@ -923,7 +1116,6 @@ async def generate_results(
     idol_name = session.idol.name if session.idol else "Unknown"
     idol_persona_obj = getattr(session.idol, "persona", None)
     idol_persona = _persona_to_dict(idol_persona_obj)
-    idol_persona_data = json_lib.dumps(idol_persona)
 
     # Build user profile JSON
     user_profile = {
@@ -1101,9 +1293,6 @@ async def generate_results(
 # Guided Learning Endpoints (Phase 6)
 # =============================================================================
 
-from app.schemas.session import GuidedLearningMessageRequest, LearningMaterialsResponse, LearningMaterialResponse, LearningTopicRequest
-from app.services.gemini import stream_learnlm
-
 @router.post("/{session_id}/learning-materials", response_model=LearningMaterialsResponse)
 async def get_learning_materials(
     session_id: str,
@@ -1115,7 +1304,7 @@ async def get_learning_materials(
     Fetch curated learning materials for a specific blueprint topic.
     Uses Google Search grounding to find real articles and videos.
     """
-    session = await _get_session(session_id, current_user.id, db)
+    await _get_session(session_id, current_user.id, db)
 
     # Braces in the user-typed topic would read as unresolved placeholders
     # under strict rendering — neutralise them before substitution.
@@ -1125,6 +1314,7 @@ async def get_learning_materials(
     full_response = await generate_with_grounding(
         system_prompt=load_and_render("learning_materials_system.txt", {}),
         user_message=prompt,
+        operation="learning_material_search",
     )
 
     try:
@@ -1270,8 +1460,6 @@ async def guided_learning(
 # T023: GET /sessions/{id}/feed - Generate Daily Insights (Idea Cards)
 # =============================================================================
 
-from app.schemas.session import DailyFeedResponse, DailyInsightResponse
-
 @router.get("/{session_id}/feed", response_model=DailyFeedResponse)
 async def get_daily_feed(
     session_id: str,
@@ -1321,6 +1509,7 @@ async def get_daily_feed(
     full_response = await generate_with_grounding(
         system_prompt=_render_persona_system(idol_name, idol_persona),
         user_message=prompt,
+        operation="daily_feed_generation",
     )
 
     try:

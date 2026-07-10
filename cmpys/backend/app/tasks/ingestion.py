@@ -12,6 +12,7 @@ Multi-step LLM extraction pipeline:
 import asyncio
 import logging
 import re
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
@@ -20,7 +21,7 @@ from sqlalchemy.orm import selectinload
 from app.core.celery import celery_app
 from app.core.db import async_session_maker
 from app.models.achievement_evidence import AchievementEvidence
-from app.models.idol import Idol
+from app.models.idol import CatalogStatus, Idol
 from app.models.idol_achievement import DatePrecision, IdolAchievement
 from app.models.idol_external_id import IdolExternalId
 from app.models.idol_job import IdolImportJob
@@ -36,6 +37,10 @@ from app.services.ingestion.extract import (
     run_profile_extraction,
     run_timeline_normalization,
 )
+from app.services.content_quality import (
+    MIN_PLAN_DETAIL_LESSON_WORDS,
+    MIN_PLAN_DETAIL_MATERIAL_WORDS,
+)
 from app.services.llm.schemas import (
     AchievementsExtractionResponse,
     PersonaPackResponse,
@@ -44,6 +49,40 @@ from app.services.llm.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _idol_catalog_quality(
+    *,
+    profile_confidence: float,
+    profile_evidence_count: int,
+    timeline_events: list,
+    persona_generated: bool,
+    persona_evidence_count: int,
+) -> tuple[float, bool]:
+    """Require source evidence, not merely model-reported confidence."""
+    event_count = len(timeline_events)
+    evidence_backed_events = sum(
+        1
+        for event in timeline_events
+        if float(getattr(event, "confidence", 0.0)) >= 0.55
+        and bool(getattr(event, "evidence", None))
+    )
+    evidence_backed_ratio = evidence_backed_events / event_count if event_count else 0.0
+    score = (
+        min(max(profile_confidence, 0.0), 1.0) * 0.35
+        + (0.15 if profile_evidence_count >= 1 else 0.0)
+        + min(event_count / 6, 1.0) * 0.15
+        + evidence_backed_ratio * 0.25
+        + (0.10 if persona_generated and persona_evidence_count >= 1 else 0.0)
+    )
+    score = round(score, 3)
+    publishable = (
+        profile_confidence >= 0.60
+        and profile_evidence_count >= 1
+        and evidence_backed_events >= 2
+        and score >= 0.70
+    )
+    return score, publishable
 
 
 def sanitize_for_postgres(data: Any) -> Any:
@@ -382,6 +421,25 @@ async def _run_ingestion_async(job_id: str) -> dict:
                 logger.debug(f"[INGESTION][{job_id}] Storing persona...")
                 await _store_persona(db, job.idol, persona_response)
 
+            quality_score, publishable = _idol_catalog_quality(
+                profile_confidence=profile_response.profile.confidence,
+                profile_evidence_count=len(profile_response.profile.evidence),
+                timeline_events=timeline_response.timeline,
+                persona_generated=persona_response is not None,
+                persona_evidence_count=(
+                    len(persona_response.persona.grounding_evidence)
+                    if persona_response
+                    else 0
+                ),
+            )
+            job.idol.quality_score = quality_score
+            if profile_response.profile.domains and job.idol.domain in {"", "unknown"}:
+                job.idol.domain = profile_response.profile.domains[0]
+            job.idol.status = (
+                CatalogStatus.PUBLISHED if publishable else CatalogStatus.FLAGGED
+            )
+            job.idol.published_at = datetime.now(timezone.utc) if publishable else None
+
             await _update_job(db, job, step="storing_data", progress=95)
 
             # =================================================================
@@ -403,6 +461,8 @@ async def _run_ingestion_async(job_id: str) -> dict:
                 "achievements_count": len(achievements_response.candidates) if achievements_response else 0,
                 "timeline_events": len(timeline_response.timeline) if timeline_response else 0,
                 "persona_generated": persona_response is not None,
+                "catalog_status": job.idol.status.value,
+                "quality_score": quality_score,
             }
             logger.info(f"[INGESTION][{job_id}] Final result: {result}")
             
@@ -897,8 +957,8 @@ def _normalize_plan_item_details(details: dict) -> dict:
             step.setdefault("completed", False)
 
     # --- Validate content depth ---
-    min_lesson_words = 500
-    min_material_words = 600
+    min_lesson_words = MIN_PLAN_DETAIL_LESSON_WORDS
+    min_material_words = MIN_PLAN_DETAIL_MATERIAL_WORDS
 
     # Flag steps with thin lesson_content (should be 500+ words per prompt)
     for step in details.get("steps", []):

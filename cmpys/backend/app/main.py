@@ -2,11 +2,13 @@ from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 import os
 
 from app.api.router import router as api_router
+from app.api.v1.media import router as media_router
 from app.core.config import settings
 from app.core.health import router as health_router
 from app.core.logging import setup_logging, get_logger
@@ -33,8 +35,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-from fastapi.middleware.cors import CORSMiddleware
-
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
@@ -53,8 +53,6 @@ app.add_middleware(ResponseBodyLoggerMiddleware)
 # Added last so it sits OUTERMOST: the body logger above still sees the
 # uncompressed body, while the client receives the gzipped response.
 app.add_middleware(GZipMiddleware, minimum_size=1024)
-
-from app.api.v1.media import router as media_router
 
 # Include routers
 app.include_router(health_router)
