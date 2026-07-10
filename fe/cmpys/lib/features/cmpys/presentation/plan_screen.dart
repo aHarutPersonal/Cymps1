@@ -99,7 +99,7 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
       onTap: () => setState(() => _view = idx),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
-        height: 38,
+        height: 44,
         alignment: Alignment.center,
         decoration: BoxDecoration(
           color: active ? AppColors.card : Colors.transparent,
@@ -210,7 +210,7 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
   /// hasn't landed) yet. Tapping re-checks and re-enqueues when possible.
   Widget _planPendingCard(CmpysState st) {
     return CmpysCardSurface(
-      onTap: () => ref.read(currentPlanProvider.notifier).refresh(),
+      onTap: () => ref.read(currentPlanProvider.notifier).retry(),
       child: Row(
         children: [
           const Icon(PhosphorIconsRegular.sparkle,

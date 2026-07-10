@@ -149,8 +149,8 @@ class CmpysIdolDetailScreen extends ConsumerWidget {
               onTap: () => Navigator.of(context).maybePop(),
               borderRadius: BorderRadius.circular(12),
               child: Container(
-                width: 38,
-                height: 38,
+                width: 44,
+                height: 44,
                 decoration: BoxDecoration(
                   color: Colors.white.withValues(alpha: 0.16),
                   borderRadius: BorderRadius.circular(12),

@@ -530,8 +530,8 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
               child: ValueListenableBuilder<TextEditingValue>(
                 valueListenable: _input,
                 builder: (_, value, _) => Container(
-                  width: 38,
-                  height: 38,
+                  width: 44,
+                  height: 44,
                   margin: const EdgeInsets.only(bottom: 1),
                   decoration: BoxDecoration(
                     color: value.text.trim().isEmpty

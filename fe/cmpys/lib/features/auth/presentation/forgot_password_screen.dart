@@ -204,8 +204,8 @@ class _BackButton extends StatelessWidget {
         onTap: onPressed,
         borderRadius: AppRadii.br16,
         child: Container(
-          width: 42,
-          height: 42,
+          width: 44,
+          height: 44,
           decoration: BoxDecoration(
             borderRadius: AppRadii.br16,
             border: Border.all(color: AppColors.borderLight),

@@ -252,25 +252,32 @@ class _WeekBlock extends StatelessWidget {
         children: [
           Row(
             children: [
-              CmpysKicker('Week $week',
-                  color: isCurrent ? AppColors.green : null),
-              if (isCurrent) ...[
-                const SizedBox(width: 8),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: AppColors.greenSoft,
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: Text('You are here',
-                      style: AppTypography.caption.copyWith(
-                          color: AppColors.green,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700)),
+              Expanded(
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 5,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    CmpysKicker('Week $week',
+                        color: isCurrent ? AppColors.green : null),
+                    if (isCurrent)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: AppColors.greenSoft,
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text('You are here',
+                            style: AppTypography.caption.copyWith(
+                                color: AppColors.green,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700)),
+                      ),
+                  ],
                 ),
-              ],
-              const Spacer(),
+              ),
+              const SizedBox(width: 8),
               Text(
                 '$completedCount/$totalCount',
                 style: AppTypography.captionMedium.copyWith(

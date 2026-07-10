@@ -13,6 +13,7 @@ import '../../../core/ui/cmpys/cmpys_primitives.dart';
 import '../../../core/ui/motion/entrance.dart';
 import '../../../core/ui/motion/page_transition.dart';
 import '../data/cmpys_seed.dart';
+import '../state/cmpys_backend_sync.dart';
 import '../state/cmpys_store.dart';
 import 'record_screen.dart';
 
@@ -41,17 +42,23 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
   @override
   Widget build(BuildContext context) {
     final st = ref.watch(cmpysStoreProvider);
+    ref.watch(cmpysBackendSyncProvider);
     final idol = st.idol;
-    final c = cmpysComparison;
     final dims = st.liveDims();
     final ms = st.liveMilestones();
-    final cmpAge = st.user.age > 0 ? st.user.age : c.age;
-    final youAvg = (dims.map((d) => d.you).reduce((a, b) => a + b) / dims.length).round();
-    final idolAvg = (dims.map((d) => d.idol).reduce((a, b) => a + b) / dims.length).round();
-    final overall = (youAvg / idolAvg * 100).round();
+    final cmpAge = st.user.age;
+    final hasScores = dims.isNotEmpty;
+    final youAvg = hasScores
+        ? (dims.map((d) => d.you).reduce((a, b) => a + b) / dims.length).round()
+        : 0;
+    final idolAvg = hasScores
+        ? (dims.map((d) => d.idol).reduce((a, b) => a + b) / dims.length).round()
+        : 0;
+    final overall = idolAvg > 0 ? (youAvg / idolAvg * 100).round() : 0;
     final hitCount = ms.where((m) => st.milestones[m.id] ?? false).length;
     final pending = st.pendingWins().length;
     final initial = st.user.name.isNotEmpty ? st.user.name[0].toUpperCase() : 'Y';
+    final strengths = dims.where((d) => d.you >= d.idol).toList();
 
     return Scaffold(
       backgroundColor: AppColors.paper,
@@ -64,7 +71,7 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                CmpysKicker('Both at age $cmpAge'),
+                CmpysKicker(cmpAge > 0 ? 'Both at age $cmpAge' : 'Your comparison'),
                 const SizedBox(height: 4),
                 Text('You vs ${idol.short}',
                     style: AppTypography.display.copyWith(
@@ -72,23 +79,32 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
               ],
             ),
             const SizedBox(height: 16),
-            _gaugeHero(st, idol, youAvg, idolAvg, overall, initial),
+            if (hasScores)
+              _gaugeHero(st, idol, youAvg, idolAvg, overall, initial)
+            else
+              _comparisonScoresPending(),
             const SizedBox(height: 14),
             _aiVerdictCard(st, idol),
             const SizedBox(height: 14),
-            _recordEntry(st, idol, pending),
-            const SizedBox(height: 18),
-            _radarCard(idol, dims),
-            const SizedBox(height: 16),
-            _dimensionRows(dims),
-            const SizedBox(height: 22),
-            _milestonesSection(st, idol, ms, hitCount, cmpAge),
-            const SizedBox(height: 22),
-            const Padding(
-                padding: EdgeInsets.only(left: 2),
-                child: CmpysKicker('Where you’re already ahead')),
-            const SizedBox(height: 10),
-            ...c.strengths.map(_strengthCard),
+            _recordEntry(st, idol, hasScores ? pending : 0),
+            if (hasScores) ...[
+              const SizedBox(height: 18),
+              _radarCard(idol, dims),
+              const SizedBox(height: 16),
+              _dimensionRows(dims),
+              if (ms.isNotEmpty) ...[
+                const SizedBox(height: 22),
+                _milestonesSection(st, idol, ms, hitCount, cmpAge),
+              ],
+              if (strengths.isNotEmpty) ...[
+                const SizedBox(height: 22),
+                const Padding(
+                    padding: EdgeInsets.only(left: 2),
+                    child: CmpysKicker('Where you’re already ahead')),
+                const SizedBox(height: 10),
+                ...strengths.map(_strengthCard),
+              ],
+            ],
             const SizedBox(height: 18),
             CmpysButton(
               variant: CmpysBtnVariant.primary,
@@ -101,6 +117,40 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
           ]),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _comparisonScoresPending() {
+    return CmpysCardSurface(
+      onTap: () => ref.invalidate(cmpysBackendSyncProvider),
+      raised: true,
+      child: Row(
+        children: [
+          const SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              valueColor: AlwaysStoppedAnimation<Color>(AppColors.ochre),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Your comparison scores are being prepared.',
+                    style: AppTypography.bodyMedium
+                        .copyWith(color: AppColors.ink, fontSize: 14.5)),
+                const SizedBox(height: 3),
+                Text('Tap to check again.',
+                    style: AppTypography.caption
+                        .copyWith(color: AppColors.ink3, fontSize: 12.5)),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -214,9 +264,15 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
               const Icon(Icons.auto_awesome_rounded,
                   size: 14, color: Color(0xFFFFD166)),
               const SizedBox(width: 6),
-              Text('${idol.short.toUpperCase()}’S VERDICT',
+              Expanded(
+                child: Text(
+                  '${idol.short.toUpperCase()}’S VERDICT',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                   style: AppTypography.kicker.copyWith(
-                      color: Colors.white.withValues(alpha: 0.6))),
+                      color: Colors.white.withValues(alpha: 0.6)),
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 12),
@@ -423,6 +479,7 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
   Widget _dimRow(LiveDim d, {required bool first}) {
     final open = _open == d.id;
     final gap = d.idol - d.you;
+    final ahead = gap < 0;
     return Container(
       decoration: BoxDecoration(
         border: first
@@ -451,11 +508,16 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
                         padding: const EdgeInsets.symmetric(
                             horizontal: 9, vertical: 3),
                         decoration: BoxDecoration(
-                            color: AppColors.claySoft,
+                            color: ahead
+                                ? AppColors.greenSoft
+                                : AppColors.claySoft,
                             borderRadius: BorderRadius.circular(999)),
-                        child: Text('−$gap',
+                        child: Text(ahead ? '+${-gap}' : '−$gap',
                             style: AppTypography.kicker.copyWith(
-                                color: AppColors.clay, fontSize: 10.5)),
+                                color: ahead
+                                    ? AppColors.green2
+                                    : AppColors.clay,
+                                fontSize: 10.5)),
                       ),
                     ],
                   ),
@@ -601,7 +663,7 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
     );
   }
 
-  Widget _strengthCard(CmpysStrength s) {
+  Widget _strengthCard(LiveDim dimension) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: CmpysCardSurface(
@@ -614,7 +676,7 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
                 size: 20, color: AppColors.green),
             const SizedBox(width: 10),
             Expanded(
-              child: Text(s.label,
+              child: Text('You’re currently ahead in ${dimension.label}.',
                   style: AppTypography.bodyMedium.copyWith(
                       color: AppColors.green2,
                       fontSize: 14,

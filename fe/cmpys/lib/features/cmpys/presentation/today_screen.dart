@@ -17,39 +17,31 @@ import '../data/cmpys_ideas_provider.dart';
 import '../data/cmpys_seed.dart';
 import '../state/cmpys_backend_sync.dart';
 import '../state/cmpys_store.dart';
-import 'detail_screens.dart';
-
-/// Lazily-built lookup from plan-item id to its (item, pillar). `cmpysPlan` is
-/// a top-level const, so this is computed once for the whole app instead of
-/// re-scanning every pillar/item on each habit tile render (was O(pillars×items)
-/// per tile).
-final Map<String, ({CmpysPlanItem item, CmpysPillar pillar})> _pillarByItemId = {
-  for (final p in cmpysPlan.pillars)
-    for (final it in p.items) it.id: (item: it, pillar: p),
-};
 
 /// CMPYS Today tab — the "next best action" home screen.
 ///
 /// Daily habits come from the AI-generated 12-week plan (current week's
 /// daily-rhythm items via GET /plans/{id}/today, toggled per-day through
-/// /daily-toggle). The seeded habits are only a fallback while no plan
-/// exists; while the plan job runs a slim progress hint shows instead.
+/// /daily-toggle). Until that plan exists, the screen shows an explicit plan
+/// state instead of substituting demo tasks.
 class CmpysTodayScreen extends ConsumerWidget {
   const CmpysTodayScreen({super.key});
-
-  List<CmpysPlanItem> get _dailyItems => cmpysPlan.pillars
-      .expand((p) => p.items)
-      .where((it) => it.repeat == CmpysRepeat.daily)
-      .toList();
-
-  ({CmpysPlanItem item, CmpysPillar pillar})? _pillarFor(String id) =>
-      _pillarByItemId[id];
 
   String _greeting() {
     final h = DateTime.now().hour;
     if (h < 12) return 'Good morning';
     if (h < 18) return 'Good afternoon';
     return 'Good evening';
+  }
+
+  int? _planDay(CurrentPlanState planState) {
+    final createdAt = planState.plan?.createdAt?.toLocal();
+    if (createdAt == null) return null;
+    final start = DateTime(createdAt.year, createdAt.month, createdAt.day);
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final day = today.difference(start).inDays + 1;
+    return day < 1 ? 1 : day;
   }
 
   @override
@@ -59,32 +51,31 @@ class CmpysTodayScreen extends ConsumerWidget {
     // Hydrate mentor + AI results from the backend (source of truth).
     ref.watch(cmpysBackendSyncProvider);
 
-    // Daily rhythm from the generated plan. Once a plan exists the seed
-    // habits never show — while today's view loads we show a placeholder
-    // rather than flashing demo content.
-    final planReady =
-        ref.watch(currentPlanProvider).status == CurrentPlanStatus.ready;
-    final backendToday = ref.watch(todayViewProvider).valueOrNull;
+    // The plan and today's view are the only sources of task data. In
+    // particular, empty/loading/failed plan states must never render the
+    // prototype's seeded habits.
+    final planState = ref.watch(currentPlanProvider);
+    final planReady = planState.status == CurrentPlanStatus.ready;
+    final todayAsync = ref.watch(todayViewProvider);
+    final backendToday = todayAsync.valueOrNull;
     final backendItems = backendToday?.items ?? const <TodayTaskItem>[];
-    final todayLoading = planReady && backendToday == null;
+    final todayLoading =
+        planReady && todayAsync.isLoading && backendToday == null;
+    final todayFailed =
+        planReady && todayAsync.hasError && backendToday == null;
+    final planDay = _planDay(planState);
 
-    final daily = planReady ? const <CmpysPlanItem>[] : _dailyItems;
-    final totalToday = planReady ? backendItems.length : daily.length;
-    final doneToday = planReady
-        ? backendItems.where((i) => i.completedToday).length
-        : daily.where((it) => st.tasks[it.id] ?? false).length;
+    final totalToday = backendToday?.totalToday ?? backendItems.length;
+    final doneToday =
+        backendToday?.completedToday ??
+        backendItems.where((i) => i.completedToday).length;
     final pct = totalToday == 0 ? 0.0 : doneToday / totalToday * 100;
     // AI-generated idea cards — no static fallback.
     final ideasAsync = ref.watch(cmpysIdeasProvider);
     final name = st.user.name.isEmpty ? 'friend' : st.user.name;
 
-    final backendUndone =
-        backendItems.where((i) => !i.completedToday).toList();
+    final backendUndone = backendItems.where((i) => !i.completedToday).toList();
     final nextBackendItem = backendUndone.isEmpty ? null : backendUndone.first;
-    final nextItem = daily.firstWhere((it) => !(st.tasks[it.id] ?? false),
-        orElse: () => daily.isNotEmpty ? daily.first : cmpysPlan.pillars.first.items.first);
-    final nextHasUndone =
-        planReady ? false : daily.any((it) => !(st.tasks[it.id] ?? false));
 
     return Scaffold(
       backgroundColor: AppColors.paper,
@@ -92,118 +83,250 @@ class CmpysTodayScreen extends ConsumerWidget {
         bottom: false,
         child: EntranceScope(
           child: ListView(
-          padding: EdgeInsets.fromLTRB(18, 14, 18, AppShell.bottomNavClearance(context)),
-          children: EntranceGroup.wrap([
-            _topBar(context, st, idol, name),
-            const SizedBox(height: 18),
-            _heroCard(pct, doneToday, totalToday, st.streak),
-            ..._planGeneratingHint(context, ref),
-            const SizedBox(height: 16),
-            if (nextBackendItem != null)
-              _backendNextActionCard(context, nextBackendItem)
-            else if (planReady && backendItems.isNotEmpty)
-              _allDoneCard()
-            else if (todayLoading)
-              const SizedBox.shrink()
-            else if (nextHasUndone)
-              _nextActionCard(context, nextItem)
-            else if (!planReady)
-              _allDoneCard(),
-            const SizedBox(height: 22),
-            _sectionHeader(context, 'Today’s habits', onFullPlan: () => context.go(AppRoutes.plan)),
-            const SizedBox(height: 12),
-            if (todayLoading)
-              _habitsLoadingCard()
-            else if (planReady && backendItems.isNotEmpty)
-              CmpysCardSurface(
-                pad: const EdgeInsets.all(6),
-                child: Column(
-                  children: [
-                    for (var i = 0; i < backendItems.length; i++)
-                      _backendHabitTile(context, ref, backendItems[i],
-                          first: i == 0),
-                  ],
-                ),
-              )
-            else if (daily.isEmpty)
-              Text('No daily habits in your plan yet.',
-                  style: AppTypography.bodyDim)
-            else
-              CmpysCardSurface(
-                pad: const EdgeInsets.all(6),
-                child: Column(
-                  children: [
-                    for (var i = 0; i < daily.length; i++)
-                      _habitTile(context, ref, daily[i], st.tasks[daily[i].id] ?? false,
-                          first: i == 0),
-                  ],
-                ),
-              ),
-            const SizedBox(height: 22),
-            ideasAsync.when(
-              data: (ideas) =>
-                  _ideaCard(context, ideas[st.dayNum % ideas.length]),
-              loading: () => _ideaLoadingCard(),
-              error: (_, _) => _ideaErrorCard(ref),
+            padding: EdgeInsets.fromLTRB(
+              18,
+              14,
+              18,
+              AppShell.bottomNavClearance(context),
             ),
-            const SizedBox(height: 22),
-            _compareNudge(context, st, idol, name),
-          ]),
+            children: EntranceGroup.wrap([
+              _topBar(context, idol, name, planDay),
+              const SizedBox(height: 18),
+              if (!planReady)
+                _planStateCard(context, ref, st, planState)
+              else if (todayLoading)
+                const CmpysSkeleton.block(height: 124)
+              else if (todayFailed)
+                _todayErrorCard(ref)
+              else
+                _heroCard(
+                  pct,
+                  doneToday,
+                  totalToday,
+                  backendToday?.streak ?? 0,
+                ),
+              if (planReady && backendToday != null) ...[
+                const SizedBox(height: 16),
+                if (nextBackendItem != null)
+                  _backendNextActionCard(context, nextBackendItem)
+                else if (backendItems.isNotEmpty)
+                  _allDoneCard(),
+                const SizedBox(height: 22),
+                _sectionHeader(
+                  context,
+                  'Today’s habits',
+                  onFullPlan: () => context.go(AppRoutes.plan),
+                ),
+                const SizedBox(height: 12),
+                if (backendItems.isNotEmpty)
+                  CmpysCardSurface(
+                    pad: const EdgeInsets.all(6),
+                    child: Column(
+                      children: [
+                        for (var i = 0; i < backendItems.length; i++)
+                          _backendHabitTile(
+                            context,
+                            ref,
+                            backendItems[i],
+                            first: i == 0,
+                          ),
+                      ],
+                    ),
+                  )
+                else
+                  Text(
+                    'No daily habits in your plan this week.',
+                    style: AppTypography.bodyDim,
+                  ),
+              ],
+              const SizedBox(height: 22),
+              ideasAsync.when(
+                data: (ideas) {
+                  final now = DateTime.now();
+                  final calendarDay =
+                      DateTime(
+                        now.year,
+                        now.month,
+                        now.day,
+                      ).millisecondsSinceEpoch ~/
+                      Duration.millisecondsPerDay;
+                  return _ideaCard(context, ideas[calendarDay % ideas.length]);
+                },
+                loading: () => _ideaLoadingCard(),
+                error: (_, _) => _ideaErrorCard(ref),
+              ),
+              const SizedBox(height: 22),
+              _compareNudge(context, st, idol, name),
+            ]),
           ),
         ),
       ),
     );
   }
 
-  /// Slim progress hint while the 12-week plan job is still running.
-  List<Widget> _planGeneratingHint(BuildContext context, WidgetRef ref) {
-    final planState = ref.watch(currentPlanProvider);
-    if (planState.status != CurrentPlanStatus.generating) return const [];
-    return [
-      const SizedBox(height: 16),
-      CmpysCardSurface(
-        onTap: () => context.go(AppRoutes.plan),
-        pad: const EdgeInsets.all(16),
-        child: Row(
-          children: [
-            const SizedBox(
-              width: 15,
-              height: 15,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                valueColor: AlwaysStoppedAnimation<Color>(AppColors.green),
+  Widget _planStateCard(
+    BuildContext context,
+    WidgetRef ref,
+    CmpysState st,
+    CurrentPlanState planState,
+  ) {
+    switch (planState.status) {
+      case CurrentPlanStatus.loading:
+        return const CmpysSkeleton.block(height: 124);
+      case CurrentPlanStatus.generating:
+        return CmpysCardSurface(
+          onTap: () => context.go(AppRoutes.plan),
+          child: Row(
+            children: [
+              const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  valueColor: AlwaysStoppedAnimation<Color>(AppColors.green),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Your plan with ${st.idol.short} is being written.',
+                      style: AppTypography.bodyMedium.copyWith(
+                        color: AppColors.ink,
+                        fontSize: 14.5,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      '${planState.jobProgress}% complete',
+                      style: AppTypography.caption.copyWith(
+                        color: AppColors.ink3,
+                        fontSize: 12.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(
+                Icons.chevron_right_rounded,
+                size: 18,
+                color: AppColors.hair2,
+              ),
+            ],
+          ),
+        );
+      case CurrentPlanStatus.empty:
+        return CmpysCardSurface(
+          onTap: () => ref.read(currentPlanProvider.notifier).retry(),
+          child: Row(
+            children: [
+              const Icon(
+                PhosphorIconsRegular.sparkle,
+                size: 20,
+                color: AppColors.ink3,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'You don’t have a plan yet.',
+                      style: AppTypography.bodyMedium.copyWith(
+                        color: AppColors.ink,
+                        fontSize: 14.5,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      'Tap to check again.',
+                      style: AppTypography.caption.copyWith(
+                        color: AppColors.ink3,
+                        fontSize: 12.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      case CurrentPlanStatus.failed:
+        return CmpysCardSurface(
+          onTap: () => ref.read(currentPlanProvider.notifier).retry(),
+          child: Row(
+            children: [
+              const Icon(
+                Icons.refresh_rounded,
+                size: 20,
+                color: AppColors.ink3,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Couldn’t load your plan — tap to retry.',
+                  style: AppTypography.caption.copyWith(
+                    color: AppColors.ink2,
+                    fontSize: 13.5,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      case CurrentPlanStatus.ready:
+        return const SizedBox.shrink();
+    }
+  }
+
+  Widget _todayErrorCard(WidgetRef ref) {
+    return CmpysCardSurface(
+      onTap: () => ref.invalidate(todayViewProvider),
+      child: Row(
+        children: [
+          const Icon(Icons.refresh_rounded, size: 20, color: AppColors.ink3),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              'Couldn’t load today’s habits — tap to retry.',
+              style: AppTypography.caption.copyWith(
+                color: AppColors.ink2,
+                fontSize: 13.5,
               ),
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                'Your 12-week plan is being written — ${planState.jobProgress}%',
-                style: AppTypography.caption
-                    .copyWith(color: AppColors.ink2, fontSize: 13.5),
-              ),
-            ),
-            const Icon(Icons.chevron_right_rounded,
-                size: 18, color: AppColors.hair2),
-          ],
-        ),
+          ),
+        ],
       ),
-    ];
+    );
   }
 
   Future<void> _toggleDaily(
-      BuildContext context, WidgetRef ref, TodayTaskItem item) async {
+    BuildContext context,
+    WidgetRef ref,
+    TodayTaskItem item,
+  ) async {
     final wasDone = item.completedToday;
     try {
       await ref.read(planRepositoryProvider).toggleDailyTask(item.id);
       ref.invalidate(todayViewProvider);
       if (!wasDone && context.mounted) {
-        showCmpysToast(context, 'Nice. Kept your word.',
-            icon: Icons.check_rounded, tone: AppColors.green);
+        showCmpysToast(
+          context,
+          'Nice. Kept your word.',
+          icon: Icons.check_rounded,
+          tone: AppColors.green,
+        );
       }
     } catch (_) {
       if (context.mounted) {
-        showCmpysToast(context, 'Couldn’t update — try again.',
-            icon: Icons.error_outline_rounded, tone: AppColors.ink2);
+        showCmpysToast(
+          context,
+          'Couldn’t update — try again.',
+          icon: Icons.error_outline_rounded,
+          tone: AppColors.ink2,
+        );
       }
     }
   }
@@ -222,35 +345,54 @@ class CmpysTodayScreen extends ConsumerWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('YOUR NEXT BEST ACTION',
-                style: AppTypography.kicker.copyWith(
-                    color: Colors.white.withValues(alpha: 0.55))),
+            Text(
+              'YOUR NEXT BEST ACTION',
+              style: AppTypography.kicker.copyWith(
+                color: Colors.white.withValues(alpha: 0.55),
+              ),
+            ),
             const SizedBox(height: 10),
-            Text(item.title,
-                style: AppTypography.h3.copyWith(
-                    color: Colors.white, fontSize: 21, height: 1.2)),
+            Text(
+              item.title,
+              style: AppTypography.h3.copyWith(
+                color: Colors.white,
+                fontSize: 21,
+                height: 1.2,
+              ),
+            ),
             if (item.dailyInstructions != null &&
                 item.dailyInstructions!.trim().isNotEmpty) ...[
               const SizedBox(height: 8),
-              Text(item.dailyInstructions!,
-                  maxLines: 3,
-                  overflow: TextOverflow.ellipsis,
-                  style: AppTypography.caption.copyWith(
-                      color: Colors.white.withValues(alpha: 0.8),
-                      fontSize: 13,
-                      height: 1.45)),
+              Text(
+                item.dailyInstructions!,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: AppTypography.caption.copyWith(
+                  color: Colors.white.withValues(alpha: 0.8),
+                  fontSize: 13,
+                  height: 1.45,
+                ),
+              ),
             ],
             const SizedBox(height: 14),
             Row(
               children: [
-                Text('Daily rhythm · ~${item.estimatedHours}h this week',
+                Expanded(
+                  child: Text(
+                    'Daily rhythm · ~${item.estimatedHours}h this week',
+                    maxLines: 2,
                     style: AppTypography.caption.copyWith(
-                        color: Colors.white.withValues(alpha: 0.7),
-                        fontSize: 13)),
-                const Spacer(),
+                      color: Colors.white.withValues(alpha: 0.7),
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 8,
+                  ),
                   decoration: BoxDecoration(
                     color: const Color(0xFFEBC24A),
                     borderRadius: BorderRadius.circular(999),
@@ -258,12 +400,19 @@ class CmpysTodayScreen extends ConsumerWidget {
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text('Start',
-                          style: AppTypography.button.copyWith(
-                              color: const Color(0xFF211F1A), fontSize: 14)),
+                      Text(
+                        'Start',
+                        style: AppTypography.button.copyWith(
+                          color: const Color(0xFF211F1A),
+                          fontSize: 14,
+                        ),
+                      ),
                       const SizedBox(width: 4),
-                      const Icon(Icons.arrow_forward_rounded,
-                          size: 16, color: Color(0xFF211F1A)),
+                      const Icon(
+                        Icons.arrow_forward_rounded,
+                        size: 16,
+                        color: Color(0xFF211F1A),
+                      ),
                     ],
                   ),
                 ),
@@ -276,8 +425,11 @@ class CmpysTodayScreen extends ConsumerWidget {
   }
 
   Widget _backendHabitTile(
-      BuildContext context, WidgetRef ref, TodayTaskItem item,
-      {required bool first}) {
+    BuildContext context,
+    WidgetRef ref,
+    TodayTaskItem item, {
+    required bool first,
+  }) {
     final done = item.completedToday;
     return Container(
       decoration: BoxDecoration(
@@ -305,8 +457,11 @@ class CmpysTodayScreen extends ConsumerWidget {
                   ),
                 ),
                 child: done
-                    ? const Icon(Icons.check_rounded,
-                        size: 15, color: Colors.white)
+                    ? const Icon(
+                        Icons.check_rounded,
+                        size: 15,
+                        color: Colors.white,
+                      )
                     : null,
               ),
             ),
@@ -320,16 +475,22 @@ class CmpysTodayScreen extends ConsumerWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(item.title,
-                        style: AppTypography.bodyMedium.copyWith(
-                            fontSize: 15,
-                            color: done ? AppColors.ink3 : AppColors.ink,
-                            decoration:
-                                done ? TextDecoration.lineThrough : null)),
+                    Text(
+                      item.title,
+                      style: AppTypography.bodyMedium.copyWith(
+                        fontSize: 15,
+                        color: done ? AppColors.ink3 : AppColors.ink,
+                        decoration: done ? TextDecoration.lineThrough : null,
+                      ),
+                    ),
                     const SizedBox(height: 2),
-                    Text('Daily · ~${item.estimatedHours}h this week',
-                        style: AppTypography.caption
-                            .copyWith(color: AppColors.ink3, fontSize: 12)),
+                    Text(
+                      'Daily · ~${item.estimatedHours}h this week',
+                      style: AppTypography.caption.copyWith(
+                        color: AppColors.ink3,
+                        fontSize: 12,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -337,15 +498,23 @@ class CmpysTodayScreen extends ConsumerWidget {
           ),
           const Padding(
             padding: EdgeInsets.only(right: 6),
-            child: Icon(Icons.chevron_right_rounded,
-                size: 18, color: AppColors.hair2),
+            child: Icon(
+              Icons.chevron_right_rounded,
+              size: 18,
+              color: AppColors.hair2,
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _topBar(BuildContext context, CmpysState st, CmpysIdol idol, String name) {
+  Widget _topBar(
+    BuildContext context,
+    CmpysIdol idol,
+    String name,
+    int? planDay,
+  ) {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -353,11 +522,20 @@ class CmpysTodayScreen extends ConsumerWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              CmpysKicker('Day ${st.dayNum} · with ${idol.short}'),
+              CmpysKicker(
+                planDay == null
+                    ? 'With ${idol.short}'
+                    : 'Day $planDay · with ${idol.short}',
+              ),
               const SizedBox(height: 6),
-              Text('${_greeting()}, $name.',
-                  style: AppTypography.display.copyWith(
-                      fontSize: 30, letterSpacing: -0.6, height: 1.08)),
+              Text(
+                '${_greeting()}, $name.',
+                style: AppTypography.display.copyWith(
+                  fontSize: 30,
+                  letterSpacing: -0.6,
+                  height: 1.08,
+                ),
+              ),
             ],
           ),
         ),
@@ -380,8 +558,8 @@ class CmpysTodayScreen extends ConsumerWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(12),
         child: Container(
-          width: 40,
-          height: 40,
+          width: 44,
+          height: 44,
           decoration: BoxDecoration(
             color: AppColors.card,
             borderRadius: BorderRadius.circular(12),
@@ -417,17 +595,25 @@ class CmpysTodayScreen extends ConsumerWidget {
             color: const Color(0xFFEBC24A),
             track: Colors.white.withValues(alpha: 0.22),
             child: RichText(
-              text: TextSpan(children: [
-                TextSpan(
+              text: TextSpan(
+                children: [
+                  TextSpan(
                     text: '$doneToday',
                     style: AppTypography.h2.copyWith(
-                        color: Colors.white, fontSize: 23, height: 1)),
-                TextSpan(
+                      color: Colors.white,
+                      fontSize: 23,
+                      height: 1,
+                    ),
+                  ),
+                  TextSpan(
                     text: '/$total',
                     style: AppTypography.caption.copyWith(
-                        color: Colors.white.withValues(alpha: 0.7),
-                        fontSize: 13)),
-              ]),
+                      color: Colors.white.withValues(alpha: 0.7),
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
           const SizedBox(width: 18),
@@ -436,39 +622,59 @@ class CmpysTodayScreen extends ConsumerWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  pct >= 100 ? 'Today is done. Well held.' : '$left habits left today',
+                  total == 0
+                      ? 'No habits scheduled today.'
+                      : pct >= 100
+                      ? 'Today is done. Well held.'
+                      : '$left habits left today',
                   style: AppTypography.h4.copyWith(
-                      color: Colors.white, fontSize: 17, height: 1.2),
+                    color: Colors.white,
+                    fontSize: 17,
+                    height: 1.2,
+                  ),
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  pct >= 100
+                  total == 0
+                      ? 'Use the roadmap to see what’s ahead.'
+                      : pct >= 100
                       ? 'Consistency is the whole game.'
                       : 'Small things, done daily.',
                   style: AppTypography.caption.copyWith(
-                      color: Colors.white.withValues(alpha: 0.85),
-                      fontSize: 13.5),
+                    color: Colors.white.withValues(alpha: 0.85),
+                    fontSize: 13.5,
+                  ),
                 ),
                 if (streak > 0) ...[
                   const SizedBox(height: 11),
                   Container(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 5),
+                      horizontal: 12,
+                      vertical: 5,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.white.withValues(alpha: 0.16),
                       borderRadius: BorderRadius.circular(999),
                     ),
                     child: Row(
-                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(PhosphorIconsFill.flame,
-                            size: 16, color: const Color(0xFFEBC24A)),
+                        Icon(
+                          PhosphorIconsFill.flame,
+                          size: 16,
+                          color: const Color(0xFFEBC24A),
+                        ),
                         const SizedBox(width: 6),
-                        Text('$streak-day streak',
+                        Flexible(
+                          child: Text(
+                            '$streak-day streak',
+                            maxLines: 2,
                             style: AppTypography.captionMedium.copyWith(
-                                color: Colors.white,
-                                fontSize: 13.5,
-                                fontWeight: FontWeight.w600)),
+                              color: Colors.white,
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -477,61 +683,6 @@ class CmpysTodayScreen extends ConsumerWidget {
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _nextActionCard(BuildContext context, CmpysPlanItem item) {
-    final pf = _pillarFor(item.id);
-    return GestureDetector(
-      onTap: () => _openItem(context, item),
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(20, 18, 18, 18),
-        decoration: BoxDecoration(
-          gradient: AppColors.gradInk,
-          borderRadius: AppRadii.lg,
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('YOUR NEXT BEST ACTION',
-                style: AppTypography.kicker.copyWith(
-                    color: Colors.white.withValues(alpha: 0.55))),
-            const SizedBox(height: 10),
-            Text(item.title,
-                style: AppTypography.h3.copyWith(
-                    color: Colors.white, fontSize: 21, height: 1.2)),
-            const SizedBox(height: 14),
-            Row(
-              children: [
-                Text('${item.minutes} min · ${pf?.pillar.kicker ?? ""}',
-                    style: AppTypography.caption.copyWith(
-                        color: Colors.white.withValues(alpha: 0.7),
-                        fontSize: 13)),
-                const Spacer(),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFEBC24A),
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text('Start',
-                          style: AppTypography.button.copyWith(
-                              color: const Color(0xFF211F1A), fontSize: 14)),
-                      const SizedBox(width: 4),
-                      const Icon(Icons.arrow_forward_rounded,
-                          size: 16, color: Color(0xFF211F1A)),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -545,19 +696,26 @@ class CmpysTodayScreen extends ConsumerWidget {
         children: [
           const Icon(Icons.check_rounded, size: 30, color: AppColors.green),
           const SizedBox(height: 10),
-          Text('All daily habits complete.',
-              style: AppTypography.h3.copyWith(fontSize: 18)),
+          Text(
+            'All daily habits complete.',
+            style: AppTypography.h3.copyWith(fontSize: 18),
+          ),
           const SizedBox(height: 4),
-          Text('Come back tomorrow — or get ahead in your plan.',
-              textAlign: TextAlign.center,
-              style: AppTypography.bodyDim.copyWith(fontSize: 13.5)),
+          Text(
+            'Come back tomorrow — or get ahead in your plan.',
+            textAlign: TextAlign.center,
+            style: AppTypography.bodyDim.copyWith(fontSize: 13.5),
+          ),
         ],
       ),
     );
   }
 
-  Widget _sectionHeader(BuildContext context, String title,
-      {VoidCallback? onFullPlan}) {
+  Widget _sectionHeader(
+    BuildContext context,
+    String title, {
+    VoidCallback? onFullPlan,
+  }) {
     return Padding(
       padding: const EdgeInsets.only(left: 2),
       child: Row(
@@ -567,92 +725,17 @@ class CmpysTodayScreen extends ConsumerWidget {
           if (onFullPlan != null)
             GestureDetector(
               onTap: onFullPlan,
-              child: Text('Full plan',
-                  style: AppTypography.captionMedium.copyWith(
-                      color: AppColors.green, fontWeight: FontWeight.w600)),
+              child: Text(
+                'Full plan',
+                style: AppTypography.captionMedium.copyWith(
+                  color: AppColors.green,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
             ),
         ],
       ),
     );
-  }
-
-  Widget _habitTile(BuildContext context, WidgetRef ref, CmpysPlanItem item,
-      bool done,
-      {required bool first}) {
-    final pf = _pillarFor(item.id);
-    return Container(
-      decoration: BoxDecoration(
-        border: first
-            ? null
-            : const Border(top: BorderSide(color: AppColors.hair)),
-      ),
-      child: Row(
-        children: [
-          GestureDetector(
-            onTap: () {
-              ref.read(cmpysStoreProvider.notifier).toggleTask(item.id);
-              if (!done) {
-                showCmpysToast(context, 'Nice. Kept your word.',
-                    icon: Icons.check_rounded, tone: AppColors.green);
-              }
-            },
-            behavior: HitTestBehavior.opaque,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(8, 14, 12, 14),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                width: 26,
-                height: 26,
-                decoration: BoxDecoration(
-                  color: done ? (pf?.pillar.accent ?? AppColors.green) : Colors.transparent,
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: done ? (pf?.pillar.accent ?? AppColors.green) : AppColors.hair2,
-                    width: 2,
-                  ),
-                ),
-                child: done
-                    ? const Icon(Icons.check_rounded, size: 15, color: Colors.white)
-                    : null,
-              ),
-            ),
-          ),
-          Expanded(
-            child: GestureDetector(
-              onTap: () => _openItem(context, item),
-              behavior: HitTestBehavior.opaque,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(item.title,
-                        style: AppTypography.bodyMedium.copyWith(
-                            fontSize: 15,
-                            color: done ? AppColors.ink3 : AppColors.ink,
-                            decoration:
-                                done ? TextDecoration.lineThrough : null)),
-                    const SizedBox(height: 2),
-                    Text('Task · Daily · ${item.minutes} min',
-                        style: AppTypography.caption
-                            .copyWith(color: AppColors.ink3, fontSize: 12)),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          const Padding(
-            padding: EdgeInsets.only(right: 6),
-            child: Icon(Icons.chevron_right_rounded,
-                size: 18, color: AppColors.hair2),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _habitsLoadingCard() {
-    return const CmpysSkeleton.block(height: 96);
   }
 
   Widget _ideaLoadingCard() {
@@ -680,14 +763,19 @@ class CmpysTodayScreen extends ConsumerWidget {
           onTap: () => ref.invalidate(cmpysIdeasProvider),
           child: Row(
             children: [
-              const Icon(Icons.refresh_rounded,
-                  size: 18, color: AppColors.ink3),
+              const Icon(
+                Icons.refresh_rounded,
+                size: 18,
+                color: AppColors.ink3,
+              ),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
                   'Couldn’t load today’s idea — tap to retry.',
-                  style: AppTypography.caption
-                      .copyWith(color: AppColors.ink2, fontSize: 13.5),
+                  style: AppTypography.caption.copyWith(
+                    color: AppColors.ink2,
+                    fontSize: 13.5,
+                  ),
                 ),
               ),
             ],
@@ -714,33 +802,43 @@ class CmpysTodayScreen extends ConsumerWidget {
               borderRadius: AppRadii.lg,
               boxShadow: [
                 BoxShadow(
-                    color: idea.tone.withValues(alpha: 0.25),
-                    blurRadius: 18,
-                    offset: const Offset(0, 8)),
+                  color: idea.tone.withValues(alpha: 0.25),
+                  blurRadius: 18,
+                  offset: const Offset(0, 8),
+                ),
               ],
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(PhosphorIconsFill.quotes,
-                    size: 26, color: Colors.white.withValues(alpha: 0.55)),
+                Icon(
+                  PhosphorIconsFill.quotes,
+                  size: 26,
+                  color: Colors.white.withValues(alpha: 0.55),
+                ),
                 const SizedBox(height: 10),
-                Text(idea.text,
-                    style: AppTypography.h3.copyWith(
-                        color: Colors.white,
-                        fontSize: 20,
-                        height: 1.35,
-                        letterSpacing: -0.2)),
+                Text(
+                  idea.text,
+                  style: AppTypography.h3.copyWith(
+                    color: Colors.white,
+                    fontSize: 20,
+                    height: 1.35,
+                    letterSpacing: -0.2,
+                  ),
+                ),
                 const SizedBox(height: 12),
                 Row(
                   children: [
                     Flexible(
-                      child: Text('— ${idea.author}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: AppTypography.caption.copyWith(
-                              color: Colors.white.withValues(alpha: 0.8),
-                              fontSize: 13)),
+                      child: Text(
+                        '— ${idea.author}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTypography.caption.copyWith(
+                          color: Colors.white.withValues(alpha: 0.8),
+                          fontSize: 13,
+                        ),
+                      ),
                     ),
                     if (idea.isSourced) ...[
                       const SizedBox(width: 5),
@@ -768,7 +866,11 @@ class CmpysTodayScreen extends ConsumerWidget {
   }
 
   Widget _compareNudge(
-      BuildContext context, CmpysState st, CmpysIdol idol, String name) {
+    BuildContext context,
+    CmpysState st,
+    CmpysIdol idol,
+    String name,
+  ) {
     final initial = name.isNotEmpty && name != 'friend'
         ? name[0].toUpperCase()
         : 'Y';
@@ -808,23 +910,30 @@ class CmpysTodayScreen extends ConsumerWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('You vs ${idol.short} at ${cmpysComparison.age}',
-                    style: AppTypography.bodyMedium.copyWith(fontSize: 15)),
+                Text(
+                  st.user.age > 0
+                      ? 'You vs ${idol.short} at ${st.user.age}'
+                      : 'You vs ${idol.short}',
+                  style: AppTypography.bodyMedium.copyWith(fontSize: 15),
+                ),
                 const SizedBox(height: 2),
-                Text('See where you stand today',
-                    style: AppTypography.caption
-                        .copyWith(color: AppColors.ink2, fontSize: 13)),
+                Text(
+                  'See where you stand today',
+                  style: AppTypography.caption.copyWith(
+                    color: AppColors.ink2,
+                    fontSize: 13,
+                  ),
+                ),
               ],
             ),
           ),
-          const Icon(Icons.chevron_right_rounded,
-              size: 19, color: AppColors.ink3),
+          const Icon(
+            Icons.chevron_right_rounded,
+            size: 19,
+            color: AppColors.ink3,
+          ),
         ],
       ),
     );
-  }
-
-  void _openItem(BuildContext context, CmpysPlanItem item) {
-    openCmpysPlanItem(context, item);
   }
 }

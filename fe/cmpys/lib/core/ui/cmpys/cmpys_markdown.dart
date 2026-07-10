@@ -81,8 +81,8 @@ class CmpysMarkdownScreen extends StatelessWidget {
                   onTap: () => Navigator.of(context).maybePop(),
                   borderRadius: BorderRadius.circular(999),
                   child: Container(
-                    width: 38,
-                    height: 38,
+                    width: 44,
+                    height: 44,
                     decoration: BoxDecoration(
                       color: AppColors.card,
                       shape: BoxShape.circle,

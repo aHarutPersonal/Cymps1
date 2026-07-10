@@ -260,17 +260,16 @@ class CmpysState {
   /// plan, after which /plans/current serves it.
   final String? planJobId;
 
-  /// Raw `comparison_scores` map from the backend session. When present,
-  /// [liveDims] and [liveMilestones] use these real values; when null they
-  /// fall back to the seed data.
+  /// Raw `comparison_scores` map from the backend session. An empty map means
+  /// the active session is known but its generated scores are still pending.
   final Map<String, dynamic>? liveComparisonScores;
 
   /// A truly empty start: no pre-logged achievements, no fake streak, nothing
   /// checked off. Every entry the user sees is either backend-generated or
   /// explicitly entered by them.
   factory CmpysState.initial() => CmpysState(
-        user: CmpysUser(name: '', age: 24),
-        idol: defaultIdol(),
+        user: CmpysUser(name: '', age: 0),
+        idol: cmpysPlaceholderIdol,
         tasks: const {},
         milestones: const {},
         achievements: const [],
@@ -400,12 +399,12 @@ class CmpysState {
 
   // ── derived helpers (mirror record-data.jsx) ──
 
-  /// Comparison dimensions with reassessment shifts applied (you-score capped 100).
-  /// Prefers real dims from the session when present, else the seed list.
+  /// Generated comparison dimensions with reassessment shifts applied
+  /// (you-score capped at 100). Missing backend scores stay empty; demo values
+  /// are never substituted.
   List<({String id, String label, int you, int idol, String youNote, String idolNote})>
       liveDims() {
-    final base = dimsFromScores(liveComparisonScores) ??
-        cmpysComparison.dimensions;
+    final base = dimsFromScores(liveComparisonScores) ?? const <CmpysDimension>[];
     return base
         .map((d) => (
               id: d.id,
@@ -418,10 +417,10 @@ class CmpysState {
         .toList();
   }
 
-  /// Real milestones from the session when present, else the seed list.
+  /// Generated milestones from the active session, or an empty list while
+  /// structured comparison data is unavailable.
   List<CmpysMilestone> liveMilestones() =>
-      milestonesFromScores(liveComparisonScores) ??
-      cmpysComparison.milestones;
+      milestonesFromScores(liveComparisonScores) ?? const <CmpysMilestone>[];
 
   List<CmpysWin> pendingWins() =>
       achievements.where((a) => !a.assessed).toList();
@@ -767,7 +766,9 @@ class CmpysStore extends StateNotifier<CmpysState> {
     final blueprintMd = (blueprint != null && blueprint.trim().isNotEmpty)
         ? blueprint
         : next.blueprintMd;
-    final scores = session.comparisonScores ?? next.liveComparisonScores;
+    final switchedSession = session.id != next.sessionId;
+    final scores = session.comparisonScores ??
+        (switchedSession ? const <String, dynamic>{} : next.liveComparisonScores);
     final age = session.userAge > 0 ? session.userAge : next.user.age;
     final interests = session.userInterests.isNotEmpty
         ? session.userInterests

@@ -178,6 +178,30 @@ async def generate_plan_endpoint(
     Trigger asynchronous plan generation.
     Returns jobId to poll for status.
     """
+    # Recovery calls can arrive after the onboarding SSE already enqueued the
+    # job but before the client persisted its id. Reuse that session-linked
+    # job instead of charging for and racing a duplicate plan generation.
+    if data.sessionId:
+        existing = (
+            await db.execute(
+                select(PlanGenerationJob)
+                .where(
+                    PlanGenerationJob.user_id == current_user.id,
+                    PlanGenerationJob.idol_id == data.idolId,
+                    PlanGenerationJob.session_id == data.sessionId,
+                    PlanGenerationJob.status.in_(["pending", "running", "completed"]),
+                )
+                .order_by(PlanGenerationJob.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if existing:
+            return IdolImportResponse(
+                idolId=data.idolId,
+                jobId=str(existing.id),
+                status=existing.status,
+            )
+
     # Create the job record
     job = PlanGenerationJob(
         user_id=current_user.id,

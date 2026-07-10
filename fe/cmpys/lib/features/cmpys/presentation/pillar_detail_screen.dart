@@ -80,8 +80,8 @@ class PillarDetailScreen extends ConsumerWidget {
                   onTap: () => Navigator.of(context).maybePop(),
                   borderRadius: BorderRadius.circular(999),
                   child: Container(
-                    width: 38,
-                    height: 38,
+                    width: 44,
+                    height: 44,
                     decoration: BoxDecoration(
                       color: Colors.white.withValues(alpha: 0.18),
                       shape: BoxShape.circle,
@@ -192,7 +192,7 @@ class PillarDetailScreen extends ConsumerWidget {
       padding: const EdgeInsets.only(bottom: 10),
       child: CmpysCardSurface(
         pad: const EdgeInsets.fromLTRB(14, 12, 12, 12),
-        onTap: () => openCmpysPlanItem(context, it),
+        onTap: () => openCmpysPlanItem(context, it, pillar: pillar),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [

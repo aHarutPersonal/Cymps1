@@ -61,14 +61,23 @@ class AppShell extends ConsumerWidget {
   /// padding so its last item / button clears the nav instead of hiding
   /// underneath it. Pass [extra] for additional breathing room.
   static double bottomNavClearance(BuildContext context, {double extra = 0}) {
+    // The floating nav is hidden while the keyboard is open. Keeping its full
+    // clearance would leave a large dead zone above text fields/composers.
+    if (MediaQuery.viewInsetsOf(context).bottom > 0) return 12.0 + extra;
     return _pillHeight + _bottomMargin(context) + 22.0 + extra;
   }
+
+  @visibleForTesting
+  static bool useIconOnlyNavigation(double width, double scaledLabelSize) =>
+      width < 380 || scaledLabelSize > 16;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     // Hydrate mentor + AI results from the backend on app entry, regardless
     // of which tab the user lands on first.
     ref.watch(cmpysBackendSyncProvider);
+
+    final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
 
     return Scaffold(
       backgroundColor: AppColors.paper,
@@ -80,21 +89,22 @@ class AppShell extends ConsumerWidget {
               child: navigationShell,
             ),
           ),
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: _FloatingPillNav(
-              currentIndex: navigationShell.currentIndex,
-              onTap: (index) {
-                HapticFeedback.selectionClick();
-                navigationShell.goBranch(
-                  index,
-                  initialLocation: index == navigationShell.currentIndex,
-                );
-              },
+          if (!keyboardOpen)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: _FloatingPillNav(
+                currentIndex: navigationShell.currentIndex,
+                onTap: (index) {
+                  HapticFeedback.selectionClick();
+                  navigationShell.goBranch(
+                    index,
+                    initialLocation: index == navigationShell.currentIndex,
+                  );
+                },
+              ),
             ),
-          ),
         ],
       ),
     );
@@ -109,9 +119,16 @@ class _FloatingPillNav extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bottomMargin = AppShell._bottomMargin(context);
+    final width = MediaQuery.sizeOf(context).width;
+    final scaledLabelSize = MediaQuery.textScalerOf(context).scale(14);
+    final iconOnly = AppShell.useIconOnlyNavigation(width, scaledLabelSize);
 
     return Padding(
-      padding: EdgeInsets.only(bottom: bottomMargin, left: 16, right: 16),
+      padding: EdgeInsets.only(
+        bottom: bottomMargin,
+        left: iconOnly ? 10 : 16,
+        right: iconOnly ? 10 : 16,
+      ),
       child: Center(
         child: Container(
           padding: const EdgeInsets.all(6),
@@ -134,6 +151,7 @@ class _FloatingPillNav extends StatelessWidget {
                   glyph: dest.glyph,
                   label: dest.label,
                   active: active,
+                  iconOnly: iconOnly,
                   onTap: () => onTap(i),
                 ),
               );
@@ -150,16 +168,45 @@ class _NavChip extends StatelessWidget {
     required this.glyph,
     required this.label,
     required this.active,
+    required this.iconOnly,
     required this.onTap,
   });
 
   final CmpysNavGlyph glyph;
   final String label;
   final bool active;
+  final bool iconOnly;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
+    final iconOnlyChip = AnimatedContainer(
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
+      width: 44,
+      height: 48,
+      decoration: BoxDecoration(
+        color: active ? AppColors.green : Colors.transparent,
+        borderRadius: BorderRadius.circular(999),
+        boxShadow: active
+            ? [
+                BoxShadow(
+                  color: AppColors.green2.withValues(alpha: 0.28),
+                  blurRadius: 10,
+                  offset: const Offset(0, 3),
+                ),
+              ]
+            : null,
+      ),
+      alignment: Alignment.center,
+      child: CmpysNavIcon(
+        glyph,
+        size: 22,
+        color: active ? Colors.white : AppColors.ink3,
+        strokeWidth: active ? 2.0 : 1.7,
+      ),
+    );
+
     final activeChip = AnimatedContainer(
       duration: const Duration(milliseconds: 220),
       curve: Curves.easeOutCubic,
@@ -204,12 +251,24 @@ class _NavChip extends StatelessWidget {
       ),
     );
 
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(999),
-        child: active ? activeChip : inactiveChip,
+    return Semantics(
+      label: label,
+      button: true,
+      selected: active,
+      child: Tooltip(
+        message: iconOnly ? label : '',
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(999),
+            child: iconOnly
+                ? iconOnlyChip
+                : active
+                    ? activeChip
+                    : inactiveChip,
+          ),
+        ),
       ),
     );
   }

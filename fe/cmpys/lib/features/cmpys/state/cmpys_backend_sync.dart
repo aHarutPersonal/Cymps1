@@ -10,9 +10,26 @@ import 'cmpys_store.dart';
 
 final cmpysBackendSyncProvider = FutureProvider<void>((ref) async {
   try {
-    final session =
-        await ref.read(sessionRepositoryProvider).getLatestSession();
+    final repo = ref.read(sessionRepositoryProvider);
+    var session = await repo.getLatestSession();
     if (session != null) {
+      ref.read(cmpysStoreProvider.notifier).syncFromSession(session);
+    }
+
+    // Fetching a completed session with a prose verdict but no structured
+    // scores asks the backend to enqueue its idempotent backfill. Poll briefly
+    // so the Compare screen replaces its honest pending state automatically
+    // once those generated numbers land.
+    for (
+      var attempt = 0;
+      attempt < 20 &&
+          session?.comparisonOutput?.trim().isNotEmpty == true &&
+          session?.comparisonScores == null;
+      attempt++
+    ) {
+      await Future<void>.delayed(const Duration(seconds: 3));
+      session = await repo.getLatestSession();
+      if (session == null) break;
       ref.read(cmpysStoreProvider.notifier).syncFromSession(session);
     }
   } catch (_) {

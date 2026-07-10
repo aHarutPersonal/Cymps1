@@ -842,10 +842,11 @@ class _ToastWidgetState extends State<_ToastWidget>
   @override
   Widget build(BuildContext context) {
     final bottomInset = MediaQuery.of(context).padding.bottom;
+    final keyboardInset = MediaQuery.of(context).viewInsets.bottom;
     return Positioned(
       left: 0,
       right: 0,
-      bottom: 108 + bottomInset,
+      bottom: keyboardInset > 0 ? keyboardInset + 16 : 108 + bottomInset,
       child: IgnorePointer(
         child: Center(
           child: AnimatedBuilder(

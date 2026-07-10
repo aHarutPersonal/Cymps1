@@ -135,8 +135,8 @@ class _CmpysRecordScreenState extends ConsumerState<CmpysRecordScreen> {
           onTap: () => Navigator.of(context).maybePop(),
           borderRadius: BorderRadius.circular(999),
           child: Container(
-            width: 38,
-            height: 38,
+            width: 44,
+            height: 44,
             decoration: BoxDecoration(
               color: AppColors.card,
               shape: BoxShape.circle,
@@ -210,7 +210,7 @@ class _CmpysRecordScreenState extends ConsumerState<CmpysRecordScreen> {
 
   Widget _filterChips() {
     return SizedBox(
-      height: 36,
+      height: 44,
       child: ListView(
         scrollDirection: Axis.horizontal,
         children: [
@@ -897,8 +897,8 @@ class _AddWinSheetState extends ConsumerState<AddWinSheet> {
         onTap: onTap,
         borderRadius: BorderRadius.circular(10),
         child: Container(
-          width: 34,
-          height: 34,
+          width: 44,
+          height: 44,
           decoration: BoxDecoration(
               color: AppColors.paper2, borderRadius: BorderRadius.circular(10)),
           alignment: Alignment.center,
@@ -1033,7 +1033,7 @@ class _ClaimSheetState extends ConsumerState<ClaimSheet> {
                               fontWeight: FontWeight.w700)),
                       const SizedBox(height: 2),
                       Text(
-                          '$idolShort hit this by ${cmpysComparison.age} · counts toward ${dim.label}',
+                          '$idolShort hit this by $maxAge · counts toward ${dim.label}',
                           style: AppTypography.caption.copyWith(
                               color: dim.deep.withValues(alpha: 0.75),
                               fontSize: 12)),
@@ -1136,8 +1136,8 @@ class _ClaimSheetState extends ConsumerState<ClaimSheet> {
         onTap: onTap,
         borderRadius: BorderRadius.circular(10),
         child: Container(
-          width: 34,
-          height: 34,
+          width: 44,
+          height: 44,
           decoration: BoxDecoration(
               color: AppColors.paper2, borderRadius: BorderRadius.circular(10)),
           alignment: Alignment.center,
@@ -1164,14 +1164,14 @@ class ReassessOverlay extends ConsumerStatefulWidget {
 class _ReassessOverlayState extends ConsumerState<ReassessOverlay> {
   String _phase = 'think';
   late Map<String, int> _deltas;
-  late Map<String, int> _beforeShift;
+  late Map<String, int> _beforeScores;
 
   @override
   void initState() {
     super.initState();
     final st = ref.read(cmpysStoreProvider);
     _deltas = st.assessDeltas();
-    _beforeShift = Map<String, int>.from(st.dimShift);
+    _beforeScores = {for (final d in st.liveDims()) d.id: d.you};
   }
 
   List<String> get _lines {
@@ -1282,8 +1282,7 @@ class _ReassessOverlayState extends ConsumerState<ReassessOverlay> {
   }
 
   Widget _deltaRow(String dimId, int delta) {
-    final base = cmpysComparison.dimensions.firstWhere((d) => d.id == dimId);
-    final before = (base.you + (_beforeShift[dimId] ?? 0)).clamp(0, 100);
+    final before = (_beforeScores[dimId] ?? 0).clamp(0, 100);
     final after = (before + delta).clamp(0, 100);
     final meta = dimOf(dimId);
     return Container(

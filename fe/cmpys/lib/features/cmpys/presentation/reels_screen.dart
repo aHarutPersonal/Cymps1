@@ -210,8 +210,8 @@ class _CmpysReelsScreenState extends ConsumerState<CmpysReelsScreen> {
                       ),
                       _refresh == 'loading'
                           ? Container(
-                              width: 38,
-                              height: 38,
+                              width: 44,
+                              height: 44,
                               padding: const EdgeInsets.all(9),
                               child: const CircularProgressIndicator(
                                 strokeWidth: 2,
@@ -284,8 +284,8 @@ class _CmpysReelsScreenState extends ConsumerState<CmpysReelsScreen> {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        width: 38,
-        height: 38,
+        width: 44,
+        height: 44,
         decoration: BoxDecoration(
           color: Colors.white.withValues(alpha: 0.16),
           shape: BoxShape.circle,
@@ -510,6 +510,8 @@ class _ReelState extends ConsumerState<_Reel>
     final commentCount = idea.comments.length + (st?.comments.length ?? 0);
     final likeN = idea.likes + (liked ? 1 : 0);
     final dark = Color.lerp(idea.tone, Colors.black, 0.45)!;
+    final media = MediaQuery.of(context);
+    final compact = media.size.height < 700 || media.textScaler.scale(14) > 16;
 
     return GestureDetector(
       onTap: _onTap,
@@ -541,20 +543,21 @@ class _ReelState extends ConsumerState<_Reel>
 
           // Watermark quote
           Positioned(
-            top: 116,
-            left: 20,
+            top: compact ? 94 : 116,
+            left: compact ? 16 : 20,
             child: Opacity(
               opacity: 0.55,
               child: Icon(PhosphorIconsFill.quotes,
-                  size: 120, color: Colors.white.withValues(alpha: 0.16)),
+                  size: compact ? 90 : 120,
+                  color: Colors.white.withValues(alpha: 0.16)),
             ),
           ),
 
           // Main text block
           Positioned(
-            left: 24,
-            right: 90,
-            bottom: 130,
+            left: compact ? 18 : 24,
+            right: compact ? 76 : 90,
+            bottom: compact ? 92 : 130,
             child: AnimatedSwitcher(
               duration: const Duration(milliseconds: 450),
               transitionBuilder: (child, anim) => FadeTransition(
@@ -571,13 +574,13 @@ class _ReelState extends ConsumerState<_Reel>
                       key: ValueKey('on-${idea.id}'),
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,
-                      children: _textColumn(idea),
+                      children: _textColumn(idea, compact: compact),
                     )
                   : Column(
                       key: ValueKey('off-${idea.id}'),
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,
-                      children: _textColumn(idea),
+                      children: _textColumn(idea, compact: compact),
                     ),
             ),
           ),
@@ -585,7 +588,7 @@ class _ReelState extends ConsumerState<_Reel>
           // Action rail
           Positioned(
             right: 12,
-            bottom: 118,
+            bottom: compact ? 82 : 118,
             child: GestureDetector(
               onTap: () {}, // absorb taps so card double-tap doesn't fire
               child: Column(
@@ -599,7 +602,7 @@ class _ReelState extends ConsumerState<_Reel>
                     onTap: () =>
                         ref.read(cmpysStoreProvider.notifier).likeIdea(idea.id),
                   ),
-                  const SizedBox(height: 16),
+                  SizedBox(height: compact ? 10 : 16),
                   _RailBtn(
                     icon: PhosphorIconsFill.chatCircle,
                     outlineIcon: PhosphorIconsRegular.chatCircle,
@@ -608,7 +611,7 @@ class _ReelState extends ConsumerState<_Reel>
                     activeColor: Colors.white,
                     onTap: widget.onComments,
                   ),
-                  const SizedBox(height: 16),
+                  SizedBox(height: compact ? 10 : 16),
                   _RailBtn(
                     icon: PhosphorIconsFill.bookmarkSimple,
                     outlineIcon: PhosphorIconsRegular.bookmarkSimple,
@@ -625,7 +628,7 @@ class _ReelState extends ConsumerState<_Reel>
                           tone: now ? AppColors.green : AppColors.ink3);
                     },
                   ),
-                  const SizedBox(height: 16),
+                  SizedBox(height: compact ? 10 : 16),
                   _RailBtn(
                     icon: PhosphorIconsFill.shareNetwork,
                     outlineIcon: PhosphorIconsRegular.shareNetwork,
@@ -645,7 +648,7 @@ class _ReelState extends ConsumerState<_Reel>
             Positioned(
               left: 0,
               right: 0,
-              bottom: 44,
+              bottom: compact ? 22 : 44,
               child: _SwipeHint(),
             ),
 
@@ -684,7 +687,7 @@ class _ReelState extends ConsumerState<_Reel>
     );
   }
 
-  List<Widget> _textColumn(CmpysIdea idea) {
+  List<Widget> _textColumn(CmpysIdea idea, {required bool compact}) {
     return [
       Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -701,10 +704,14 @@ class _ReelState extends ConsumerState<_Reel>
       const SizedBox(height: 16),
       Text(
         idea.text,
+        maxLines: compact ? 7 : null,
+        overflow: compact ? TextOverflow.ellipsis : null,
         // Design uses the reading serif (`className="serif"`) for idea body text.
         style: AppTypography.readingBold.copyWith(
           color: Colors.white,
-          fontSize: idea.text.length > 90 ? 25 : 29,
+          fontSize: compact
+              ? (idea.text.length > 90 ? 20 : 23)
+              : (idea.text.length > 90 ? 25 : 29),
           height: 1.16,
           letterSpacing: -0.4,
         ),

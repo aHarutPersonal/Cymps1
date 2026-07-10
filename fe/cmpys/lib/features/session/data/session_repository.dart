@@ -167,10 +167,17 @@ class SessionRepository {
     }
   }
 
-  /// Get the user's latest resumable session (most recent non-completed).
-  /// Alias over [getCurrentSession] — the backend's `/sessions/current`
-  /// already returns the newest non-completed session.
-  Future<Session?> getLatestSession() => getCurrentSession();
+  /// Get the user's newest session, including completed onboarding.
+  ///
+  /// This is distinct from [getCurrentSession], which is only for resuming an
+  /// unfinished onboarding flow. Post-onboarding hydration and plan recovery
+  /// need the completed session's blueprint, scores, and selected mentor.
+  Future<Session?> getLatestSession() async {
+    debugPrint('🔍 Loading latest session');
+    final response = await _dioClient.get('/sessions/latest');
+    if (response.data == null) return null;
+    return Session.fromJson(response.data as Map<String, dynamic>);
+  }
 
   /// Abandon the user's current in-progress session so a fresh one can start.
   /// Best-effort: the backend rejects a second active session, so we clear the

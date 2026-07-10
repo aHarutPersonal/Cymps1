@@ -141,6 +141,7 @@ class PlanRepository {
   Future<String> generatePlan({
     required String idolId,
     required int targetAge,
+    String? sessionId,
     int durationWeeks = 12,
     int weeklyHours = 10,
   }) async {
@@ -149,6 +150,7 @@ class PlanRepository {
       'targetAge': targetAge,
       'durationWeeks': durationWeeks,
       'weeklyHours': weeklyHours,
+      if (sessionId != null && sessionId.isNotEmpty) 'sessionId': sessionId,
     });
     final data = response.data as Map<String, dynamic>;
     final jobId = data['jobId']?.toString() ?? '';

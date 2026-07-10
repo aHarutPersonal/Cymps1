@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/design_tokens.dart';
 import '../../../app/router.dart';
+import '../../../core/ui/app_shell.dart';
 import '../../../core/ui/cmpys/cmpys_primitives.dart';
 import '../../../core/ui/motion/entrance.dart';
 import '../../../core/ui/motion/page_transition.dart';
@@ -290,7 +291,6 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
               children: [
                 Text(idol.name, style: AppTypography.h4.copyWith(fontSize: 16)),
                 Row(
-                  mainAxisSize: MainAxisSize.min,
                   children: [
                     Container(
                         width: 7,
@@ -298,9 +298,13 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
                         decoration: const BoxDecoration(
                             color: AppColors.green, shape: BoxShape.circle)),
                     const SizedBox(width: 5),
-                    Text('AI mentor · always here',
-                        style: AppTypography.caption.copyWith(
-                            color: AppColors.green, fontSize: 12)),
+                    Expanded(
+                      child: Text('AI mentor · always here',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppTypography.caption.copyWith(
+                              color: AppColors.green, fontSize: 12)),
+                    ),
                   ],
                 ),
               ],
@@ -310,8 +314,8 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
             onTap: () => Navigator.of(context).push(
                 CmpysPageRoute(builder: (_) => const CmpysNotesScreen())),
             child: Container(
-              width: 38,
-              height: 38,
+              width: 44,
+              height: 44,
               alignment: Alignment.center,
               decoration: BoxDecoration(
                 color: AppColors.paper2,
@@ -576,10 +580,14 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
   }
 
   Widget _composer(CmpysIdol idol) {
-    final bottom = MediaQuery.of(context).padding.bottom;
     final showSuggestions = _msgs.isEmpty && !_busy && !_winMode;
     return Container(
-      padding: EdgeInsets.fromLTRB(14, 10, 14, 12 + bottom + 96),
+      padding: EdgeInsets.fromLTRB(
+        14,
+        10,
+        14,
+        AppShell.bottomNavClearance(context, extra: 2),
+      ),
       decoration: const BoxDecoration(
         color: AppColors.card,
         border: Border(top: BorderSide(color: AppColors.hair)),
@@ -589,7 +597,7 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
         children: [
           if (showSuggestions)
             SizedBox(
-              height: 38,
+              height: 44,
               child: ListView(
                 scrollDirection: Axis.horizontal,
                 children: [
@@ -666,8 +674,8 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
                         child: ValueListenableBuilder<TextEditingValue>(
                           valueListenable: _input,
                           builder: (_, value, _) => Container(
-                            width: 38,
-                            height: 38,
+                            width: 44,
+                            height: 44,
                             margin: const EdgeInsets.only(bottom: 1),
                             decoration: BoxDecoration(
                               color: value.text.trim().isEmpty

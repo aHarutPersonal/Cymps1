@@ -77,8 +77,8 @@ Widget _backBtn(BuildContext context) => Material(
         onTap: () => Navigator.of(context).maybePop(),
         borderRadius: BorderRadius.circular(999),
         child: Container(
-          width: 38,
-          height: 38,
+          width: 44,
+          height: 44,
           decoration: BoxDecoration(
             color: AppColors.card,
             shape: BoxShape.circle,
@@ -108,7 +108,7 @@ class _EmptyState extends StatelessWidget {
   Widget build(BuildContext context) {
     return Center(
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -621,10 +621,10 @@ class _CmpysEditProfileScreenState
     super.initState();
     final u = ref.read(cmpysStoreProvider).user;
     _name = TextEditingController(text: u.name);
-    _age = u.age;
+    _age = u.age > 0 ? u.age : 16;
     _interests = {...u.interests};
     _initialName = u.name;
-    _initialAge = u.age;
+    _initialAge = _age;
     _initialInterests = {...u.interests};
   }
 
@@ -720,8 +720,8 @@ class _CmpysEditProfileScreenState
                         onTap: _tryBack,
                         borderRadius: BorderRadius.circular(999),
                         child: Container(
-                          width: 38,
-                          height: 38,
+                          width: 44,
+                          height: 44,
                           decoration: BoxDecoration(
                             color: AppColors.card,
                             shape: BoxShape.circle,
@@ -898,8 +898,8 @@ class _CmpysEditProfileScreenState
         onTap: onTap,
         borderRadius: BorderRadius.circular(10),
         child: Container(
-          width: 34,
-          height: 34,
+          width: 44,
+          height: 44,
           decoration:
               BoxDecoration(color: bg, borderRadius: BorderRadius.circular(10)),
           alignment: Alignment.center,
@@ -1227,7 +1227,11 @@ void openIdolDetail(BuildContext context, CmpysIdol idol) {
 
 /// Routes a plan item to the right detail screen by kind:
 /// read → article, book → book lesson, video → video, task → task detail.
-void openCmpysPlanItem(BuildContext context, CmpysPlanItem item) {
+void openCmpysPlanItem(
+  BuildContext context,
+  CmpysPlanItem item, {
+  required CmpysPillar pillar,
+}) {
   switch (item.kind) {
     case CmpysItemKind.read:
       final reading = cmpysReadings[item.id];
@@ -1257,10 +1261,6 @@ void openCmpysPlanItem(BuildContext context, CmpysPlanItem item) {
       break;
   }
   // Tasks (and any item without bound reader content) open the task detail.
-  final pillar = cmpysPlan.pillars.firstWhere(
-    (p) => p.items.any((it) => it.id == item.id),
-    orElse: () => cmpysPlan.pillars.first,
-  );
   Navigator.of(context).push(CmpysPageRoute(
       builder: (_) => CmpysTaskDetailScreen(item: item, pillar: pillar)));
 }

@@ -11,6 +11,7 @@ import '../../../core/ui/motion/entrance.dart';
 import '../../../core/ui/motion/page_transition.dart';
 import '../../auth/controllers/auth_controller.dart';
 import '../../auth/controllers/session_controller.dart';
+import '../../plan/state/current_plan_provider.dart';
 import '../data/cmpys_seed.dart';
 import '../state/cmpys_store.dart';
 import 'detail_screens.dart';
@@ -26,9 +27,10 @@ class CmpysYouScreen extends ConsumerWidget {
     final st = ref.watch(cmpysStoreProvider);
     final idol = st.idol;
     final name = st.user.name.isEmpty ? 'Your name' : st.user.name;
-    final daily = cmpysPlan.pillars.expand((p) => p.items).toList();
-    final doneCount = daily.where((it) => st.tasks[it.id] ?? false).length;
-    final planPct = daily.isEmpty ? 0 : (doneCount / daily.length * 100).round();
+    final plan = ref.watch(currentPlanProvider).plan;
+    final today = ref.watch(todayViewProvider).valueOrNull;
+    final planPct = plan?.overallProgress.round();
+    final planDay = _planDay(plan?.createdAt);
 
     return Scaffold(
       backgroundColor: AppColors.paper,
@@ -62,16 +64,16 @@ class CmpysYouScreen extends ConsumerWidget {
               ],
             ),
             const SizedBox(height: 16),
-            _profileCard(context, st, idol, name),
+            _profileCard(context, st, idol, name, planDay),
             const SizedBox(height: 18),
             Row(
               children: [
                 Expanded(
-                    child: _stat('${st.streak}', 'Day streak',
+                    child: _stat(today == null ? '—' : '${today.streak}', 'Day streak',
                         PhosphorIconsRegular.flame, AppColors.ochre)),
                 const SizedBox(width: 10),
                 Expanded(
-                    child: _stat('$planPct%', 'Plan done',
+                    child: _stat(planPct == null ? '—' : '$planPct%', 'Plan done',
                         PhosphorIconsRegular.target, AppColors.green)),
                 const SizedBox(width: 10),
                 Expanded(
@@ -156,8 +158,8 @@ class CmpysYouScreen extends ConsumerWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(999),
         child: Container(
-          width: 40,
-          height: 40,
+          width: 44,
+          height: 44,
           decoration: BoxDecoration(
             color: AppColors.card,
             shape: BoxShape.circle,
@@ -169,8 +171,18 @@ class CmpysYouScreen extends ConsumerWidget {
     );
   }
 
-  Widget _profileCard(
-      BuildContext context, CmpysState st, CmpysIdol idol, String name) {
+  int? _planDay(DateTime? createdAt) {
+    if (createdAt == null) return null;
+    final local = createdAt.toLocal();
+    final start = DateTime(local.year, local.month, local.day);
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final day = today.difference(start).inDays + 1;
+    return day < 1 ? 1 : day;
+  }
+
+  Widget _profileCard(BuildContext context, CmpysState st, CmpysIdol idol,
+      String name, int? planDay) {
     final initial = st.user.name.isNotEmpty ? st.user.name[0].toUpperCase() : 'Y';
     return CmpysCardSurface(
       raised: true,
@@ -184,13 +196,25 @@ class CmpysYouScreen extends ConsumerWidget {
             tint: AppColors.ochreSoft,
           ),
           const SizedBox(height: 12),
-          Text(name,
-              style: AppTypography.display.copyWith(
-                  fontSize: 24, fontWeight: FontWeight.w700, height: 1.1)),
+          Text(
+            name,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: AppTypography.display.copyWith(
+                fontSize: 24, fontWeight: FontWeight.w700, height: 1.1),
+          ),
           const SizedBox(height: 3),
-          Text('Age ${st.user.age} · Day ${st.dayNum} on CMPYS',
-              style: AppTypography.caption
-                  .copyWith(color: AppColors.ink2, fontSize: 13.5)),
+          Text(
+            st.user.age <= 0
+                ? 'Complete your profile to personalize CMPYS'
+                : planDay == null
+                    ? 'Age ${st.user.age}'
+                    : 'Age ${st.user.age} · Day $planDay on CMPYS',
+            textAlign: TextAlign.center,
+            style: AppTypography.caption
+                .copyWith(color: AppColors.ink2, fontSize: 13.5),
+          ),
           const SizedBox(height: 14),
           GestureDetector(
             onTap: () => Navigator.of(context).push(CmpysPageRoute(
@@ -212,9 +236,15 @@ class CmpysYouScreen extends ConsumerWidget {
                     size: 20,
                   ),
                   const SizedBox(width: 7),
-                  Text('Mentored by ${idol.short}',
+                  Flexible(
+                    child: Text(
+                      'Mentored by ${idol.short}',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                       style: AppTypography.captionMedium.copyWith(
-                          color: idol.color, fontWeight: FontWeight.w700)),
+                          color: idol.color, fontWeight: FontWeight.w700),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -244,10 +274,10 @@ class CmpysYouScreen extends ConsumerWidget {
                   color: AppColors.ink)),
           const SizedBox(height: 3),
           Text(label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
+              maxLines: 2,
+              textAlign: TextAlign.center,
               style: AppTypography.caption
-                  .copyWith(color: AppColors.ink3, fontSize: 11)),
+                  .copyWith(color: AppColors.ink3, fontSize: 12)),
         ],
       ),
     );

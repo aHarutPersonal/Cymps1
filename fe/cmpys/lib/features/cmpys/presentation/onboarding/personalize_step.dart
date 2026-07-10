@@ -66,8 +66,8 @@ class _CmpysPersonalizeStepState extends State<CmpysPersonalizeStep> {
                     GestureDetector(
                       onTap: _back,
                       child: Container(
-                        width: 38,
-                        height: 38,
+                        width: 44,
+                        height: 44,
                         decoration: BoxDecoration(
                           color: AppColors.card,
                           shape: BoxShape.circle,
@@ -275,8 +275,8 @@ class _CmpysPersonalizeStepState extends State<CmpysPersonalizeStep> {
         onTap: onTap,
         borderRadius: BorderRadius.circular(10),
         child: Container(
-          width: 36,
-          height: 36,
+          width: 44,
+          height: 44,
           decoration: BoxDecoration(
             color: bg,
             borderRadius: BorderRadius.circular(10),

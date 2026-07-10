@@ -843,6 +843,38 @@ async def get_current_session(
     return _build_session_response(session)
 
 
+@router.get("/latest", response_model=SessionResponse | None)
+async def get_latest_session(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """Return the user's newest session, including completed onboarding.
+
+    ``/current`` is deliberately limited to resumable, non-completed sessions.
+    Post-onboarding features need the completed session as their source of
+    truth for the selected idol, comparison scores, blueprint, and plan-job
+    recovery, so they must use this endpoint instead.
+    """
+    stmt = (
+        select(IntakeSession)
+        .options(
+            selectinload(IntakeSession.idol),
+            selectinload(IntakeSession.idol).selectinload(Idol.profile),
+            selectinload(IntakeSession.idol).selectinload(Idol.persona),
+        )
+        .where(IntakeSession.user_id == current_user.id)
+        .order_by(IntakeSession.created_at.desc())
+        .limit(1)
+    )
+    result = await db.execute(stmt)
+    session = result.scalar_one_or_none()
+    if not session:
+        return None
+
+    _maybe_enqueue_scores_backfill(session)
+    return _build_session_response(session)
+
+
 @router.get("/{session_id}", response_model=SessionResponse)
 async def get_session(
     session_id: str,
@@ -1266,7 +1298,7 @@ async def generate_results(
         # task is usually already finished, so this await is ~free. The prose
         # comparison is the mirror; these are the numbers behind the Compare
         # screen's gauges/radar. Best-effort: a failure leaves
-        # comparison_scores_json null and the client falls back to seed data.
+        # comparison_scores_json null and the client shows a pending state.
         try:
             scores = await scores_task
             if scores:

@@ -141,8 +141,8 @@ class CmpysIdolPreviewStep extends StatelessWidget {
               onTap: onBack,
               borderRadius: BorderRadius.circular(999),
               child: Container(
-                width: 38,
-                height: 38,
+                width: 44,
+                height: 44,
                 decoration: BoxDecoration(
                   color: Colors.white.withValues(alpha: 0.16),
                   shape: BoxShape.circle,

@@ -644,6 +644,25 @@ const cmpysIdeas = <CmpysIdea>[
 
 CmpysIdol defaultIdol() => cmpysIdols.first;
 
+/// Neutral pre-hydration identity. Production screens may build for a frame
+/// before the latest session arrives; showing a real catalog mentor there
+/// would fabricate a selection the user never made.
+const cmpysPlaceholderIdol = CmpysIdol(
+  id: 'mentor-placeholder',
+  slug: '__llm__',
+  name: 'Your mentor',
+  short: 'your mentor',
+  initials: 'M',
+  title: 'Mentor',
+  era: '',
+  field: 'Growth',
+  color: AppColors.green,
+  tint: AppColors.greenSoft,
+  tag: '',
+  blurb: '',
+  quote: '',
+);
+
 /// Serialize an idol for persistence (colors as ARGB ints). Used by the store
 /// so an LLM-suggested idol survives an app restart, not just catalog ones.
 Map<String, dynamic> cmpysIdolToJson(CmpysIdol i) => {

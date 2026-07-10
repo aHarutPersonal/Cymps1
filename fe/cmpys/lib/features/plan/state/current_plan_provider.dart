@@ -220,6 +220,16 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
     }
   }
 
+  /// User-initiated recovery from the empty/error state. Automatic recovery
+  /// is intentionally attempted once per controller lifetime, but an explicit
+  /// retry must be allowed to enqueue again after a transient API/broker
+  /// failure.
+  Future<void> retry() async {
+    _autoGenerateTried = false;
+    state = const CurrentPlanState(status: CurrentPlanStatus.loading);
+    await refresh();
+  }
+
   /// Called when the onboarding flow stores a fresh plan-generation job id.
   void onJobIdChanged(String? jobId) {
     if (jobId == null || jobId.isEmpty) return;
@@ -310,6 +320,7 @@ final currentPlanProvider =
       final jobId = await ref.read(planRepositoryProvider).generatePlan(
             idolId: idolId,
             targetAge: session.userAge > 0 ? session.userAge : 24,
+            sessionId: session.id,
           );
       if (jobId.isNotEmpty) {
         ref.read(cmpysStoreProvider.notifier).setPlanJobId(jobId);

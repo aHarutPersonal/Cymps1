@@ -201,8 +201,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                       setState(() => _showEmailForm = false);
                     },
               child: Container(
-                width: 40,
-                height: 40,
+                width: 44,
+                height: 44,
                 decoration: BoxDecoration(
                   color: AppColors.surface,
                   border: Border.all(color: AppColors.border),
@@ -453,12 +453,17 @@ class _AuthPill extends StatelessWidget {
                       ),
                       const SizedBox(width: 10),
                     ],
-                    Text(
-                      label,
-                      style: AppTypography.bodyMedium.copyWith(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                        color: fg,
+                    Flexible(
+                      child: Text(
+                        label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.center,
+                        style: AppTypography.bodyMedium.copyWith(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          color: fg,
+                        ),
                       ),
                     ),
                   ],
