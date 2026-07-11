@@ -7,7 +7,6 @@ import 'package:phosphor_flutter/phosphor_flutter.dart';
 import '../../../app/design_tokens.dart';
 import '../../../core/network/api_error.dart';
 import '../../../core/ui/app_shell.dart';
-import '../../../core/ui/cmpys/cmpys_markdown.dart';
 import '../../../core/ui/cmpys/cmpys_primitives.dart';
 import '../../../core/ui/motion/page_transition.dart';
 import '../data/plan_repository.dart';
@@ -16,6 +15,7 @@ import '../state/current_plan_provider.dart';
 import 'achievement_sheet.dart';
 import 'book_reader_screen.dart';
 import 'cycle_completion_screen.dart';
+import 'lesson_reader_screen.dart';
 import 'material_reader_screen.dart';
 import 'material_video_screen.dart';
 import 'material_web_screen.dart';
@@ -245,10 +245,30 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
           _generatingCard()
         else ...[
           if (d.steps.isNotEmpty) ...[
-            const CmpysKicker('Lesson steps'),
+            Row(
+              children: [
+                const Expanded(child: CmpysKicker('Focused lessons')),
+                Text(
+                  '${d.completedStepIds.length}/${d.steps.length}',
+                  style: AppTypography.captionMedium.copyWith(
+                    color: AppColors.green2,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Complete one lesson at a time. Finishing the active lesson unlocks the next.',
+              style: AppTypography.caption.copyWith(
+                color: AppColors.ink3,
+                fontSize: 12.5,
+                height: 1.4,
+              ),
+            ),
             const SizedBox(height: 12),
             for (var i = 0; i < d.steps.length; i++) ...[
-              _stepCard(d.steps[i], i + 1),
+              _lessonCard(d, d.steps[i], i),
               const SizedBox(height: 12),
             ],
           ],
@@ -263,16 +283,64 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
           ],
         ],
         const SizedBox(height: 18),
-        CmpysButton(
-          variant: d.completed ? CmpysBtnVariant.dark : CmpysBtnVariant.primary,
-          size: CmpysBtnSize.lg,
-          full: true,
-          disabled: _toggling,
-          leadingIcon:
-              d.completed ? Icons.undo_rounded : Icons.check_rounded,
-          onTap: _toggleComplete,
-          child: Text(d.completed ? 'Mark as not done' : 'Mark as done'),
-        ),
+        if (d.steps.isEmpty)
+          CmpysButton(
+            variant:
+                d.completed ? CmpysBtnVariant.dark : CmpysBtnVariant.primary,
+            size: CmpysBtnSize.lg,
+            full: true,
+            disabled: _toggling,
+            leadingIcon:
+                d.completed ? Icons.undo_rounded : Icons.check_rounded,
+            onTap: _toggleComplete,
+            child: Text(d.completed ? 'Mark as not done' : 'Mark as done'),
+          )
+        else if (d.completed)
+          CmpysCardSurface(
+            color: AppColors.greenSoft,
+            border: false,
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.check_circle_rounded,
+                  color: AppColors.green2,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'All focused lessons are complete. Mission accomplished.',
+                    style: AppTypography.bodyMedium.copyWith(
+                      color: AppColors.green2,
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          )
+        else
+          CmpysCardSurface(
+            color: AppColors.paper2,
+            child: Row(
+              children: [
+                const Icon(
+                  PhosphorIconsRegular.lockSimple,
+                  color: AppColors.ink3,
+                  size: 18,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Complete all lessons in order to finish this mission.',
+                    style: AppTypography.caption.copyWith(
+                      color: AppColors.ink2,
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
       ],
     );
   }
@@ -305,94 +373,224 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
     );
   }
 
-  Widget _stepCard(PlanStepDetail step, int number) {
+  Widget _lessonCard(PlanItemDetailed detailed, PlanStepDetail step, int index) {
+    final completed = detailed.isStepCompleted(step.id);
+    final unlocked = detailed.isStepUnlocked(index);
+    final active = unlocked && !completed;
     final hasLesson =
         step.lessonContent != null && step.lessonContent!.trim().isNotEmpty;
+
     return CmpysCardSurface(
-      pad: const EdgeInsets.all(4),
-      child: Theme(
-        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-        child: ExpansionTile(
-          tilePadding: const EdgeInsets.symmetric(horizontal: 14),
-          childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-          leading: Container(
-            width: 30,
-            height: 30,
+      key: Key('lesson-${index + 1}-${completed ? 'completed' : active ? 'active' : 'locked'}'),
+      color: active
+          ? AppColors.greenSoft
+          : unlocked
+              ? AppColors.card
+              : AppColors.paper2,
+      raised: active,
+      onTap: !unlocked
+          ? () => _showLessonLocked(index, detailed.activeStepIndex)
+          : hasLesson
+              ? () => _openLesson(detailed, step, index)
+              : null,
+      pad: const EdgeInsets.all(16),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 36,
+            height: 36,
             alignment: Alignment.center,
-            decoration: const BoxDecoration(
-              color: AppColors.greenSoft,
+            decoration: BoxDecoration(
+              color: completed
+                  ? AppColors.green
+                  : active
+                      ? Colors.white
+                      : AppColors.card.withValues(alpha: 0.7),
               shape: BoxShape.circle,
             ),
-            child: Text('$number',
-                style: AppTypography.captionMedium.copyWith(
-                    color: AppColors.green,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 13)),
+            child: completed
+                ? const Icon(Icons.check_rounded, color: Colors.white, size: 18)
+                : unlocked
+                    ? Text(
+                        '${index + 1}',
+                        style: AppTypography.captionMedium.copyWith(
+                          color: AppColors.green2,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      )
+                    : const Icon(
+                        PhosphorIconsRegular.lockSimple,
+                        color: AppColors.ink3,
+                        size: 16,
+                      ),
           ),
-          title: Text(step.title,
-              style: AppTypography.bodyMedium.copyWith(fontSize: 15)),
-          subtitle: step.estimateMinutes != null
-              ? Text('${step.estimateMinutes} min',
-                  style: AppTypography.caption
-                      .copyWith(color: AppColors.ink3, fontSize: 12))
-              : null,
-          children: [
-            if (step.description != null && step.description!.isNotEmpty)
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Text(step.description!,
-                    style: AppTypography.body
-                        .copyWith(fontSize: 14, height: 1.5)),
-              ),
-            if (step.substeps.isNotEmpty) ...[
-              const SizedBox(height: 10),
-              for (final s in step.substeps)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Padding(
-                        padding: EdgeInsets.only(top: 5),
-                        child: Icon(Icons.circle,
-                            size: 6, color: AppColors.ink3),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(s,
-                            style: AppTypography.body
-                                .copyWith(fontSize: 13.5, height: 1.45)),
-                      ),
-                    ],
+          const SizedBox(width: 13),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  active
+                      ? 'CURRENT LESSON'
+                      : completed
+                          ? 'COMPLETED · TAP TO REVIEW'
+                          : 'LOCKED',
+                  style: AppTypography.kicker.copyWith(
+                    color: active
+                        ? AppColors.green2
+                        : completed
+                            ? AppColors.green
+                            : AppColors.ink3,
+                    fontSize: 8.5,
                   ),
                 ),
-            ],
-            if (hasLesson) ...[
-              const SizedBox(height: 12),
-              const Divider(color: AppColors.hair, height: 1),
-              const SizedBox(height: 12),
-              CmpysMarkdown(step.lessonContent!),
-            ],
-            if (step.expectedOutput != null &&
-                step.expectedOutput!.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Icon(PhosphorIconsRegular.flagCheckered,
-                      size: 15, color: AppColors.green),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text('Done when: ${step.expectedOutput!}',
-                        style: AppTypography.caption.copyWith(
-                            color: AppColors.ink2,
-                            fontSize: 13,
-                            height: 1.4)),
+                const SizedBox(height: 5),
+                Text(
+                  step.title,
+                  style: AppTypography.bodyMedium.copyWith(
+                    color: unlocked ? AppColors.ink : AppColors.ink3,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
                   ),
-                ],
+                ),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 5,
+                  children: [
+                    _lessonMeta(
+                      PhosphorIconsRegular.bookOpenText,
+                      '${step.readingMinutes ?? _lessonReadMinutes(step)} min read',
+                    ),
+                    _lessonMeta(
+                      PhosphorIconsRegular.timer,
+                      '${step.practiceMinutes ?? _lessonPracticeMinutes(step)} min practice',
+                    ),
+                    if (step.resources.isNotEmpty)
+                      _lessonMeta(
+                        PhosphorIconsRegular.books,
+                        '${step.resources.length} reference${step.resources.length == 1 ? '' : 's'}',
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Icon(
+              unlocked ? Icons.chevron_right_rounded : Icons.lock_outline,
+              color: active ? AppColors.green2 : AppColors.ink3,
+              size: 20,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _lessonMeta(IconData icon, String label) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 13, color: AppColors.ink3),
+        const SizedBox(width: 4),
+        Text(
+          label,
+          style: AppTypography.caption.copyWith(
+            color: AppColors.ink3,
+            fontSize: 11.5,
+          ),
+        ),
+      ],
+    );
+  }
+
+  int _lessonReadMinutes(PlanStepDetail step) {
+    final words = (step.lessonContent ?? '').split(RegExp(r'\s+')).length;
+    return (words / 200).ceil().clamp(1, 60);
+  }
+
+  int _lessonPracticeMinutes(PlanStepDetail step) =>
+      ((step.estimateMinutes ?? 45) - _lessonReadMinutes(step)).clamp(20, 55);
+
+  Future<void> _openLesson(
+    PlanItemDetailed detailed,
+    PlanStepDetail step,
+    int index,
+  ) async {
+    final completed = detailed.isStepCompleted(step.id);
+    final changed = await Navigator.of(context, rootNavigator: true).push<bool>(
+      CmpysPageRoute<bool>(
+        builder: (_) => LessonReaderScreen(
+          itemId: detailed.item.id,
+          missionTitle: detailed.item.title,
+          step: step,
+          stepNumber: index + 1,
+          totalSteps: detailed.steps.length,
+          materials: detailed.materials,
+          completed: completed,
+        ),
+      ),
+    );
+    if (changed == true && mounted) {
+      await _load();
+      ref.read(currentPlanProvider.notifier).refresh();
+      if (mounted) {
+        showCmpysToast(
+          context,
+          index == detailed.steps.length - 1
+              ? 'Mission complete.'
+              : 'Lesson complete. The next lesson is unlocked.',
+          icon: Icons.check_rounded,
+          tone: AppColors.green,
+        );
+      }
+    }
+  }
+
+  Future<void> _showLessonLocked(int index, int activeIndex) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppColors.card,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(22, 18, 22, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(
+                PhosphorIconsRegular.lockSimple,
+                color: AppColors.ochre2,
+                size: 30,
+              ),
+              const SizedBox(height: 13),
+              Text(
+                'Lesson ${index + 1} is locked',
+                style: AppTypography.h2.copyWith(fontSize: 23),
+              ),
+              const SizedBox(height: 7),
+              Text(
+                'Complete Lesson ${activeIndex + 1} first. Your next lesson will unlock automatically.',
+                style: AppTypography.body.copyWith(
+                  color: AppColors.ink2,
+                  fontSize: 14,
+                  height: 1.45,
+                ),
+              ),
+              const SizedBox(height: 18),
+              CmpysButton(
+                full: true,
+                onTap: () => Navigator.of(sheetContext).pop(),
+                child: const Text('Back to current lesson'),
               ),
             ],
-          ],
+          ),
         ),
       ),
     );

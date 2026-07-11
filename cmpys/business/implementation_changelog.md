@@ -1,6 +1,16 @@
 # CMPYS Implementation Changelog
 
-**Last Updated:** 2026-05-13
+**Last Updated:** 2026-07-11
+
+---
+
+## 2026-07-11: Focused Lesson Reader & Honest Duration
+
+- Expanded every generated lesson to 1,200-1,800 words with a required framework, example, failure modes, guided practice, knowledge check, and exact references.
+- Derived lesson duration from reading time plus 30-45 minutes of timed practice, constrained to a 40-60 minute session.
+- Added a dedicated full-screen lesson reader with section paging, selectable text, contents, type/theme controls, and relevant book/material links.
+- Added one-at-a-time lesson focus: completed lessons stay reviewable, the earliest incomplete lesson is current, and later lessons remain locked in both UI and API.
+- Existing short lessons regenerate automatically when opened.
 
 ---
 

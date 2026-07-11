@@ -1,17 +1,47 @@
 """Tests for PRD-aligned content depth thresholds."""
 
+from app.api.v1.plans import _lesson_details_meet_quality
 from app.services.content_resources import MIN_BOOK_MODULE_WORDS
 from app.services.content_quality import evaluate_book_module
-from app.tasks.plans import MIN_PLAN_DETAIL_LESSON_WORDS, MIN_PLAN_DETAIL_MATERIAL_WORDS
+from app.tasks.plans import (
+    MIN_PLAN_DETAIL_LESSON_WORDS,
+    MIN_PLAN_DETAIL_MATERIAL_WORDS,
+    normalize_lesson_durations,
+)
 
 
 def test_content_quality_thresholds_match_prd_minimums():
     assert MIN_BOOK_MODULE_WORDS == 3200
-    # Aligned with the tightened plan_item_details.txt ceilings (lessons 250-550,
-    # materials 400-600) after the prompt review reduced word maxima to avoid
-    # truncation and padded filler.
-    assert MIN_PLAN_DETAIL_LESSON_WORDS == 250
+    assert MIN_PLAN_DETAIL_LESSON_WORDS == 1200
     assert MIN_PLAN_DETAIL_MATERIAL_WORDS == 350
+
+
+def test_lesson_duration_is_derived_from_reading_and_practice():
+    details = {
+        "steps": [
+            {
+                "lesson_content": "word " * 1600,
+                "estimate_minutes": 45,
+                "practice_minutes": 35,
+            }
+        ]
+    }
+
+    normalized = normalize_lesson_durations(details)
+    step = normalized["steps"][0]
+
+    assert step["reading_minutes"] == 8
+    assert step["practice_minutes"] == 35
+    assert step["estimate_minutes"] == 43
+
+
+def test_legacy_short_lesson_is_upgraded_when_opened():
+    assert not _lesson_details_meet_quality(
+        {"steps": [{"lesson_content": "word " * 500}]}
+    )
+    assert _lesson_details_meet_quality(
+        {"steps": [{"lesson_content": "word " * 1200}]}
+    )
 
 
 def test_book_quality_gate_requires_structure_not_only_length():

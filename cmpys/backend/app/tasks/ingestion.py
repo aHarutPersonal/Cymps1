@@ -961,7 +961,7 @@ def _normalize_plan_item_details(details: dict) -> dict:
     min_lesson_words = MIN_PLAN_DETAIL_LESSON_WORDS
     min_material_words = MIN_PLAN_DETAIL_MATERIAL_WORDS
 
-    # Flag steps with thin lesson_content (should be 500+ words per prompt)
+    # Flag steps below the substantial lesson floor enforced by the prompt.
     for step in details.get("steps", []):
         lesson = step.get("lesson_content", "")
         if lesson and len(lesson.split()) < min_lesson_words:

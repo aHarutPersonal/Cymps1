@@ -118,6 +118,38 @@ def _blueprint_phase_for_week(week: int | None) -> str:
     return "Weeks 10-12: Integration"
 
 
+def normalize_lesson_durations(details: dict[str, Any]) -> dict[str, Any]:
+    """Make every lesson's time claim auditable from reading + practice.
+
+    The LLM supplies the practice design, while the backend derives reading
+    time from the actual lesson length and constrains total lesson time to the
+    product's 40-60 minute contract.
+    """
+    for step in details.get("steps", []):
+        lesson = str(step.get("lesson_content") or "")
+        word_count = len(lesson.split())
+        reading_minutes = max(1, round(word_count / 200))
+
+        requested_total = int(
+            step.get("estimate_minutes") or step.get("estimateMinutes") or 45
+        )
+        requested_total = max(40, min(60, requested_total))
+        requested_practice = int(
+            step.get("practice_minutes") or requested_total - reading_minutes
+        )
+        practice_minutes = max(30, requested_practice)
+        total_minutes = reading_minutes + practice_minutes
+        if total_minutes < 40:
+            practice_minutes += 40 - total_minutes
+        elif total_minutes > 60:
+            practice_minutes = max(20, 60 - reading_minutes)
+
+        step["reading_minutes"] = reading_minutes
+        step["practice_minutes"] = practice_minutes
+        step["estimate_minutes"] = reading_minutes + practice_minutes
+    return details
+
+
 async def _load_session_context(
     db,
     user_id: str | None = None,
@@ -838,6 +870,7 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
             # and book/video resources can be deduplicated reliably.
             from app.tasks.ingestion import _normalize_plan_item_details
             details = _normalize_plan_item_details(details)
+            details = normalize_lesson_durations(details)
             call_quality[id(llm_response)] = _score_detail_payload(details)
 
             # Validate content depth — retry once if lesson_content is too thin
@@ -863,10 +896,11 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                 )
                 retry_prompt = prompt + (
                     "\n\nIMPORTANT: Your previous attempt produced content that was too thin. "
-                    "Each step's lesson_content should be roughly 250-550 words, and each "
+                    "Each step's lesson_content MUST be 1,200-1,800 words, and each "
                     "book/in_app_lesson material's content_markdown roughly 400-600 words. "
-                    "Strengthen thin sections with a real example from the idol's life and a "
-                    "concrete practice exercise — but stay within those ranges and do NOT pad."
+                    "Strengthen thin lessons with mechanisms, a worked example, failure modes, "
+                    "a 30-45 minute guided practice, a knowledge check, and exact material "
+                    "references — stay within those ranges and do NOT pad or repeat."
                 )
                 if active_tier == "fast":
                     active_tier = "balanced"
@@ -893,6 +927,7 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                 )
                 if not retry_response.error:
                     retry_details = _normalize_plan_item_details(retry_response.data)
+                    retry_details = normalize_lesson_durations(retry_details)
                     call_quality[id(retry_response)] = _score_detail_payload(
                         retry_details
                     )

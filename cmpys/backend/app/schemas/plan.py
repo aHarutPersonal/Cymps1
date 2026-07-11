@@ -118,6 +118,8 @@ class StepDetail(BaseModel):
     # Additional fields from LLM prompt schema
     expected_output: str | None = None  # Artifact/deliverable for this step
     estimate_minutes: int | None = None  # Estimated time for this step
+    reading_minutes: int | None = None  # Derived from lesson word count
+    practice_minutes: int | None = None  # Timed guided application
     order: int | None = None  # Step order (1-based)
     resources: list[str] | None = None  # Material IDs referenced by this step
     substeps: list[str] | None = None  # Tactical sub-actions
@@ -178,6 +180,7 @@ class PlanItemDetailedResponse(BaseModel):
     details: ItemDetails | None = None
     progress: ItemProgress
     completed: bool = False
+    completed_step_ids: list[str] = Field(default_factory=list)
     # Details generation status
     details_status: DetailsStatus = DetailsStatus.AVAILABLE
     job_id: str | None = None

@@ -34,6 +34,7 @@ from app.models.plan import (
 from app.models.plan_job import PlanGenerationJob
 from app.models.user import User
 from app.models.user_achievement import UserAchievement
+from app.services.content_quality import MIN_PLAN_DETAIL_LESSON_WORDS
 from app.schemas.plan import (
     AchievementSuggestionResponse,
     BookIdeaDetail,
@@ -602,6 +603,8 @@ def _parse_item_details(details_json: dict | None) -> ItemDetails | None:
             description=s.get("description"),
             expected_output=s.get("expected_output"),
             estimate_minutes=s.get("estimate_minutes") or s.get("estimateMinutes"),
+            reading_minutes=s.get("reading_minutes") or s.get("readingMinutes"),
+            practice_minutes=s.get("practice_minutes") or s.get("practiceMinutes"),
             order=s.get("order"),
             resources=s.get("resources"),
             substeps=s.get("substeps"),
@@ -644,6 +647,20 @@ def _parse_item_details(details_json: dict | None) -> ItemDetails | None:
     )
 
 
+def _lesson_details_meet_quality(details_json: dict | None) -> bool:
+    """Treat legacy short lessons as missing so they are upgraded on open."""
+    if not details_json:
+        return False
+    lessons = [
+        str(step.get("lesson_content") or "")
+        for step in details_json.get("steps", [])
+        if step.get("lesson_content")
+    ]
+    return not lessons or all(
+        len(lesson.split()) >= MIN_PLAN_DETAIL_LESSON_WORDS for lesson in lessons
+    )
+
+
 @items_router.get("/{item_id}/detailed", response_model=PlanItemDetailedResponse)
 async def get_plan_item_detailed(
     item_id: str,
@@ -659,20 +676,32 @@ async def get_plan_item_detailed(
     """
     item = await _get_item_for_user(db, item_id, current_user.id)
     progress, is_completed = await _compute_item_progress(db, current_user.id, item)
-    
-    # Check if details exist
-    if item.details_json:
+    completed_steps_result = await db.execute(
+        select(PlanItemStepCompletion.step_id).where(
+            PlanItemStepCompletion.user_id == current_user.id,
+            PlanItemStepCompletion.plan_item_id == item.id,
+            PlanItemStepCompletion.completed_at.isnot(None),
+        )
+    )
+    completed_step_ids = [
+        str(step_id) for step_id in completed_steps_result.scalars().all()
+    ]
+
+    # Existing legacy lessons are automatically regenerated once they are
+    # opened, so old 2-minute content cannot keep presenting a 40-minute label.
+    if _lesson_details_meet_quality(item.details_json):
         details = _parse_item_details(item.details_json)
         return PlanItemDetailedResponse(
             item=_item_to_response(item),
             details=details,
             progress=progress,
             completed=is_completed,
+            completed_step_ids=completed_step_ids,
             details_status=DetailsStatus.AVAILABLE,
             job_id=None,
         )
     
-    # No details - check if a job is ALREADY in progress
+    # No details (or legacy thin details) - check for an active upgrade job.
     active_job_stmt = (
         select(PlanItemDetailJob)
         .where(
@@ -721,6 +750,7 @@ async def get_plan_item_detailed(
             details=None,
             progress=progress,
             completed=is_completed,
+            completed_step_ids=completed_step_ids,
             details_status=DetailsStatus.PENDING,
             job_id=existing_job.id,
         )
@@ -749,6 +779,7 @@ async def get_plan_item_detailed(
         details=None,
         progress=progress,
         completed=is_completed,
+        completed_step_ids=completed_step_ids,
         details_status=DetailsStatus.PENDING,
         job_id=job.id,
     )
@@ -949,6 +980,27 @@ async def toggle_step_complete(
         if item_completion and item_completion.completed_at:
             item_completion.completed_at = None
     else:
+        # Lessons are intentionally sequential. The API enforces the same gate
+        # as the UI so a future lesson cannot be completed through a stale or
+        # handcrafted client request.
+        step_index = step_ids.index(step_id)
+        prior_step_ids = [sid for sid in step_ids[:step_index] if sid]
+        if prior_step_ids:
+            prior_result = await db.execute(
+                select(PlanItemStepCompletion.step_id).where(
+                    PlanItemStepCompletion.user_id == current_user.id,
+                    PlanItemStepCompletion.plan_item_id == item_id,
+                    PlanItemStepCompletion.step_id.in_(prior_step_ids),
+                    PlanItemStepCompletion.completed_at.isnot(None),
+                )
+            )
+            completed_prior_ids = set(prior_result.scalars().all())
+            missing_prior = [sid for sid in prior_step_ids if sid not in completed_prior_ids]
+            if missing_prior:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Complete the earlier lessons before advancing",
+                )
         if step_completion:
             step_completion.completed_at = now
         else:

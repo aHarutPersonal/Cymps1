@@ -9,6 +9,7 @@ _Learn about the person you're helping. Update this as you go._
 - **Notes:** Prefers product/AI decisions in this order: material quality first, then speed, then keeping the budget modest through cheaper options where quality is preserved.
 - **Notes:** For book-learning features, prefers genuinely long-form material (more than 15 minutes) and a dedicated app-like reader with selection-based notes.
 - **Notes:** Prefers plans to emphasize one current-week focus and unlock future weeks sequentially after completion.
+- **Notes:** For lessons, prefers honest 40–60 minute learning sessions, a dedicated reader with relevant book references, and one sequentially unlocked focus lesson at a time.
 
 ## Context
 

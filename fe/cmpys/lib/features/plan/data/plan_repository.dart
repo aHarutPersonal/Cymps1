@@ -37,6 +37,21 @@ class PlanRepository {
     return PlanItemDetailed.fromJson(response.data as Map<String, dynamic>);
   }
 
+  /// Complete or uncomplete one lesson step. The backend enforces sequential
+  /// progression and auto-completes the mission after its final lesson.
+  Future<({bool completed, bool itemCompleted})> toggleStepComplete(
+    String itemId,
+    String stepId,
+  ) async {
+    final response =
+        await _dioClient.post('/plan-items/$itemId/steps/$stepId/toggle');
+    final data = response.data as Map<String, dynamic>;
+    return (
+      completed: data['completed'] as bool? ?? false,
+      itemCompleted: data['item_completed'] as bool? ?? false,
+    );
+  }
+
   /// Toggle item-level completion. Returns a [ToggleResult] with the new
   /// completed state plus plan-level signals (planComplete,
   /// missionTasksRemaining) used by the achievement cycle flow.

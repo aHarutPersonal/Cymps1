@@ -310,6 +310,9 @@ class PlanStepDetail {
     this.description,
     this.expectedOutput,
     this.estimateMinutes,
+    this.readingMinutes,
+    this.practiceMinutes,
+    this.resources = const [],
     this.substeps = const [],
     this.lessonContent,
   });
@@ -319,6 +322,9 @@ class PlanStepDetail {
   final String? description;
   final String? expectedOutput;
   final int? estimateMinutes;
+  final int? readingMinutes;
+  final int? practiceMinutes;
+  final List<String> resources;
   final List<String> substeps;
 
   /// Full markdown lesson for this step.
@@ -330,6 +336,13 @@ class PlanStepDetail {
         description: j['description'] as String?,
         expectedOutput: j['expected_output'] as String?,
         estimateMinutes: (j['estimate_minutes'] as num?)?.toInt(),
+        readingMinutes:
+            (j['reading_minutes'] ?? j['readingMinutes'] as num?)?.toInt(),
+        practiceMinutes:
+            (j['practice_minutes'] ?? j['practiceMinutes'] as num?)?.toInt(),
+        resources:
+            (j['resources'] as List?)?.map((e) => e.toString()).toList() ??
+                const [],
         substeps:
             (j['substeps'] as List?)?.map((e) => e.toString()).toList() ??
                 const [],
@@ -553,6 +566,9 @@ class PlanItemDetailed {
     this.steps = const [],
     this.materials = const [],
     this.completed = false,
+    this.completedStepIds = const {},
+    this.completedSteps = 0,
+    this.totalSteps = 0,
     this.jobId,
   });
 
@@ -561,12 +577,28 @@ class PlanItemDetailed {
   final List<PlanStepDetail> steps;
   final List<PlanMaterialDetail> materials;
   final bool completed;
+  final Set<String> completedStepIds;
+  final int completedSteps;
+  final int totalSteps;
   final String? jobId;
 
   bool get detailsReady => detailsStatus == 'available';
 
+  bool isStepCompleted(String stepId) => completedStepIds.contains(stepId);
+
+  int get activeStepIndex {
+    for (var index = 0; index < steps.length; index++) {
+      if (!isStepCompleted(steps[index].id)) return index;
+    }
+    return steps.isEmpty ? 0 : steps.length - 1;
+  }
+
+  bool isStepUnlocked(int index) =>
+      completed || index <= activeStepIndex || isStepCompleted(steps[index].id);
+
   factory PlanItemDetailed.fromJson(Map<String, dynamic> j) {
     final details = j['details'] as Map<String, dynamic>?;
+    final progress = j['progress'] as Map<String, dynamic>?;
     return PlanItemDetailed(
       item: BackendPlanItem.fromJson(
           (j['item'] as Map?)?.cast<String, dynamic>() ?? const {}),
@@ -582,6 +614,14 @@ class PlanItemDetailed {
               .toList() ??
           const [],
       completed: j['completed'] as bool? ?? false,
+      completedStepIds: ((j['completed_step_ids'] ??
+                  j['completedStepIds']) as List? ??
+              const [])
+          .map((e) => e.toString())
+          .toSet(),
+      completedSteps:
+          (progress?['completed_steps'] as num?)?.toInt() ?? 0,
+      totalSteps: (progress?['total_steps'] as num?)?.toInt() ?? 0,
       jobId: j['job_id']?.toString(),
     );
   }

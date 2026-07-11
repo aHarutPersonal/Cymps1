@@ -21,10 +21,10 @@ IMPORTANT CONTEXT: This task is a MISSION task (weekly project/course/reading), 
 
 Design an **immediately actionable**, 100% useful execution protocol with rich sub-steps and curated learning resources that will help the user achieve this specific mission as fast and effectively as possible.
 
-RIGHT-SIZE FOR THE LEARNER (READ FIRST): Depth beats volume. Each step should teach ONE core concept, show ONE worked example, drive ONE concrete practice, and end with ONE check for understanding. Do NOT pad to hit a word count — a tight, high-signal lesson the user actually finishes beats a long one they abandon. Respect the word ranges below as CEILINGS, not targets.
+RIGHT-SIZE FOR THE LEARNER (READ FIRST): Depth beats filler. Each step must be a complete guided lesson that teaches ONE core concept, shows a worked example, anticipates failure modes, drives a timed practice, and ends with a check for understanding. The word range below is a hard quality boundary, not permission to repeat ideas. Add substance through mechanisms, comparisons, examples, diagnostics, and application.
 
 CRITICAL RULES:
-1. **STEPS = SUBSTANTIAL SKILL-BUILDING LESSONS, NOT ADVICE.** Each step must teach the user a REAL skill or technique they can practice. Steps should take 30-60 MINUTES each — these are not 5-minute tasks.
+1. **STEPS = SUBSTANTIAL SKILL-BUILDING LESSONS, NOT ADVICE.** Each step must teach the user a REAL skill or technique they can practice. Steps must take 40-60 MINUTES each — these are not 5-minute tasks.
    - BAD: "Read this book", "Add 50 people on LinkedIn", "Watch this course", "Network with experts"
    - BAD: "Take notes" (3 minutes, not a real step)
    - BAD: "Reflect on what you learned" (vague, not teachable)
@@ -32,12 +32,14 @@ CRITICAL RULES:
    - GOOD: "Practice [specific technique] with these exercises — start with the guided example, then solve 5 problems independently" (60-90 min)
    - GOOD: "Build [specific artifact] using [specific tool/method] — follow the template below, customize it for your context" (45-60 min)
 
-2. **EACH STEP HAS A FOCUSED LESSON (250-550 WORDS, ceiling not target).** Every step MUST include a `lesson_content` field — a markdown lesson that teaches the user exactly how to execute that step. This is the CORE VALUE of the app — aim for a tight 2-3 minute read. Structure it as:
-   - **Opening context** (1-2 sentences): Why this skill matters for the mission
-   - **Core concept explanation** (2-3 paragraphs): The key framework, model, or technique with concrete details
-   - **Real-world example** (1 paragraph): Use a specific event from DOCUMENTED MENTOR EVIDENCE when available. Otherwise use a clearly labeled domain scenario. Never invent an anecdote, quotation, date, or result and attribute it to {idol_name}.
-   - **Practice guide** (3 numbered steps): Exactly what to do, with specific tools, time estimates, and success criteria
-   - **Reflection prompt** (1 sentence): A question that forces the user to apply this to their own situation
+2. **EACH STEP HAS A COMPLETE LESSON (1,200-1,800 WORDS; HARD RANGE).** Every step MUST include a `lesson_content` field that can stand alone in the lesson reader. At 200 words per minute this provides 6-9 minutes of teaching, followed by 30-50 minutes of guided practice. Structure every lesson with these exact second-level headings:
+   - `## Why This Matters` — 100-150 words connecting the skill to the mission and the user's context.
+   - `## Core Framework` — 350-500 words explaining the mechanism, components, trade-offs, and two concepts learners commonly confuse.
+   - `## Worked Example` — 250-350 words showing the complete reasoning or execution. Use DOCUMENTED MENTOR EVIDENCE when available; otherwise label it **Practical scenario**. Never invent an anecdote, quotation, date, or result and attribute it to {idol_name}.
+   - `## Failure Modes` — 150-250 words covering at least three mistakes, symptoms, and corrections.
+   - `## Guided Practice` — 300-450 words with 3-5 numbered phases totaling 30-45 minutes. Every phase names a timer, tool/template, expected output, and success criterion.
+   - `## Check Your Understanding` — 100-150 words with three diagnostic questions and an answer/check rubric.
+   - `## References` — 60-120 words naming the exact supplied material(s) that deepen this lesson and explaining what to read/watch. Never invent chapter numbers.
 
 3. **100% USEFUL MATERIALS.** Do not suggest generic ideas. Suggest specific, highly effective, renowned, or industry-standard materials.
 
@@ -67,7 +69,9 @@ CRITICAL RULES:
 
 12. **SUBSTEPS MUST BE ACTIONABLE.** Each substep should be 20-50 words describing a specific, measurable action. BAD: "Practice regularly". GOOD: "Set a 20-minute timer and write 3 application scenarios for this concept to your current project".
 
-13. **IF A STEP CLAIMS 50+ MINUTES**, its `lesson_content` should reach the upper end of the range (around 450-550 words) with a detailed example and an extra practice exercise — but never pad beyond the 550-word ceiling.
+13. **DURATION MUST BE AUDITABLE.** Set `reading_minutes` from the amount of teaching material and `practice_minutes` from the numbered timed practice phases. `estimate_minutes` MUST equal their sum and remain between 40 and 60. A duration label without enough reading and timed practice is a hard failure.
+
+14. **REFERENCE MATERIALS FROM THE LESSON.** Each step's `resources` list must contain the exact titles of 1-2 items from the top-level `materials` array that directly support that lesson. Include the book when it is genuinely useful, so the lesson reader can offer an in-app book guide at the point of need.
 
 OUTPUT FORMAT (strict JSON, no extra keys, no markdown):
 {
@@ -76,8 +80,11 @@ OUTPUT FORMAT (strict JSON, no extra keys, no markdown):
       "id": "step_1",
       "title": "Action-verb title — MUST be a skill/technique to learn (max 60 chars)",
       "description": "2-3 sentence summary of the skill or technique this step teaches and what the user will be able to do after completing it.",
-      "estimate_minutes": 60,
-      "lesson_content": "# Step Title\n\n## Why This Matters\n2-3 sentences on why this skill is critical for the mission.\n\n## The Core Framework\n3-5 paragraphs explaining the key concept with specifics. Include the name of the framework/model/technique, its components, and how it works.\n\n## Real-World Example\n1-2 paragraphs describing a specific, named case study that demonstrates this concept in action.\n\n### Practice This\n1. [Specific action with tool/method, time estimate]\n2. [Specific action with expected output]\n3. [Specific action with success criteria]\n\n## Reflection\n[Question that forces application to the user's own situation]",
+      "estimate_minutes": 50,
+      "reading_minutes": 8,
+      "practice_minutes": 42,
+      "lesson_content": "# Step Title\n\n## Why This Matters\n...\n\n## Core Framework\n...\n\n## Worked Example\n...\n\n## Failure Modes\n...\n\n## Guided Practice\n1. ...\n\n## Check Your Understanding\n...\n\n## References\n...",
+      "resources": ["Exact Book Title", "Exact Video Title"],
       "substeps": [
         "Specific practice exercise 1 with tool, time estimate, and success criteria (20-50 words)",
         "Specific practice exercise 2 with tool, time estimate, and success criteria (20-50 words)",
@@ -109,4 +116,4 @@ OUTPUT FORMAT (strict JSON, no extra keys, no markdown):
   "mental_model": "Name of 1 specific mental model that unlocks efficiency for this task."
 }
 
-Provide exactly 3 focused steps (30-60 minutes each). Each step MUST be a skill-building lesson with focused lesson_content (250-550 words) and 2-3 practice substeps. Steps must TEACH, not advise. Provide exactly 3 elite materials: exactly 1 book with exact title/author and no generated content, exactly 1 video, and 1 article/course/tool/in_app_lesson. Word ranges are ceilings — never pad to fill them.
+Provide exactly 3 sequential, focused steps (40-60 minutes each). Each step MUST be a complete skill-building lesson with 1,200-1,800 words of lesson_content, an auditable reading/practice time split, 2-3 practice substeps, and references to 1-2 exact titles from the materials array. Steps must TEACH, not advise. Provide exactly 3 elite materials: exactly 1 book with exact title/author and no generated content, exactly 1 video, and 1 article/course/tool/in_app_lesson. Never pad or repeat to fill the range.

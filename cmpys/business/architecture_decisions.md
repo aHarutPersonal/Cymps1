@@ -44,8 +44,8 @@ LLM-generated content was frequently too thin (200-800 word "15-minute modules")
 
 Add post-generation validation with a single retry:
 
-1. **Book modules**: If `content_markdown` < 1,500 words, retry once with a prompt emphasizing depth
-2. **Plan item details**: If any `lesson_content` < 300 words or `content_markdown` < 400 words, retry once
+1. **Book modules**: Require 3,200-4,500 words plus structure, practice, anti-filler, and grounding checks; retry once with the exact failed checks
+2. **Plan item details**: If any `lesson_content` < 1,200 words or `content_markdown` < 350 words, retry once; regenerate legacy short lessons when opened
 3. **Plan generation**: `BinaryTask` schema enforces `description` min_length=10
 
 Use the retry result only if it's deeper than the original.
