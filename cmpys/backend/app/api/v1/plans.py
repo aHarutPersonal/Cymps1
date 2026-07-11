@@ -62,6 +62,7 @@ router = APIRouter(prefix="/plans", tags=["plans"])
 
 MISSION_TYPES = {PlanItemType.PROJECT, PlanItemType.COURSE, PlanItemType.READING}
 PLAN_JOB_STALE_AFTER = timedelta(minutes=15)
+DETAIL_JOB_STALE_AFTER = timedelta(minutes=15)
 
 
 def _plan_job_is_stale(
@@ -82,6 +83,19 @@ def _plan_job_is_stale(
     if last_update.tzinfo is None:
         last_update = last_update.replace(tzinfo=timezone.utc)
     return (now or datetime.now(timezone.utc)) - last_update >= PLAN_JOB_STALE_AFTER
+
+
+def _detail_job_is_stale(
+    job: PlanItemDetailJob,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    created_at = job.created_at
+    if created_at is None:
+        return True
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    return (now or datetime.now(timezone.utc)) - created_at >= DETAIL_JOB_STALE_AFTER
 
 
 def _count_remaining_missions(items, completed_item_ids: set[str]) -> int:
@@ -675,11 +689,37 @@ async def get_plan_item_detailed(
     existing_job = result.scalar_one_or_none()
     
     if existing_job:
+        if _detail_job_is_stale(existing_job):
+            from app.tasks.plans import regenerate_plan_item_details
+
+            stale_job = existing_job
+            stale_job.status = "failed"
+            stale_job.step = "error"
+            stale_job.error_message = "Generation worker stopped before completion"
+            existing_job = PlanItemDetailJob(
+                plan_item_id=item_id,
+                user_id=current_user.id,
+                status="queued",
+                step="loading_context",
+                progress_percent=0,
+            )
+            db.add(existing_job)
+            await db.commit()
+            await db.refresh(existing_job)
+            regenerate_plan_item_details.apply_async(
+                args=[str(existing_job.id)], queue="high_priority"
+            )
+            logger.warning(
+                "[PLAN_ITEM] Replaced stale detail job item_id=%s old_job_id=%s new_job_id=%s",
+                item_id,
+                stale_job.id,
+                existing_job.id,
+            )
         logger.info(f"[PLAN_ITEM] Active job already exists for item_id={item_id}, job_id={existing_job.id}")
         return PlanItemDetailedResponse(
             item=_item_to_response(item),
             details=None,
-            progress=existing_job.progress_percent,
+            progress=progress,
             completed=is_completed,
             details_status=DetailsStatus.PENDING,
             job_id=existing_job.id,

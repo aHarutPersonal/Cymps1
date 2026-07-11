@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/env.dart';
 import '../storage/token_store.dart';
 import 'api_error.dart';
+import 'single_flight.dart';
 
 /// Dio instance provider. Shares the [dioClientProvider] instance so the app
 /// runs on one Dio with one set of interceptors.
@@ -150,13 +151,12 @@ class DioClient {
     },
   );
 
-  bool _isRefreshing = false;
+  final SingleFlight<bool> _refreshFlight = SingleFlight<bool>();
 
   /// Attempt to refresh the access token.
-  Future<bool> _refreshToken() async {
-    if (_isRefreshing) return false; // Prevent concurrent refreshes
-    _isRefreshing = true;
+  Future<bool> _refreshToken() => _refreshFlight.run(_performTokenRefresh);
 
+  Future<bool> _performTokenRefresh() async {
     try {
       final refreshToken = await _tokenStore.readRefreshToken();
       if (refreshToken == null) return false;
@@ -185,8 +185,6 @@ class DioClient {
       return false;
     } catch (e) {
       return false;
-    } finally {
-      _isRefreshing = false;
     }
   }
 

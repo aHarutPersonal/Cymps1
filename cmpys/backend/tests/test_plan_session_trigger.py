@@ -12,7 +12,7 @@ import pytest
 from app.services.llm.prompt_loader import _UNTRUSTED_OPEN, load_and_render
 from app.services.transcripts import build_chat_history_json
 from app.tasks.plans import _blueprint_phase_for_week, _load_session_context
-from app.api.v1.plans import _plan_job_is_stale
+from app.api.v1.plans import _detail_job_is_stale, _plan_job_is_stale
 
 
 class _FakeMessage:
@@ -78,6 +78,18 @@ class TestPlanJobRecovery:
         job = SimpleNamespace(updated_at=None, created_at=None)
 
         assert _plan_job_is_stale(job) is True
+
+    def test_old_detail_job_is_stale(self):
+        now = datetime(2026, 7, 11, tzinfo=timezone.utc)
+        job = SimpleNamespace(created_at=now - timedelta(minutes=16))
+
+        assert _detail_job_is_stale(job, now=now) is True
+
+    def test_recent_detail_job_is_not_stale(self):
+        now = datetime(2026, 7, 11, tzinfo=timezone.utc)
+        job = SimpleNamespace(created_at=now - timedelta(minutes=2))
+
+        assert _detail_job_is_stale(job, now=now) is False
 
 
 class TestLoadSessionContext:
