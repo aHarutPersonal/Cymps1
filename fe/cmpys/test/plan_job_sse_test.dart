@@ -84,6 +84,12 @@ void main() {
     expect(plan.missionsForWeek(2).map((i) => i.id), ['i3']);
     expect(plan.dailyRhythmForWeek(2), isEmpty);
     expect(plan.items.first.isCompleted, isTrue);
+    expect(plan.focusWeek, 2);
+    expect(plan.isWeekUnlocked(1), isTrue);
+    expect(plan.isWeekUnlocked(2), isTrue);
+    expect(plan.isWeekUnlocked(3), isFalse);
+    expect(plan.focusedItemForWeek(2)?.id, 'i3');
+    expect(plan.allMissionWorkComplete, isFalse);
   });
 
   test('PlanMaterialDetail extracts YouTube ids and in-app content', () {

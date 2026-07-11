@@ -84,7 +84,7 @@ class _ReadingLibraryScreenState extends ConsumerState<ReadingLibraryScreen> {
   }
 
   Future<void> _open(ContentResource book) async {
-    await Navigator.of(context).push(
+    await Navigator.of(context, rootNavigator: true).push(
       CmpysPageRoute<void>(
         builder: (_) =>
             BookReaderScreen(resourceId: book.id, fallbackTitle: book.title),

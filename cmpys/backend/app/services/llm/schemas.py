@@ -7,7 +7,7 @@ and are used to validate LLM responses.
 import datetime
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # =============================================================================
@@ -210,6 +210,25 @@ class PlanWeek(BaseModel):
     predicted_friction: str = Field(default="", max_length=500)
     friction_solution: str = Field(default="", max_length=500)
 
+    @model_validator(mode="after")
+    def require_mission_and_daily_rhythm(self) -> "PlanWeek":
+        """Keep the generated roadmap usable on both Plan and Today screens."""
+        normalized_types = {task.type.strip().lower() for task in self.binary_tasks}
+        mission_types = {"project", "course", "reading"}
+        daily_types = {"habit", "practice"}
+
+        if not normalized_types.intersection(mission_types):
+            raise ValueError(
+                "each plan week must include at least one primary mission task "
+                "(project, course, or reading)"
+            )
+        if not normalized_types.intersection(daily_types):
+            raise ValueError(
+                "each plan week must include at least one daily rhythm task "
+                "(habit or practice)"
+            )
+        return self
+
 
 class PlanGenerationResponse(BaseModel):
     """Response from the new plan_generate.txt prompt."""
@@ -380,4 +399,3 @@ class IdolSuggestionsResponse(BaseModel):
         min_length=1,
         max_length=3,
     )
-

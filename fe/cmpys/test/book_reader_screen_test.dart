@@ -1,6 +1,7 @@
 import 'package:cmpys/core/network/dio_client.dart';
 import 'package:cmpys/core/storage/token_store.dart';
 import 'package:cmpys/features/plan/presentation/book_reader_screen.dart';
+import 'package:cmpys/features/plan/presentation/reading_library_screen.dart';
 import 'package:cmpys/features/session/data/content_resources_repository.dart';
 import 'package:cmpys/features/session/models/content_resource.dart';
 import 'package:flutter/material.dart';
@@ -50,6 +51,18 @@ Combine the decision label and return point in one daily review.
   @override
   Future<List<ContentHighlight>> listHighlights(String resourceId) async =>
       const [];
+
+  @override
+  Future<List<ContentResource>> listLibraryResources({
+    String? kind,
+    String? query,
+    String? sort,
+    int limit = 50,
+    int offset = 0,
+  }) async => [resource];
+
+  @override
+  Future<ContentResource?> getContinueReading() async => null;
 
   @override
   Future<ContentResource> updateProgress(
@@ -102,6 +115,50 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Contents'), findsOneWidget);
     expect(find.text('Attention Loops'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('opening a book covers the shell navigation overlay', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final repository = _FakeContentResourcesRepository();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          contentResourcesRepositoryProvider.overrideWithValue(repository),
+        ],
+        child: MaterialApp(
+          home: Stack(
+            children: [
+              Positioned.fill(
+                child: Navigator(
+                  onGenerateRoute: (_) => MaterialPageRoute<void>(
+                    builder: (_) => const ReadingLibraryScreen(),
+                  ),
+                ),
+              ),
+              const Align(
+                alignment: Alignment.bottomCenter,
+                child: Material(child: Text('GLOBAL SHELL NAV')),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('GLOBAL SHELL NAV'), findsOneWidget);
+    await tester.tap(find.text('A. Author'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('CHAPTER 01 OF 03'), findsOneWidget);
+    expect(find.text('GLOBAL SHELL NAV'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 }

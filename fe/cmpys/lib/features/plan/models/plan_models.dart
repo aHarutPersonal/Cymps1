@@ -138,6 +138,50 @@ class BackendPlan {
     return _rhythmByWeek![week] ?? const [];
   }
 
+  /// The first week that still contains unfinished finite work. Daily rhythm
+  /// items intentionally do not gate progression because they reset and are
+  /// meant to support the mission, not keep the user permanently locked.
+  int get focusWeek {
+    var firstIncompleteWeek = durationWeeks == 0 ? 1 : durationWeeks;
+    var found = false;
+    for (final item in items) {
+      if (item.isDailyRhythm || item.isCompleted) continue;
+      if (!found || item.weekStart < firstIncompleteWeek) {
+        firstIncompleteWeek = item.weekStart;
+        found = true;
+      }
+    }
+    return found
+        ? firstIncompleteWeek.clamp(1, durationWeeks == 0 ? 1 : durationWeeks)
+        : (durationWeeks == 0 ? 1 : durationWeeks);
+  }
+
+  bool get allMissionWorkComplete =>
+      items.where((item) => !item.isDailyRhythm).every((item) => item.isCompleted);
+
+  /// Past weeks are reviewable, the focus week is actionable, and every
+  /// future week stays locked until the current focus advances.
+  bool isWeekUnlocked(int week) => allMissionWorkComplete || week <= focusWeek;
+
+  BackendPlanItem? focusedItemForWeek(int week) {
+    final remaining = missionsForWeek(week)
+        .where((item) => !item.isCompleted)
+        .toList(growable: false);
+    if (remaining.isEmpty) return null;
+
+    BackendPlanItem best = remaining.first;
+    for (final item in remaining.skip(1)) {
+      final itemInProgress = item.status == 'in_progress';
+      final bestInProgress = best.status == 'in_progress';
+      if ((itemInProgress && !bestInProgress) ||
+          (itemInProgress == bestInProgress &&
+              item.progressPercent > best.progressPercent)) {
+        best = item;
+      }
+    }
+    return best;
+  }
+
   /// Week the user is in right now (1-based, clamped to the plan length).
   /// A freshly generated plan is in week 1.
   int currentWeek([DateTime? now]) {

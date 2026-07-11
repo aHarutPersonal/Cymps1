@@ -416,7 +416,9 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
     }
     if (screen == null) return;
     final route = CmpysPageRoute<void>(builder: (_) => screen!);
-    Navigator.of(context).push(route);
+    // Material players/readers own their bottom controls. Present them above
+    // AppShell so the floating five-tab bar cannot cover those controls.
+    Navigator.of(context, rootNavigator: true).push(route);
   }
 
   ({IconData icon, String label})? _materialAction(PlanMaterialDetail m) {

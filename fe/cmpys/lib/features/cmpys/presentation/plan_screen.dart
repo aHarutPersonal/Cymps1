@@ -133,10 +133,18 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
 
     switch (planState.status) {
       case CurrentPlanStatus.ready:
+        final roadmap = backendPlanRoadmapBlocks(planState.plan!);
         return [
-          ...blueprint,
+          // The active focus must be the first actionable surface on this
+          // page. Supporting blueprint/progress context follows it.
+          roadmap.first,
+          if (st.blueprintMd != null &&
+              st.blueprintMd!.trim().isNotEmpty) ...[
+            const SizedBox(height: 14),
+            _blueprintCard(st),
+          ],
           // Spread so each week card is its own ListView child (lazy build).
-          ...backendPlanRoadmapBlocks(planState.plan!),
+          ...roadmap.skip(1),
           const SizedBox(height: 18),
           Center(
             child: Text('"The whole secret is small things, done daily."',
