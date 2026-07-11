@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.core.celery import celery_app
+from app.core.async_runtime import run_async
 from app.core.db import async_session_maker
 
 logger = logging.getLogger(__name__)
@@ -24,9 +25,7 @@ def backfill_comparison_scores(self, session_id: str) -> dict:
     """
     logger.info(f"[CMP_SCORES] Starting backfill for session={session_id}")
     try:
-        result = asyncio.get_event_loop().run_until_complete(
-            _backfill_comparison_scores_async(session_id)
-        )
+        result = run_async(_backfill_comparison_scores_async(session_id))
         logger.info(f"[CMP_SCORES] Backfill for session={session_id}: {result}")
         return result
     except Exception as e:

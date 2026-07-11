@@ -6,6 +6,7 @@ from sqlalchemy import and_, select
 from sqlalchemy.orm import selectinload
 
 from app.core.celery import celery_app
+from app.core.async_runtime import run_async
 from app.core.db import async_session_maker
 from app.models.idol_persona import IdolPersona
 from app.models.idol_profile import IdolProfile
@@ -197,7 +198,7 @@ def run_plan_generation(self, job_id: str) -> dict:
     """
     logger.info(f"[PLANNING] Starting plan generation for job_id={job_id}")
     try:
-        result = asyncio.get_event_loop().run_until_complete(_run_plan_generation_async(job_id))
+        result = run_async(_run_plan_generation_async(job_id))
         logger.info(f"[PLANNING] Completed job_id={job_id}, result={result}")
         return result
     except Exception as e:
@@ -468,9 +469,7 @@ def regenerate_plan_item_details(self, job_id: str) -> dict:
     """
     logger.info(f"[PLAN_DETAILS] Starting regeneration for job_id={job_id}")
     try:
-        result = asyncio.get_event_loop().run_until_complete(
-            _regenerate_plan_item_details_async(job_id)
-        )
+        result = run_async(_regenerate_plan_item_details_async(job_id))
         logger.info(f"[PLAN_DETAILS] Completed job_id={job_id}")
         return result
     except Exception as e:
@@ -994,17 +993,28 @@ async def _enqueue_all_details_generation_async(db, plan, user_id):
     items_result = await db.execute(items_stmt)
     items = list(items_result.scalars().all())
     
+    jobs = []
     for item in items:
-        # Create job
         job = PlanItemDetailJob(
             user_id=user_id,
             plan_item_id=item.id,
             status="pending"
         )
         db.add(job)
-        await db.flush()
-        
-        # Enqueue task to low priority so interactive features aren't blocked
-        regenerate_plan_item_details.apply_async(args=[job.id], queue="low_priority")
-    
-    logger.info(f"[PLANNING] Enqueued {len(items)} items for detail generation (All Weeks)")
+        jobs.append(job)
+
+    # The worker can pick up low-priority tasks immediately. Persist every job
+    # before publishing any Celery message, otherwise workers race the open
+    # transaction, report "Job not found", and the context manager rolls the
+    # uncommitted job rows back on return.
+    await db.flush()
+    await db.commit()
+
+    for job in jobs:
+        regenerate_plan_item_details.apply_async(
+            args=[str(job.id)], queue="low_priority"
+        )
+
+    logger.info(
+        f"[PLANNING] Enqueued {len(jobs)} items for detail generation (All Weeks)"
+    )

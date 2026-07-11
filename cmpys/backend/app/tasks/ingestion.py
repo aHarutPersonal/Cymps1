@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.core.celery import celery_app
+from app.core.async_runtime import run_async
 from app.core.db import async_session_maker
 from app.models.achievement_evidence import AchievementEvidence
 from app.models.idol import CatalogStatus, Idol
@@ -123,7 +124,7 @@ def run_idol_ingestion(self, job_id: str) -> dict:
     """
     logger.info(f"[INGESTION] Starting ingestion task for job_id={job_id}")
     try:
-        result = asyncio.get_event_loop().run_until_complete(_run_ingestion_async(job_id))
+        result = run_async(_run_ingestion_async(job_id))
         logger.info(f"[INGESTION] Completed job_id={job_id}, result={result}")
         return result
     except Exception as e:

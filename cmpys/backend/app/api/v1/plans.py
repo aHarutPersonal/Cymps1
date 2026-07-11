@@ -10,7 +10,7 @@ PROMPT MAPPING:
 - All other endpoints: NO LLM (database operations only)
 """
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -61,6 +61,27 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/plans", tags=["plans"])
 
 MISSION_TYPES = {PlanItemType.PROJECT, PlanItemType.COURSE, PlanItemType.READING}
+PLAN_JOB_STALE_AFTER = timedelta(minutes=15)
+
+
+def _plan_job_is_stale(
+    job: PlanGenerationJob,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Return whether a pending/running job has stopped making progress.
+
+    Celery's hard time limit is ten minutes. A fifteen-minute window avoids
+    duplicating healthy work while allowing recovery after a broker failure,
+    worker restart, or an onboarding request that persisted the job but lost
+    the task message.
+    """
+    last_update = job.updated_at or job.created_at
+    if last_update is None:
+        return True
+    if last_update.tzinfo is None:
+        last_update = last_update.replace(tzinfo=timezone.utc)
+    return (now or datetime.now(timezone.utc)) - last_update >= PLAN_JOB_STALE_AFTER
 
 
 def _count_remaining_missions(items, completed_item_ids: set[str]) -> int:
@@ -195,11 +216,41 @@ async def generate_plan_endpoint(
                 .limit(1)
             )
         ).scalar_one_or_none()
-        if existing:
+        if existing and existing.status == "completed" and existing.plan_id:
             return IdolImportResponse(
                 idolId=data.idolId,
                 jobId=str(existing.id),
                 status=existing.status,
+            )
+        if existing and existing.status in {"pending", "running"}:
+            if not _plan_job_is_stale(existing):
+                return IdolImportResponse(
+                    idolId=data.idolId,
+                    jobId=str(existing.id),
+                    status=existing.status,
+                )
+
+            # The database row outlived its Celery delivery/worker. Requeue the
+            # same idempotent job so clients already polling this id recover as
+            # well; creating another row would strand those clients forever.
+            existing.status = "pending"
+            existing.progress_percent = 0
+            existing.step = "analyzing_gaps"
+            existing.error_message = None
+            await db.commit()
+
+            from app.tasks.plans import run_plan_generation
+
+            run_plan_generation.delay(str(existing.id))
+            logger.warning(
+                "[PLAN_GENERATE] Requeued stale job id=%s session_id=%s",
+                existing.id,
+                data.sessionId,
+            )
+            return IdolImportResponse(
+                idolId=data.idolId,
+                jobId=str(existing.id),
+                status="pending",
             )
 
     # Create the job record

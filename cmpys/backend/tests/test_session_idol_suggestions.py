@@ -40,6 +40,34 @@ def test_session_response_does_not_lazy_load_unloaded_idol_profile():
     }
 
 
+def test_session_response_normalizes_profile_era_tags_to_one_string():
+    session = IntakeSession(
+        id="session-1",
+        user_id="user-1",
+        phase=SessionPhase.COMPLETED,
+        user_age=24,
+        user_financial_status="employed",
+        user_interests=["Technology"],
+    )
+    idol = Idol(id="idol-1", name="Elon Musk", domain="technology")
+    idol.profile = IdolProfile(
+        idol_id=idol.id,
+        display_name=idol.name,
+        nationality=[],
+        domains=["technology"],
+        primary_roles=["entrepreneur"],
+        era_tags=["modern_era"],
+        notable_themes=[],
+        confidence=0.9,
+        evidence=[],
+    )
+    session.idol = idol
+
+    response = sessions_api._build_session_response(session)
+
+    assert response["selected_idol"]["era"] == "modern_era"
+
+
 @pytest.mark.asyncio
 async def test_suggest_idols_returns_fallback_suggestions_when_llm_fails(monkeypatch):
     session = IntakeSession(

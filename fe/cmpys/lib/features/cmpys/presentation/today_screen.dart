@@ -626,7 +626,7 @@ class CmpysTodayScreen extends ConsumerWidget {
                       ? 'No habits scheduled today.'
                       : pct >= 100
                       ? 'Today is done. Well held.'
-                      : '$left habits left today',
+                      : '$left ${left == 1 ? 'habit' : 'habits'} left today',
                   style: AppTypography.h4.copyWith(
                     color: Colors.white,
                     fontSize: 17,

@@ -465,7 +465,19 @@ def _build_session_response(session: IntakeSession) -> dict:
             from sqlalchemy import inspect as sa_inspect
             if "profile" not in sa_inspect(session.idol).unloaded:
                 profile = session.idol.profile
-                era = getattr(profile, "era_tags", None) if profile else None
+                era_tags = getattr(profile, "era_tags", None) if profile else None
+                # IdolProfile.era_tags is a PostgreSQL array, while the
+                # session contract exposes one concise display string. Older
+                # sessions may therefore surface values like
+                # ["modern_era"]; never pass that list into Pydantic's string
+                # field or the otherwise-valid session read becomes a 500.
+                if isinstance(era_tags, str):
+                    era = era_tags
+                elif isinstance(era_tags, (list, tuple)):
+                    era = next(
+                        (str(tag).strip() for tag in era_tags if str(tag).strip()),
+                        None,
+                    )
         except Exception:
             era = None
         selected_idol = {

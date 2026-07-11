@@ -4,6 +4,7 @@ Tests for the blueprint → plan auto-trigger wiring.
 Covers the session-context threading into plan generation and the
 helpers added for the agentic plan pipeline.
 """
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -11,6 +12,7 @@ import pytest
 from app.services.llm.prompt_loader import _UNTRUSTED_OPEN, load_and_render
 from app.services.transcripts import build_chat_history_json
 from app.tasks.plans import _blueprint_phase_for_week, _load_session_context
+from app.api.v1.plans import _plan_job_is_stale
 
 
 class _FakeMessage:
@@ -51,6 +53,31 @@ class TestBlueprintPhaseMapping:
         assert _blueprint_phase_for_week(10) == "Weeks 10-12: Integration"
         assert _blueprint_phase_for_week(12) == "Weeks 10-12: Integration"
         assert _blueprint_phase_for_week(None) == "Weeks 1-3: Foundation"
+
+
+class TestPlanJobRecovery:
+    def test_recent_job_is_not_stale(self):
+        now = datetime(2026, 7, 11, tzinfo=timezone.utc)
+        job = SimpleNamespace(
+            updated_at=now - timedelta(minutes=5),
+            created_at=now - timedelta(minutes=5),
+        )
+
+        assert _plan_job_is_stale(job, now=now) is False
+
+    def test_job_older_than_worker_time_limit_is_stale(self):
+        now = datetime(2026, 7, 11, tzinfo=timezone.utc)
+        job = SimpleNamespace(
+            updated_at=now - timedelta(minutes=16),
+            created_at=now - timedelta(minutes=20),
+        )
+
+        assert _plan_job_is_stale(job, now=now) is True
+
+    def test_missing_timestamps_are_stale(self):
+        job = SimpleNamespace(updated_at=None, created_at=None)
+
+        assert _plan_job_is_stale(job) is True
 
 
 class TestLoadSessionContext:

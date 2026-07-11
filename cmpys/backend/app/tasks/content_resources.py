@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 from app.core.celery import celery_app
+from app.core.async_runtime import run_async
 from app.core.db import async_session_maker
 
 logger = logging.getLogger(__name__)
@@ -24,7 +25,7 @@ def generate_book_module_resource(
     """
     logger.info(f"[BOOK_MODULE] Starting background generation for '{title}'")
     try:
-        result = asyncio.get_event_loop().run_until_complete(
+        result = run_async(
             _generate_book_module_resource_async(title, author, user_goal, source_context)
         )
         logger.info(f"[BOOK_MODULE] Completed '{title}': {result}")
