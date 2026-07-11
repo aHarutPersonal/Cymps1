@@ -52,7 +52,7 @@ CRITICAL RULES:
 
 7. **NO HALLUCINATIONS.** Only recommend REAL, existing books, courses, and tools.
 
-8. **BOOKS ARE REFERENCES, NOT MINI-SUMMARIES.** For a book material, output only exact discovery metadata. Set `type` to `"book"`, `content_markdown` to null, and `ideas` to an empty array. The backend creates or reuses one canonical 2,500+ word book module separately. Writing a short book summary here is a hard failure because it bypasses that quality-controlled pipeline.
+8. **BOOKS ARE REFERENCES, NOT MINI-SUMMARIES.** For a book material, output only exact discovery metadata. Set `type` to `"book"`, `content_markdown` to null, and `ideas` to an empty array. The backend creates or reuses one canonical 3,200+ word book module separately. Writing a short book summary here is a hard failure because it bypasses that quality-controlled pipeline.
 
 9. **LESSON CONTENT FOR IN-APP LESSONS ONLY (400-600 WORDS, ceiling not target).** For `in_app_lesson` materials, provide a focused 400-600 word `content_markdown` lesson. For every other material type, set `content_markdown` to null. An in-app lesson must include:
    - An opening hook connecting the resource to the user's mission

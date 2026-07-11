@@ -13,6 +13,11 @@ class ContentResourcesRepository {
 
   final DioClient _dioClient;
 
+  Future<ContentResource> getResource(String resourceId) async {
+    final response = await _dioClient.get('/content-resources/$resourceId');
+    return ContentResource.fromJson(response.data as Map<String, dynamic>);
+  }
+
   Future<List<ContentResource>> listVaultResources() async {
     final response = await _dioClient.get('/content-resources/vault');
     final data = response.data as Map<String, dynamic>;
@@ -109,7 +114,9 @@ class ContentResourcesRepository {
   }
 
   Future<ContentResource?> getContinueReading() async {
-    final response = await _dioClient.get('/content-resources/continue-reading');
+    final response = await _dioClient.get(
+      '/content-resources/continue-reading',
+    );
     if (response.data == null) return null;
     final data = response.data as Map<String, dynamic>;
     if (data.isEmpty) return null;

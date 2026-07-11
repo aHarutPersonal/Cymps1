@@ -69,7 +69,7 @@ class BookModuleOutput(BaseModel):
 
 
 class BookModuleMetadataOutput(BaseModel):
-    """Small repair schema that avoids regenerating a good 3,000-word lesson."""
+    """Small repair schema that avoids regenerating a sound long-form lesson."""
 
     sections: list[BookModuleSectionOutput] = Field(min_length=6, max_length=6)
     ideas: list[BookModuleIdeaOutput] = Field(min_length=7, max_length=9)
@@ -205,7 +205,7 @@ def material_to_resource_payload(material: dict[str, Any]) -> dict[str, Any] | N
         material.get("ideas") or material.get("content_markdown")
     ):
         # A short plan-detail snippet is not a canonical book module. Returning
-        # None sends it through the dedicated 2,500+ word generation/cache path.
+        # None sends it through the dedicated 3,200+ word generation/cache path.
         content_md = material.get("content_markdown", "") or ""
         word_count = len(content_md.split()) if content_md else 0
         if word_count < MIN_BOOK_MODULE_WORDS:
@@ -300,7 +300,7 @@ async def generate_book_module(
     user_goal: str,
     source_context: str | None = None,
 ) -> dict[str, Any]:
-    """Generate a reusable 15-minute book module via the configured LLM."""
+    """Generate a reusable 16+ minute book module via the configured LLM."""
     from app.services.llm.client import get_llm_client
     from app.services.llm.prompt_loader import load_and_render
     from app.services.llm.routing import choose_llm_tier
@@ -836,7 +836,7 @@ async def get_or_create_book_module_resource(
     source_lookup: BookSourceLookup | None = None,
     module_factory: BookModuleFactory | None = None,
 ) -> ContentResource:
-    """Lookup or generate one reusable 15-minute book summary resource."""
+    """Lookup or generate one reusable long-form book guide resource."""
     canonical_key = canonical_book_key(title, author)
     result = await db.execute(
         select(ContentResource).where(ContentResource.canonical_key == canonical_key)
@@ -900,7 +900,7 @@ async def get_or_create_book_module_resource(
 
         # A provider result may be a complete licensed module, or merely a raw
         # source. Only complete modules bypass generation. This prevents the old
-        # Gutenberg link stub from masquerading as a 15-minute reading.
+        # Gutenberg link stub from masquerading as a long-form reading.
         if source_words >= MIN_BOOK_MODULE_WORDS:
             source_duration = max(5, round(source_words / 200))
             resource = ContentResource(

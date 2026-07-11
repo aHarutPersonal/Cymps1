@@ -11,6 +11,7 @@ import '../../../core/ui/motion/entrance.dart';
 import '../../../core/ui/motion/page_transition.dart';
 import '../../auth/controllers/auth_controller.dart';
 import '../../auth/controllers/session_controller.dart';
+import '../../plan/presentation/reading_library_screen.dart';
 import '../../plan/state/current_plan_provider.dart';
 import '../data/cmpys_seed.dart';
 import '../state/cmpys_store.dart';
@@ -38,113 +39,216 @@ class CmpysYouScreen extends ConsumerWidget {
         bottom: false,
         child: EntranceScope(
           child: ListView(
-          padding: EdgeInsets.fromLTRB(18, 14, 18, AppShell.bottomNavClearance(context)),
-          children: EntranceGroup.wrap([
-            Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      CmpysKicker('Profile'),
-                      const SizedBox(height: 4),
-                      Text('You',
+            padding: EdgeInsets.fromLTRB(
+              18,
+              14,
+              18,
+              AppShell.bottomNavClearance(context),
+            ),
+            children: EntranceGroup.wrap([
+              Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        CmpysKicker('Profile'),
+                        const SizedBox(height: 4),
+                        Text(
+                          'You',
                           style: AppTypography.display.copyWith(
-                              fontSize: 30, letterSpacing: -0.5, height: 1.1)),
-                    ],
+                            fontSize: 30,
+                            letterSpacing: -0.5,
+                            height: 1.1,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: _circleAction(PhosphorIconsRegular.gearSix, () {
+                      Navigator.of(context).push(
+                        CmpysPageRoute(
+                          builder: (_) => const CmpysSettingsScreen(),
+                        ),
+                      );
+                    }),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              _profileCard(context, st, idol, name, planDay),
+              const SizedBox(height: 18),
+              Row(
+                children: [
+                  Expanded(
+                    child: _stat(
+                      today == null ? '—' : '${today.streak}',
+                      'Day streak',
+                      PhosphorIconsRegular.flame,
+                      AppColors.ochre,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _stat(
+                      planPct == null ? '—' : '$planPct%',
+                      'Plan done',
+                      PhosphorIconsRegular.target,
+                      AppColors.green,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _stat(
+                      '${st.notes.length}',
+                      'Notes',
+                      PhosphorIconsRegular.note,
+                      AppColors.blue,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 22),
+              const Padding(
+                padding: EdgeInsets.only(left: 2),
+                child: CmpysKicker('Library'),
+              ),
+              const SizedBox(height: 10),
+              CmpysCardSurface(
+                pad: const EdgeInsets.symmetric(horizontal: 14),
+                child: Column(
+                  children: [
+                    _row(
+                      context,
+                      PhosphorIconsFill.sparkle,
+                      'Your record',
+                      '${st.achievements.length}',
+                      () => Navigator.of(context).push(
+                        CmpysSheetRoute(
+                          builder: (_) => const CmpysRecordScreen(),
+                        ),
+                      ),
+                      first: true,
+                    ),
+                    _row(
+                      context,
+                      PhosphorIconsRegular.bookOpen,
+                      'Reading',
+                      null,
+                      () => Navigator.of(context).push(
+                        CmpysPageRoute(
+                          builder: (_) => const ReadingLibraryScreen(),
+                        ),
+                      ),
+                    ),
+                    _row(
+                      context,
+                      PhosphorIconsRegular.note,
+                      'Notes',
+                      '${st.notes.length}',
+                      () => Navigator.of(context).push(
+                        CmpysPageRoute(
+                          builder: (_) => const CmpysNotesScreen(),
+                        ),
+                      ),
+                    ),
+                    _row(
+                      context,
+                      PhosphorIconsRegular.bookmarkSimple,
+                      'Saved',
+                      '${st.saved.length}',
+                      () => Navigator.of(context).push(
+                        CmpysPageRoute(
+                          builder: (_) => const CmpysSavedScreen(),
+                        ),
+                      ),
+                    ),
+                    _row(
+                      context,
+                      PhosphorIconsRegular.quotes,
+                      'Idea reels',
+                      null,
+                      () => context.goToIdeas(),
+                      last: true,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 18),
+              const Padding(
+                padding: EdgeInsets.only(left: 2),
+                child: CmpysKicker('Account'),
+              ),
+              const SizedBox(height: 10),
+              CmpysCardSurface(
+                pad: const EdgeInsets.symmetric(horizontal: 14),
+                child: Column(
+                  children: [
+                    _row(
+                      context,
+                      PhosphorIconsRegular.user,
+                      'Edit profile',
+                      null,
+                      () => Navigator.of(context).push(
+                        CmpysPageRoute(
+                          builder: (_) => const CmpysEditProfileScreen(),
+                        ),
+                      ),
+                      first: true,
+                    ),
+                    _row(
+                      context,
+                      PhosphorIconsRegular.scales,
+                      'Change mentor',
+                      null,
+                      () => Navigator.of(context).push(
+                        CmpysPageRoute(
+                          builder: (_) => const CmpysMentorPickerScreen(),
+                        ),
+                      ),
+                    ),
+                    _row(
+                      context,
+                      PhosphorIconsRegular.gearSix,
+                      'Settings',
+                      null,
+                      () => Navigator.of(context).push(
+                        CmpysPageRoute(
+                          builder: (_) => const CmpysSettingsScreen(),
+                        ),
+                      ),
+                      last: true,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 18),
+              CmpysCardSurface(
+                pad: const EdgeInsets.symmetric(horizontal: 14),
+                child: _row(
+                  context,
+                  PhosphorIconsRegular.signOut,
+                  'Log out',
+                  null,
+                  () => _confirmLogout(context, ref),
+                  first: true,
+                  last: true,
+                  danger: true,
+                ),
+              ),
+              const SizedBox(height: 22),
+              Center(
+                child: Text(
+                  'CMPYS · v1.0',
+                  style: AppTypography.monoLabel.copyWith(
+                    color: AppColors.ink3,
+                    fontSize: 10.5,
                   ),
                 ),
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: _circleAction(PhosphorIconsRegular.gearSix, () {
-                    Navigator.of(context).push(CmpysPageRoute(
-                        builder: (_) => const CmpysSettingsScreen()));
-                  }),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            _profileCard(context, st, idol, name, planDay),
-            const SizedBox(height: 18),
-            Row(
-              children: [
-                Expanded(
-                    child: _stat(today == null ? '—' : '${today.streak}', 'Day streak',
-                        PhosphorIconsRegular.flame, AppColors.ochre)),
-                const SizedBox(width: 10),
-                Expanded(
-                    child: _stat(planPct == null ? '—' : '$planPct%', 'Plan done',
-                        PhosphorIconsRegular.target, AppColors.green)),
-                const SizedBox(width: 10),
-                Expanded(
-                    child: _stat('${st.notes.length}', 'Notes',
-                        PhosphorIconsRegular.note, AppColors.blue)),
-              ],
-            ),
-            const SizedBox(height: 22),
-            const Padding(
-                padding: EdgeInsets.only(left: 2), child: CmpysKicker('Library')),
-            const SizedBox(height: 10),
-            CmpysCardSurface(
-              pad: const EdgeInsets.symmetric(horizontal: 14),
-              child: Column(
-                children: [
-                  _row(context, PhosphorIconsFill.sparkle, 'Your record',
-                      '${st.achievements.length}',
-                      () => Navigator.of(context).push(CmpysSheetRoute(
-                          builder: (_) => const CmpysRecordScreen())),
-                      first: true),
-                  _row(context, PhosphorIconsRegular.note, 'Notes',
-                      '${st.notes.length}',
-                      () => Navigator.of(context).push(CmpysPageRoute(
-                          builder: (_) => const CmpysNotesScreen()))),
-                  _row(context, PhosphorIconsRegular.bookmarkSimple, 'Saved',
-                      '${st.saved.length}',
-                      () => Navigator.of(context).push(CmpysPageRoute(
-                          builder: (_) => const CmpysSavedScreen()))),
-                  _row(context, PhosphorIconsRegular.quotes, 'Idea reels',
-                      null, () => context.goToIdeas(),
-                      last: true),
-                ],
               ),
-            ),
-            const SizedBox(height: 18),
-            const Padding(
-                padding: EdgeInsets.only(left: 2), child: CmpysKicker('Account')),
-            const SizedBox(height: 10),
-            CmpysCardSurface(
-              pad: const EdgeInsets.symmetric(horizontal: 14),
-              child: Column(
-                children: [
-                  _row(context, PhosphorIconsRegular.user, 'Edit profile', null,
-                      () => Navigator.of(context).push(CmpysPageRoute(
-                          builder: (_) => const CmpysEditProfileScreen())),
-                      first: true),
-                  _row(context, PhosphorIconsRegular.scales, 'Change mentor',
-                      null,
-                      () => Navigator.of(context).push(CmpysPageRoute(
-                          builder: (_) => const CmpysMentorPickerScreen()))),
-                  _row(context, PhosphorIconsRegular.gearSix, 'Settings', null,
-                      () => Navigator.of(context).push(CmpysPageRoute(
-                          builder: (_) => const CmpysSettingsScreen())),
-                      last: true),
-                ],
-              ),
-            ),
-            const SizedBox(height: 18),
-            CmpysCardSurface(
-              pad: const EdgeInsets.symmetric(horizontal: 14),
-              child: _row(context, PhosphorIconsRegular.signOut, 'Log out', null,
-                  () => _confirmLogout(context, ref),
-                  first: true, last: true, danger: true),
-            ),
-            const SizedBox(height: 22),
-            Center(
-              child: Text('CMPYS · v1.0',
-                  style: AppTypography.monoLabel
-                      .copyWith(color: AppColors.ink3, fontSize: 10.5)),
-            ),
-          ]),
+            ]),
           ),
         ),
       ),
@@ -181,9 +285,16 @@ class CmpysYouScreen extends ConsumerWidget {
     return day < 1 ? 1 : day;
   }
 
-  Widget _profileCard(BuildContext context, CmpysState st, CmpysIdol idol,
-      String name, int? planDay) {
-    final initial = st.user.name.isNotEmpty ? st.user.name[0].toUpperCase() : 'Y';
+  Widget _profileCard(
+    BuildContext context,
+    CmpysState st,
+    CmpysIdol idol,
+    String name,
+    int? planDay,
+  ) {
+    final initial = st.user.name.isNotEmpty
+        ? st.user.name[0].toUpperCase()
+        : 'Y';
     return CmpysCardSurface(
       raised: true,
       pad: const EdgeInsets.fromLTRB(18, 24, 18, 22),
@@ -202,23 +313,29 @@ class CmpysYouScreen extends ConsumerWidget {
             overflow: TextOverflow.ellipsis,
             textAlign: TextAlign.center,
             style: AppTypography.display.copyWith(
-                fontSize: 24, fontWeight: FontWeight.w700, height: 1.1),
+              fontSize: 24,
+              fontWeight: FontWeight.w700,
+              height: 1.1,
+            ),
           ),
           const SizedBox(height: 3),
           Text(
             st.user.age <= 0
                 ? 'Complete your profile to personalize CMPYS'
                 : planDay == null
-                    ? 'Age ${st.user.age}'
-                    : 'Age ${st.user.age} · Day $planDay on CMPYS',
+                ? 'Age ${st.user.age}'
+                : 'Age ${st.user.age} · Day $planDay on CMPYS',
             textAlign: TextAlign.center,
-            style: AppTypography.caption
-                .copyWith(color: AppColors.ink2, fontSize: 13.5),
+            style: AppTypography.caption.copyWith(
+              color: AppColors.ink2,
+              fontSize: 13.5,
+            ),
           ),
           const SizedBox(height: 14),
           GestureDetector(
-            onTap: () => Navigator.of(context).push(CmpysPageRoute(
-                builder: (_) => CmpysIdolDetailScreen(idol: idol))),
+            onTap: () => Navigator.of(context).push(
+              CmpysPageRoute(builder: (_) => CmpysIdolDetailScreen(idol: idol)),
+            ),
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               decoration: BoxDecoration(
@@ -242,7 +359,9 @@ class CmpysYouScreen extends ConsumerWidget {
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: AppTypography.captionMedium.copyWith(
-                          color: idol.color, fontWeight: FontWeight.w700),
+                        color: idol.color,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
                 ],
@@ -266,26 +385,40 @@ class CmpysYouScreen extends ConsumerWidget {
         children: [
           Icon(icon, size: 19, color: color),
           const SizedBox(height: 5),
-          Text(n,
-              style: AppTypography.display.copyWith(
-                  fontSize: 24,
-                  fontWeight: FontWeight.w700,
-                  height: 1,
-                  color: AppColors.ink)),
+          Text(
+            n,
+            style: AppTypography.display.copyWith(
+              fontSize: 24,
+              fontWeight: FontWeight.w700,
+              height: 1,
+              color: AppColors.ink,
+            ),
+          ),
           const SizedBox(height: 3),
-          Text(label,
-              maxLines: 2,
-              textAlign: TextAlign.center,
-              style: AppTypography.caption
-                  .copyWith(color: AppColors.ink3, fontSize: 12)),
+          Text(
+            label,
+            maxLines: 2,
+            textAlign: TextAlign.center,
+            style: AppTypography.caption.copyWith(
+              color: AppColors.ink3,
+              fontSize: 12,
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _row(BuildContext context, IconData icon, String label, String? detail,
-      VoidCallback onTap,
-      {bool first = false, bool last = false, bool danger = false}) {
+  Widget _row(
+    BuildContext context,
+    IconData icon,
+    String label,
+    String? detail,
+    VoidCallback onTap, {
+    bool first = false,
+    bool last = false,
+    bool danger = false,
+  }) {
     return GestureDetector(
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
@@ -305,27 +438,39 @@ class CmpysYouScreen extends ConsumerWidget {
                 color: danger ? AppColors.claySoft : AppColors.paper2,
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: Icon(icon,
-                  size: 18, color: danger ? AppColors.danger : AppColors.ink2),
+              child: Icon(
+                icon,
+                size: 18,
+                color: danger ? AppColors.danger : AppColors.ink2,
+              ),
             ),
             const SizedBox(width: 13),
             Expanded(
-              child: Text(label,
-                  style: AppTypography.bodyMedium.copyWith(
-                      fontSize: 15.5,
-                      color: danger ? AppColors.danger : AppColors.ink,
-                      fontWeight:
-                          danger ? FontWeight.w700 : FontWeight.w600)),
+              child: Text(
+                label,
+                style: AppTypography.bodyMedium.copyWith(
+                  fontSize: 15.5,
+                  color: danger ? AppColors.danger : AppColors.ink,
+                  fontWeight: danger ? FontWeight.w700 : FontWeight.w600,
+                ),
+              ),
             ),
             if (detail != null) ...[
-              Text(detail,
-                  style: AppTypography.caption
-                      .copyWith(color: AppColors.ink3, fontSize: 14)),
+              Text(
+                detail,
+                style: AppTypography.caption.copyWith(
+                  color: AppColors.ink3,
+                  fontSize: 14,
+                ),
+              ),
               const SizedBox(width: 6),
             ],
             if (!danger)
-              const Icon(Icons.chevron_right_rounded,
-                  size: 18, color: AppColors.hair2),
+              const Icon(
+                Icons.chevron_right_rounded,
+                size: 18,
+                color: AppColors.hair2,
+              ),
           ],
         ),
       ),
@@ -349,15 +494,21 @@ class CmpysYouScreen extends ConsumerWidget {
                   color: AppColors.claySoft,
                   borderRadius: BorderRadius.circular(13),
                 ),
-                child: const Icon(PhosphorIconsRegular.signOut,
-                    color: AppColors.danger, size: 22),
+                child: const Icon(
+                  PhosphorIconsRegular.signOut,
+                  color: AppColors.danger,
+                  size: 22,
+                ),
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
                   'Your progress is saved to this device. You can pick up right where you left off.',
                   style: AppTypography.body.copyWith(
-                      color: AppColors.ink2, fontSize: 14, height: 1.45),
+                    color: AppColors.ink2,
+                    fontSize: 14,
+                    height: 1.45,
+                  ),
                 ),
               ),
             ],

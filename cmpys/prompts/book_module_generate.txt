@@ -18,15 +18,20 @@ SOURCE DISCIPLINE — APPLY IN THIS ORDER:
 5. Do not claim this module is the full book. It is an original educational guide to the book's central frameworks.
 
 QUALITY CONTRACT:
-- `content_markdown`: target 2,800-3,600 words and never go below 2,500. This is a hard constraint.
+- `content_markdown`: target 3,500-4,200 words and never go below 3,200. This is a hard constraint. The material must take more than 15 minutes at a 200-words-per-minute learning pace, before practice time.
 - Exactly 6 substantive sections, followed by one `## Closing Synthesis` section.
-- Each substantive section contains 430-550 words across 3-5 concise paragraphs.
+- Each substantive section contains 500-620 words across 4-6 concise paragraphs. The closing synthesis contains 250-400 words and gives the reader a concrete seven-day integration plan.
 - Each section teaches one distinct framework or component; sections must not repeat one another.
 - Each section includes:
-  - a precise explanation;
-  - a grounded example from SOURCE CONTEXT or a clearly labeled practical scenario;
+  - the book's core claim in precise language;
+  - the mechanism that explains why the idea works;
+  - a grounded example from SOURCE CONTEXT or a clearly labeled, realistic practical scenario;
+  - a boundary, trade-off, failure mode, or counterexample so the reader knows when the idea does not apply;
+  - a short reflection prompt that asks the reader to connect the idea to their own situation;
   - `### Practice This` with 2-4 numbered, measurable actions;
   - one sentence connecting the section to the next idea.
+- Open with a 120-180 word orientation inside the first section that explains what this guide covers, what it intentionally leaves to the full book, and what tangible output the reader will produce.
+- Across the module, include at least 3 detailed practical scenarios from different contexts, 2 comparisons between easily confused concepts, and 2 diagnostic checklists.
 - Prefer concrete mechanisms, trade-offs, boundaries, and counterexamples over motivational language.
 - Never use filler such as "Let's dive in", "In this section we'll explore", "It's important to note", or "As mentioned earlier".
 - Use `##` section headings, `### Practice This`, and **bold** key concepts.

@@ -7,13 +7,16 @@ import 'package:go_router/go_router.dart';
 import '../../../app/assets.dart';
 import '../../../app/design_tokens.dart';
 import '../../../app/router.dart';
+import '../../../core/ui/cmpys/cmpys_primitives.dart';
 import '../controllers/auth_controller.dart';
 import '../controllers/session_controller.dart';
 
-/// Welcome / auth entry. Matches the Cmpys.zip reference (01-auth):
-/// paper background, CMPYS wordmark top-left, an editorial Bricolage headline
-/// anchored to the bottom, social-first auth (filled Apple pill + outline
-/// Google pill), and email tucked behind "Use email instead".
+/// Welcome / auth entry.
+///
+/// The screen previews CMPYS's product loop before asking the user to sign in:
+/// choose a mentor, see the same-age mirror, then work a 12-week plan. It uses
+/// the same mentor imagery, ink surfaces, mono labels, paper background, and
+/// green action language as the rest of the app.
 class AuthScreen extends ConsumerStatefulWidget {
   const AuthScreen({super.key});
 
@@ -89,7 +92,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                 padding: const EdgeInsets.fromLTRB(28, 8, 28, 20),
                 child: ConstrainedBox(
                   constraints: BoxConstraints(
-                    minHeight: MediaQuery.of(context).size.height -
+                    minHeight:
+                        MediaQuery.of(context).size.height -
                         MediaQuery.of(context).padding.top -
                         MediaQuery.of(context).padding.bottom -
                         (_errorMessage != null ? 56 : 0) -
@@ -114,37 +118,59 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const SizedBox(height: 8),
-        // Wordmark
-        Text(
-          'CMPYS',
-          style: AppTypography.kicker.copyWith(
-            fontSize: 16,
-            color: AppColors.ink,
-            letterSpacing: 4,
-          ),
+        Row(
+          children: [
+            Text(
+              'CMPYS',
+              style: AppTypography.kicker.copyWith(
+                fontSize: 16,
+                color: AppColors.ink,
+                letterSpacing: 4,
+              ),
+            ),
+            const Spacer(),
+            Container(
+              width: 8,
+              height: 8,
+              decoration: const BoxDecoration(
+                color: AppColors.green,
+                shape: BoxShape.circle,
+              ),
+            ),
+            const SizedBox(width: 7),
+            Text(
+              'MENTORSHIP',
+              style: AppTypography.kicker.copyWith(
+                fontSize: 9,
+                letterSpacing: 1.1,
+                color: AppColors.ink3,
+              ),
+            ),
+          ],
         ),
-        const Spacer(),
-        // Editorial headline — Bricolage display, bottom-anchored.
+        const SizedBox(height: 24),
+        const _MentorMirrorPanel(),
+        const SizedBox(height: 26),
         Text(
-          'Measure your life against the people who inspire you.',
+          'Don’t admire their path. Build yours.',
           style: AppTypography.display.copyWith(
-            fontSize: 38,
-            height: 1.08,
+            fontSize: 39,
+            height: 1.04,
+            letterSpacing: -1.1,
             color: AppColors.ink,
           ),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 13),
         Text(
-          'Pick a mentor. See how you compare at the same age. '
-          'Get a plan to close the gap.',
+          'Choose a mentor. Face the truth at your age. Turn the gap '
+          'into a plan you can work every day.',
           style: AppTypography.body.copyWith(
             fontSize: 15.5,
-            height: 1.45,
+            height: 1.5,
             color: AppColors.textSecondary,
           ),
         ),
-        const SizedBox(height: 30),
-        // Apple — filled (ink) pill
+        const SizedBox(height: 24),
         _AuthPill(
           label: 'Continue with Apple',
           icon: AppAssets.iconApple,
@@ -160,7 +186,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
           useColorIcon: true,
           onTap: isLoading ? null : () => _handleOAuth('google'),
         ),
-        const SizedBox(height: 18),
+        const SizedBox(height: 16),
         Center(
           child: GestureDetector(
             onTap: isLoading
@@ -172,7 +198,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
             child: Text(
               'Use email instead',
               style: AppTypography.bodyMedium.copyWith(
-                fontSize: 15,
+                fontSize: 14.5,
                 fontWeight: FontWeight.w700,
                 color: AppColors.accent,
               ),
@@ -208,13 +234,16 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                   border: Border.all(color: AppColors.border),
                   borderRadius: BorderRadius.circular(20),
                 ),
-                child: const Icon(Icons.arrow_back,
-                    color: AppColors.ink, size: 20),
+                child: const Icon(
+                  Icons.arrow_back,
+                  color: AppColors.ink,
+                  size: 20,
+                ),
               ),
             ),
             const Spacer(),
             Text(
-              _isLoginMode ? 'Welcome back.' : 'Create your account.',
+              _isLoginMode ? 'Continue your climb.' : 'Start with a standard.',
               style: AppTypography.display.copyWith(
                 fontSize: 34,
                 height: 1.1,
@@ -224,8 +253,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
             const SizedBox(height: 10),
             Text(
               _isLoginMode
-                  ? 'Sign in to continue closing the gap.'
-                  : 'Build your profile, then choose your North Star.',
+                  ? 'Your mentor, comparison, and plan are waiting.'
+                  : 'We’ll match you with a mentor, show the gap, and build your 12-week plan.',
               style: AppTypography.body.copyWith(
                 fontSize: 15.5,
                 color: AppColors.textSecondary,
@@ -384,6 +413,229 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   }
 }
 
+/// A compact product preview built from the app's real mentor portraits.
+/// The composition makes the unique CMPYS loop understandable at a glance,
+/// without relying on decorative stock imagery or invented user data.
+class _MentorMirrorPanel extends StatelessWidget {
+  const _MentorMirrorPanel();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 194,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        gradient: AppColors.gradInk,
+        borderRadius: AppRadii.card,
+        boxShadow: AppShadows.md,
+      ),
+      child: Column(
+        children: [
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(18, 17, 18, 14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'CHOOSE YOUR STANDARD',
+                          maxLines: 1,
+                          overflow: TextOverflow.fade,
+                          style: AppTypography.kicker.copyWith(
+                            fontSize: 9,
+                            color: Colors.white.withValues(alpha: 0.58),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'SAME-AGE MIRROR',
+                          maxLines: 1,
+                          overflow: TextOverflow.fade,
+                          textAlign: TextAlign.right,
+                          style: AppTypography.kicker.copyWith(
+                            fontSize: 8.5,
+                            color: AppColors.greenSoft,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const Spacer(),
+                  Row(
+                    children: [
+                      const SizedBox(
+                        width: 120,
+                        height: 62,
+                        child: Stack(
+                          clipBehavior: Clip.none,
+                          children: [
+                            Positioned(
+                              left: 0,
+                              child: _MentorPortrait(
+                                slug: 'wb',
+                                initials: 'WB',
+                                color: AppColors.green,
+                                tint: AppColors.greenSoft,
+                                size: 60,
+                              ),
+                            ),
+                            Positioned(
+                              left: 34,
+                              child: _MentorPortrait(
+                                slug: 'mc',
+                                initials: 'MC',
+                                color: AppColors.blue,
+                                tint: AppColors.blueSoft,
+                                size: 60,
+                              ),
+                            ),
+                            Positioned(
+                              left: 68,
+                              child: _MentorPortrait(
+                                slug: 'sj',
+                                initials: 'SJ',
+                                color: AppColors.ink,
+                                tint: AppColors.paper2,
+                                size: 60,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Spacer(),
+                      Icon(
+                        Icons.arrow_forward_rounded,
+                        size: 19,
+                        color: Colors.white.withValues(alpha: 0.42),
+                      ),
+                      const SizedBox(width: 8),
+                      Container(
+                        width: 60,
+                        height: 60,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: AppColors.green,
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.78),
+                            width: 2.5,
+                          ),
+                        ),
+                        child: Text(
+                          'YOU',
+                          style: AppTypography.kicker.copyWith(
+                            fontSize: 11,
+                            letterSpacing: 1.2,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const Spacer(),
+                  Row(
+                    children: [
+                      Text(
+                        'MENTOR',
+                        style: AppTypography.monoLabel.copyWith(
+                          fontSize: 9.5,
+                          color: Colors.white.withValues(alpha: 0.52),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'YOUR LIFE, MEASURED CLEARLY',
+                          maxLines: 1,
+                          overflow: TextOverflow.fade,
+                          textAlign: TextAlign.right,
+                          style: AppTypography.monoLabel.copyWith(
+                            fontSize: 8.5,
+                            color: Colors.white.withValues(alpha: 0.52),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          Container(
+            height: 40,
+            padding: const EdgeInsets.symmetric(horizontal: 18),
+            color: AppColors.green,
+            child: Row(
+              children: [
+                Text(
+                  'THE GAP',
+                  style: AppTypography.kicker.copyWith(
+                    fontSize: 9.5,
+                    color: Colors.white.withValues(alpha: 0.72),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 9),
+                  child: Icon(
+                    Icons.arrow_forward_rounded,
+                    size: 15,
+                    color: Colors.white.withValues(alpha: 0.68),
+                  ),
+                ),
+                Expanded(
+                  child: Text(
+                    'YOUR 12-WEEK PLAN',
+                    maxLines: 1,
+                    overflow: TextOverflow.fade,
+                    style: AppTypography.kicker.copyWith(
+                      fontSize: 9,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MentorPortrait extends StatelessWidget {
+  const _MentorPortrait({
+    required this.slug,
+    required this.initials,
+    required this.color,
+    required this.tint,
+    this.size = 66,
+  });
+
+  final String slug;
+  final String initials;
+  final Color color;
+  final Color tint;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return CmpysMentorAvatar(
+      slug: slug,
+      initials: initials,
+      color: color,
+      tint: tint,
+      size: size,
+      border: Border.all(color: AppColors.card, width: 2.5),
+    );
+  }
+}
+
 /// Full-width pill button used across the auth screen.
 /// - `filled` + `accent`: green primary (Sign In / Create Account).
 /// - `filled` (no accent): ink-dark pill (Continue with Apple).
@@ -412,8 +664,8 @@ class _AuthPill extends StatelessWidget {
     final Color bg = accent
         ? AppColors.accent
         : filled
-            ? AppColors.ink
-            : AppColors.surface;
+        ? AppColors.ink
+        : AppColors.surface;
     final Color fg = filled || accent ? Colors.white : AppColors.ink;
 
     return GestureDetector(
@@ -587,14 +839,18 @@ class _ErrorBanner extends StatelessWidget {
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.error_outline,
-                      size: 18, color: AppColors.error),
+                  const Icon(
+                    Icons.error_outline,
+                    size: 18,
+                    color: AppColors.error,
+                  ),
                   const SizedBox(width: AppSpacing.s12),
                   Expanded(
                     child: Text(
                       message!,
-                      style: AppTypography.caption
-                          .copyWith(color: AppColors.error),
+                      style: AppTypography.caption.copyWith(
+                        color: AppColors.error,
+                      ),
                     ),
                   ),
                   GestureDetector(

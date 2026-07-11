@@ -42,14 +42,14 @@ class LLMResponse:
         self.error = error
 
 
-def _book_module_markdown(title: str, words: int = 3000) -> str:
+def _book_module_markdown(title: str, words: int = 3400) -> str:
     return f"# {title}\n\n" + " ".join(["insight"] * words)
 
 
 def _valid_book_module(title: str = "Deep Work", author: str = "Cal Newport") -> dict:
     sections = []
     markdown_parts = []
-    for index in range(5):
+    for index in range(6):
         sections.append(
             {
                 "title": f"Framework {index + 1}",
@@ -59,10 +59,10 @@ def _valid_book_module(title: str = "Deep Work", author: str = "Cal Newport") ->
         )
         markdown_parts.append(
             f"## Framework {index + 1}\n\n"
-            + " ".join([f"concept{index}"] * 510)
+            + " ".join([f"concept{index}"] * 560)
             + "\n\n### Practice This\n1. Apply the framework.\n2. Record the result."
         )
-    markdown_parts.append("## Closing Synthesis\n\nConnect the five frameworks into one practice.")
+    markdown_parts.append("## Closing Synthesis\n\nConnect the six frameworks into one practice.")
     return {
         "title": title,
         "author_or_creator": author,
@@ -70,7 +70,7 @@ def _valid_book_module(title: str = "Deep Work", author: str = "Cal Newport") ->
         "sections": sections,
         "ideas": [
             {"title": f"Idea {index + 1}", "content": " ".join(["application"] * 40)}
-            for index in range(6)
+            for index in range(7)
         ],
         "content_markdown": f"# {title}\n\n" + "\n\n".join(markdown_parts),
     }
@@ -137,7 +137,7 @@ def test_material_to_resource_payload_rejects_short_book_summary():
 
 @pytest.mark.asyncio
 async def test_generate_book_module_retries_until_prd_minimum(monkeypatch):
-    """Book modules below 2,500 words should trigger the stronger retry."""
+    """Book modules below 3,200 words should trigger the stronger retry."""
     calls = []
 
     class Client:
@@ -167,8 +167,8 @@ async def test_generate_book_module_retries_until_prd_minimum(monkeypatch):
     )
 
     assert len(calls) == 2
-    assert len(result["content_markdown"].split()) >= 2500
-    assert result["duration_minutes"] == 13
+    assert len(result["content_markdown"].split()) >= 3200
+    assert result["duration_minutes"] == 17
     assert result["quality_report"]["passed"] is True
 
 
@@ -340,7 +340,7 @@ async def test_get_or_create_content_resource_reuses_existing_record():
 async def test_get_or_create_book_module_resource_reuses_existing_without_generation():
     existing = MagicMock()
     existing.id = "book-resource-1"
-    existing.content_markdown = "word " * 2600
+    existing.content_markdown = "word " * 3400
     existing.status = CatalogStatus.PUBLISHED
     existing.metadata_json = {"quality_report": {"passed": True}}
     db = AsyncMock()
@@ -392,7 +392,7 @@ async def test_get_or_create_book_module_resource_generates_and_saves_once_when_
     assert result.kind == ContentResourceKind.LLM_BOOK_SUMMARY
     assert result.license_status == LicenseStatus.LLM_SUMMARY
     assert result.is_public_domain is False
-    assert result.duration_minutes == 13
+    assert result.duration_minutes == 17
     assert result.content_markdown.startswith("# Deep Work")
     assert result.summary_json["ideas"][0]["title"] == "Idea 1"
     db.add.assert_called_once_with(result)
@@ -503,7 +503,7 @@ async def test_attach_content_resources_generates_missing_book_module():
     assert materials[0]["content_resource_id"] == db.add.call_args.args[0].id
     assert materials[0]["canonical_key"] == "book:james_clear:atomic_habits"
     assert materials[0]["content_markdown"].startswith("# Atomic Habits")
-    assert materials[0]["duration_minutes"] == 13
+    assert materials[0]["duration_minutes"] == 17
     assert materials[0]["ideas"][0]["title"] == "Idea 1"
 
 

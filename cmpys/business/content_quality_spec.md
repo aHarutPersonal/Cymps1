@@ -27,7 +27,7 @@ CMPYS claims to provide 15-90 minute learning experiences, but the actual conten
 
 | Field | Minimum | Target | Rationale |
 |-------|---------|--------|-----------|
-| `content_markdown` | 2,500 words | 3,000 words | 15 min reading at 200 wpm = 3,000 words |
+| `content_markdown` | 3,200 words | 3,600 words | More than 15 min at a 200 wpm learning pace |
 | Each `section.summary` | 80 words | 120 words | Substantial enough to give a takeaway on skim |
 | Each `section.exercise` | 40 words | 60 words | Specific, measurable action with tool/time/success criteria |
 | Each `idea.content` | 40 words | 60 words | Must include specific example + actionable takeaway |
@@ -193,8 +193,8 @@ class PlanItemCreate(BaseModel):
 ## 6. Verification Checklist
 
 - [ ] Generate a plan for a test user. Open a plan item's details. Verify each `lesson_content` is >= 500 words with real examples and exercises.
-- [ ] Open a book module in the In-App Lesson reader. Verify `content_markdown` is >= 2,500 words with multiple sections, examples, and exercises.
+- [ ] Open a book module in the dedicated reader. Verify `content_markdown` is >= 3,200 words with multiple sections, examples, boundaries, and exercises.
 - [ ] Verify `duration_minutes` reflects actual word count (words / 200), not a hardcoded value.
 - [ ] Send a deliberately shallow prompt output through the pipeline. Verify the backend retries with a stronger prompt.
-- [ ] Verify a 2,500-word book module shows `duration_minutes=13` (not 15).
+- [ ] Verify a 3,200-word book module shows `duration_minutes=16`.
 - [ ] Verify a 500-word lesson step shows `estimate_minutes=3` (not 60).

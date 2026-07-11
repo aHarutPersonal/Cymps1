@@ -10,7 +10,7 @@
 **File:** `/prompts/book_module_generate.txt`
 
 Changes:
-- Added minimum word count requirement: `content_markdown` must be 2,500-4,000 words
+- Added minimum word count requirement: `content_markdown` must be 3,200-4,500 words
 - Section summaries must be 80-150 words (was: no requirement)
 - Section exercises must be 40-80 words (was: "A short action")
 - Idea card content must be 40-80 words with specific example + actionable takeaway

@@ -35,9 +35,17 @@ BackendPlan _planFor(String idol) => BackendPlan(
 class _FakePlanRepo implements PlanRepository {
   _FakePlanRepo(this.plan);
   BackendPlan? plan;
+  final requestedJobs = <String>[];
+  final jobs = <String, PlanJobStatus>{};
 
   @override
   Future<BackendPlan?> getCurrentPlan() async => plan;
+
+  @override
+  Future<PlanJobStatus> getJobStatus(String jobId) async {
+    requestedJobs.add(jobId);
+    return jobs[jobId]!;
+  }
 
   @override
   dynamic noSuchMethod(Invocation invocation) =>
@@ -96,5 +104,38 @@ void main() {
 
     expect(controller.state.status, CurrentPlanStatus.ready);
     expect(controller.state.plan?.idolName, 'Warren Buffett');
+  });
+
+  test('a new onboarding job replaces polling for a previous account job',
+      () async {
+    final repo = _FakePlanRepo(null)
+      ..jobs['old-job'] = const PlanJobStatus(
+        id: 'old-job',
+        status: 'running',
+        progressPercent: 0,
+      )
+      ..jobs['new-job'] = const PlanJobStatus(
+        id: 'new-job',
+        status: 'completed',
+        progressPercent: 100,
+      );
+    var storedJobId = 'old-job';
+    final controller = CurrentPlanController(
+      repo: repo,
+      readJobId: () => storedJobId,
+      readIdolName: () => 'Oprah Winfrey',
+    );
+    await pumpEventQueue();
+    expect(controller.state.status, CurrentPlanStatus.generating);
+
+    repo.plan = _planFor('Oprah Winfrey');
+    storedJobId = 'new-job';
+    controller.onJobIdChanged('new-job');
+    await pumpEventQueue();
+
+    expect(repo.requestedJobs, contains('new-job'));
+    expect(controller.state.status, CurrentPlanStatus.ready);
+    expect(controller.state.plan?.idolName, 'Oprah Winfrey');
+    controller.dispose();
   });
 }

@@ -9,9 +9,17 @@ import '../../../app/design_tokens.dart';
 /// Markdown body using the CMPYS type system. [onDark] flips ink → white for
 /// use on color-block surfaces.
 class CmpysMarkdown extends StatelessWidget {
-  const CmpysMarkdown(this.data, {super.key, this.onDark = false});
+  const CmpysMarkdown(
+    this.data, {
+    super.key,
+    this.onDark = false,
+    this.fontSize = 15.5,
+    this.lineHeight = 1.6,
+  });
   final String data;
   final bool onDark;
+  final double fontSize;
+  final double lineHeight;
 
   @override
   Widget build(BuildContext context) {
@@ -21,24 +29,52 @@ class CmpysMarkdown extends StatelessWidget {
       data: data,
       selectable: false,
       styleSheet: MarkdownStyleSheet(
-        p: AppTypography.reading.copyWith(fontSize: 15.5, height: 1.6, color: ink),
-        h1: AppTypography.h2.copyWith(fontSize: 24, color: ink, height: 1.25),
-        h2: AppTypography.h3.copyWith(fontSize: 20, color: ink, height: 1.3),
-        h3: AppTypography.h4.copyWith(fontSize: 17, color: ink, height: 1.3),
-        strong: AppTypography.readingBold.copyWith(fontSize: 15.5, color: ink),
+        p: AppTypography.reading.copyWith(
+          fontSize: fontSize,
+          height: lineHeight,
+          color: ink,
+        ),
+        h1: AppTypography.h2.copyWith(
+          fontSize: fontSize + 8.5,
+          color: ink,
+          height: 1.25,
+        ),
+        h2: AppTypography.h3.copyWith(
+          fontSize: fontSize + 4.5,
+          color: ink,
+          height: 1.3,
+        ),
+        h3: AppTypography.h4.copyWith(
+          fontSize: fontSize + 1.5,
+          color: ink,
+          height: 1.3,
+        ),
+        strong: AppTypography.readingBold.copyWith(
+          fontSize: fontSize,
+          color: ink,
+        ),
         em: AppTypography.reading.copyWith(
-            fontSize: 15.5, fontStyle: FontStyle.italic, color: ink),
-        listBullet:
-            AppTypography.reading.copyWith(fontSize: 15.5, color: ink2),
+          fontSize: fontSize,
+          fontStyle: FontStyle.italic,
+          color: ink,
+        ),
+        listBullet: AppTypography.reading.copyWith(
+          fontSize: fontSize,
+          color: ink2,
+        ),
         blockquote: AppTypography.readingQuote.copyWith(
-            fontSize: 16.5, color: ink, height: 1.45),
+          fontSize: fontSize + 1,
+          color: ink,
+          height: 1.45,
+        ),
         blockquoteDecoration: BoxDecoration(
           color: onDark
               ? Colors.white.withValues(alpha: 0.08)
               : AppColors.greenSoft,
           borderRadius: BorderRadius.circular(12),
           border: const Border(
-              left: BorderSide(color: AppColors.green, width: 3)),
+            left: BorderSide(color: AppColors.green, width: 3),
+          ),
         ),
         blockquotePadding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
         h1Padding: const EdgeInsets.only(top: 18, bottom: 4),
@@ -88,8 +124,11 @@ class CmpysMarkdownScreen extends StatelessWidget {
                       shape: BoxShape.circle,
                       border: Border.all(color: AppColors.hair),
                     ),
-                    child: const Icon(Icons.chevron_left_rounded,
-                        size: 22, color: AppColors.ink),
+                    child: const Icon(
+                      Icons.chevron_left_rounded,
+                      size: 22,
+                      color: AppColors.ink,
+                    ),
                   ),
                 ),
               ),
@@ -102,9 +141,14 @@ class CmpysMarkdownScreen extends StatelessWidget {
                   const SizedBox(height: 6),
                   Padding(
                     padding: const EdgeInsets.only(bottom: 16),
-                    child: Text(title,
-                        style: AppTypography.h1.copyWith(
-                            fontSize: 28, letterSpacing: -0.4, height: 1.3)),
+                    child: Text(
+                      title,
+                      style: AppTypography.h1.copyWith(
+                        fontSize: 28,
+                        letterSpacing: -0.4,
+                        height: 1.3,
+                      ),
+                    ),
                   ),
                   CmpysMarkdown(markdown),
                 ],

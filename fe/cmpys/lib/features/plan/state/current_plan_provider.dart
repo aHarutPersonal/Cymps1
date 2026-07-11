@@ -95,18 +95,25 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
   final Future<String?> Function()? _requestGeneration;
   bool _autoGenerateTried = false;
   Timer? _poll;
+  String? _pollingJobId;
 
   static const _pollInterval = Duration(seconds: 3);
 
   @override
   void dispose() {
-    _poll?.cancel();
+    _cancelPolling();
     super.dispose();
+  }
+
+  void _cancelPolling() {
+    _poll?.cancel();
+    _poll = null;
+    _pollingJobId = null;
   }
 
   /// Re-fetch the plan; falls back to job polling while it's generating.
   Future<void> refresh() async {
-    _poll?.cancel();
+    _cancelPolling();
     try {
       final jobId = _readJobId();
       final hasJob = jobId != null && jobId.isNotEmpty;
@@ -235,7 +242,10 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
     if (jobId == null || jobId.isEmpty) return;
     // If already polling this exact cycle, skip — but NEVER skip when showing
     // an older plan (ready state): the new job means a fresh plan is coming.
-    if (state.status == CurrentPlanStatus.generating) return;
+    if (state.status == CurrentPlanStatus.generating &&
+        _pollingJobId == jobId) {
+      return;
+    }
     state = const CurrentPlanState(status: CurrentPlanStatus.generating);
     _startPolling(jobId);
   }
@@ -253,6 +263,7 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
 
   void _startPolling(String jobId) {
     _poll?.cancel();
+    _pollingJobId = jobId;
     _poll = Timer.periodic(_pollInterval, (_) => _checkJob(jobId));
     _checkJob(jobId);
   }
@@ -266,10 +277,10 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
       final job = await _repo.getJobStatus(jobId);
       if (!mounted) return;
       if (job.isCompleted) {
-        _poll?.cancel();
+        _cancelPolling();
         await refresh();
       } else if (job.isFailed) {
-        _poll?.cancel();
+        _cancelPolling();
         state = CurrentPlanState(
           status: CurrentPlanStatus.failed,
           error: job.errorMessage ?? 'Plan generation failed.',
@@ -290,7 +301,7 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
       // A stale job id (backend reset) 404s forever — stop and show "no
       // plan". Transient network errors just wait for the next tick.
       if (e is ApiError && e.statusCode == 404) {
-        _poll?.cancel();
+        _cancelPolling();
         state = const CurrentPlanState(status: CurrentPlanStatus.empty);
       }
     } finally {

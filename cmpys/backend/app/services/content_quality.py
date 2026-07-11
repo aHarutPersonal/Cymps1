@@ -12,9 +12,12 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 
-MIN_BOOK_MODULE_WORDS = 2500
-TARGET_BOOK_MODULE_WORDS = 3000
-MAX_BOOK_MODULE_WORDS = 3800
+# At a conservative adult learning pace of 200 words/minute, 3,200 words is
+# sixteen minutes before the embedded exercises. This keeps the product's
+# "more than 15 minutes" promise true even for a fast, uninterrupted read.
+MIN_BOOK_MODULE_WORDS = 3200
+TARGET_BOOK_MODULE_WORDS = 3600
+MAX_BOOK_MODULE_WORDS = 4500
 
 MIN_PLAN_DETAIL_LESSON_WORDS = 250
 MIN_PLAN_DETAIL_MATERIAL_WORDS = 350

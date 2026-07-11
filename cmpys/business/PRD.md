@@ -51,12 +51,12 @@ The app transforms idol worship into actionable growth by:
 ## 3. Core Business Requirements
 
 ### BR-01: Authentic Content Depth
-**Requirement:** All learning content must match its claimed duration. A "15-minute module" must provide 15 minutes of genuine reading/learning material (2,500-4,000 words). A "60-minute mission" must have 500-1,200 word lessons per step with actionable exercises.
+**Requirement:** All learning content must match its claimed duration. A long-form book guide must provide more than 15 minutes of genuine reading/learning material (3,200-4,500 words). A "60-minute mission" must have 500-1,200 word lessons per step with actionable exercises.
 
 **Rationale:** The #1 reason users churn from learning apps is content that overpromises and underdelivers. Showing "60 min" next to a 200-word lesson destroys trust.
 
 **Acceptance Criteria:**
-- Book modules: `content_markdown` >= 2,500 words, `duration_minutes` = `word_count / 200`
+- Book modules: `content_markdown` >= 3,200 words, `duration_minutes` = `word_count / 200`
 - Plan item lessons: each `lesson_content` >= 500 words, steps claiming 60+ min must have 800+ words
 - Daily rhythm tasks: `daily_instructions` >= 40 words with specific, measurable actions
 - Plan item descriptions: mission tasks >= 50 words, daily rhythm >= 30 words
@@ -122,7 +122,7 @@ The app transforms idol worship into actionable growth by:
 
 | ID | Feature | Status | Business Impact |
 |----|---------|--------|-----------------|
-| P0-A | Book modules >= 2,500 words | Done | Users get real 15-min learning modules |
+| P0-A | Book modules >= 3,200 words | Done | Users get genuinely long-form, 16+ minute learning modules |
 | P0-B | Lesson content >= 500 words per step | Done | Each learning step is substantive |
 | P0-C | Plan generator preserves `estimated_hours` and `daily_instructions` | Done | Duration claims are enforceable |
 | P0-D | Backend content quality validation + retry | Done | Thin content caught before reaching users |

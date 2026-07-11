@@ -7,6 +7,7 @@ import '../../../../app/router.dart';
 import '../../../auth/controllers/session_controller.dart';
 import '../../data/cmpys_seed.dart';
 import '../../state/cmpys_store.dart';
+import '../../state/cmpys_backend_sync.dart';
 import 'analysis_step.dart';
 import 'discovery_step.dart';
 import 'idol_preview_step.dart';
@@ -72,6 +73,10 @@ class _CmpysOnboardingFlowState extends ConsumerState<CmpysOnboardingFlow> {
       // Best-effort. The design demo can proceed even if backend wiring is
       // pending; we route into /home either way so the user sees the app.
     }
+    // AppShell may have resolved its one-shot backend sync before this new
+    // onboarding session finished. Force a fresh read so generated comparison
+    // scores and the completed plan replace any prior account/session cache.
+    ref.invalidate(cmpysBackendSyncProvider);
     if (!mounted) return;
     context.go(AppRoutes.home);
   }
