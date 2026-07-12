@@ -25,7 +25,12 @@ from app.schemas.comparison import (
     UserAchievementItem,
 )
 from app.services.llm import get_llm_client
-from app.services.llm.prompt_loader import load_prompt, render_prompt
+from app.services.llm.prompt_loader import (
+    load_prompt,
+    render_prompt,
+    sanitize_untrusted_input,
+)
+from app.services.llm.schemas import AIComparisonOutput
 
 logger = logging.getLogger(__name__)
 
@@ -368,12 +373,18 @@ async def _run_ai_comparison(
         {
             "idol_name": idol_name,
             "idol_field": idol_field or "Various",
-            "idol_bio": idol_bio or "No biography available",
+            "idol_bio": sanitize_untrusted_input(
+                idol_bio or "No biography available"
+            ),
             "target_age": str(target_age),
-            "idol_milestones": idol_milestones_text,
+            "idol_milestones": sanitize_untrusted_input(idol_milestones_text),
             "user_age": str(user_age),
-            "user_background": user_background or "Not specified",
-            "user_achievements": user_achievements_text,
+            "user_background": sanitize_untrusted_input(
+                user_background or "Not specified"
+            ),
+            "user_achievements": sanitize_untrusted_input(
+                user_achievements_text
+            ),
         },
         prompt_name="comparison_analyze.txt",
     )
@@ -381,15 +392,17 @@ async def _run_ai_comparison(
     # Use the unified LLM client
     client = get_llm_client(timeout=90.0)
     
-    response = await client.generate_json(
+    validated, response = await client.generate_and_validate(
         system_prompt="You are an expert life coach. Return only valid JSON, no markdown code blocks.",
         user_prompt=prompt,
+        output_model=AIComparisonOutput,
+        repair_on_failure=True,
     )
     
-    if response.error:
+    if response.error or validated is None:
         raise ValueError(f"LLM error: {response.error}")
     
-    return response.data
+    return validated.model_dump(mode="json")
 
 
 @router.get("/ai", response_model=ComparisonResponse)
@@ -474,7 +487,12 @@ async def compare_to_idol_ai(
         from datetime import date
         today = date.today()
         user_age = today.year - current_user.profile.birth_date.year
-    
+
+    # All prompt inputs are now plain in-memory values. End the read
+    # transaction before the long provider call and reacquire only if a later
+    # database operation is ever added to this endpoint.
+    await db.commit()
+
     try:
         # Run AI comparison
         ai_result = await _run_ai_comparison(

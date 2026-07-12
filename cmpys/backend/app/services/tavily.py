@@ -1,8 +1,9 @@
 """
 Material URL resolution service.
 
-Uses Gemini with Google Search grounding to find real, verified YouTube URLs.
-Validates availability via oEmbed. If no valid URL found, returns None (not search links).
+Searches YouTube directly for real URLs and validates availability via oEmbed.
+Gemini grounding is a fallback for direct-search misses. If no valid URL is
+found, returns None (not search links).
 """
 
 import asyncio
@@ -17,18 +18,55 @@ logger = logging.getLogger("cmpys.services.video_search")
 
 YOUTUBE_OEMBED_URL = "https://www.youtube.com/oembed"
 
+_RELEVANCE_STOP_WORDS = {
+    "about", "and", "best", "explains", "for", "from", "full", "how",
+    "interview", "official", "the", "this", "to", "video", "with", "without",
+}
 
-async def _validate_youtube_url(client: httpx.AsyncClient, url: str) -> bool:
-    """Check if a YouTube video is actually available via oEmbed."""
+
+async def _youtube_oembed_metadata(
+    client: httpx.AsyncClient,
+    url: str,
+) -> dict | None:
+    """Return trusted playability metadata for one YouTube URL."""
     try:
         resp = await client.get(
             YOUTUBE_OEMBED_URL,
             params={"url": url, "format": "json"},
             timeout=5.0,
         )
-        return resp.status_code == 200
+        if resp.status_code != 200:
+            return None
+        payload = resp.json()
+        return payload if isinstance(payload, dict) else None
     except Exception:
+        return None
+
+
+async def _validate_youtube_url(client: httpx.AsyncClient, url: str) -> bool:
+    """Check if a YouTube video is actually available via oEmbed."""
+    return await _youtube_oembed_metadata(client, url) is not None
+
+
+def _oembed_matches_query(metadata: dict, query: str) -> bool:
+    """Reject playable-but-irrelevant first results before the fast-path wins."""
+    def tokens(value: str) -> set[str]:
+        return {
+            token
+            for token in re.findall(r"[a-z0-9]+", value.casefold())
+            if len(token) >= 3 and token not in _RELEVANCE_STOP_WORDS
+        }
+
+    wanted = tokens(query)
+    candidate = tokens(
+        f"{metadata.get('title', '')} {metadata.get('author_name', '')}"
+    )
+    if not wanted or not candidate:
         return False
+    overlap = wanted & candidate
+    required = 1 if len(wanted) <= 2 else 2
+    coverage = len(overlap) / len(wanted)
+    return len(overlap) >= required and (coverage >= 0.25 or len(overlap) >= 3)
 
 
 def _extract_youtube_urls(text: str) -> list[str]:
@@ -45,7 +83,10 @@ async def _search_video_via_google(query: str) -> Optional[str]:
     try:
         from google.genai import types
 
-        from app.services.gemini import _gemini_client
+        from app.services.gemini import (
+            GEMINI_REQUEST_TIMEOUT_MS,
+            _gemini_client,
+        )
 
         client = _gemini_client()
         response = await client.aio.models.generate_content(
@@ -64,6 +105,9 @@ async def _search_video_via_google(query: str) -> Optional[str]:
             config=types.GenerateContentConfig(
                 tools=[types.Tool(google_search=types.GoogleSearch())],
                 temperature=0.0,
+                http_options=types.HttpOptions(
+                    timeout=GEMINI_REQUEST_TIMEOUT_MS,
+                ),
             ),
         )
 
@@ -125,13 +169,20 @@ async def _search_video_via_youtube_api(query: str) -> Optional[str]:
             if not unique_ids:
                 return None
 
-            # Validate first 3 via oEmbed
+            # Validate playability AND title/creator relevance for the first
+            # three. A merely playable result is not a quality-preserving hit.
             for vid in unique_ids[:3]:
                 url = f"https://www.youtube.com/watch?v={vid}"
-                is_valid = await _validate_youtube_url(client, url)
-                if is_valid:
-                    logger.info(f"[VIDEO] ✓ YouTube search fallback: {url} for '{query}'")
+                metadata = await _youtube_oembed_metadata(client, url)
+                if metadata and _oembed_matches_query(metadata, query):
+                    logger.info(f"[VIDEO] ✓ Relevant YouTube result: {url} for '{query}'")
                     return url
+                if metadata:
+                    logger.info(
+                        "[VIDEO] Playable result was not relevant enough: %s for '%s'",
+                        url,
+                        query,
+                    )
 
         return None
     except Exception as exc:
@@ -140,14 +191,12 @@ async def _search_video_via_youtube_api(query: str) -> Optional[str]:
 
 
 async def _resolve_single_video(query: str) -> Optional[str]:
-    """Try Gemini grounding first, fall back to YouTube search scraping."""
-    url = await _search_video_via_google(query)
+    """Use validated direct YouTube search, then ground only as a fallback."""
+    url = await _search_video_via_youtube_api(query)
     if url:
         return url
 
-    # Fallback: direct YouTube search scrape
-    url = await _search_video_via_youtube_api(query)
-    return url
+    return await _search_video_via_google(query)
 
 
 async def resolve_material_urls(materials: list[dict]) -> list[dict]:

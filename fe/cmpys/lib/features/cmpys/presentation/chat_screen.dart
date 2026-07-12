@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/design_tokens.dart';
 import '../../../app/router.dart';
+import '../../../core/network/coalesced_text.dart';
 import '../../../core/ui/app_shell.dart';
 import '../../../core/ui/cmpys/cmpys_primitives.dart';
 import '../../../core/ui/motion/entrance.dart';
@@ -36,6 +37,8 @@ class CmpysChatScreen extends ConsumerStatefulWidget {
 class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
   final TextEditingController _input = TextEditingController();
   final ScrollController _scroll = ScrollController();
+  bool _scrollFrameScheduled = false;
+  bool _scrollShouldAnimate = false;
 
   final List<_Msg> _msgs = [];
   bool _waiting = false; // sent, no chunks yet
@@ -161,28 +164,36 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
         ? 'I want to report a win I just achieved: "$text". React briefly in your own voice — does it move my trajectory?'
         : text;
 
-    String acc = '';
+    var acc = '';
+    final streamed = CoalescedText(
+      onUpdate: (value) {
+        if (!mounted) return;
+        _streamingText.value = value;
+        _scrollToBottom(streaming: true);
+      },
+    );
     try {
       final repo = ref.read(sessionRepositoryProvider);
-      await for (final ev
-          in repo.sendGuidedLearningMessage(sessionId, content)) {
+      await for (final ev in repo.sendGuidedLearningMessage(
+        sessionId,
+        content,
+      )) {
         if (!mounted) return;
         final type = ev['type'] as String? ?? '';
         if (type == 'chunk') {
-          acc += (ev['content'] as String? ?? '');
           if (_waiting || !_streaming) {
             setState(() {
               _waiting = false;
               _streaming = true;
             });
           }
-          _streamingText.value = acc;
-          _scrollToBottom(streaming: true);
+          streamed.add(ev['content'] as String? ?? '');
         } else if (type == 'error') {
           throw StateError(ev['message']?.toString() ?? 'chat error');
         }
       }
       if (!mounted) return;
+      acc = streamed.close();
       if (acc.trim().isEmpty) throw StateError('empty reply');
 
       setState(() {
@@ -197,7 +208,9 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
         final winText = _pendingWinText!;
         _pendingWinText = null;
         final dim = classifyWin(winText);
-        ref.read(cmpysStoreProvider.notifier).addWin(
+        ref
+            .read(cmpysStoreProvider.notifier)
+            .addWin(
               title: winText,
               dim: dim,
               age: ref.read(cmpysStoreProvider).user.age,
@@ -205,11 +218,16 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
               source: 'chat',
               idolNote: acc.trim(),
             );
-        showCmpysToast(context, 'Added to your record',
-            icon: Icons.check_rounded, tone: AppColors.green);
+        showCmpysToast(
+          context,
+          'Added to your record',
+          icon: Icons.check_rounded,
+          tone: AppColors.green,
+        );
       }
     } catch (e) {
       if (!mounted) return;
+      acc = streamed.close(emitPending: false);
       _cachedSessionId = null;
       if (hadCachedId && acc.isEmpty) {
         // The cached id may have gone stale — re-resolve once and retry,
@@ -224,6 +242,8 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
         _error =
             '${idol.short} got cut off. Check your connection and tap retry.';
       });
+    } finally {
+      streamed.dispose();
     }
   }
 
@@ -233,17 +253,25 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
   }
 
   void _scrollToBottom({bool streaming = false}) {
+    _scrollShouldAnimate = _scrollShouldAnimate || !streaming;
+    if (_scrollFrameScheduled) return;
+    _scrollFrameScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scrollFrameScheduled = false;
+      final animate = _scrollShouldAnimate;
+      _scrollShouldAnimate = false;
       if (!_scroll.hasClients) return;
       final max = _scroll.position.maxScrollExtent;
-      if (streaming) {
+      if (!animate) {
         // Per-chunk: don't stack 280ms animations — snap if not at bottom.
         if (_scroll.offset < max) _scroll.jumpTo(max);
         return;
       }
-      _scroll.animateTo(max,
-          duration: const Duration(milliseconds: 280),
-          curve: Curves.easeOutCubic);
+      _scroll.animateTo(
+        max,
+        duration: const Duration(milliseconds: 280),
+        curve: Curves.easeOutCubic,
+      );
     });
   }
 
@@ -293,17 +321,24 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
                 Row(
                   children: [
                     Container(
-                        width: 7,
-                        height: 7,
-                        decoration: const BoxDecoration(
-                            color: AppColors.green, shape: BoxShape.circle)),
+                      width: 7,
+                      height: 7,
+                      decoration: const BoxDecoration(
+                        color: AppColors.green,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
                     const SizedBox(width: 5),
                     Expanded(
-                      child: Text('AI mentor · always here',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: AppTypography.caption.copyWith(
-                              color: AppColors.green, fontSize: 12)),
+                      child: Text(
+                        'AI mentor · always here',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTypography.caption.copyWith(
+                          color: AppColors.green,
+                          fontSize: 12,
+                        ),
+                      ),
                     ),
                   ],
                 ),
@@ -311,8 +346,9 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
             ),
           ),
           GestureDetector(
-            onTap: () => Navigator.of(context).push(
-                CmpysPageRoute(builder: (_) => const CmpysNotesScreen())),
+            onTap: () => Navigator.of(
+              context,
+            ).push(CmpysPageRoute(builder: (_) => const CmpysNotesScreen())),
             child: Container(
               width: 44,
               height: 44,
@@ -321,8 +357,11 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
                 color: AppColors.paper2,
                 borderRadius: BorderRadius.circular(11),
               ),
-              child: const Icon(PhosphorIconsRegular.note,
-                  size: 19, color: AppColors.ink2),
+              child: const Icon(
+                PhosphorIconsRegular.note,
+                size: 19,
+                color: AppColors.ink2,
+              ),
             ),
           ),
         ],
@@ -333,44 +372,51 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
   Widget _messages(CmpysIdol idol) {
     return EntranceScope(
       child: ListView(
-      controller: _scroll,
-      padding: const EdgeInsets.fromLTRB(16, 18, 16, 8),
-      children: [
-        Entrance(
-          child: Center(
-            child: Column(
-              children: [
-                CmpysMentorAvatar(
-                  slug: idol.slug,
-                  initials: idol.initials,
-                  color: idol.color,
-                  tint: idol.tint,
-                  size: 56,
-                ),
-                const SizedBox(height: 10),
-                Text(idol.name,
-                    style: AppTypography.display.copyWith(
-                        fontSize: 17, fontWeight: FontWeight.w700, height: 1.2)),
-                const SizedBox(height: 6),
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 240),
-                  child: Text(
-                    'Ask anything. Useful answers come with quick actions — save them or add them to your plan.',
-                    textAlign: TextAlign.center,
-                    style: AppTypography.caption
-                        .copyWith(color: AppColors.ink3, fontSize: 12.5),
+        controller: _scroll,
+        padding: const EdgeInsets.fromLTRB(16, 18, 16, 8),
+        children: [
+          Entrance(
+            child: Center(
+              child: Column(
+                children: [
+                  CmpysMentorAvatar(
+                    slug: idol.slug,
+                    initials: idol.initials,
+                    color: idol.color,
+                    tint: idol.tint,
+                    size: 56,
                   ),
-                ),
-              ],
+                  const SizedBox(height: 10),
+                  Text(
+                    idol.name,
+                    style: AppTypography.display.copyWith(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w700,
+                      height: 1.2,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 240),
+                    child: Text(
+                      'Ask anything. Useful answers come with quick actions — save them or add them to your plan.',
+                      textAlign: TextAlign.center,
+                      style: AppTypography.caption.copyWith(
+                        color: AppColors.ink3,
+                        fontSize: 12.5,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
-        ),
-        const SizedBox(height: 18),
-        for (final m in _msgs) _bubble(idol, m),
-        if (_streaming) _streamingBubble(idol),
-        if (_waiting) _waitingBubble(idol),
-        if (_error != null) _errorCard(),
-      ],
+          const SizedBox(height: 18),
+          for (final m in _msgs) _bubble(idol, m),
+          if (_streaming) _streamingBubble(idol),
+          if (_waiting) _waitingBubble(idol),
+          if (_error != null) _errorCard(),
+        ],
       ),
     );
   }
@@ -389,15 +435,21 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
         children: [
           Row(
             children: [
-              const Icon(Icons.warning_amber_rounded,
-                  size: 18, color: AppColors.danger),
+              const Icon(
+                Icons.warning_amber_rounded,
+                size: 18,
+                color: AppColors.danger,
+              ),
               const SizedBox(width: 8),
               Expanded(
-                child: Text(_error!,
-                    style: AppTypography.caption.copyWith(
-                        color: AppColors.danger,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600)),
+                child: Text(
+                  _error!,
+                  style: AppTypography.caption.copyWith(
+                    color: AppColors.danger,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ),
             ],
           ),
@@ -427,27 +479,32 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
     return Padding(
       padding: const EdgeInsets.only(bottom: 14),
       child: Row(
-        mainAxisAlignment:
-            m.me ? MainAxisAlignment.end : MainAxisAlignment.start,
+        mainAxisAlignment: m.me
+            ? MainAxisAlignment.end
+            : MainAxisAlignment.start,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           if (!m.me) ...[
             CmpysMentorAvatar(
-                slug: idol.slug,
-                initials: idol.initials,
-                color: idol.color,
-                tint: idol.tint,
-                size: 28),
+              slug: idol.slug,
+              initials: idol.initials,
+              color: idol.color,
+              tint: idol.tint,
+              size: 28,
+            ),
             const SizedBox(width: 8),
           ],
           Flexible(
             child: Column(
-              crossAxisAlignment:
-                  m.me ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+              crossAxisAlignment: m.me
+                  ? CrossAxisAlignment.end
+                  : CrossAxisAlignment.start,
               children: [
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 15, vertical: 11),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 15,
+                    vertical: 11,
+                  ),
                   decoration: BoxDecoration(
                     gradient: m.me ? AppColors.gradGreen : null,
                     color: m.me ? null : AppColors.card,
@@ -459,24 +516,38 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
                     ),
                     border: m.me ? null : Border.all(color: AppColors.hair),
                   ),
-                  child: Text(m.text,
-                      style: AppTypography.body.copyWith(
-                          fontSize: 15.5,
-                          height: 1.45,
-                          color: m.me ? Colors.white : AppColors.ink)),
+                  child: Text(
+                    m.text,
+                    style: AppTypography.body.copyWith(
+                      fontSize: 15.5,
+                      height: 1.45,
+                      color: m.me ? Colors.white : AppColors.ink,
+                    ),
+                  ),
                 ),
                 if (!m.me && m.rich) ...[
                   const SizedBox(height: 8),
-                  _actionPill('Add to notes', PhosphorIconsRegular.note,
-                      AppColors.blue, () {
-                    ref.read(cmpysStoreProvider.notifier).saveNote(
-                        kind: 'chat',
-                        title: 'From ${idol.short}',
-                        body: m.text,
-                        from: idol.short);
-                    showCmpysToast(context, 'Saved to notes',
-                        icon: Icons.note_alt_outlined, tone: AppColors.blue);
-                  }),
+                  _actionPill(
+                    'Add to notes',
+                    PhosphorIconsRegular.note,
+                    AppColors.blue,
+                    () {
+                      ref
+                          .read(cmpysStoreProvider.notifier)
+                          .saveNote(
+                            kind: 'chat',
+                            title: 'From ${idol.short}',
+                            body: m.text,
+                            from: idol.short,
+                          );
+                      showCmpysToast(
+                        context,
+                        'Saved to notes',
+                        icon: Icons.note_alt_outlined,
+                        tone: AppColors.blue,
+                      );
+                    },
+                  ),
                 ],
               ],
             ),
@@ -487,7 +558,11 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
   }
 
   Widget _actionPill(
-      String label, IconData icon, Color color, VoidCallback onTap) {
+    String label,
+    IconData icon,
+    Color color,
+    VoidCallback onTap,
+  ) {
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -501,9 +576,14 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
           children: [
             Icon(icon, size: 14, color: color),
             const SizedBox(width: 6),
-            Text(label,
-                style: AppTypography.captionMedium.copyWith(
-                    color: color, fontWeight: FontWeight.w700, fontSize: 12.5)),
+            Text(
+              label,
+              style: AppTypography.captionMedium.copyWith(
+                color: color,
+                fontWeight: FontWeight.w700,
+                fontSize: 12.5,
+              ),
+            ),
           ],
         ),
       ),
@@ -517,11 +597,12 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           CmpysMentorAvatar(
-              slug: idol.slug,
-              initials: idol.initials,
-              color: idol.color,
-              tint: idol.tint,
-              size: 28),
+            slug: idol.slug,
+            initials: idol.initials,
+            color: idol.color,
+            tint: idol.tint,
+            size: 28,
+          ),
           const SizedBox(width: 8),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
@@ -529,10 +610,11 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
               color: AppColors.card,
               border: Border.all(color: AppColors.hair),
               borderRadius: const BorderRadius.only(
-                  topLeft: Radius.circular(6),
-                  topRight: Radius.circular(16),
-                  bottomLeft: Radius.circular(16),
-                  bottomRight: Radius.circular(16)),
+                topLeft: Radius.circular(6),
+                topRight: Radius.circular(16),
+                bottomLeft: Radius.circular(16),
+                bottomRight: Radius.circular(16),
+              ),
             ),
             child: const CmpysTypingDots(),
           ),
@@ -548,11 +630,12 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           CmpysMentorAvatar(
-              slug: idol.slug,
-              initials: idol.initials,
-              color: idol.color,
-              tint: idol.tint,
-              size: 28),
+            slug: idol.slug,
+            initials: idol.initials,
+            color: idol.color,
+            tint: idol.tint,
+            size: 28,
+          ),
           const SizedBox(width: 8),
           Flexible(
             child: Container(
@@ -561,16 +644,21 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
                 color: AppColors.card,
                 border: Border.all(color: AppColors.hair),
                 borderRadius: const BorderRadius.only(
-                    topLeft: Radius.circular(6),
-                    topRight: Radius.circular(16),
-                    bottomLeft: Radius.circular(16),
-                    bottomRight: Radius.circular(16)),
+                  topLeft: Radius.circular(6),
+                  topRight: Radius.circular(16),
+                  bottomLeft: Radius.circular(16),
+                  bottomRight: Radius.circular(16),
+                ),
               ),
               child: ValueListenableBuilder<String>(
                 valueListenable: _streamingText,
-                builder: (_, text, _) => Text(text,
-                    style: AppTypography.body
-                        .copyWith(fontSize: 15.5, height: 1.45)),
+                builder: (_, text, _) => Text(
+                  text,
+                  style: AppTypography.body.copyWith(
+                    fontSize: 15.5,
+                    height: 1.45,
+                  ),
+                ),
               ),
             ),
           ),
@@ -614,8 +702,10 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
               padding: const EdgeInsets.only(bottom: 8, left: 4),
               child: Text(
                 'Reporting a win — ${idol.short} will file it in your record.',
-                style: AppTypography.caption
-                    .copyWith(color: AppColors.ochre2, fontSize: 12.5),
+                style: AppTypography.caption.copyWith(
+                  color: AppColors.ochre2,
+                  fontSize: 12.5,
+                ),
               ),
             ),
           Row(
@@ -630,9 +720,11 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
                     color: _winMode ? AppColors.ochre : AppColors.ochreSoft,
                     shape: BoxShape.circle,
                   ),
-                  child: Icon(PhosphorIconsFill.sparkle,
-                      size: 20,
-                      color: _winMode ? Colors.white : AppColors.ochre2),
+                  child: Icon(
+                    PhosphorIconsFill.sparkle,
+                    size: 20,
+                    color: _winMode ? Colors.white : AppColors.ochre2,
+                  ),
                 ),
               ),
               const SizedBox(width: 9),
@@ -661,8 +753,9 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
                             border: InputBorder.none,
                             isDense: true,
                             filled: false,
-                            contentPadding:
-                                const EdgeInsets.symmetric(vertical: 11),
+                            contentPadding: const EdgeInsets.symmetric(
+                              vertical: 11,
+                            ),
                           ),
                         ),
                       ),
@@ -683,8 +776,11 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
                                   : AppColors.green,
                               shape: BoxShape.circle,
                             ),
-                            child: const Icon(Icons.arrow_upward_rounded,
-                                color: Colors.white, size: 18),
+                            child: const Icon(
+                              Icons.arrow_upward_rounded,
+                              color: Colors.white,
+                              size: 18,
+                            ),
                           ),
                         ),
                       ),
@@ -715,9 +811,14 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
           color: p.bg,
           borderRadius: BorderRadius.circular(999),
         ),
-        child: Text(s,
-            style: AppTypography.captionMedium.copyWith(
-                color: p.fg, fontWeight: FontWeight.w600, fontSize: 13)),
+        child: Text(
+          s,
+          style: AppTypography.captionMedium.copyWith(
+            color: p.fg,
+            fontWeight: FontWeight.w600,
+            fontSize: 13,
+          ),
+        ),
       ),
     );
   }

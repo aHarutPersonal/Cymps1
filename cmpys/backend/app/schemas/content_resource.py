@@ -36,6 +36,13 @@ class ContentResourceListResponse(BaseModel):
     total: int
 
 
+class ContentResourceReferenceResponse(BaseModel):
+    """Small late-binding response for a generated shared resource."""
+
+    id: str
+    canonicalKey: str
+
+
 class ContentResourceSaveRequest(BaseModel):
     """Save a shared resource to the current user's Vault."""
 

@@ -11,7 +11,7 @@ from app.api.router import router as api_router
 from app.api.v1.media import router as media_router
 from app.core.config import settings
 from app.core.health import router as health_router
-from app.core.logging import setup_logging, get_logger
+from app.core.logging import get_logger, setup_logging, shutdown_logging
 from app.core.middleware import ResponseBodyLoggerMiddleware
 
 logger = get_logger("cmpys.main")
@@ -25,8 +25,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info(f"Debug mode: {settings.debug}")
     logger.info(f"LLM provider: {settings.llm_provider}")
     logger.info(f"LLM configured: {settings.llm_configured}")
-    yield
-    logger.info(f"Shutting down {settings.app_name} application")
+    try:
+        yield
+    finally:
+        logger.info(f"Shutting down {settings.app_name} application")
+        shutdown_logging()
 
 
 app = FastAPI(
@@ -52,7 +55,7 @@ app.add_middleware(ResponseBodyLoggerMiddleware)
 # content library, session outputs) typically shrink 60-85% on the wire.
 # Added last so it sits OUTERMOST: the body logger above still sees the
 # uncompressed body, while the client receives the gzipped response.
-app.add_middleware(GZipMiddleware, minimum_size=1024)
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
 
 # Include routers
 app.include_router(health_router)

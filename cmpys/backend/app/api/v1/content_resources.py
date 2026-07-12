@@ -16,6 +16,7 @@ from app.models.content_resource import (
     UserContentProgress,
     UserContentSave,
 )
+from app.models.idol import CatalogStatus
 from app.models.plan import Plan, PlanItem, PlanItemContentResource
 from app.models.user import User
 from app.schemas.content_resource import (
@@ -24,6 +25,7 @@ from app.schemas.content_resource import (
     ContentHighlightResponse,
     ContentProgressUpdate,
     ContentResourceListResponse,
+    ContentResourceReferenceResponse,
     ContentResourceResponse,
     ContentResourceSaveRequest,
     ContentResourceSaveResponse,
@@ -393,6 +395,32 @@ async def get_continue_reading(
     save = await _get_save(db, current_user.id, resource.id)
     resource_resp = _resource_response(resource, save=save, progress=progress)
     return ContinueReadingResponse(resource=resource_resp)
+
+
+@router.get("/resolve", response_model=ContentResourceReferenceResponse)
+async def resolve_content_resource(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+    canonicalKey: str = Query(..., min_length=3, max_length=320),
+) -> ContentResourceReferenceResponse:
+    """Late-bind a deferred material once its quality-gated module is ready."""
+    del current_user  # The authentication dependency is intentional.
+    result = await db.execute(
+        select(ContentResource.id, ContentResource.canonical_key).where(
+            ContentResource.canonical_key == canonicalKey,
+            ContentResource.status == CatalogStatus.PUBLISHED,
+        )
+    )
+    row = result.one_or_none()
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Resource is still being prepared",
+        )
+    return ContentResourceReferenceResponse(
+        id=str(row.id),
+        canonicalKey=str(row.canonical_key),
+    )
 
 
 @router.get("/{resource_id}", response_model=ContentResourceResponse)

@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/env.dart';
@@ -35,21 +34,14 @@ class AuthRepository {
       fullName: fullName,
     );
 
-    debugPrint('🔐 Register request: ${request.toJson()}');
-
     final response = await _dioClient.post(
       '/auth/register',
       data: request.toJson(),
       skipAuth: true,
     );
 
-    debugPrint('🔐 Register response status: ${response.statusCode}');
-    debugPrint('🔐 Register response data: ${response.data}');
-    debugPrint('🔐 Register response type: ${response.data.runtimeType}');
-
     final data = response.data as Map<String, dynamic>?;
     if (data == null) {
-      debugPrint('❌ Response data is null');
       throw Exception('Invalid response from server: data is null');
     }
 
@@ -57,16 +49,10 @@ class AuthRepository {
     final hasToken =
         data['access_token'] != null || data['accessToken'] != null;
     if (!hasToken) {
-      debugPrint(
-        '❌ No access token found. Available keys: ${data.keys.toList()}',
-      );
       throw Exception('Invalid response from server: missing access token');
     }
 
     final authResponse = AuthResponse.fromJson(data);
-    debugPrint(
-      '✅ Registration successful! Token: ${authResponse.accessToken.substring(0, 20)}...',
-    );
     await _saveTokens(authResponse);
     return authResponse;
   }
@@ -78,15 +64,11 @@ class AuthRepository {
   }) async {
     final request = LoginRequest(email: email, password: password);
 
-    debugPrint('🔐 Login request for: $email');
-
     final response = await _dioClient.post(
       '/auth/login',
       data: request.toJson(),
       skipAuth: true,
     );
-
-    debugPrint('🔐 Login response status: ${response.statusCode}');
 
     final data = response.data as Map<String, dynamic>?;
     if (data == null) {
@@ -97,14 +79,10 @@ class AuthRepository {
     final hasToken =
         data['access_token'] != null || data['accessToken'] != null;
     if (!hasToken) {
-      debugPrint(
-        '❌ No access token found. Available keys: ${data.keys.toList()}',
-      );
       throw Exception('Invalid response from server: missing access token');
     }
 
     final authResponse = AuthResponse.fromJson(data);
-    debugPrint('✅ Login successful!');
     await _saveTokens(authResponse);
     return authResponse;
   }

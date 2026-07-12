@@ -25,10 +25,20 @@ class CmpysYouScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final st = ref.watch(cmpysStoreProvider);
+    final st = ref.watch(
+      cmpysStoreProvider.select(
+        (s) => (
+          idol: s.idol,
+          user: s.user,
+          notesCount: s.notes.length,
+          achievementsCount: s.achievements.length,
+          savedCount: s.saved.length,
+        ),
+      ),
+    );
     final idol = st.idol;
     final name = st.user.name.isEmpty ? 'Your name' : st.user.name;
-    final plan = ref.watch(currentPlanProvider).plan;
+    final plan = ref.watch(currentPlanProvider.select((s) => s.plan));
     final today = ref.watch(todayViewProvider).valueOrNull;
     final planPct = plan?.overallProgress.round();
     final planDay = _planDay(plan?.createdAt);
@@ -78,7 +88,7 @@ class CmpysYouScreen extends ConsumerWidget {
                 ],
               ),
               const SizedBox(height: 16),
-              _profileCard(context, st, idol, name, planDay),
+              _profileCard(context, st.user, idol, name, planDay),
               const SizedBox(height: 18),
               Row(
                 children: [
@@ -102,7 +112,7 @@ class CmpysYouScreen extends ConsumerWidget {
                   const SizedBox(width: 10),
                   Expanded(
                     child: _stat(
-                      '${st.notes.length}',
+                      '${st.notesCount}',
                       'Notes',
                       PhosphorIconsRegular.note,
                       AppColors.blue,
@@ -124,7 +134,7 @@ class CmpysYouScreen extends ConsumerWidget {
                       context,
                       PhosphorIconsFill.sparkle,
                       'Your record',
-                      '${st.achievements.length}',
+                      '${st.achievementsCount}',
                       () => Navigator.of(context).push(
                         CmpysSheetRoute(
                           builder: (_) => const CmpysRecordScreen(),
@@ -147,7 +157,7 @@ class CmpysYouScreen extends ConsumerWidget {
                       context,
                       PhosphorIconsRegular.note,
                       'Notes',
-                      '${st.notes.length}',
+                      '${st.notesCount}',
                       () => Navigator.of(context).push(
                         CmpysPageRoute(
                           builder: (_) => const CmpysNotesScreen(),
@@ -158,7 +168,7 @@ class CmpysYouScreen extends ConsumerWidget {
                       context,
                       PhosphorIconsRegular.bookmarkSimple,
                       'Saved',
-                      '${st.saved.length}',
+                      '${st.savedCount}',
                       () => Navigator.of(context).push(
                         CmpysPageRoute(
                           builder: (_) => const CmpysSavedScreen(),
@@ -287,14 +297,12 @@ class CmpysYouScreen extends ConsumerWidget {
 
   Widget _profileCard(
     BuildContext context,
-    CmpysState st,
+    CmpysUser user,
     CmpysIdol idol,
     String name,
     int? planDay,
   ) {
-    final initial = st.user.name.isNotEmpty
-        ? st.user.name[0].toUpperCase()
-        : 'Y';
+    final initial = user.name.isNotEmpty ? user.name[0].toUpperCase() : 'Y';
     return CmpysCardSurface(
       raised: true,
       pad: const EdgeInsets.fromLTRB(18, 24, 18, 22),
@@ -320,11 +328,11 @@ class CmpysYouScreen extends ConsumerWidget {
           ),
           const SizedBox(height: 3),
           Text(
-            st.user.age <= 0
+            user.age <= 0
                 ? 'Complete your profile to personalize CMPYS'
                 : planDay == null
-                ? 'Age ${st.user.age}'
-                : 'Age ${st.user.age} · Day $planDay on CMPYS',
+                ? 'Age ${user.age}'
+                : 'Age ${user.age} · Day $planDay on CMPYS',
             textAlign: TextAlign.center,
             style: AppTypography.caption.copyWith(
               color: AppColors.ink2,

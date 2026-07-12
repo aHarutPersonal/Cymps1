@@ -25,6 +25,26 @@ void main() {
     expect(blueprint, 'Plan well.');
   });
 
+  test(
+    'streamGenerateResults coalesces bursts and flushes exact documents',
+    () async {
+      final comparisonUpdates = <String>[];
+      final blueprintUpdates = <String>[];
+
+      await streamGenerateResults(
+        repo: _BurstResultsRepository(),
+        sessionId: 'session-burst',
+        onComparison: comparisonUpdates.add,
+        onBlueprint: blueprintUpdates.add,
+      );
+
+      expect(comparisonUpdates.last, List.filled(500, 'c').join());
+      expect(blueprintUpdates.last, List.filled(500, 'b').join());
+      expect(comparisonUpdates.length, lessThan(20));
+      expect(blueprintUpdates.length, lessThan(20));
+    },
+  );
+
   test('BackendPlan parses items and splits missions from daily rhythm', () {
     final plan = BackendPlan.fromJson({
       'id': 'plan-1',
@@ -131,6 +151,16 @@ void main() {
     });
     expect(externalCourse.prefersExternalLink, isTrue);
     expect(externalCourse.hasInAppContent, isFalse);
+
+    final deferredBook = PlanMaterialDetail.fromJson({
+      'title': 'The Effective Executive',
+      'type': 'book',
+      'canonical_key': 'book:peter-drucker:the-effective-executive',
+    });
+    expect(
+      deferredBook.canonicalKey,
+      'book:peter-drucker:the-effective-executive',
+    );
   });
 
   test('splitBookChapters splits on chapter headings with part fallback', () {
@@ -243,5 +273,20 @@ class _PlanJobRepository implements AgenticSessionRepository {
     String content,
   ) {
     throw UnimplementedError();
+  }
+}
+
+class _BurstResultsRepository extends Fake implements AgenticSessionRepository {
+  @override
+  Stream<Map<String, dynamic>> generateResults(String sessionId) async* {
+    yield {'type': 'section', 'section': 'comparison'};
+    for (var i = 0; i < 500; i++) {
+      yield {'type': 'chunk', 'content': 'c'};
+    }
+    yield {'type': 'section', 'section': 'blueprint'};
+    for (var i = 0; i < 500; i++) {
+      yield {'type': 'chunk', 'content': 'b'};
+    }
+    yield {'type': 'done'};
   }
 }

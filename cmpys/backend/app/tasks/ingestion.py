@@ -212,103 +212,15 @@ async def _run_ingestion_async(job_id: str) -> dict:
             # Steps 2+3: Extract profile AND achievements in parallel
             # =================================================================
             logger.info(f"[INGESTION][{job_id}] Steps 2-3/6: Extracting profile and achievements in parallel...")
+            # The polling API already provides deterministic, step-aware
+            # narratives. Do not spend another provider call or write partial
+            # token fragments to the database for decorative "thinking" text.
+            job.thinking_text = None
             await _update_job(
                 db, job, 
                 step="extracting_profile", 
                 progress=25,
             )
-
-            # Generate natural thinking stream (LLM) concurrently
-            try:
-                import openai
-                from app.core.config import settings as app_settings
-                
-                if app_settings.openai_api_key:
-                    initial_history = job.thinking_text or ""
-                    idol_name = job.idol.name
-                    
-                    # Prepare preview of text content for the LLM to "read"
-                    text_preview = "\n\n".join([c.text[:500] for c in chunks[:3]])
-                    
-                    async def _generate_thinking_stream_concurrently():
-                        try:
-                            # Use an independent DB session to avoid ConcurrentModificationError
-                            async with async_session_maker() as stream_db:
-                                # Fetch a fresh instance for this session
-                                stream_stmt = select(IdolImportJob).where(IdolImportJob.id == job_id)
-                                stream_res = await stream_db.execute(stream_stmt)
-                                stream_job = stream_res.scalar_one_or_none()
-                                
-                                if not stream_job:
-                                    return
-                                    
-                                thinking_system = (
-                                    f"You are an expert biographer researching {idol_name}. "
-                                    "You are reading source material to extract facts. "
-                                    "Think out loud about the SPECIFIC FACTS you are finding in the text. "
-                                    "Do NOT describe your search strategy. "
-                                    "Instead, say 'I found...' or 'Interesting, the text mentions...'. "
-                                    "Use markdown bold (**text**) for key dates, names, and terms."
-                                )
-                                
-                                thinking_prompt = (
-                                    f"Here is the text content I am reading:\n\n{text_preview}\n\n"
-                                    "Narrate your discovery process based on this text. What specific details jumped out?"
-                                )
-                                
-                                openai_client = openai.AsyncOpenAI(api_key=app_settings.openai_api_key)
-                                
-                                stream = await openai_client.chat.completions.create(
-                                    model="gpt-4o-mini",
-                                    messages=[
-                                        {"role": "system", "content": thinking_system},
-                                        {"role": "user", "content": thinking_prompt},
-                                    ],
-                                    stream=True,
-                                    max_tokens=120,
-                                    temperature=0.7,
-                                )
-                                
-                                import asyncio
-                                accumulated_stream = ""
-                                buffer = ""
-                                last_update_time = asyncio.get_event_loop().time()
-
-                                async for chunk in stream:
-                                    delta = chunk.choices[0].delta
-                                    if delta.content:
-                                        content_piece = delta.content
-                                        accumulated_stream += content_piece
-                                        buffer += content_piece
-                                        
-                                        current_time = asyncio.get_event_loop().time()
-                                        
-                                        # Buffer updates (every 20 chars or 200ms)
-                                        if len(buffer) >= 20 or (current_time - last_update_time) > 0.2:
-                                            sep = "\n" if initial_history else ""
-                                            stream_job.thinking_text = f"{initial_history}{sep}{accumulated_stream}"
-                                            await stream_db.commit()
-                                            buffer = ""
-                                            last_update_time = current_time
-                                            
-                                # Final flush
-                                if buffer:
-                                    sep = "\n" if initial_history else ""
-                                    stream_job.thinking_text = f"{initial_history}{sep}{accumulated_stream}"
-                                    await stream_db.commit()
-                        except Exception as e:
-                            logger.warning(f"[INGESTION][{job_id}] Concurrent thinking stream failed: {e}")
-
-                    # Start thinking generation in the background!
-                    logger.info(f"[INGESTION][{job_id}] Starting concurrent thinking stream...")
-                    asyncio.create_task(_generate_thinking_stream_concurrently())
-            except Exception as e:
-                logger.warning(f"[INGESTION][{job_id}] Failed to start thinking stream: {e}")
-                # Fallback to static update if LLM fails
-                await _update_job(
-                    db, job, 
-                    thought=f"Now analyzing {len(chunks)} text chunks to extract profile and achievements concurrently..."
-                )
 
             # Run profile and achievements extraction concurrently
             profile_task = run_profile_extraction(
@@ -381,7 +293,10 @@ async def _run_ingestion_async(job_id: str) -> dict:
             # Handle timeline result
             if not timeline_response:
                 logger.warning(f"[INGESTION][{job_id}] Timeline normalization failed, using fallback")
-                timeline_response = _create_fallback_timeline(achievements_response)
+                timeline_response = _create_fallback_timeline(
+                    achievements_response,
+                    profile_response,
+                )
             else:
                 logger.info(f"[INGESTION][{job_id}] Normalized {len(timeline_response.timeline)} timeline events")
 
@@ -633,6 +548,7 @@ def _create_fallback_achievements() -> AchievementsExtractionResponse:
 
 def _create_fallback_timeline(
     achievements: AchievementsExtractionResponse,
+    profile: ProfileExtractionResponse | None = None,
 ) -> TimelineNormalizationResponse:
     """Create timeline from achievements without normalization."""
     from app.services.llm.schemas import TimelineEvent, TimelineNormalizationResponse
@@ -651,7 +567,12 @@ def _create_fallback_timeline(
             evidence=c.evidence,
         ))
     
-    return TimelineNormalizationResponse(timeline=events, dedupe_notes=[])
+    response = TimelineNormalizationResponse(timeline=events, dedupe_notes=[])
+    if profile is not None:
+        from app.services.ingestion.dates import apply_computed_timeline_ages
+
+        apply_computed_timeline_ages(profile, response)
+    return response
 
 
 # =============================================================================

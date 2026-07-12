@@ -639,14 +639,43 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
   /// Open a material in-app: YouTube player for videos, chaptered book
   /// reader for books backed by a shared resource (full public-domain text
   /// or LLM module), markdown reader for lessons, web view for plain links.
-  void _openMaterial(PlanMaterialDetail m) {
+  Future<void> _openMaterial(PlanMaterialDetail m) async {
     final videoId = m.youtubeVideoId;
+    var bookResourceId = m.contentResourceId;
+    if (m.type == 'book' &&
+        bookResourceId == null &&
+        (m.canonicalKey ?? '').isNotEmpty) {
+      try {
+        bookResourceId = await ref
+            .read(planRepositoryProvider)
+            .resolveContentResourceId(m.canonicalKey!);
+      } catch (_) {
+        if (!mounted) return;
+        showCmpysToast(
+          context,
+          'Could not check the book guide. Try again.',
+          icon: Icons.cloud_off_rounded,
+          tone: AppColors.danger,
+        );
+        return;
+      }
+      if (!mounted) return;
+      if (bookResourceId == null) {
+        showCmpysToast(
+          context,
+          'The full book guide is still being prepared.',
+          icon: PhosphorIconsRegular.hourglass,
+          tone: AppColors.ochre2,
+        );
+        return;
+      }
+    }
     Widget? screen;
     if (videoId != null) {
       screen = MaterialVideoScreen(material: m, videoId: videoId);
-    } else if (m.type == 'book' && m.contentResourceId != null) {
+    } else if (m.type == 'book' && bookResourceId != null) {
       screen = BookReaderScreen(
-        resourceId: m.contentResourceId!,
+        resourceId: bookResourceId,
         fallbackTitle: m.title,
       );
     } else if (m.prefersExternalLink) {
@@ -666,6 +695,12 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
   ({IconData icon, String label})? _materialAction(PlanMaterialDetail m) {
     if (m.youtubeVideoId != null) {
       return (icon: PhosphorIconsFill.playCircle, label: 'Watch');
+    }
+    if (m.type == 'book' && (m.canonicalKey ?? '').isNotEmpty) {
+      return (
+        icon: PhosphorIconsRegular.bookOpen,
+        label: m.contentResourceId == null ? 'Check guide' : 'Read',
+      );
     }
     if (m.prefersExternalLink) {
       return (icon: PhosphorIconsRegular.globe, label: 'Open');

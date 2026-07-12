@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../app/design_tokens.dart';
+import '../../../../core/network/coalesced_text.dart';
 import '../../../../core/ui/cmpys/cmpys_primitives.dart';
 import '../../../session/data/session_repository.dart';
 import '../../../session/models/session_models.dart';
@@ -36,6 +37,8 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
   final TextEditingController _input = TextEditingController();
   final ScrollController _scroll = ScrollController();
   final List<_M> _msgs = [];
+  bool _scrollFrameScheduled = false;
+  bool _scrollShouldAnimate = false;
 
   bool _typing = true; // waiting for first chunk of a turn
   bool _streaming = false; // chunks arriving
@@ -141,14 +144,20 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
       return;
     }
     setState(() => _error = null);
-    await _sendTurn(last,
-        showAsUser: false, isRetry: true, isKickoff: _lastSentWasKickoff);
+    await _sendTurn(
+      last,
+      showAsUser: false,
+      isRetry: true,
+      isKickoff: _lastSentWasKickoff,
+    );
   }
 
-  Future<void> _sendTurn(String content,
-      {required bool showAsUser,
-      bool isRetry = false,
-      bool isKickoff = false}) async {
+  Future<void> _sendTurn(
+    String content, {
+    required bool showAsUser,
+    bool isRetry = false,
+    bool isKickoff = false,
+  }) async {
     setState(() {
       _typing = true;
       _streaming = false;
@@ -159,24 +168,31 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
     _lastSentWasKickoff = isKickoff;
 
     final repo = ref.read(sessionRepositoryProvider);
-    String acc = '';
     bool transition = false;
+    final streamed = CoalescedText(
+      onUpdate: (value) {
+        if (!mounted) return;
+        _streamingText.value = _stripMarker(value);
+        _scrollToBottom(streaming: true);
+      },
+    );
 
     try {
-      await for (final ev in repo.sendInterviewMessage(_sessionId!, content,
-          isKickoff: isKickoff)) {
+      await for (final ev in repo.sendInterviewMessage(
+        _sessionId!,
+        content,
+        isKickoff: isKickoff,
+      )) {
         if (!mounted) return;
         final type = ev['type'] as String? ?? '';
         if (type == 'chunk') {
-          acc += (ev['content'] as String? ?? '');
           if (_typing || !_streaming) {
             setState(() {
               _typing = false;
               _streaming = true;
             });
           }
-          _streamingText.value = _stripMarker(acc);
-          _scrollToBottom();
+          streamed.add(ev['content'] as String? ?? '');
         } else if (type == 'done') {
           transition = ev['phase_transition'] == true;
           _turns = (ev['turn'] as int?) ?? _turns + 1;
@@ -186,7 +202,7 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
         }
       }
       if (!mounted) return;
-      final display = _stripMarker(acc).trim();
+      final display = _stripMarker(streamed.close()).trim();
       if (display.isEmpty) {
         throw StateError('empty interview response');
       }
@@ -211,6 +227,8 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
         _error =
             '${widget.idol.short} got cut off. Tap retry to continue the conversation.';
       });
+    } finally {
+      streamed.dispose();
     }
   }
 
@@ -223,17 +241,29 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
     });
   }
 
-  void _scrollToBottom() {
+  void _scrollToBottom({bool streaming = false}) {
+    _scrollShouldAnimate = _scrollShouldAnimate || !streaming;
+    if (_scrollFrameScheduled) return;
+    _scrollFrameScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scrollFrameScheduled = false;
+      final animate = _scrollShouldAnimate;
+      _scrollShouldAnimate = false;
       if (!_scroll.hasClients) return;
-      _scroll.animateTo(_scroll.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 280),
-          curve: Curves.easeOutCubic);
+      final max = _scroll.position.maxScrollExtent;
+      if (!animate) {
+        if (_scroll.offset < max) _scroll.jumpTo(max);
+        return;
+      }
+      _scroll.animateTo(
+        max,
+        duration: const Duration(milliseconds: 280),
+        curve: Curves.easeOutCubic,
+      );
     });
   }
 
-  double get _progress =>
-      ((_turns / _maxTurns) * 100).clamp(5, 100).toDouble();
+  double get _progress => ((_turns / _maxTurns) * 100).clamp(5, 100).toDouble();
 
   @override
   Widget build(BuildContext context) {
@@ -270,21 +300,29 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(widget.idol.name,
-                        style: AppTypography.h4.copyWith(fontSize: 16)),
+                    Text(
+                      widget.idol.name,
+                      style: AppTypography.h4.copyWith(fontSize: 16),
+                    ),
                     Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Container(
-                            width: 7,
-                            height: 7,
-                            decoration: const BoxDecoration(
-                                color: AppColors.green,
-                                shape: BoxShape.circle)),
+                          width: 7,
+                          height: 7,
+                          decoration: const BoxDecoration(
+                            color: AppColors.green,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
                         const SizedBox(width: 5),
-                        Text('Getting to know you',
-                            style: AppTypography.caption.copyWith(
-                                color: AppColors.green2, fontSize: 12)),
+                        Text(
+                          'Getting to know you',
+                          style: AppTypography.caption.copyWith(
+                            color: AppColors.green2,
+                            fontSize: 12,
+                          ),
+                        ),
                       ],
                     ),
                   ],
@@ -309,10 +347,13 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 5),
             decoration: BoxDecoration(
-                color: AppColors.paper2,
-                borderRadius: BorderRadius.circular(999)),
-            child: Text('${widget.idol.name.toUpperCase()} · AI MENTOR',
-                style: AppTypography.kicker.copyWith(fontSize: 10.5)),
+              color: AppColors.paper2,
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Text(
+              '${widget.idol.name.toUpperCase()} · AI MENTOR',
+              style: AppTypography.kicker.copyWith(fontSize: 10.5),
+            ),
           ),
         ),
         const SizedBox(height: 14),
@@ -338,15 +379,21 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
         children: [
           Row(
             children: [
-              const Icon(Icons.warning_amber_rounded,
-                  size: 18, color: AppColors.danger),
+              const Icon(
+                Icons.warning_amber_rounded,
+                size: 18,
+                color: AppColors.danger,
+              ),
               const SizedBox(width: 8),
               Expanded(
-                child: Text(_error!,
-                    style: AppTypography.caption.copyWith(
-                        color: AppColors.danger,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600)),
+                child: Text(
+                  _error!,
+                  style: AppTypography.caption.copyWith(
+                    color: AppColors.danger,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ),
             ],
           ),
@@ -377,10 +424,11 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
               color: AppColors.card,
               border: Border.all(color: AppColors.hair),
               borderRadius: const BorderRadius.only(
-                  topLeft: Radius.circular(6),
-                  topRight: Radius.circular(16),
-                  bottomLeft: Radius.circular(16),
-                  bottomRight: Radius.circular(16)),
+                topLeft: Radius.circular(6),
+                topRight: Radius.circular(16),
+                bottomLeft: Radius.circular(16),
+                bottomRight: Radius.circular(16),
+              ),
             ),
             child: const CmpysTypingDots(),
           ),
@@ -404,16 +452,21 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
                 color: AppColors.card,
                 border: Border.all(color: AppColors.hair),
                 borderRadius: const BorderRadius.only(
-                    topLeft: Radius.circular(6),
-                    topRight: Radius.circular(18),
-                    bottomLeft: Radius.circular(18),
-                    bottomRight: Radius.circular(18)),
+                  topLeft: Radius.circular(6),
+                  topRight: Radius.circular(18),
+                  bottomLeft: Radius.circular(18),
+                  bottomRight: Radius.circular(18),
+                ),
               ),
               child: ValueListenableBuilder<String>(
                 valueListenable: _streamingText,
-                builder: (_, text, _) => Text(text,
-                    style: AppTypography.body
-                        .copyWith(fontSize: 15.5, height: 1.45)),
+                builder: (_, text, _) => Text(
+                  text,
+                  style: AppTypography.body.copyWith(
+                    fontSize: 15.5,
+                    height: 1.45,
+                  ),
+                ),
               ),
             ),
           ),
@@ -423,27 +476,27 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
   }
 
   Widget _avatar(double size) => CmpysMentorAvatar(
-        slug: widget.idol.slug,
-        initials: widget.idol.initials,
-        color: widget.idol.color,
-        tint: widget.idol.tint,
-        size: size,
-      );
+    slug: widget.idol.slug,
+    initials: widget.idol.initials,
+    color: widget.idol.color,
+    tint: widget.idol.tint,
+    size: size,
+  );
 
   Widget _bubble(_M m) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Row(
-        mainAxisAlignment:
-            m.me ? MainAxisAlignment.end : MainAxisAlignment.start,
+        mainAxisAlignment: m.me
+            ? MainAxisAlignment.end
+            : MainAxisAlignment.start,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           if (!m.me) _avatar(28),
           if (!m.me) const SizedBox(width: 8),
           Flexible(
             child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 15, vertical: 11),
+              padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 11),
               decoration: BoxDecoration(
                 gradient: m.me ? AppColors.gradGreen : null,
                 color: m.me ? null : AppColors.card,
@@ -453,14 +506,18 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
                   bottomLeft: const Radius.circular(18),
                   bottomRight: Radius.circular(m.me ? 6 : 18),
                 ),
-                border:
-                    m.me ? null : Border.all(color: AppColors.hair, width: 1),
+                border: m.me
+                    ? null
+                    : Border.all(color: AppColors.hair, width: 1),
               ),
-              child: Text(m.text,
-                  style: AppTypography.body.copyWith(
-                      fontSize: 15.5,
-                      height: 1.45,
-                      color: m.me ? Colors.white : AppColors.ink)),
+              child: Text(
+                m.text,
+                style: AppTypography.body.copyWith(
+                  fontSize: 15.5,
+                  height: 1.45,
+                  color: m.me ? Colors.white : AppColors.ink,
+                ),
+              ),
             ),
           ),
         ],
@@ -476,8 +533,8 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
       final status = _finished
           ? 'Analyzing your answers…'
           : _error != null
-              ? 'Waiting to retry…'
-              : '${widget.idol.short} is thinking…';
+          ? 'Waiting to retry…'
+          : '${widget.idol.short} is thinking…';
       return Container(
         padding: pad,
         decoration: const BoxDecoration(
@@ -485,9 +542,13 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
           border: Border(top: BorderSide(color: AppColors.hair, width: 1)),
         ),
         child: Center(
-          child: Text(status,
-              style: AppTypography.caption
-                  .copyWith(color: AppColors.ink3, fontSize: 13)),
+          child: Text(
+            status,
+            style: AppTypography.caption.copyWith(
+              color: AppColors.ink3,
+              fontSize: 13,
+            ),
+          ),
         ),
       );
     }
@@ -539,8 +600,11 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
                         : AppColors.green,
                     shape: BoxShape.circle,
                   ),
-                  child: const Icon(Icons.arrow_upward_rounded,
-                      color: Colors.white, size: 18),
+                  child: const Icon(
+                    Icons.arrow_upward_rounded,
+                    color: Colors.white,
+                    size: 18,
+                  ),
                 ),
               ),
             ),

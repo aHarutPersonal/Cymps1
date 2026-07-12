@@ -456,6 +456,9 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
     if (material.type == 'book' && material.contentResourceId != null) {
       return 'Read book';
     }
+    if (material.type == 'book' && (material.canonicalKey ?? '').isNotEmpty) {
+      return 'Check guide';
+    }
     if (material.youtubeVideoId != null) return 'Watch';
     if (material.prefersExternalLink) return 'Open';
     if (material.hasInAppContent) return 'Read';
@@ -463,12 +466,41 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
     return null;
   }
 
-  void _openMaterial(PlanMaterialDetail material) {
+  Future<void> _openMaterial(PlanMaterialDetail material) async {
     final videoId = material.youtubeVideoId;
+    var bookResourceId = material.contentResourceId;
+    if (material.type == 'book' &&
+        bookResourceId == null &&
+        (material.canonicalKey ?? '').isNotEmpty) {
+      try {
+        bookResourceId = await ref
+            .read(planRepositoryProvider)
+            .resolveContentResourceId(material.canonicalKey!);
+      } catch (_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not check the book guide. Try again.'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+      if (!mounted) return;
+      if (bookResourceId == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('The full book guide is still being prepared.'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+    }
     Widget? screen;
-    if (material.type == 'book' && material.contentResourceId != null) {
+    if (material.type == 'book' && bookResourceId != null) {
       screen = BookReaderScreen(
-        resourceId: material.contentResourceId!,
+        resourceId: bookResourceId,
         fallbackTitle: material.title,
       );
     } else if (videoId != null) {

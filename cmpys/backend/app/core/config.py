@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     # Application
     app_name: str = "cmpys"
     debug: bool = False
+    # Full HTTP bodies are expensive to copy/mask and may contain private user
+    # text. Production logs request metadata only unless explicitly enabled.
+    http_body_logging_enabled: bool = False
 
     # Database
     database_url: str = "postgresql+psycopg://cmpys:cmpys@localhost:5432/cmpys"

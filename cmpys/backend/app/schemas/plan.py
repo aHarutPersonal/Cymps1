@@ -26,8 +26,13 @@ class PlanGenerateRequest(BaseModel):
 
     idolId: str
     targetAge: int = Field(..., ge=1, le=150)
-    durationWeeks: int = Field(default=12, ge=1, le=52)
-    weeklyHours: int = Field(default=10, ge=1, le=168)
+    # CMPYS is intentionally one focused twelve-week cycle, not an arbitrary
+    # calendar planner. Keeping the API contract exact prevents prompt/runtime
+    # disagreement and incomplete plans.
+    durationWeeks: int = Field(default=12, ge=12, le=12)
+    # The execution contract always includes one mission and one daily rhythm;
+    # stored estimates are whole hours, so two is the smallest honest cap.
+    weeklyHours: int = Field(default=10, ge=2, le=168)
     focus: str | None = Field(default=None, max_length=200)
     # Optional: the agentic session this plan continues. When provided, the
     # interview transcript / comparison / blueprint from that exact session are

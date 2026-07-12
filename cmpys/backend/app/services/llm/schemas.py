@@ -6,6 +6,7 @@ and are used to validate LLM responses.
 """
 import datetime
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -238,6 +239,110 @@ class PlanGenerationResponse(BaseModel):
     weeks: list[PlanWeek] = Field(default_factory=list)
 
 
+class PlanDetailIdeaOutput(BaseModel):
+    title: str = Field(max_length=50)
+    content: str
+    category: str | None = None
+
+
+class PlanDetailMaterialOutput(BaseModel):
+    title: str
+    type: Literal["book", "video", "in_app_lesson", "article", "course", "tool"]
+    author_or_creator: str | None = None
+    search_query: str
+    duration_minutes: int | None = Field(default=None, ge=1)
+    canonical_hint: str | None = None
+    source_strategy: str | None = None
+    reason: str
+    content_markdown: str | None = None
+    ideas: list[PlanDetailIdeaOutput] = Field(default_factory=list)
+
+
+class PlanDetailStepOutput(BaseModel):
+    id: str = Field(pattern=r"^step_[1-3]$")
+    title: str = Field(max_length=60)
+    description: str
+    estimate_minutes: int = Field(ge=40, le=60)
+    reading_minutes: int = Field(ge=1, le=30)
+    practice_minutes: int = Field(ge=20, le=59)
+    lesson_content: str
+    resources: list[str] = Field(min_length=1, max_length=2)
+    substeps: list[str] = Field(min_length=2, max_length=3)
+
+
+class PlanItemDetailsOutput(BaseModel):
+    """Native structured-output contract for long plan-item lessons."""
+
+    steps: list[PlanDetailStepOutput] = Field(min_length=3, max_length=3)
+    materials: list[PlanDetailMaterialOutput] = Field(min_length=3, max_length=3)
+    definition_of_done: str
+    mental_model: str
+
+    @model_validator(mode="after")
+    def require_complete_learning_contract(self) -> "PlanItemDetailsOutput":
+        """Protect reader depth and resource integrity before persistence."""
+        required_headings = (
+            "## Why This Matters",
+            "## Core Framework",
+            "## Worked Example",
+            "## Failure Modes",
+            "## Guided Practice",
+            "## Check Your Understanding",
+            "## References",
+        )
+        material_titles = {material.title for material in self.materials}
+
+        if len({step.id for step in self.steps}) != 3:
+            raise ValueError("step ids must be unique")
+        for step in self.steps:
+            lesson_words = len(step.lesson_content.split())
+            if not 1200 <= lesson_words <= 1800:
+                raise ValueError(
+                    f"{step.id} lesson_content has {lesson_words} words; "
+                    "required range is 1200-1800"
+                )
+            missing = [
+                heading for heading in required_headings
+                if heading not in step.lesson_content
+            ]
+            if missing:
+                raise ValueError(f"{step.id} is missing lesson headings: {missing}")
+            if any(title not in material_titles for title in step.resources):
+                raise ValueError(
+                    f"{step.id} resources must exactly match top-level material titles"
+                )
+            for substep in step.substeps:
+                words = len(substep.split())
+                if not 20 <= words <= 50:
+                    raise ValueError(
+                        f"{step.id} substeps must contain 20-50 words"
+                    )
+
+        kinds = [material.type for material in self.materials]
+        if kinds.count("book") != 1 or kinds.count("video") != 1:
+            raise ValueError("materials must contain exactly one book and one video")
+        if sum(kind in {"article", "course", "tool", "in_app_lesson"} for kind in kinds) != 1:
+            raise ValueError(
+                "the third material must be an article, course, tool, or in_app_lesson"
+            )
+
+        for material in self.materials:
+            content = material.content_markdown
+            if material.type == "in_app_lesson":
+                words = len((content or "").split())
+                if not 400 <= words <= 600:
+                    raise ValueError(
+                        "in_app_lesson content_markdown must contain 400-600 words"
+                    )
+            elif content is not None:
+                raise ValueError(
+                    f"{material.type} material content_markdown must be null"
+                )
+            if material.type == "book" and material.ideas:
+                raise ValueError("book material ideas must be empty")
+        return self
+
+
 # =============================================================================
 # Persona Pack
 # =============================================================================
@@ -361,6 +466,51 @@ class ComparisonResponse(BaseModel):
         default_factory=list,
         description="Structured list of idol achievements referenced"
     )
+
+
+class AIComparisonCategoryOutput(BaseModel):
+    """Category result for the legacy structured comparison endpoint."""
+
+    category: str
+    score: float = Field(ge=0, le=100)
+    analysis: str
+    userStrengths: list[str] = Field(default_factory=list)
+    gaps: list[str] = Field(default_factory=list)
+    keyIdolMilestone: str | None = None
+    userBestMatch: str | None = None
+
+
+class AIComparisonStrengthOutput(BaseModel):
+    category: str
+    description: str
+    achievementTitle: str | None = None
+
+
+class AIComparisonGapOutput(BaseModel):
+    category: str
+    description: str
+    idolMilestone: str | None = None
+    ageAtMilestone: int | None = Field(default=None, ge=0, le=150)
+    suggestion: str | None = None
+
+
+class AIComparisonNextMilestoneOutput(BaseModel):
+    title: str
+    description: str
+    estimatedTimeframe: str | None = None
+
+
+class AIComparisonOutput(BaseModel):
+    """Strict LLM contract used by ``GET /comparison/ai``."""
+
+    overallScore: float = Field(ge=0, le=100)
+    overallAnalysis: str
+    realisticPerspective: str
+    encouragement: str
+    categoryBreakdown: list[AIComparisonCategoryOutput]
+    strengths: list[AIComparisonStrengthOutput] = Field(default_factory=list)
+    gaps: list[AIComparisonGapOutput] = Field(default_factory=list)
+    nextMilestone: AIComparisonNextMilestoneOutput | None = None
 
 
 class CitedResource(BaseModel):

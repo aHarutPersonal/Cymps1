@@ -4,7 +4,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import joinedload
 
 from app.core.db import get_db
 from app.core.security import decode_token
@@ -38,7 +38,10 @@ async def get_current_user(
 
     stmt = (
         select(User)
-        .options(selectinload(User.profile))
+        # ``profile`` is a one-to-one relationship, so a join avoids the
+        # second round-trip that select-in loading would add to every
+        # authenticated request.
+        .options(joinedload(User.profile))
         .where(User.id == user_id)
     )
     result = await db.execute(stmt)

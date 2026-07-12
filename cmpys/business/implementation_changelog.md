@@ -1,6 +1,19 @@
 # CMPYS Implementation Changelog
 
-**Last Updated:** 2026-07-11
+**Last Updated:** 2026-07-12
+
+---
+
+## 2026-07-12: Prompt Alignment & End-to-End Performance
+
+- Separated the strategic blueprint from the executable twelve-week plan and added runtime enforcement for ordered weeks, capacity-based task counts, daily scripts, success metrics, and hour caps.
+- Reworked persona/interview/tutor prompts around a truthful, source-grounded AI portrayal; aligned persona, comparison, partial-date, and lesson-detail schemas with runtime models.
+- Reduced a standard five-turn activation flow from eight grounded model responses to two while keeping the fact lookup and age-matched comparison grounded.
+- Removed decorative model calls, compacted prompt JSON, added native structured output, deferred book-module generation with reader late binding, and validated direct video relevance before accepting the fast path.
+- Released database connections before long model/search work, reduced scalar relationship queries, narrowed job polling to one joined query, suppressed successful poll logs, and moved request/media blocking work off the asyncio loop.
+- Coalesced streamed UI updates, narrowed Riverpod watches, parallelized independent plan startup requests, shortened returning-launch splash time, and made release networking/logging safe.
+- Verification: 327 backend tests, 113 Flutter tests, Ruff, Flutter analysis, and a release-mode web build passed.
+- Full evidence and caveats: `business/prompt_performance_audit_2026-07-12.md`.
 
 ---
 

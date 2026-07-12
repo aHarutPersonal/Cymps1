@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/env.dart';
@@ -81,7 +82,7 @@ class DioClient {
     _dio.interceptors.add(_errorInterceptor);
 
     // Logging interceptor (debug only)
-    if (Env.enableLogging) {
+    if (kDebugMode && Env.enableLogging) {
       _dio.interceptors.add(_loggingInterceptor);
     }
   }

@@ -15,6 +15,7 @@ import json
 import logging
 
 from app.models.source_chunk import SourceChunk
+from app.services.ingestion.dates import apply_computed_timeline_ages
 from app.services.llm import BaseLLMClient, get_llm_client
 from app.services.llm.prompt_loader import load_prompt, render_prompt
 from app.services.llm.telemetry import record_llm_response
@@ -45,7 +46,11 @@ def _chunks_to_json(chunks: list[SourceChunk], source_url: str, source_id: str) 
             "source_url": source_url,
             "text": chunk.text,
         })
-    return json.dumps(chunk_list, indent=2)
+    return json.dumps(
+        chunk_list,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
 
 # =============================================================================
@@ -248,7 +253,8 @@ async def run_timeline_normalization(
     
     candidates_json = json.dumps(
         [c.model_dump(mode="json") for c in candidates.candidates],
-        indent=2,
+        ensure_ascii=False,
+        separators=(",", ":"),
     )
     
     # Render user prompt with ALL required placeholders
@@ -264,6 +270,8 @@ async def run_timeline_normalization(
         output_model=TimelineNormalizationResponse,
         repair_on_failure=True,
     )
+    if validated is not None:
+        validated = apply_computed_timeline_ages(profile, validated)
     await record_llm_response(
         operation="idol_timeline_normalization",
         response=response,
@@ -392,9 +400,19 @@ async def run_persona_pack(
     # Load prompt templates
     system_prompt = load_prompt("extractor_system")
     user_template = load_prompt("persona_pack")
+    persona_instruction = render_prompt(
+        user_template,
+        {"idol_name": profile.profile.display_name},
+        prompt_name="persona_pack.txt",
+        strict=True,
+    )
     
     sources_json = _chunks_to_json(chunks, source_url, source_id)
-    profile_json = json.dumps(profile.profile.model_dump(mode="json"), indent=2)
+    profile_json = json.dumps(
+        profile.profile.model_dump(mode="json"),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
     
     # Build user prompt
     user_prompt = f"""IDOL PROFILE:
@@ -403,7 +421,7 @@ async def run_persona_pack(
 SOURCES (chunked):
 {sources_json}
 
-{user_template}"""
+{persona_instruction}"""
     
     validated, response = await client.generate_and_validate(
         system_prompt=system_prompt,

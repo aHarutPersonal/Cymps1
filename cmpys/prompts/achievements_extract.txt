@@ -45,12 +45,15 @@ Therefore:
 Example structure (do NOT literally label it):
 "Buffett formed Buffett Partnership Ltd. in 1956, creating a vehicle to apply value investing systematically. Replicable angle: start with a small, focused vehicle to compound results and iterate."
 
-DATE RULES:
-- If exact day is stated -> date="YYYY-MM-DD", date_precision="day"
-- If only month+year -> date=null, date_precision="month"
-- If only year -> date=null, date_precision="year"
-- If no date -> date=null, date_precision="unknown"
-Never guess missing dates or months/days.
+DATE RULES (partial-date storage convention):
+- If exact day is stated -> date="YYYY-MM-DD", date_precision="day".
+- If only month+year is stated -> date="YYYY-MM-01", date_precision="month".
+  The day 01 is a storage sentinel, NOT a claim that the event happened on day 1.
+- If only year is stated -> date="YYYY-01-01", date_precision="year".
+  January 1 is a storage sentinel, NOT a claim about the event's month or day.
+- If no date is stated -> date=null, date_precision="unknown".
+Never infer a year or month. The backend uses date_precision to prevent sentinel
+components from being displayed or treated as exact.
 
 IMPORTANT:
 - age_at_event MUST remain null for all candidates (computed later).

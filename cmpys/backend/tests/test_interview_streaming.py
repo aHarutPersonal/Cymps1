@@ -1,5 +1,6 @@
 import pytest
 from fastapi.responses import StreamingResponse
+from types import SimpleNamespace
 
 from app.api.v1 import sessions as sessions_api
 from app.models.chat import ChatThread
@@ -80,6 +81,93 @@ async def test_interview_stream_awaits_coroutine_provider_stream(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_agentic_streams_have_a_bounded_provider_timeout(monkeypatch):
+    captured = {}
+
+    class FakeModels:
+        def generate_content_stream(self, **kwargs):
+            captured["config"] = kwargs["config"]
+
+            async def stream():
+                yield SimpleNamespace(text="ok")
+
+            return stream()
+
+    client = SimpleNamespace(aio=SimpleNamespace(models=FakeModels()))
+    monkeypatch.setattr(gemini, "_gemini_client", lambda: client)
+
+    chunks = [
+        chunk
+        async for chunk in gemini.interview_stream(
+            system_prompt="system",
+            user_message="question",
+        )
+    ]
+
+    assert chunks == ["ok"]
+    assert captured["config"].http_options.timeout == 60_000
+
+
+@pytest.mark.asyncio
+async def test_agentic_streams_use_expected_grounding_policy(monkeypatch):
+    calls = []
+
+    async def fake_stream_generate(**kwargs):
+        calls.append(kwargs)
+        yield "ok"
+
+    monkeypatch.setattr(gemini, "_stream_generate", fake_stream_generate)
+
+    assert [
+        chunk
+        async for chunk in gemini.interview_stream(
+            system_prompt="system",
+            user_message="interview",
+        )
+    ] == ["ok"]
+    assert [
+        chunk
+        async for chunk in gemini.comparison_stream(
+            system_prompt="system",
+            user_message="comparison",
+        )
+    ] == ["ok"]
+    assert [
+        chunk
+        async for chunk in gemini.blueprint_stream(
+            system_prompt="system",
+            user_message="blueprint",
+        )
+    ] == ["ok"]
+
+    assert [call["grounded"] for call in calls] == [False, True, False]
+
+
+def test_interview_prompts_include_chat_history_exactly_once():
+    marker = "HISTORY_SENTINEL_8f31"
+    session = SimpleNamespace(
+        user_age=24,
+        user_financial_status="student",
+        user_interests=["technology"],
+        user_goal="build useful software",
+        idol_facts_json={"raw_facts": "verified fact"},
+    )
+
+    system_prompt, user_prompt = sessions_api._render_interview_prompts(
+        session,
+        idol_name="Ada Lovelace",
+        idol_persona={},
+        chat_history_json=f'[{marker}]',
+        current_turn=2,
+        user_message="I practice every morning.",
+    )
+
+    assert marker not in system_prompt
+    assert marker in user_prompt
+    assert (system_prompt + user_prompt).count(marker) == 1
+
+
+@pytest.mark.asyncio
 async def test_interview_returns_sse_before_fetching_missing_idol_facts(monkeypatch):
     session = IntakeSession(
         id="session-1",
@@ -109,6 +197,9 @@ async def test_interview_returns_sse_before_fetching_missing_idol_facts(monkeypa
             pass
 
         async def flush(self):
+            pass
+
+        async def commit(self):
             pass
 
         async def execute(self, stmt):

@@ -8,9 +8,10 @@ Features:
 - Structured log format with timestamps
 """
 import logging
+import queue
 import sys
 from datetime import datetime
-from logging.handlers import RotatingFileHandler
+from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
 from pathlib import Path
 
 from app.core.config import settings
@@ -19,6 +20,8 @@ from app.core.config import settings
 LOG_DIR = Path(__file__).parent.parent.parent / "logs"
 LOG_FILE = LOG_DIR / "cmpys.log"
 REQUEST_LOG_FILE = LOG_DIR / "requests.log"
+
+_request_listener: QueueListener | None = None
 
 # Ensure log directory exists
 LOG_DIR.mkdir(exist_ok=True)
@@ -82,10 +85,18 @@ def setup_logging() -> None:
     file_handler.setFormatter(file_format)
     root_logger.addHandler(file_handler)
     
-    # Request logger (separate file for HTTP requests/responses)
+    # Request logger (separate file for HTTP requests/responses). File writes
+    # happen on a listener thread so polling traffic cannot block the asyncio
+    # request loop on RotatingFileHandler.flush().
+    global _request_listener
+    if _request_listener is not None:
+        _request_listener.stop()
+        _request_listener = None
+
     request_logger = logging.getLogger("cmpys.requests")
     request_logger.setLevel(logging.INFO)
     request_logger.propagate = False  # Don't send to root logger
+    request_logger.handlers.clear()
     
     request_handler = RotatingFileHandler(
         REQUEST_LOG_FILE,
@@ -95,14 +106,23 @@ def setup_logging() -> None:
     )
     request_handler.setLevel(logging.INFO)
     request_handler.setFormatter(CurlFormatter())
-    request_logger.addHandler(request_handler)
-    
+    listener_handlers: list[logging.Handler] = [request_handler]
+
     # Also log requests to console if debug mode
     if settings.debug:
         request_console = logging.StreamHandler(sys.stdout)
         request_console.setLevel(logging.DEBUG)
         request_console.setFormatter(CurlFormatter())
-        request_logger.addHandler(request_console)
+        listener_handlers.append(request_console)
+
+    request_queue: queue.SimpleQueue = queue.SimpleQueue()
+    request_logger.addHandler(QueueHandler(request_queue))
+    _request_listener = QueueListener(
+        request_queue,
+        *listener_handlers,
+        respect_handler_level=True,
+    )
+    _request_listener.start()
     
     # Reduce noise from third-party libraries
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
@@ -116,6 +136,14 @@ def setup_logging() -> None:
     app_logger = logging.getLogger("cmpys")
     app_logger.info(f"Logging initialized. Log files: {LOG_DIR}")
     app_logger.info(f"Log level: {logging.getLevelName(log_level)}")
+
+
+def shutdown_logging() -> None:
+    """Flush and stop the background request-log listener."""
+    global _request_listener
+    if _request_listener is not None:
+        _request_listener.stop()
+        _request_listener = None
 
 
 def get_logger(name: str) -> logging.Logger:

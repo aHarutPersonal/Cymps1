@@ -273,6 +273,17 @@ PROMPT_PLACEHOLDERS = {
         "comparison_summary",
     ],
 
+    "comparison_analyze.txt": [
+        "idol_name",
+        "idol_field",
+        "idol_bio",
+        "target_age",
+        "idol_milestones",
+        "user_age",
+        "user_background",
+        "user_achievements",
+    ],
+
 }
 
 
@@ -433,7 +444,13 @@ def render_prompt(
         if value is None:
             str_variables[key] = "null"
         elif isinstance(value, (dict, list)):
-            str_variables[key] = json.dumps(value, indent=2)
+            # Compact UTF-8 JSON preserves the exact structure while avoiding
+            # thousands of whitespace/escape tokens in source-heavy prompts.
+            str_variables[key] = json.dumps(
+                value,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
         else:
             str_variables[key] = str(value)
     
@@ -542,6 +559,7 @@ PROMPT_REGISTRY = {
         "interview": ["interview_system.xml", "interview_question.txt"],
         "comparison": ["persona_system.txt", "comparison_generate.txt"],
         "comparison_scores": ["comparison_scores.txt"],
+        "legacy_comparison_analysis": ["comparison_analyze.txt"],
         "blueprint": ["persona_system.txt", "blueprint_generate.txt"],
     },
     # Guided learning (sessions API)

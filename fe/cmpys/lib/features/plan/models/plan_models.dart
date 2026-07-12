@@ -382,6 +382,7 @@ class PlanMaterialDetail {
     this.reason,
     this.contentMarkdown,
     this.contentResourceId,
+    this.canonicalKey,
     this.ideas = const [],
   });
 
@@ -396,6 +397,7 @@ class PlanMaterialDetail {
   /// Shared content_resources.id — the full lesson text may live there
   /// instead of inline in [contentMarkdown].
   final String? contentResourceId;
+  final String? canonicalKey;
   final List<BookIdea> ideas;
 
   /// YouTube video id when [url] points at YouTube, else null.
@@ -448,6 +450,7 @@ class PlanMaterialDetail {
         reason: j['reason'] as String?,
         contentMarkdown: j['content_markdown'] as String?,
         contentResourceId: j['content_resource_id']?.toString(),
+        canonicalKey: (j['canonical_key'] ?? j['canonicalKey'])?.toString(),
         ideas:
             (j['ideas'] as List?)
                 ?.whereType<Map<String, dynamic>>()

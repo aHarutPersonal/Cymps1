@@ -1,10 +1,10 @@
-from typing import Annotated
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import joinedload, selectinload
 
 from app.core.db import get_db
 from app.models.idol_job import IdolImportJob
@@ -320,6 +320,10 @@ class JobStatusResponse(BaseModel):
 async def get_job_status(
     job_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
+    job_type: Annotated[
+        Literal["import", "plan", "plan_detail", "suggest"] | None,
+        Query(alias="type"),
+    ] = None,
 ) -> JobStatusResponse:
     """
     Get the current status of an import job.
@@ -327,40 +331,44 @@ async def get_job_status(
     Returns dynamic "AI thinking" text that changes based on the current step
     and progress, providing an engaging experience while waiting.
     """
-    # Try Import Job first
-    stmt = (
-        select(IdolImportJob)
-        .options(selectinload(IdolImportJob.idol))
-        .where(IdolImportJob.id == job_id)
-    )
-    result = await db.execute(stmt)
-    job = result.scalar_one_or_none()
+    # Existing clients can omit ``type`` and retain the legacy probing order.
+    # Callers that know the job kind avoid up to three guaranteed-miss queries
+    # on every polling tick.
+    job = None
+    if job_type in (None, "import"):
+        stmt = (
+            select(IdolImportJob)
+            .options(joinedload(IdolImportJob.idol))
+            .where(IdolImportJob.id == job_id)
+        )
+        result = await db.execute(stmt)
+        job = result.scalar_one_or_none()
 
-    if not job:
+    if not job and job_type in (None, "plan"):
         # Try Plan Generation Job
         stmt = (
             select(PlanGenerationJob)
-            .options(selectinload(PlanGenerationJob.idol))
+            .options(joinedload(PlanGenerationJob.idol))
             .where(PlanGenerationJob.id == job_id)
         )
         result = await db.execute(stmt)
         job = result.scalar_one_or_none()
 
-    if not job:
+    if not job and job_type in (None, "plan_detail"):
         # Try Plan Item Detail Job
         stmt = (
             select(PlanItemDetailJob)
             .options(
-                selectinload(PlanItemDetailJob.plan_item)
-                .selectinload(PlanItem.plan)
-                .selectinload(Plan.idol)
+                joinedload(PlanItemDetailJob.plan_item)
+                .joinedload(PlanItem.plan)
+                .joinedload(Plan.idol)
             )
             .where(PlanItemDetailJob.id == job_id)
         )
         result = await db.execute(stmt)
         job = result.scalar_one_or_none()
 
-    if not job:
+    if not job and job_type in (None, "suggest"):
         # Try Idol Suggest Job
         stmt = (
             select(IdolSuggestJob)

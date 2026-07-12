@@ -11,6 +11,7 @@ from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
+from app.core.config import settings
 from app.core.logging import get_logger, log_request, log_response
 
 logger = get_logger("cmpys.middleware")
@@ -142,6 +143,10 @@ class ResponseBodyLoggerMiddleware:
     """
     
     SKIP_PATHS = {"/health", "/ready", "/favicon.ico"}
+    # Job status is polled every few seconds and historically dominates HTTP
+    # traffic. Successful polls add little diagnostic value, so keep failures
+    # while avoiding log formatting, queueing, and disk I/O for the hot path.
+    QUIET_SUCCESS_PREFIXES = ("/api/v1/jobs/",)
 
     # Cap how much body we retain for logging. log_response truncates to
     # 2,000 chars anyway, so buffering multi-MB payloads (or entire SSE
@@ -150,6 +155,11 @@ class ResponseBodyLoggerMiddleware:
 
     def __init__(self, app: ASGIApp):
         self.app = app
+        self.capture_bodies = settings.debug or settings.http_body_logging_enabled
+
+    @classmethod
+    def should_log(cls, path: str, status_code: int) -> bool:
+        return status_code >= 400 or not path.startswith(cls.QUIET_SUCCESS_PREFIXES)
     
     async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
         if scope["type"] != "http":
@@ -201,7 +211,11 @@ class ResponseBodyLoggerMiddleware:
                 is_event_stream = "text/event-stream" in response_headers.get(
                     "content-type", ""
                 )
-            elif message["type"] == "http.response.body" and not is_event_stream:
+            elif (
+                self.capture_bodies
+                and message["type"] == "http.response.body"
+                and not is_event_stream
+            ):
                 if len(response_body) < self.MAX_CAPTURED_BODY:
                     body = message.get("body", b"")
                     response_body += body[: self.MAX_CAPTURED_BODY - len(response_body)]
@@ -209,11 +223,18 @@ class ResponseBodyLoggerMiddleware:
             await send(message)
         
         # Process request
-        await self.app(scope, receive_wrapper, send_wrapper)
+        await self.app(
+            scope,
+            receive_wrapper if self.capture_bodies else receive,
+            send_wrapper,
+        )
         
         # Calculate duration
         duration_ms = (time.perf_counter() - start_time) * 1000
-        
+
+        if not self.should_log(path, response_status):
+            return
+
         # Log request and response
         try:
             method = scope.get("method", "GET")

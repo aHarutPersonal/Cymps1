@@ -13,7 +13,15 @@ import '../../plan/data/plan_repository.dart';
 import '../../plan/models/plan_models.dart';
 import '../../plan/presentation/backend_plan_widgets.dart';
 import '../../plan/state/current_plan_provider.dart';
+import '../data/cmpys_seed.dart';
 import '../state/cmpys_store.dart';
+
+typedef _PlanStoreView = ({
+  CmpysIdol idol,
+  String? blueprintMd,
+  List<CmpysCustomTask> custom,
+  Map<String, bool> tasks,
+});
 
 /// CMPYS Plan tab — Roadmap (generated 12-week plan) / Daily habits split.
 ///
@@ -33,7 +41,16 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final st = ref.watch(cmpysStoreProvider);
+    final st = ref.watch(
+      cmpysStoreProvider.select(
+        (s) => (
+          idol: s.idol,
+          blueprintMd: s.blueprintMd,
+          custom: s.custom,
+          tasks: s.tasks,
+        ),
+      ),
+    );
     final planState = ref.watch(currentPlanProvider);
     return Scaffold(
       backgroundColor: AppColors.paper,
@@ -41,21 +58,26 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
         bottom: false,
         child: EntranceScope(
           child: ListView(
-          padding: EdgeInsets.fromLTRB(18, 14, 18, AppShell.bottomNavClearance(context)),
-          children: EntranceGroup.wrap([
-            _header(st, planState.plan),
-            const SizedBox(height: 18),
-            _viewToggle(),
-            const SizedBox(height: 18),
-            if (_view == 0) ..._roadmap(st, planState) else ..._habits(st),
-          ]),
+            padding: EdgeInsets.fromLTRB(
+              18,
+              14,
+              18,
+              AppShell.bottomNavClearance(context),
+            ),
+            children: EntranceGroup.wrap([
+              _header(st, planState.plan),
+              const SizedBox(height: 18),
+              _viewToggle(),
+              const SizedBox(height: 18),
+              if (_view == 0) ..._roadmap(st, planState) else ..._habits(st),
+            ]),
           ),
         ),
       ),
     );
   }
 
-  Widget _header(CmpysState st, BackendPlan? plan) {
+  Widget _header(_PlanStoreView st, BackendPlan? plan) {
     // Never fall back to the seed plan's title — it names the demo idol.
     final title = plan != null
         ? 'Your ${plan.durationWeeks}-week path'
@@ -68,9 +90,14 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
       children: [
         CmpysKicker('Your growth plan'),
         const SizedBox(height: 4),
-        Text(title,
-            style: AppTypography.display
-                .copyWith(fontSize: 30, letterSpacing: -0.5, height: 1.1)),
+        Text(
+          title,
+          style: AppTypography.display.copyWith(
+            fontSize: 30,
+            letterSpacing: -0.5,
+            height: 1.1,
+          ),
+        ),
         const SizedBox(height: 6),
         Text(subtitle, style: AppTypography.bodyDim.copyWith(fontSize: 14.5)),
       ],
@@ -107,23 +134,27 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
           boxShadow: active
               ? [
                   const BoxShadow(
-                      color: Color(0x1416161C),
-                      blurRadius: 8,
-                      offset: Offset(0, 2)),
+                    color: Color(0x1416161C),
+                    blurRadius: 8,
+                    offset: Offset(0, 2),
+                  ),
                 ]
               : null,
         ),
-        child: Text(label,
-            style: AppTypography.bodyMedium.copyWith(
-                fontSize: 14,
-                color: active ? AppColors.ink : AppColors.ink2,
-                fontWeight: FontWeight.w700)),
+        child: Text(
+          label,
+          style: AppTypography.bodyMedium.copyWith(
+            fontSize: 14,
+            color: active ? AppColors.ink : AppColors.ink2,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
       ),
     );
   }
 
   // ─── Roadmap ───
-  List<Widget> _roadmap(CmpysState st, CurrentPlanState planState) {
+  List<Widget> _roadmap(_PlanStoreView st, CurrentPlanState planState) {
     final blueprint = <Widget>[
       if (st.blueprintMd != null && st.blueprintMd!.trim().isNotEmpty) ...[
         _blueprintCard(st),
@@ -138,8 +169,7 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
           // The active focus must be the first actionable surface on this
           // page. Supporting blueprint/progress context follows it.
           roadmap.first,
-          if (st.blueprintMd != null &&
-              st.blueprintMd!.trim().isNotEmpty) ...[
+          if (st.blueprintMd != null && st.blueprintMd!.trim().isNotEmpty) ...[
             const SizedBox(height: 14),
             _blueprintCard(st),
           ],
@@ -147,9 +177,13 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
           ...roadmap.skip(1),
           const SizedBox(height: 18),
           Center(
-            child: Text('"The whole secret is small things, done daily."',
-                style: AppTypography.readingQuote
-                    .copyWith(color: AppColors.ink3, fontSize: 15)),
+            child: Text(
+              '"The whole secret is small things, done daily."',
+              style: AppTypography.readingQuote.copyWith(
+                color: AppColors.ink3,
+                fontSize: 15,
+              ),
+            ),
           ),
         ];
       case CurrentPlanStatus.generating:
@@ -176,14 +210,19 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
             onTap: () => ref.read(currentPlanProvider.notifier).refresh(),
             child: Row(
               children: [
-                const Icon(Icons.refresh_rounded,
-                    size: 18, color: AppColors.ink3),
+                const Icon(
+                  Icons.refresh_rounded,
+                  size: 18,
+                  color: AppColors.ink3,
+                ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
                     'Couldn’t load your 12-week plan — tap to retry.',
-                    style: AppTypography.caption
-                        .copyWith(color: AppColors.ink2, fontSize: 13.5),
+                    style: AppTypography.caption.copyWith(
+                      color: AppColors.ink2,
+                      fontSize: 13.5,
+                    ),
                   ),
                 ),
               ],
@@ -216,25 +255,36 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
 
   /// Empty state: the plan for the active idol hasn't been generated (or
   /// hasn't landed) yet. Tapping re-checks and re-enqueues when possible.
-  Widget _planPendingCard(CmpysState st) {
+  Widget _planPendingCard(_PlanStoreView st) {
     return CmpysCardSurface(
       onTap: () => ref.read(currentPlanProvider.notifier).retry(),
       child: Row(
         children: [
-          const Icon(PhosphorIconsRegular.sparkle,
-              size: 18, color: AppColors.ink3),
+          const Icon(
+            PhosphorIconsRegular.sparkle,
+            size: 18,
+            color: AppColors.ink3,
+          ),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Your plan with ${st.idol.short} isn’t ready yet.',
-                    style: AppTypography.bodyMedium
-                        .copyWith(color: AppColors.ink, fontSize: 14.5)),
+                Text(
+                  'Your plan with ${st.idol.short} isn’t ready yet.',
+                  style: AppTypography.bodyMedium.copyWith(
+                    color: AppColors.ink,
+                    fontSize: 14.5,
+                  ),
+                ),
                 const SizedBox(height: 2),
-                Text('Tap to check again.',
-                    style: AppTypography.caption
-                        .copyWith(color: AppColors.ink3, fontSize: 12.5)),
+                Text(
+                  'Tap to check again.',
+                  style: AppTypography.caption.copyWith(
+                    color: AppColors.ink3,
+                    fontSize: 12.5,
+                  ),
+                ),
               ],
             ),
           ),
@@ -244,16 +294,18 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
   }
 
   /// The LLM-written blueprint from onboarding — the mentor's own roadmap.
-  Widget _blueprintCard(CmpysState st) {
+  Widget _blueprintCard(_PlanStoreView st) {
     final idol = st.idol;
     return GestureDetector(
-      onTap: () => Navigator.of(context).push(CmpysPageRoute(
-        builder: (_) => CmpysMarkdownScreen(
-          kicker: 'From ${idol.short}',
-          title: 'Your blueprint',
-          markdown: st.blueprintMd!,
+      onTap: () => Navigator.of(context).push(
+        CmpysPageRoute(
+          builder: (_) => CmpysMarkdownScreen(
+            kicker: 'From ${idol.short}',
+            title: 'Your blueprint',
+            markdown: st.blueprintMd!,
+          ),
         ),
-      )),
+      ),
       child: Container(
         padding: const EdgeInsets.all(18),
         decoration: BoxDecoration(
@@ -261,9 +313,10 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
           borderRadius: AppRadii.card,
           boxShadow: [
             BoxShadow(
-                color: AppColors.green2.withValues(alpha: 0.25),
-                blurRadius: 18,
-                offset: const Offset(0, 8)),
+              color: AppColors.green2.withValues(alpha: 0.25),
+              blurRadius: 18,
+              offset: const Offset(0, 8),
+            ),
           ],
         ),
         child: Row(
@@ -281,13 +334,21 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('WRITTEN BY ${idol.short.toUpperCase()}',
-                      style: AppTypography.kicker.copyWith(
-                          color: Colors.white.withValues(alpha: 0.75))),
+                  Text(
+                    'WRITTEN BY ${idol.short.toUpperCase()}',
+                    style: AppTypography.kicker.copyWith(
+                      color: Colors.white.withValues(alpha: 0.75),
+                    ),
+                  ),
                   const SizedBox(height: 4),
-                  Text('Your blueprint — read it in full',
-                      style: AppTypography.h4.copyWith(
-                          color: Colors.white, fontSize: 16, height: 1.25)),
+                  Text(
+                    'Your blueprint — read it in full',
+                    style: AppTypography.h4.copyWith(
+                      color: Colors.white,
+                      fontSize: 16,
+                      height: 1.25,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -298,8 +359,11 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
                 color: Colors.white.withValues(alpha: 0.18),
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.arrow_forward_rounded,
-                  size: 16, color: Colors.white),
+              child: const Icon(
+                Icons.arrow_forward_rounded,
+                size: 16,
+                color: Colors.white,
+              ),
             ),
           ],
         ),
@@ -307,7 +371,11 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
     );
   }
 
-  Widget _customRow(CmpysState st, CmpysCustomTask c, {required bool first}) {
+  Widget _customRow(
+    _PlanStoreView st,
+    CmpysCustomTask c, {
+    required bool first,
+  }) {
     final done = st.tasks[c.id] ?? false;
     return Container(
       decoration: BoxDecoration(
@@ -328,10 +396,16 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
                 color: done ? AppColors.green : Colors.transparent,
                 shape: BoxShape.circle,
                 border: Border.all(
-                    color: done ? AppColors.green : AppColors.hair2, width: 2),
+                  color: done ? AppColors.green : AppColors.hair2,
+                  width: 2,
+                ),
               ),
               child: done
-                  ? const Icon(Icons.check_rounded, size: 15, color: Colors.white)
+                  ? const Icon(
+                      Icons.check_rounded,
+                      size: 15,
+                      color: Colors.white,
+                    )
                   : null,
             ),
           ),
@@ -340,27 +414,37 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(c.title,
-                    style: AppTypography.bodyMedium.copyWith(
-                        fontSize: 15,
-                        color: done ? AppColors.ink3 : AppColors.ink,
-                        decoration: done ? TextDecoration.lineThrough : null)),
+                Text(
+                  c.title,
+                  style: AppTypography.bodyMedium.copyWith(
+                    fontSize: 15,
+                    color: done ? AppColors.ink3 : AppColors.ink,
+                    decoration: done ? TextDecoration.lineThrough : null,
+                  ),
+                ),
                 const SizedBox(height: 2),
-                Text('Suggested in chat',
-                    style: AppTypography.caption
-                        .copyWith(color: AppColors.ink3, fontSize: 12)),
+                Text(
+                  'Suggested in chat',
+                  style: AppTypography.caption.copyWith(
+                    color: AppColors.ink3,
+                    fontSize: 12,
+                  ),
+                ),
               ],
             ),
           ),
-          const Icon(PhosphorIconsRegular.chatTeardrop,
-              size: 16, color: AppColors.hair2),
+          const Icon(
+            PhosphorIconsRegular.chatTeardrop,
+            size: 16,
+            color: AppColors.hair2,
+          ),
         ],
       ),
     );
   }
 
   // ─── Daily habits view ───
-  List<Widget> _habits(CmpysState st) {
+  List<Widget> _habits(_PlanStoreView st) {
     // Backend-generated daily rhythm (current plan week). Mirrors the
     // roadmap's status handling — the seeded demo rituals never show, since
     // they belong to a different mentor than the one the user chose.
@@ -373,8 +457,10 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
         }
         if (today.items.isEmpty) {
           return [
-            Text('No daily rhythm tasks this week — check the roadmap.',
-                style: AppTypography.bodyDim),
+            Text(
+              'No daily rhythm tasks this week — check the roadmap.',
+              style: AppTypography.bodyDim,
+            ),
           ];
         }
         return _backendHabits(today);
@@ -397,14 +483,19 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
             onTap: () => ref.read(currentPlanProvider.notifier).refresh(),
             child: Row(
               children: [
-                const Icon(Icons.refresh_rounded,
-                    size: 18, color: AppColors.ink3),
+                const Icon(
+                  Icons.refresh_rounded,
+                  size: 18,
+                  color: AppColors.ink3,
+                ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
                     'Couldn’t load your daily rhythm — tap to retry.',
-                    style: AppTypography.caption
-                        .copyWith(color: AppColors.ink2, fontSize: 13.5),
+                    style: AppTypography.caption.copyWith(
+                      color: AppColors.ink2,
+                      fontSize: 13.5,
+                    ),
                   ),
                 ),
               ],
@@ -426,13 +517,20 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(PhosphorIconsFill.flame, size: 15, color: const Color(0xFFFFD166)),
+          Icon(
+            PhosphorIconsFill.flame,
+            size: 15,
+            color: const Color(0xFFFFD166),
+          ),
           const SizedBox(width: 6),
-          Text('$streak-day streak',
-              style: AppTypography.captionMedium.copyWith(
-                  color: Colors.white,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700)),
+          Text(
+            '$streak-day streak',
+            style: AppTypography.captionMedium.copyWith(
+              color: Colors.white,
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
         ],
       ),
     );
@@ -447,13 +545,16 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
       Container(
         padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
-            gradient: AppColors.gradViolet, borderRadius: AppRadii.lg,
-            boxShadow: [
-              BoxShadow(
-                  color: AppColors.lilac.withValues(alpha: 0.28),
-                  blurRadius: 20,
-                  offset: const Offset(0, 10)),
-            ]),
+          gradient: AppColors.gradViolet,
+          borderRadius: AppRadii.lg,
+          boxShadow: [
+            BoxShadow(
+              color: AppColors.lilac.withValues(alpha: 0.28),
+              blurRadius: 20,
+              offset: const Offset(0, 10),
+            ),
+          ],
+        ),
         child: Row(
           children: [
             CmpysRing(
@@ -462,24 +563,36 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
               stroke: 7,
               color: Colors.white,
               track: Colors.white.withValues(alpha: 0.25),
-              child: Text('$done/$total',
-                  style: AppTypography.h3.copyWith(
-                      color: Colors.white, fontSize: 18, height: 1)),
+              child: Text(
+                '$done/$total',
+                style: AppTypography.h3.copyWith(
+                  color: Colors.white,
+                  fontSize: 18,
+                  height: 1,
+                ),
+              ),
             ),
             const SizedBox(width: 18),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Your daily rhythm',
-                      style: AppTypography.h4.copyWith(
-                          color: Colors.white, fontSize: 17)),
+                  Text(
+                    'Your daily rhythm',
+                    style: AppTypography.h4.copyWith(
+                      color: Colors.white,
+                      fontSize: 17,
+                    ),
+                  ),
                   const SizedBox(height: 4),
                   Text(
-                      'These reset every day. The roadmap moves forward — these keep you moving.',
-                      style: AppTypography.caption.copyWith(
-                          color: Colors.white.withValues(alpha: 0.85),
-                          fontSize: 13, height: 1.4)),
+                    'These reset every day. The roadmap moves forward — these keep you moving.',
+                    style: AppTypography.caption.copyWith(
+                      color: Colors.white.withValues(alpha: 0.85),
+                      fontSize: 13,
+                      height: 1.4,
+                    ),
+                  ),
                   if (today.streak > 0) ...[
                     const SizedBox(height: 10),
                     _streakChip(today.streak),
@@ -492,7 +605,9 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
       ),
       const SizedBox(height: 18),
       const Padding(
-          padding: EdgeInsets.only(left: 2), child: CmpysKicker('Every day')),
+        padding: EdgeInsets.only(left: 2),
+        child: CmpysKicker('Every day'),
+      ),
       const SizedBox(height: 10),
       CmpysCardSurface(
         pad: const EdgeInsets.all(6),
@@ -512,13 +627,21 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
       await ref.read(planRepositoryProvider).toggleDailyTask(item.id);
       ref.invalidate(todayViewProvider);
       if (!wasDone && mounted) {
-        showCmpysToast(context, 'Nice. Kept your word.',
-            icon: Icons.check_rounded, tone: AppColors.green);
+        showCmpysToast(
+          context,
+          'Nice. Kept your word.',
+          icon: Icons.check_rounded,
+          tone: AppColors.green,
+        );
       }
     } catch (_) {
       if (mounted) {
-        showCmpysToast(context, 'Couldn’t update — try again.',
-            icon: Icons.error_outline_rounded, tone: AppColors.ink2);
+        showCmpysToast(
+          context,
+          'Couldn’t update — try again.',
+          icon: Icons.error_outline_rounded,
+          tone: AppColors.ink2,
+        );
       }
     }
   }
@@ -546,12 +669,16 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
                   color: done ? AppColors.green : Colors.transparent,
                   shape: BoxShape.circle,
                   border: Border.all(
-                      color: done ? AppColors.green : AppColors.hair2,
-                      width: 2),
+                    color: done ? AppColors.green : AppColors.hair2,
+                    width: 2,
+                  ),
                 ),
                 child: done
-                    ? const Icon(Icons.check_rounded,
-                        size: 15, color: Colors.white)
+                    ? const Icon(
+                        Icons.check_rounded,
+                        size: 15,
+                        color: Colors.white,
+                      )
                     : null,
               ),
             ),
@@ -565,16 +692,22 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(item.title,
-                        style: AppTypography.bodyMedium.copyWith(
-                            fontSize: 15,
-                            color: done ? AppColors.ink3 : AppColors.ink,
-                            decoration:
-                                done ? TextDecoration.lineThrough : null)),
+                    Text(
+                      item.title,
+                      style: AppTypography.bodyMedium.copyWith(
+                        fontSize: 15,
+                        color: done ? AppColors.ink3 : AppColors.ink,
+                        decoration: done ? TextDecoration.lineThrough : null,
+                      ),
+                    ),
                     const SizedBox(height: 2),
-                    Text('Daily · ~${item.estimatedHours}h this week',
-                        style: AppTypography.caption
-                            .copyWith(color: AppColors.ink3, fontSize: 12)),
+                    Text(
+                      'Daily · ~${item.estimatedHours}h this week',
+                      style: AppTypography.caption.copyWith(
+                        color: AppColors.ink3,
+                        fontSize: 12,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -582,8 +715,11 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
           ),
           const Padding(
             padding: EdgeInsets.only(right: 6),
-            child: Icon(Icons.chevron_right_rounded,
-                size: 18, color: AppColors.hair2),
+            child: Icon(
+              Icons.chevron_right_rounded,
+              size: 18,
+              color: AppColors.hair2,
+            ),
           ),
         ],
       ),

@@ -73,11 +73,11 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
     required String? Function() readJobId,
     String? Function()? readIdolName,
     Future<String?> Function()? requestGeneration,
-  })  : _repo = repo,
-        _readJobId = readJobId,
-        _readIdolName = readIdolName,
-        _requestGeneration = requestGeneration,
-        super(const CurrentPlanState(status: CurrentPlanStatus.loading)) {
+  }) : _repo = repo,
+       _readJobId = readJobId,
+       _readIdolName = readIdolName,
+       _requestGeneration = requestGeneration,
+       super(const CurrentPlanState(status: CurrentPlanStatus.loading)) {
     refresh();
   }
 
@@ -127,14 +127,13 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
       Object? planError;
       await Future.wait<void>([
         if (hasJob)
-          _repo.getJobStatus(jobId).then<void>(
-                (j) => job = j,
-                onError: (Object e) => jobError = e,
-              ),
+          _repo
+              .getJobStatus(jobId)
+              .then<void>((j) => job = j, onError: (Object e) => jobError = e),
         _repo.getCurrentPlan().then<void>(
-              (p) => plan = p,
-              onError: (Object e) => planError = e,
-            ),
+          (p) => plan = p,
+          onError: (Object e) => planError = e,
+        ),
       ]);
       if (!mounted) return;
 
@@ -175,13 +174,16 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
       // When the active idol is known, the plan must name the same idol —
       // a plan with no idol name cannot be verified and is treated as stale
       // rather than shown to the wrong mentor's user.
-      final matchesActiveIdol = fetched == null ||
+      final matchesActiveIdol =
+          fetched == null ||
           wantIdol == null ||
           wantIdol.isEmpty ||
           (planIdol != null && planIdol.isNotEmpty && planIdol == wantIdol);
       if (fetched != null && fetched.items.isNotEmpty && matchesActiveIdol) {
-        state =
-            CurrentPlanState(status: CurrentPlanStatus.ready, plan: fetched);
+        state = CurrentPlanState(
+          status: CurrentPlanStatus.ready,
+          plan: fetched,
+        );
         return;
       }
       if (jobId != null && jobId.isNotEmpty) {
@@ -195,7 +197,9 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
       if (!mounted) return;
       debugPrint('📋 Plan fetch failed: $e');
       state = CurrentPlanState(
-          status: CurrentPlanStatus.failed, error: e.toString());
+        status: CurrentPlanStatus.failed,
+        error: e.toString(),
+      );
     }
   }
 
@@ -312,55 +316,64 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
 
 final currentPlanProvider =
     StateNotifierProvider<CurrentPlanController, CurrentPlanState>((ref) {
-  final controller = CurrentPlanController(
-    repo: ref.watch(planRepositoryProvider),
-    readJobId: () => ref.read(cmpysStoreProvider).planJobId,
-    readIdolName: () => ref.read(cmpysStoreProvider).idol.name,
-    requestGeneration: () async {
-      // Recovery path: a completed onboarding session with a chosen idol but
-      // no plan and no job id (older app build / lost SSE event). Enqueue
-      // generation via POST /plans/generate and persist the job id.
-      final session =
-          await ref.read(sessionRepositoryProvider).getLatestSession();
-      final idolId = session?.selectedIdol?.id;
-      final hasResults = session?.blueprintOutput?.trim().isNotEmpty == true ||
-          session?.phase == SessionPhase.completed;
-      if (session == null || idolId == null || idolId.isEmpty || !hasResults) {
-        return null;
-      }
-      final jobId = await ref.read(planRepositoryProvider).generatePlan(
-            idolId: idolId,
-            targetAge: session.userAge > 0 ? session.userAge : 24,
-            sessionId: session.id,
-          );
-      if (jobId.isNotEmpty) {
-        ref.read(cmpysStoreProvider.notifier).setPlanJobId(jobId);
-      }
-      return jobId;
-    },
-  );
-  // When onboarding finishes and persists the job id, start polling without
-  // waiting for a manual refresh.
-  ref.listen<String?>(
-    cmpysStoreProvider.select((s) => s.planJobId),
-    (_, next) => controller.onJobIdChanged(next),
-  );
-  // When the user switches idols (new session), re-fetch so the Plan tab shows
-  // the new idol's plan instead of the previous idol's cached one.
-  ref.listen<String>(
-    cmpysStoreProvider.select((s) => s.idol.name),
-    (_, next) => controller.onIdolChanged(next),
-  );
-  return controller;
-});
+      final controller = CurrentPlanController(
+        repo: ref.watch(planRepositoryProvider),
+        readJobId: () => ref.read(cmpysStoreProvider).planJobId,
+        readIdolName: () => ref.read(cmpysStoreProvider).idol.name,
+        requestGeneration: () async {
+          // Recovery path: a completed onboarding session with a chosen idol but
+          // no plan and no job id (older app build / lost SSE event). Enqueue
+          // generation via POST /plans/generate and persist the job id.
+          final session = await ref
+              .read(sessionRepositoryProvider)
+              .getLatestSession();
+          final idolId = session?.selectedIdol?.id;
+          final hasResults =
+              session?.blueprintOutput?.trim().isNotEmpty == true ||
+              session?.phase == SessionPhase.completed;
+          if (session == null ||
+              idolId == null ||
+              idolId.isEmpty ||
+              !hasResults) {
+            return null;
+          }
+          final jobId = await ref
+              .read(planRepositoryProvider)
+              .generatePlan(
+                idolId: idolId,
+                targetAge: session.userAge > 0 ? session.userAge : 24,
+                sessionId: session.id,
+              );
+          if (jobId.isNotEmpty) {
+            ref.read(cmpysStoreProvider.notifier).setPlanJobId(jobId);
+          }
+          return jobId;
+        },
+      );
+      // When onboarding finishes and persists the job id, start polling without
+      // waiting for a manual refresh.
+      ref.listen<String?>(
+        cmpysStoreProvider.select((s) => s.planJobId),
+        (_, next) => controller.onJobIdChanged(next),
+      );
+      // When the user switches idols (new session), re-fetch so the Plan tab shows
+      // the new idol's plan instead of the previous idol's cached one.
+      ref.listen<String>(
+        cmpysStoreProvider.select((s) => s.idol.name),
+        (_, next) => controller.onIdolChanged(next),
+      );
+      return controller;
+    });
 
 /// Today's daily rhythm (current plan week's habit/practice items with
 /// per-day completion + streak). Null until the plan is ready. Invalidate
 /// after a daily-toggle to refresh counts; previous data is kept while
 /// refreshing so the list doesn't flicker.
 final todayViewProvider = FutureProvider<TodayView?>((ref) async {
-  final planState = ref.watch(currentPlanProvider);
-  final plan = planState.plan;
-  if (planState.status != CurrentPlanStatus.ready || plan == null) return null;
+  final selection = ref.watch(
+    currentPlanProvider.select((s) => (status: s.status, plan: s.plan)),
+  );
+  final plan = selection.plan;
+  if (selection.status != CurrentPlanStatus.ready || plan == null) return null;
   return ref.watch(planRepositoryProvider).getTodayView(plan.id);
 });

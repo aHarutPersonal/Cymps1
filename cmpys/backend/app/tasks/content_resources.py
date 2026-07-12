@@ -1,4 +1,3 @@
-import asyncio
 import logging
 
 from app.core.celery import celery_app

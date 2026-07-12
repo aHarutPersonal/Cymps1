@@ -5,9 +5,44 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../app/router.dart';
 import '../controllers/session_controller.dart';
+
+const _splashSeenKey = 'cmpys_has_seen_splash';
+
+@visibleForTesting
+const splashFirstVisitMinimum = Duration(milliseconds: 3400);
+
+@visibleForTesting
+const splashReturningVisitMinimum = Duration(milliseconds: 600);
+
+@visibleForTesting
+Duration splashMinimumForVisit({required bool hasSeenSplash}) =>
+    hasSeenSplash ? splashReturningVisitMinimum : splashFirstVisitMinimum;
+
+@visibleForTesting
+Duration splashRemainingDelay({
+  required bool hasSeenSplash,
+  required Duration elapsed,
+}) {
+  final remaining =
+      splashMinimumForVisit(hasSeenSplash: hasSeenSplash) - elapsed;
+  return remaining.isNegative ? Duration.zero : remaining;
+}
+
+/// Waits for both the minimum brand beat and session bootstrap. The futures are
+/// deliberately joined instead of awaited serially, so network/storage work is
+/// hidden behind the animation rather than added after it.
+@visibleForTesting
+Future<void> waitForSplashGate({
+  required Future<void> initialization,
+  required Duration minimumDelay,
+  Future<void> Function(Duration) delay = Future<void>.delayed,
+}) async {
+  await Future.wait<void>([initialization, delay(minimumDelay)]);
+}
 
 /// CMPYS splash — the green "Who were they, at your age?" intro from the
 /// design: gradient field, soft glow, wordmark, overlapping mentor portraits
@@ -35,13 +70,14 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
 
   late final AnimationController _entrance;
   late final AnimationController _loop; // glow bob + typing-dot pulse
-  Timer? _autoAdvance;
-  Future<void>? _initFuture;
+  late final Future<void> _initFuture;
+  late final Stopwatch _visitClock;
   bool _navigated = false;
 
   @override
   void initState() {
     super.initState();
+    _visitClock = Stopwatch()..start();
     _entrance = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: _timeline),
@@ -53,12 +89,12 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
 
     // Resolve the session in the background while the splash plays.
     _initFuture = ref.read(sessionControllerProvider.notifier).initialize();
-    _autoAdvance = Timer(const Duration(milliseconds: 3400), _advance);
+    unawaited(_autoAdvanceWhenReady());
   }
 
   @override
   void dispose() {
-    _autoAdvance?.cancel();
+    _visitClock.stop();
     _entrance.dispose();
     _loop.dispose();
     super.dispose();
@@ -67,7 +103,6 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
   Future<void> _advance() async {
     if (_navigated) return;
     _navigated = true;
-    _autoAdvance?.cancel();
 
     try {
       await _initFuture;
@@ -84,9 +119,44 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
     context.go(route);
   }
 
+  Future<void> _autoAdvanceWhenReady() async {
+    // Treat a failed preference read conservatively as a first visit. Session
+    // bootstrap was already started above and continues in parallel.
+    var hasSeenSplash = false;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      hasSeenSplash = prefs.getBool(_splashSeenKey) ?? false;
+      if (!hasSeenSplash) {
+        unawaited(prefs.setBool(_splashSeenKey, true));
+      }
+    } catch (e) {
+      debugPrint('🚀 splash preference error: $e');
+    }
+
+    final remaining = splashRemainingDelay(
+      hasSeenSplash: hasSeenSplash,
+      elapsed: _visitClock.elapsed,
+    );
+    try {
+      await waitForSplashGate(
+        initialization: _initFuture,
+        minimumDelay: remaining,
+      );
+    } catch (e) {
+      // [_advance] retains the existing fallback-to-auth behavior when session
+      // initialization fails; this catch prevents an unhandled background error.
+      debugPrint('🚀 splash bootstrap error: $e');
+    }
+    if (mounted) await _advance();
+  }
+
   // A fade + 10px rise, mapped to a [delayMs, delayMs+durMs] slice of the
   // master timeline (cmpysFadeUp).
-  Widget _fadeUp({required int delayMs, int durMs = 650, required Widget child}) {
+  Widget _fadeUp({
+    required int delayMs,
+    int durMs = 650,
+    required Widget child,
+  }) {
     final curved = CurvedAnimation(
       parent: _entrance,
       curve: Interval(
@@ -216,7 +286,9 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
                                       shape: BoxShape.circle,
                                       color: _green2,
                                       border: Border.all(
-                                          color: _green, width: 2.5),
+                                        color: _green,
+                                        width: 2.5,
+                                      ),
                                       boxShadow: const [
                                         BoxShadow(
                                           color: Color(0x2E000000),
@@ -227,7 +299,8 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
                                       image: DecorationImage(
                                         fit: BoxFit.cover,
                                         image: AssetImage(
-                                            'assets/images/mentors/${_mentors[i]}.png'),
+                                          'assets/images/mentors/${_mentors[i]}.png',
+                                        ),
                                       ),
                                     ),
                                   ),

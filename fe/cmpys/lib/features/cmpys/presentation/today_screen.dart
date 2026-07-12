@@ -46,8 +46,10 @@ class CmpysTodayScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final st = ref.watch(cmpysStoreProvider);
-    final idol = st.idol;
+    final storeView = ref.watch(
+      cmpysStoreProvider.select((s) => (idol: s.idol, user: s.user)),
+    );
+    final idol = storeView.idol;
     // Hydrate mentor + AI results from the backend (source of truth).
     ref.watch(cmpysBackendSyncProvider);
 
@@ -72,7 +74,7 @@ class CmpysTodayScreen extends ConsumerWidget {
     final pct = totalToday == 0 ? 0.0 : doneToday / totalToday * 100;
     // AI-generated idea cards — no static fallback.
     final ideasAsync = ref.watch(cmpysIdeasProvider);
-    final name = st.user.name.isEmpty ? 'friend' : st.user.name;
+    final name = storeView.user.name.isEmpty ? 'friend' : storeView.user.name;
 
     final backendUndone = backendItems.where((i) => !i.completedToday).toList();
     final nextBackendItem = backendUndone.isEmpty ? null : backendUndone.first;
@@ -93,7 +95,7 @@ class CmpysTodayScreen extends ConsumerWidget {
               _topBar(context, idol, name, planDay),
               const SizedBox(height: 18),
               if (!planReady)
-                _planStateCard(context, ref, st, planState)
+                _planStateCard(context, ref, idol, planState)
               else if (todayLoading)
                 const CmpysSkeleton.block(height: 124)
               else if (todayFailed)
@@ -156,7 +158,7 @@ class CmpysTodayScreen extends ConsumerWidget {
                 error: (_, _) => _ideaErrorCard(ref),
               ),
               const SizedBox(height: 22),
-              _compareNudge(context, st, idol, name),
+              _compareNudge(context, storeView.user, idol, name),
             ]),
           ),
         ),
@@ -167,7 +169,7 @@ class CmpysTodayScreen extends ConsumerWidget {
   Widget _planStateCard(
     BuildContext context,
     WidgetRef ref,
-    CmpysState st,
+    CmpysIdol idol,
     CurrentPlanState planState,
   ) {
     switch (planState.status) {
@@ -192,7 +194,7 @@ class CmpysTodayScreen extends ConsumerWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Your plan with ${st.idol.short} is being written.',
+                      'Your plan with ${idol.short} is being written.',
                       style: AppTypography.bodyMedium.copyWith(
                         color: AppColors.ink,
                         fontSize: 14.5,
@@ -867,7 +869,7 @@ class CmpysTodayScreen extends ConsumerWidget {
 
   Widget _compareNudge(
     BuildContext context,
-    CmpysState st,
+    CmpysUser user,
     CmpysIdol idol,
     String name,
   ) {
@@ -911,8 +913,8 @@ class CmpysTodayScreen extends ConsumerWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  st.user.age > 0
-                      ? 'You vs ${idol.short} at ${st.user.age}'
+                  user.age > 0
+                      ? 'You vs ${idol.short} at ${user.age}'
                       : 'You vs ${idol.short}',
                   style: AppTypography.bodyMedium.copyWith(fontSize: 15),
                 ),

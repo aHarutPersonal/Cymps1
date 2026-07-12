@@ -26,6 +26,11 @@ from app.core.config import settings
 
 logger = logging.getLogger("cmpys.services.gemini")
 
+# Bound user-facing provider requests. Historical successful generations are
+# below this ceiling; the limit prevents a stalled socket from holding an SSE
+# request or worker slot indefinitely.
+GEMINI_REQUEST_TIMEOUT_MS = 60_000
+
 # Keywords that suggest user is asking for learning resources
 RESOURCE_KEYWORDS = {
     "book", "video", "course", "recommend", "resource", "reading",
@@ -102,6 +107,9 @@ async def generate_with_grounding(
                 system_instruction=system_prompt,
                 tools=[types.Tool(google_search=types.GoogleSearch())],
                 temperature=0.7,
+                http_options=types.HttpOptions(
+                    timeout=GEMINI_REQUEST_TIMEOUT_MS,
+                ),
             ),
         )
         text = response.text or ""
@@ -172,6 +180,9 @@ async def _stream_generate(
                 system_instruction=system_prompt,
                 tools=tools,
                 temperature=temperature,
+                http_options=types.HttpOptions(
+                    timeout=GEMINI_REQUEST_TIMEOUT_MS,
+                ),
             ),
         )
         # The async SDK may return the iterator directly or a coroutine that
@@ -219,29 +230,26 @@ async def stream_learnlm(
 async def interview_stream(
     system_prompt: str,
     user_message: str,
-    conversation_history: str = "",
 ) -> AsyncGenerator[str, None]:
     """
     Stream a Gemini response for the interview phase.
 
-    Uses system_instruction for deep persona immersion + Google Search
-    for fact-based grounding. The system_prompt should be the rendered
+    Uses ``system_instruction`` for deep persona immersion and the verified
+    fact sheet embedded by the caller. The system_prompt should be the rendered
     interview_system.xml content. The user_message is the rendered
     interview_question.txt.
 
     The model asks exactly ONE question per turn and reacts emotionally.
     """
-    # Build the user-facing content (history + current message)
-    if conversation_history:
-        contents = f"{conversation_history}\n\nUser: {user_message}"
-    else:
-        contents = user_message
-
-    logger.info("[GEMINI] Starting interview stream (persona + Google Search)")
+    # The caller supplies a separately verified idol fact sheet in the rendered
+    # per-turn prompt. Searching again here adds several seconds to every turn
+    # and can produce facts that conflict with that shared source of truth.
+    logger.info("[GEMINI] Starting interview stream (persona + verified fact sheet)")
     async for text in _stream_generate(
         system_prompt=system_prompt,
-        contents=contents,
+        contents=user_message,
         label="Interview",
+        grounded=False,
         temperature=0.8,
     ):
         yield text
@@ -263,6 +271,7 @@ async def comparison_stream(
         system_prompt=system_prompt,
         contents=user_message,
         label="Comparison",
+        grounded=True,
     ):
         yield text
 
@@ -274,15 +283,16 @@ async def blueprint_stream(
     """
     Stream a Gemini response for the Q1–Q4 quarterly blueprint.
 
-    Uses Google Search to find real, currently available study materials
-    (books, courses, platforms) with working URLs. The system_prompt
-    maintains the idol persona. The user_message is the rendered
-    blueprint_generate.txt with full context.
+    Uses the cached idol facts, interview, and comparison supplied by the
+    caller. Resource lookup happens later in the plan-detail pipeline, so this
+    phase does not pay for live search. The system_prompt maintains the idol
+    persona. The user_message is the rendered blueprint_generate.txt.
     """
-    logger.info("[GEMINI] Starting blueprint stream (Google Search for resources)")
+    logger.info("[GEMINI] Starting blueprint stream (cached evidence, no live search)")
     async for text in _stream_generate(
         system_prompt=system_prompt,
         contents=user_message,
         label="Blueprint",
+        grounded=False,
     ):
         yield text

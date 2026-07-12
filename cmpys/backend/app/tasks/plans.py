@@ -1,7 +1,7 @@
-import asyncio
 import logging
 from typing import Any
 
+from pydantic import ValidationError
 from sqlalchemy import and_, select
 from sqlalchemy.orm import selectinload
 
@@ -22,8 +22,46 @@ from app.services.content_quality import (
     MIN_PLAN_DETAIL_MATERIAL_WORDS,
 )
 from app.services.transcripts import build_chat_history_json
+from app.services.llm.schemas import PlanItemDetailsOutput
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_plan_detail_response(response: Any) -> None:
+    """Apply the same basic contract for providers with or without native JSON schema."""
+    if getattr(response, "error", None):
+        return
+    try:
+        validated = PlanItemDetailsOutput.model_validate(response.data)
+        response.data = validated.model_dump(mode="json")
+    except ValidationError as exc:
+        response.error = f"Plan detail schema validation failed: {exc}"
+
+
+def _plan_detail_recovery_prompt(prompt: str, error: str) -> tuple[str, str]:
+    """Return a retry prompt and stage matched to the actual failure type."""
+    if error.startswith("Plan detail schema validation failed:"):
+        return (
+            prompt
+            + "\n\nQUALITY CONTRACT RETRY: The previous complete draft failed "
+            "the deterministic reader-quality contract below:\n"
+            + error[:4000]
+            + "\nRewrite the complete JSON artifact and correct every reported "
+            "issue. Preserve exactly three lessons and three materials. Each "
+            "lesson must contain 1,200-1,800 substantive words under every "
+            "required heading, with 20-50 word actionable substeps and exact "
+            "references to top-level material titles. Include exactly one book, "
+            "one video, and one allowed third material. Do not pad or repeat.",
+            "quality_recovery",
+        )
+    return (
+        prompt
+        + "\n\nJSON RECOVERY: Return ONLY strictly valid JSON. Escape every "
+        "quote and newline inside string values. No trailing commas, "
+        "commentary, or markdown fences. Preserve every content-depth rule "
+        "from the original request.",
+        "json_recovery",
+    )
 
 
 def _build_idol_plan_context(
@@ -148,6 +186,43 @@ def normalize_lesson_durations(details: dict[str, Any]) -> dict[str, Any]:
         step["practice_minutes"] = practice_minutes
         step["estimate_minutes"] = reading_minutes + practice_minutes
     return details
+
+
+async def _resolve_plan_detail_materials(
+    db,
+    *,
+    plan_item_id: str,
+    materials: list[dict[str, Any]],
+    user_goal: str,
+) -> list[dict[str, Any]]:
+    """Resolve lightweight material metadata without blocking on book writing.
+
+    Full 3,200+ word book guides are shared catalog artifacts. Cache misses are
+    queued by ``attach_content_resources_to_materials`` while the plan lesson
+    can finish immediately; already-published books still attach synchronously.
+    """
+    if not materials:
+        return []
+
+    from app.services.content_resources import (
+        attach_content_resources_to_materials,
+        sync_plan_item_content_resource_links,
+    )
+    from app.services.tavily import resolve_material_urls
+
+    resolved = await resolve_material_urls(materials)
+    attached = await attach_content_resources_to_materials(
+        db,
+        resolved,
+        user_goal=user_goal,
+        defer_book_generation=True,
+    )
+    await sync_plan_item_content_resource_links(
+        db,
+        plan_item_id=plan_item_id,
+        materials=attached,
+    )
+    return attached
 
 
 async def _load_session_context(
@@ -617,78 +692,10 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
         # Step 2: Generating curriculum
         await _update_job(db, job, step="generating_curriculum", progress=40)
         
-        # Generate human-readable thinking concurrently
-        try:
-            import openai
-            from app.core.config import settings as app_settings
-            from app.services.llm.prompt_loader import load_prompt, render_prompt
-            
-            thinking_template = load_prompt("thinking_task")
-            thinking_prompt = render_prompt(thinking_template, {
-                "task_title": item.title,
-                "idol_name": idol_name,
-            }, prompt_name="thinking_task.txt")
-            
-            thinking_system = "You are a helpful AI coach who thinks out loud while creating detailed learning steps. Be practical and encouraging."
-            
-            async def _generate_thinking_stream_concurrently():
-                try:
-                    async with async_session_maker() as stream_db:
-                        stream_stmt = select(PlanItemDetailJob).where(PlanItemDetailJob.id == job_id)
-                        stream_res = await stream_db.execute(stream_stmt)
-                        stream_job = stream_res.scalar_one_or_none()
-                        
-                        if not stream_job:
-                            return
-                            
-                        openai_client = openai.AsyncOpenAI(api_key=app_settings.openai_api_key)
-                        thinking_text = ""
-                        buffer = ""
-                        last_update_time = asyncio.get_event_loop().time()
-                        
-                        stream = await openai_client.chat.completions.create(
-                            model="gpt-4o-mini",
-                            messages=[
-                                {"role": "system", "content": thinking_system},
-                                {"role": "user", "content": thinking_prompt},
-                            ],
-                            stream=True,
-                            max_tokens=80,
-                            temperature=0.7,
-                        )
-                        
-                        async for chunk in stream:
-                            delta = chunk.choices[0].delta
-                            if delta.content:
-                                content_piece = delta.content
-                                thinking_text += content_piece
-                                buffer += content_piece
-                                
-                                current_time = asyncio.get_event_loop().time()
-                                
-                                # Buffer updates
-                                if len(buffer) >= 20 or (current_time - last_update_time) > 0.2:
-                                    stream_job.thinking_text = thinking_text
-                                    await stream_db.commit()
-                                    buffer = ""
-                                    last_update_time = current_time
-                        
-                        # Final flush
-                        if buffer:
-                            stream_job.thinking_text = thinking_text
-                            await stream_db.commit()
-                        
-                        logger.info(f"[PLAN_DETAILS] Thinking generated: {len(thinking_text)} chars")
-                except Exception as e:
-                    logger.warning(f"[PLAN_DETAILS] Concurrent thinking generation failed: {e}")
-            
-            logger.info("[PLAN_DETAILS] Starting concurrent thinking stream...")
-            asyncio.create_task(_generate_thinking_stream_concurrently())
-        except Exception as e:
-            logger.warning(f"[PLAN_DETAILS] Failed to start thinking stream: {e}")
-            job.thinking_text = f"Let me break down '{item.title}' into actionable steps..."
-            await db.commit()
-        
+        # Job polling already renders deterministic, step-aware narratives.
+        # Keep artifact generation focused on the user-visible lesson instead
+        # of launching an untracked second-provider "thinking" request.
+        job.thinking_text = None
         await _update_job(db, job, progress=50)
         
         # session_context grounds the lesson in the user's agentic session
@@ -811,7 +818,9 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
             llm_response = await client.generate_json(
                 system_prompt=system_prompt,
                 user_prompt=prompt,
+                output_model=PlanItemDetailsOutput,
             )
+            _validate_plan_detail_response(llm_response)
             detail_llm_calls.append(
                 (
                     "draft",
@@ -827,8 +836,12 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
             # A single fresh sampling almost always returns valid JSON, so retry
             # once with an explicit strict-JSON reminder before giving up.
             if llm_response.error:
+                retry_prompt, recovery_stage = _plan_detail_recovery_prompt(
+                    prompt,
+                    llm_response.error,
+                )
                 logger.warning(
-                    f"[PLAN_DETAILS] LLM JSON error for '{item.title}': "
+                    f"[PLAN_DETAILS] LLM contract error for '{item.title}': "
                     f"{llm_response.error}. Retrying once."
                 )
                 if active_tier == "fast":
@@ -843,14 +856,13 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                     recovery_reason = "balanced_schema_retry"
                 json_retry_response = await client.generate_json(
                     system_prompt=system_prompt,
-                    user_prompt=prompt
-                    + "\n\nIMPORTANT: Return ONLY strictly valid, minified JSON. "
-                    "Escape every quote and newline inside string values. No "
-                    "trailing commas, no commentary, no markdown fences.",
+                    user_prompt=retry_prompt,
+                    output_model=PlanItemDetailsOutput,
                 )
+                _validate_plan_detail_response(json_retry_response)
                 detail_llm_calls.append(
                     (
-                        "json_recovery",
+                        recovery_stage,
                         json_retry_response,
                         active_tier,
                         recovery_reason,
@@ -915,7 +927,9 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                 retry_response = await client.generate_json(
                     system_prompt=system_prompt,
                     user_prompt=retry_prompt,
+                    output_model=PlanItemDetailsOutput,
                 )
+                _validate_plan_detail_response(retry_response)
                 detail_llm_calls.append(
                     (
                         "quality_retry",
@@ -952,25 +966,18 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
             # Step 3: Resolve material URLs via Tavily (real web search)
             await _update_job(db, job, step="resolving_materials", progress=75)
             try:
-                from app.services.tavily import resolve_material_urls
-                from app.services.content_resources import (
-                    attach_content_resources_to_materials,
-                    sync_plan_item_content_resource_links,
-                )
                 raw_materials = details.get("materials", [])
                 if raw_materials:
-                    details["materials"] = await resolve_material_urls(raw_materials)
-                    details["materials"] = await attach_content_resources_to_materials(
-                        db,
-                        details["materials"],
-                        user_goal=user_goal,
-                    )
-                    await sync_plan_item_content_resource_links(
+                    details["materials"] = await _resolve_plan_detail_materials(
                         db,
                         plan_item_id=item.id,
-                        materials=details["materials"],
+                        materials=raw_materials,
+                        user_goal=user_goal,
                     )
-                    logger.info(f"[PLAN_DETAILS] Resolved {len(details['materials'])} material URLs via Google Search")
+                    logger.info(
+                        "[PLAN_DETAILS] Resolved %s material references",
+                        len(details["materials"]),
+                    )
             except Exception as resolve_err:
                 logger.warning(f"[PLAN_DETAILS] URL resolution failed, using fallbacks: {resolve_err}")
             

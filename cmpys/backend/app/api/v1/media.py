@@ -1,15 +1,15 @@
+import asyncio
+
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import FileResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import joinedload
 from sqlalchemy.future import select
 from typing import Annotated
 from datetime import date
 
 from app.api.dependencies import get_db
 from app.models.idol import Idol
-from app.core.config import settings
-
 from pathlib import Path
 
 router = APIRouter()
@@ -32,7 +32,7 @@ async def get_media(filename: str, db: Annotated[AsyncSession, Depends(get_db)])
     if "_" in filename and filename.endswith(".jpg"):
         idol_id_str = filename.split("_")[0]
         try:
-            stmt = select(Idol).options(selectinload(Idol.profile)).where(Idol.id == idol_id_str)
+            stmt = select(Idol).options(joinedload(Idol.profile)).where(Idol.id == idol_id_str)
             result = await db.execute(stmt)
             idol = result.scalar_one_or_none()
             if not idol:
@@ -63,29 +63,41 @@ async def get_media(filename: str, db: Annotated[AsyncSession, Depends(get_db)])
                 age=age,
                 idol_description=f"{occupation}. {desc}"
             )
+
+            # The image request can take ~10 seconds and needs no open database
+            # transaction after the prompt snapshot above.
+            await db.commit()
             
             # Generate image via GenAI
             try:
-                from google import genai
                 from google.genai import types
-                
-                client = genai.Client(api_key=settings.gemini_api_key)
-                result = client.models.generate_images(
+                from app.services.gemini import (
+                    GEMINI_REQUEST_TIMEOUT_MS,
+                    _gemini_client,
+                )
+
+                client = _gemini_client()
+                # The Imagen SDK surface is synchronous. Run it off the asyncio
+                # event loop so one lazy avatar cannot freeze every API request.
+                result = await asyncio.to_thread(
+                    client.models.generate_images,
                     model='imagen-4.0-generate-001',
                     prompt=prompt,
                     config=types.GenerateImagesConfig(
                         number_of_images=1,
                         output_mime_type="image/jpeg",
-                        aspect_ratio="1:1"
-                    )
+                        aspect_ratio="1:1",
+                        http_options=types.HttpOptions(
+                            timeout=GEMINI_REQUEST_TIMEOUT_MS,
+                        ),
+                    ),
                 )
                 
                 if result.generated_images:
                     image_bytes = result.generated_images[0].image.image_bytes
                     
                     # Save it locally so next time it serves fast
-                    with open(file_path, "wb") as out_file:
-                        out_file.write(image_bytes)
+                    await asyncio.to_thread(file_path.write_bytes, image_bytes)
                         
                     return Response(content=image_bytes, media_type="image/jpeg")
                 else:

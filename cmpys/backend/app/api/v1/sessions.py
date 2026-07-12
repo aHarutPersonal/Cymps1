@@ -22,7 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import joinedload, selectinload
 
 from app.api.dependencies import get_current_user
 from app.core.db import get_db
@@ -93,9 +93,8 @@ async def _get_session(
     stmt = (
         select(IntakeSession)
         .options(
-            selectinload(IntakeSession.idol),
-            selectinload(IntakeSession.idol).selectinload(Idol.profile),
-            selectinload(IntakeSession.idol).selectinload(Idol.persona),
+            joinedload(IntakeSession.idol).joinedload(Idol.profile),
+            joinedload(IntakeSession.idol).joinedload(Idol.persona),
         )
         .where(
             IntakeSession.id == session_id,
@@ -396,15 +395,17 @@ def _strip_json_fences(text: str) -> str:
 
 
 def _render_persona_system(idol_name: str, idol_persona: dict) -> str:
-    """Render persona_system.txt so the model speaks AS the idol with full voice
-    fidelity (voice style, principles, era lexicon, worldview adapter).
+    """Render the evidence-based mentor portrayal with full voice fidelity.
 
-    Falls back to a minimal in-character instruction when no persona pack
-    exists yet (e.g. ingestion still running)."""
+    The fallback remains transparent when ingestion has not produced a persona
+    pack yet; missing evidence must never weaken the identity boundary."""
     if not idol_persona:
         return (
-            f"You are {idol_name}. Stay 100% in character. First person only. "
-            f"Never break character. Never use AI disclaimers."
+            f"You are the CMPYS Mentor, an AI portrayal inspired by public "
+            f"information about {idol_name}; you are not the literal person and "
+            "do not possess their memories or identity. Be useful and candid, "
+            "but do not invent biographical facts, quotations, or lived "
+            "experience. If asked who you are, state this boundary plainly."
         )
     return load_and_render("persona_system.txt", {
         "idol_name": idol_name,
@@ -648,6 +649,11 @@ async def suggest_idols(
         "user_goal": session.user_goal or "not specified",
     })
 
+    # The catalog lookup is complete. Do not keep that read transaction and a
+    # pooled connection open during the slower grounded fallback.
+    if db is not None:
+        await db.commit()
+
     # Call Gemini with Google Search for factual grounding. Any failure
     # (provider down, bad JSON) falls back to a curated set so the user is
     # never left with an empty selection screen.
@@ -833,9 +839,8 @@ async def get_current_session(
     stmt = (
         select(IntakeSession)
         .options(
-            selectinload(IntakeSession.idol),
-            selectinload(IntakeSession.idol).selectinload(Idol.profile),
-            selectinload(IntakeSession.idol).selectinload(Idol.persona),
+            joinedload(IntakeSession.idol).joinedload(Idol.profile),
+            joinedload(IntakeSession.idol).joinedload(Idol.persona),
         )
         .where(
             IntakeSession.user_id == current_user.id,
@@ -870,9 +875,8 @@ async def get_latest_session(
     stmt = (
         select(IntakeSession)
         .options(
-            selectinload(IntakeSession.idol),
-            selectinload(IntakeSession.idol).selectinload(Idol.profile),
-            selectinload(IntakeSession.idol).selectinload(Idol.persona),
+            joinedload(IntakeSession.idol).joinedload(Idol.profile),
+            joinedload(IntakeSession.idol).joinedload(Idol.persona),
         )
         .where(IntakeSession.user_id == current_user.id)
         .order_by(IntakeSession.created_at.desc())
@@ -934,6 +938,53 @@ def _interview_question_params(
     }
 
 
+def _render_interview_prompts(
+    session: IntakeSession,
+    *,
+    idol_name: str,
+    idol_persona: dict,
+    chat_history_json: str,
+    current_turn: int,
+    user_message: str,
+) -> tuple[str, str]:
+    """Render one interview turn with exactly one copy of chat history.
+
+    The per-turn prompt owns the transcript. The system prompt still receives
+    every required placeholder, but its history slot is deliberately empty so
+    longer interviews do not pay for the same tokens twice.
+    """
+    system_prompt = load_and_render("interview_system.xml", {
+        "idol_name": idol_name,
+        "idol_era": idol_persona.get("era_context", "unknown"),
+        "idol_domain": ", ".join(idol_persona.get("topics_of_strength", [])),
+        "voice_style": idol_persona.get("voice_style", "authoritative"),
+        "signature_phrases": ", ".join(idol_persona.get("signature_phrases", [])),
+        "principles": "; ".join(idol_persona.get("principles", [])),
+        "dos": "; ".join(idol_persona.get("dos", [])),
+        "donts": "; ".join(idol_persona.get("donts", [])),
+        "lexicon_allow": ", ".join(idol_persona.get("lexicon_allow", [])),
+        "lexicon_ban": ", ".join(idol_persona.get("lexicon_ban", [])),
+        "taboo_topics": ", ".join(idol_persona.get("taboo_topics", [])),
+        "worldview_adapter_json": json_lib.dumps(idol_persona.get("worldview_adapter", {})),
+        "user_age": str(session.user_age),
+        "user_financial_status": session.user_financial_status or "",
+        "user_interests_json": json_lib.dumps(session.user_interests or []),
+        "user_goal": session.user_goal or "not specified",
+        "chat_history_json": "[]",
+    })
+    user_prompt = load_and_render(
+        "interview_question.txt",
+        _interview_question_params(
+            session,
+            idol_name=idol_name,
+            chat_history_json=chat_history_json,
+            current_turn=current_turn,
+            user_message=user_message,
+        ),
+    )
+    return system_prompt, user_prompt
+
+
 @router.post("/{session_id}/interview")
 async def interview(
     session_id: str,
@@ -989,6 +1040,11 @@ async def interview(
     current_turn = session.interview_turn_count + 1
     should_transition = current_turn >= MAX_INTERVIEW_TURNS
 
+    # End the short read/write transaction before handing control to a model
+    # stream.  Otherwise this request keeps a pooled database connection
+    # checked out for the entire (often 10-30 second) generation.
+    await db.commit()
+
     async def generate_stream():
         nonlocal should_transition
         full_response = ""
@@ -999,29 +1055,6 @@ async def interview(
             # several seconds. Without this the connection is silent and the app
             # can give up before the first interview chunk arrives.
             yield f"data: {json_lib.dumps({'type': 'status', 'message': 'thinking'})}\n\n"
-
-            # Render the system prompt (interview_system.xml) INSIDE the stream
-            # so any render error surfaces as an SSE error event rather than
-            # blocking the StreamingResponse from being returned.
-            system_prompt = load_and_render("interview_system.xml", {
-                "idol_name": idol_name,
-                "idol_era": idol_persona.get("era_context", "unknown"),
-                "idol_domain": ", ".join(idol_persona.get("topics_of_strength", [])),
-                "voice_style": idol_persona.get("voice_style", "authoritative"),
-                "signature_phrases": ", ".join(idol_persona.get("signature_phrases", [])),
-                "principles": "; ".join(idol_persona.get("principles", [])),
-                "dos": "; ".join(idol_persona.get("dos", [])),
-                "donts": "; ".join(idol_persona.get("donts", [])),
-                "lexicon_allow": ", ".join(idol_persona.get("lexicon_allow", [])),
-                "lexicon_ban": ", ".join(idol_persona.get("lexicon_ban", [])),
-                "taboo_topics": ", ".join(idol_persona.get("taboo_topics", [])),
-                "worldview_adapter_json": json_lib.dumps(idol_persona.get("worldview_adapter", {})),
-                "user_age": str(session.user_age),
-                "user_financial_status": session.user_financial_status or "",
-                "user_interests_json": json_lib.dumps(session.user_interests or []),
-                "user_goal": session.user_goal or "not specified",
-                "chat_history_json": chat_history_json,
-            })
 
             # On the first turn, fetch idol facts via Google Search — done
             # INSIDE the stream so the SSE response starts immediately rather
@@ -1040,22 +1073,21 @@ async def interview(
                 )
                 session.idol_facts_json = {"raw_facts": facts_response}
 
-            # Render the per-turn user prompt (depends on idol facts).
-            user_prompt = load_and_render(
-                "interview_question.txt",
-                _interview_question_params(
-                    session,
-                    idol_name=idol_name,
-                    chat_history_json=chat_history_json,
-                    current_turn=current_turn,
-                    user_message=data.content,
-                ),
+            # Render both prompts inside the stream so render errors become SSE
+            # error events. The verified fact sheet now lives in the per-turn
+            # prompt, and the transcript is included exactly once.
+            system_prompt, user_prompt = _render_interview_prompts(
+                session,
+                idol_name=idol_name,
+                idol_persona=idol_persona,
+                chat_history_json=chat_history_json,
+                current_turn=current_turn,
+                user_message=data.content,
             )
 
             async for chunk in interview_stream(
                 system_prompt=system_prompt,
                 user_message=user_prompt,
-                conversation_history=chat_history_json,
             ):
                 full_response += chunk
                 yield f"data: {json_lib.dumps({'type': 'chunk', 'content': chunk})}\n\n"
@@ -1177,6 +1209,11 @@ async def generate_results(
     # and blueprint_generate.txt both defer voice, intensity, and era language
     # to "your persona (in the system prompt)" — so it must be the full pack.
     persona_system = _render_persona_system(idol_name, idol_persona)
+
+    # Everything needed by the generator is now materialized in memory.
+    # Release the connection while the two long model streams are running;
+    # later persistence calls transparently acquire it again.
+    await db.commit()
 
     async def generate_stream():
         # =====================================================================
@@ -1350,6 +1387,10 @@ async def get_learning_materials(
     """
     await _get_session(session_id, current_user.id, db)
 
+    # The grounded search is network-bound and does not need a database
+    # connection.  Close the read transaction until resource attachment.
+    await db.commit()
+
     # Braces in the user-typed topic would read as unresolved placeholders
     # under strict rendering — neutralise them before substitution.
     safe_topic = data.topic.replace("{", "(").replace("}", ")")
@@ -1469,6 +1510,10 @@ async def guided_learning(
         "disclaimer": idol_persona.get("disclaimer") or "",
     }, strict=False)
 
+    # Persist the user's turn and release the pooled connection before the
+    # tutor stream begins. The assistant turn opens a fresh short transaction.
+    await db.commit()
+
     async def generate_stream():
         full_response = ""
         try:
@@ -1549,6 +1594,10 @@ async def get_daily_feed(
         "user_profile_json": json_lib.dumps(user_profile),
         "idol_evidence_json": json_lib.dumps(idol_evidence),
     })
+
+    # The model/search call can be slow; the session snapshot above is enough
+    # to run it without monopolizing a database connection.
+    await db.commit()
 
     full_response = await generate_with_grounding(
         system_prompt=_render_persona_system(idol_name, idol_persona),

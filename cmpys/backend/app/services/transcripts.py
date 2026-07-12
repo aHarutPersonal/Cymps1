@@ -30,11 +30,19 @@ def build_chat_history_json(
         {"role": msg.role.value, "content": _content(msg)}
         for msg in messages
     ]
-    serialized = json.dumps(history, indent=2)
+    serialized = json.dumps(
+        history,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
     if max_chars is None:
         return serialized
 
     while history and len(serialized) > max_chars:
         history.pop(0)
-        serialized = json.dumps(history, indent=2)
+        serialized = json.dumps(
+            history,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
     return serialized

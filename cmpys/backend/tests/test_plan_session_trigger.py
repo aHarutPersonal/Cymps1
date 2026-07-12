@@ -165,7 +165,7 @@ class TestTranscriptHelper:
         result = build_chat_history_json(messages)
         assert "What have you built?" in result
         assert "A small trading model." in result
-        assert '"role": "assistant"' in result
+        assert '"role":"assistant"' in result
 
     def test_max_chars_drops_oldest_messages_first(self):
         messages = [

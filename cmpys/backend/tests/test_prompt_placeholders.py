@@ -195,15 +195,23 @@ class TestRenderPromptJsonHandling:
         template = "Profile: {profile_json}"
         result = render_prompt(template, {"profile_json": {"name": "Test", "age": 25}})
         
-        assert '"name": "Test"' in result
-        assert '"age": 25' in result
+        assert '"name":"Test"' in result
+        assert '"age":25' in result
 
     def test_list_values_are_json_serialized(self):
         """List values should be JSON-serialized automatically."""
         template = "Items: {items_json}"
         result = render_prompt(template, {"items_json": ["a", "b", "c"]})
         
-        assert '["a", "b", "c"]' in result or '[\n  "a"' in result
+        assert '["a","b","c"]' in result
+
+    def test_json_values_keep_unicode_without_ascii_escape_bloat(self):
+        result = render_prompt("Profile: {profile_json}", {
+            "profile_json": {"goal": "créer avec précision"},
+        })
+
+        assert "créer avec précision" in result
+        assert "\\u00e9" not in result
 
     def test_none_values_become_null(self):
         """None values should become 'null' string."""
