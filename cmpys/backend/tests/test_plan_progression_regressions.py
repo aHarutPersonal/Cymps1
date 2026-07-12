@@ -1,0 +1,233 @@
+"""Regression coverage for daily rhythms, week unlocks, and detail failures."""
+
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+
+from app.api.v1 import plans
+from app.api.v1.daily_tasks import _execution_focus_week
+from app.models.plan import PlanItem, PlanItemStatus, PlanItemType
+from app.schemas.plan import DetailsStatus, ItemProgress
+
+
+def _item(
+    item_id: str,
+    item_type: PlanItemType,
+    week: int,
+    *,
+    status: PlanItemStatus = PlanItemStatus.NOT_STARTED,
+    meta_json: dict | None = None,
+) -> PlanItem:
+    now = datetime.now(timezone.utc)
+    return PlanItem(
+        id=item_id,
+        plan_id="plan-1",
+        title=f"Task {item_id}",
+        type=item_type,
+        description="A concrete task description for regression coverage.",
+        week_start=week,
+        week_end=week,
+        success_metric="Completed as specified",
+        estimated_hours=1,
+        status=status,
+        progress_percent=0,
+        meta_json=meta_json,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def test_execution_week_advances_after_week_one_missions_complete() -> None:
+    items = [
+        _item("mission-1", PlanItemType.PROJECT, 1),
+        _item("daily-1", PlanItemType.PRACTICE, 1),
+        _item("mission-2", PlanItemType.READING, 2),
+        _item("daily-2", PlanItemType.HABIT, 2),
+    ]
+
+    assert _execution_focus_week(items, set(), 12) == 1
+    assert _execution_focus_week(items, {"mission-1"}, 12) == 2
+
+
+def test_daily_rhythms_never_gate_execution_week() -> None:
+    items = [
+        _item("mission-1", PlanItemType.PROJECT, 1),
+        _item("practice-1", PlanItemType.PRACTICE, 1),
+        _item("mission-2", PlanItemType.COURSE, 2),
+    ]
+
+    assert _execution_focus_week(items, {"mission-1"}, 12) == 2
+
+
+def test_current_plan_response_hydrates_completion_records() -> None:
+    item = _item("mission-1", PlanItemType.PROJECT, 1)
+
+    response = plans._item_to_response(
+        item,
+        completed_item_ids={"mission-1"},
+    )
+
+    assert response.status.value == "completed"
+    assert response.progressPercent == 100
+
+
+def test_daily_item_never_uses_permanent_completion_state() -> None:
+    item = _item(
+        "daily-1",
+        PlanItemType.PRACTICE,
+        1,
+        status=PlanItemStatus.COMPLETED,
+    )
+
+    response = plans._item_to_response(
+        item,
+        completed_item_ids={"daily-1"},
+    )
+
+    assert response.status.value == "not_started"
+    assert response.progressPercent == 0
+
+
+@pytest.mark.asyncio
+async def test_daily_detail_is_immediate_and_uses_daily_completion() -> None:
+    item = _item(
+        "practice-1",
+        PlanItemType.PRACTICE,
+        1,
+        meta_json={"daily_instructions": "Practice the drill for twenty minutes."},
+    )
+    db = AsyncMock()
+    db.scalar.return_value = 1
+    original_get = plans._get_item_for_user
+    plans._get_item_for_user = AsyncMock(return_value=item)
+    try:
+        response = await plans.get_plan_item_detailed(
+            "practice-1",
+            db,
+            SimpleNamespace(id="user-1"),
+        )
+    finally:
+        plans._get_item_for_user = original_get
+
+    assert response.details_status == DetailsStatus.AVAILABLE
+    assert response.job_id is None
+    assert response.completed_today is True
+    assert response.daily_instructions == "Practice the drill for twenty minutes."
+    db.execute.assert_not_awaited()
+
+
+class _Result:
+    def __init__(self, *, scalars: list | None = None, scalar_one=None):
+        self._scalars = scalars or []
+        self._scalar_one = scalar_one
+
+    def scalars(self):
+        return SimpleNamespace(all=lambda: self._scalars)
+
+    def scalar_one_or_none(self):
+        return self._scalar_one
+
+
+@pytest.mark.asyncio
+async def test_failed_detail_job_is_returned_instead_of_requeued_forever() -> None:
+    item = _item("mission-1", PlanItemType.PROJECT, 1)
+    failed_job = SimpleNamespace(
+        id="job-1",
+        status="failed",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    db = AsyncMock()
+    db.execute.side_effect = [
+        _Result(scalars=[]),
+        _Result(scalar_one=failed_job),
+    ]
+    original_get = plans._get_item_for_user
+    original_progress = plans._compute_item_progress
+    plans._get_item_for_user = AsyncMock(return_value=item)
+    plans._compute_item_progress = AsyncMock(
+        return_value=(ItemProgress(), False)
+    )
+    try:
+        response = await plans.get_plan_item_detailed(
+            "mission-1",
+            db,
+            SimpleNamespace(id="user-1"),
+        )
+    finally:
+        plans._get_item_for_user = original_get
+        plans._compute_item_progress = original_progress
+
+    assert response.details_status == DetailsStatus.FAILED
+    assert response.job_id == "job-1"
+    assert response.details_error
+    assert db.add.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_stale_detail_job_stops_and_requires_explicit_retry() -> None:
+    item = _item("mission-1", PlanItemType.PROJECT, 1)
+    stale_time = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    stale_job = SimpleNamespace(
+        id="job-stale",
+        status="running",
+        step="generating",
+        error_message=None,
+        created_at=stale_time,
+        updated_at=stale_time,
+    )
+    db = AsyncMock()
+    db.execute.side_effect = [
+        _Result(scalars=[]),
+        _Result(scalar_one=stale_job),
+    ]
+    original_get = plans._get_item_for_user
+    original_progress = plans._compute_item_progress
+    plans._get_item_for_user = AsyncMock(return_value=item)
+    plans._compute_item_progress = AsyncMock(
+        return_value=(ItemProgress(), False)
+    )
+    try:
+        response = await plans.get_plan_item_detailed(
+            "mission-1",
+            db,
+            SimpleNamespace(id="user-1"),
+        )
+    finally:
+        plans._get_item_for_user = original_get
+        plans._compute_item_progress = original_progress
+
+    assert response.details_status == DetailsStatus.FAILED
+    assert stale_job.status == "failed"
+    assert db.add.call_count == 0
+    db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_detail_retry_reuses_an_active_job() -> None:
+    item = _item("mission-1", PlanItemType.PROJECT, 1)
+    now = datetime.now(timezone.utc)
+    active_job = SimpleNamespace(
+        id="job-active",
+        status="running",
+        created_at=now,
+        updated_at=now,
+    )
+    db = AsyncMock()
+    db.execute.return_value = _Result(scalar_one=active_job)
+    original_get = plans._get_item_for_user
+    plans._get_item_for_user = AsyncMock(return_value=item)
+    try:
+        response = await plans.regenerate_item_details(
+            "mission-1",
+            db,
+            SimpleNamespace(id="user-1"),
+        )
+    finally:
+        plans._get_item_for_user = original_get
+
+    assert response.job_id == "job-active"
+    assert db.add.call_count == 0
+    db.commit.assert_not_awaited()

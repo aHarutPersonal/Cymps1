@@ -8,28 +8,20 @@ import '../../../auth/controllers/session_controller.dart';
 import '../../data/cmpys_seed.dart';
 import '../../state/cmpys_store.dart';
 import '../../state/cmpys_backend_sync.dart';
-import 'analysis_step.dart';
 import 'discovery_step.dart';
 import 'idol_preview_step.dart';
 import 'intake_step.dart';
+import 'mentor_lab_step.dart';
 import 'personalize_step.dart';
-import 'plan_gen_step.dart';
 
 /// CMPYS post-auth onboarding orchestrator.
 ///
 /// Routes the user through: personalize → discovery → idol preview → idol-led
-/// intake → AI analysis → plan generation → main app.
+/// intake → automatic mentor lab (comparison + blueprint + plan) → main app.
 ///
 /// All sub-screens are local widgets that update a single [CmpysOnboardingDraft]
 /// + selected [CmpysIdol] held in this orchestrator's state.
-enum _OnboardingRoute {
-  personalize,
-  discovery,
-  preview,
-  intake,
-  analysis,
-  planGen,
-}
+enum _OnboardingRoute { personalize, discovery, preview, intake, mentorLab }
 
 class CmpysOnboardingFlow extends ConsumerStatefulWidget {
   const CmpysOnboardingFlow({super.key});
@@ -49,7 +41,9 @@ class _CmpysOnboardingFlowState extends ConsumerState<CmpysOnboardingFlow> {
     // Seed the CMPYS store with the user's onboarding answers, chosen idol,
     // backend session id, and the LLM-generated comparison + blueprint so the
     // main app renders real AI content everywhere.
-    ref.read(cmpysStoreProvider.notifier).completeOnboarding(
+    ref
+        .read(cmpysStoreProvider.notifier)
+        .completeOnboarding(
           name: _draft.name,
           age: _draft.age,
           interests: _draft.interests.toList(),
@@ -115,7 +109,9 @@ class _CmpysOnboardingFlowState extends ConsumerState<CmpysOnboardingFlow> {
         );
       case _OnboardingRoute.discovery:
         return CmpysDiscoveryStep(
-          key: ValueKey('discovery-${_draft.interests.join("|")}-${_draft.goalId}'),
+          key: ValueKey(
+            'discovery-${_draft.interests.join("|")}-${_draft.goalId}',
+          ),
           interests: _draft.interests,
           age: _draft.age,
           goalId: _draft.goalId,
@@ -143,20 +139,12 @@ class _CmpysOnboardingFlowState extends ConsumerState<CmpysOnboardingFlow> {
           key: ValueKey('intake-${idol.id}'),
           idol: idol,
           draft: _draft,
-          onDone: () => setState(() => _route = _OnboardingRoute.analysis),
+          onDone: () => setState(() => _route = _OnboardingRoute.mentorLab),
         );
-      case _OnboardingRoute.analysis:
+      case _OnboardingRoute.mentorLab:
         final idol = _selectedIdol ?? defaultIdol();
-        return CmpysAnalysisStep(
-          key: ValueKey('analysis-${idol.id}'),
-          idol: idol,
-          draft: _draft,
-          onDone: () => setState(() => _route = _OnboardingRoute.planGen),
-        );
-      case _OnboardingRoute.planGen:
-        final idol = _selectedIdol ?? defaultIdol();
-        return CmpysPlanGenStep(
-          key: ValueKey('plangen-${idol.id}'),
+        return CmpysMentorLabStep(
+          key: ValueKey('mentor-lab-${idol.id}'),
           idol: idol,
           draft: _draft,
           onDone: _finish,

@@ -1,6 +1,30 @@
 # CMPYS Implementation Changelog
 
-**Last Updated:** 2026-07-12
+**Last Updated:** 2026-07-13
+
+---
+
+## 2026-07-13: Automatic Post-Interview Mentor Lab
+
+- Replaced the separate comparison reveal and blueprint waiting screens with one automatic Mentor Lab transition immediately after the final interview answer.
+- Staged the plan job as soon as result generation begins, then dispatched it only after comparison and blueprint were persisted so faster UX does not weaken personalization.
+- Made result generation idempotent across comparison, blueprint, and completed phases: retries reuse finished artifacts, completed sessions replay safely, and failed plan work gets a fresh job without repeating successful LLM calls.
+- Added six swipeable product-benefit cards covering interview personalization, mentor evidence, sequential focus, deep lessons, daily rhythm, and observable progress, with live generation status and progress.
+- Entry to the app is enabled only after the real persisted twelve-week plan, comparison, and blueprint are all ready; there is no fixed-delay readiness state.
+- Added regression coverage for staged/one-time plan dispatch, completed-session replay, blueprint-only retry, automatic UI startup, card swiping, and real plan readiness.
+- Verification: 340 database-independent backend tests and 119 Flutter tests passed, along with Ruff, Python compilation, Flutter analysis, diff validation, and a release-mode web build. The existing migration integration test still requires a running local PostgreSQL instance; this feature adds no migration.
+
+---
+
+## 2026-07-13: Plan Detail, Daily Rhythm & Week Progression Repair
+
+- Stopped infinite plan-item polling: failed or stale lesson jobs now become a visible terminal state with an explicit, idempotent retry instead of being silently requeued forever.
+- Made habit/practice details instant and daily-aware; daily rhythms no longer trigger long-form lesson generation or become permanently completed plan items.
+- Classified both `habit` and `practice` as daily rhythms throughout Flutter and excluded them from mission-detail pre-generation.
+- Changed Today/Daily Focus from calendar-age weeks to the first week with unfinished mission work, matching sequential plan progression.
+- Hydrated `/plans/current` from authoritative completion records and synchronized item status/progress on item and lesson completion, so finishing Week 1 unlocks Week 2 immediately.
+- Tightened the mission lesson availability gate to require all three complete 1,200+ word lessons.
+- Verification: 335 database-independent backend tests, 117 Flutter tests, Ruff, Python compilation, Flutter analysis, diff validation, and a release-mode web build passed. The database migration integration test could not run because local PostgreSQL was unavailable; this change adds no migration.
 
 ---
 

@@ -73,7 +73,7 @@ void main() {
         {
           'id': 'i2',
           'title': '30 minutes of deliberate practice',
-          'type': 'habit',
+          'type': 'practice',
           'description': 'Every day.',
           'weekStart': 1,
           'weekEnd': 1,
@@ -101,6 +101,7 @@ void main() {
     expect(plan.currentWeek(), 1);
     expect(plan.missionsForWeek(1).map((i) => i.id), ['i1']);
     expect(plan.dailyRhythmForWeek(1).map((i) => i.id), ['i2']);
+    expect(plan.items[1].isDailyRhythm, isTrue);
     expect(plan.missionsForWeek(2).map((i) => i.id), ['i3']);
     expect(plan.dailyRhythmForWeek(2), isEmpty);
     expect(plan.items.first.isCompleted, isTrue);
@@ -110,6 +111,29 @@ void main() {
     expect(plan.isWeekUnlocked(3), isFalse);
     expect(plan.focusedItemForWeek(2)?.id, 'i3');
     expect(plan.allMissionWorkComplete, isFalse);
+  });
+
+  test('PlanItemDetailed parses failed and daily states', () {
+    final failed = PlanItemDetailed.fromJson({
+      'item': {'id': 'mission-1', 'title': 'Build the prototype'},
+      'details_status': 'failed',
+      'details_error': 'Generate it again.',
+      'progress': const <String, dynamic>{},
+    });
+    expect(failed.detailsFailed, isTrue);
+    expect(failed.detailsLoading, isFalse);
+    expect(failed.detailsError, 'Generate it again.');
+
+    final daily = PlanItemDetailed.fromJson({
+      'item': {'id': 'daily-1', 'title': 'Practice', 'type': 'practice'},
+      'details_status': 'available',
+      'daily_instructions': 'Run the drill once.',
+      'completed_today': true,
+      'progress': const <String, dynamic>{},
+    });
+    expect(daily.item.isDailyRhythm, isTrue);
+    expect(daily.dailyInstructions, 'Run the drill once.');
+    expect(daily.completedToday, isTrue);
   });
 
   test('PlanMaterialDetail extracts YouTube ids and in-app content', () {

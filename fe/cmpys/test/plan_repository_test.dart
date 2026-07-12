@@ -27,6 +27,16 @@ void main() {
     expect(client.requestedQuery, const {'canonicalKey': 'book:author:title'});
     expect(id, 'resource-123');
   });
+
+  test('regeneratePlanItemDetails uses the explicit retry endpoint', () async {
+    final client = _RecordingDioClient();
+    final repository = PlanRepository(dioClient: client);
+
+    final jobId = await repository.regeneratePlanItemDetails('item-123');
+
+    expect(client.requestedPath, '/plan-items/item-123/regenerate-details');
+    expect(jobId, 'detail-job-123');
+  });
 }
 
 class _RecordingDioClient extends DioClient {
@@ -64,6 +74,22 @@ class _RecordingDioClient extends DioClient {
                 'progressPercent': 20,
               }
               as T,
+      requestOptions: RequestOptions(path: path),
+    );
+  }
+
+  @override
+  Future<Response<T>> post<T>(
+    String path, {
+    dynamic data,
+    Map<String, dynamic>? queryParameters,
+    Options? options,
+    bool skipAuth = false,
+  }) async {
+    requestedPath = path;
+    requestedQuery = queryParameters;
+    return Response<T>(
+      data: <String, dynamic>{'job_id': 'detail-job-123'} as T,
       requestOptions: RequestOptions(path: path),
     );
   }

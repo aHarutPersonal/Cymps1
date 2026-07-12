@@ -41,6 +41,17 @@ class PlanRepository {
     return PlanItemDetailed.fromJson(response.data as Map<String, dynamic>);
   }
 
+  /// Explicitly retry a mission lesson after the backend reports generation
+  /// failure. Failed jobs are not auto-requeued on every poll, preventing an
+  /// endless loading/cost loop.
+  Future<String> regeneratePlanItemDetails(String itemId) async {
+    final response = await _dioClient.post(
+      '/plan-items/$itemId/regenerate-details',
+    );
+    final data = response.data as Map<String, dynamic>;
+    return (data['job_id'] ?? data['jobId'])?.toString() ?? '';
+  }
+
   /// Resolve a deferred canonical resource after background generation.
   /// Returns null while its quality-gated module is still being prepared.
   Future<String?> resolveContentResourceId(String canonicalKey) async {

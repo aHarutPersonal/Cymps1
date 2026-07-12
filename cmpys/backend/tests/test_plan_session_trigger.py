@@ -91,6 +91,15 @@ class TestPlanJobRecovery:
 
         assert _detail_job_is_stale(job, now=now) is False
 
+    def test_recent_detail_progress_keeps_an_older_job_active(self):
+        now = datetime(2026, 7, 11, tzinfo=timezone.utc)
+        job = SimpleNamespace(
+            created_at=now - timedelta(minutes=20),
+            updated_at=now - timedelta(seconds=30),
+        )
+
+        assert _detail_job_is_stale(job, now=now) is False
+
 
 class TestLoadSessionContext:
     @pytest.mark.asyncio

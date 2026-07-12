@@ -189,6 +189,12 @@ class PlanItemDetailedResponse(BaseModel):
     # Details generation status
     details_status: DetailsStatus = DetailsStatus.AVAILABLE
     job_id: str | None = None
+    details_error: str | None = None
+    # Daily rhythms are tracked per calendar day, not as permanently completed
+    # plan items. These fields let the same detail route render them instantly
+    # without sending a habit/practice through long-form lesson generation.
+    daily_instructions: str | None = None
+    completed_today: bool | None = None
 
 
 class ToggleCompleteResponse(BaseModel):

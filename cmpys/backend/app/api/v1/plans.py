@@ -21,6 +21,7 @@ from sqlalchemy.orm import selectinload
 from app.api.dependencies import get_current_user
 from app.core.db import get_db
 from app.models.intake import IntakeSession
+from app.models.daily_task_completion import DailyTaskCompletion
 from app.models.item_detail_job import PlanItemDetailJob
 from app.models.idol import Idol
 from app.models.plan import (
@@ -62,8 +63,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/plans", tags=["plans"])
 
 MISSION_TYPES = {PlanItemType.PROJECT, PlanItemType.COURSE, PlanItemType.READING}
+DAILY_TYPES = {PlanItemType.HABIT, PlanItemType.PRACTICE}
 PLAN_JOB_STALE_AFTER = timedelta(minutes=15)
-DETAIL_JOB_STALE_AFTER = timedelta(minutes=15)
+DETAIL_JOB_STALE_AFTER = timedelta(minutes=5)
 
 
 def _plan_job_is_stale(
@@ -78,7 +80,7 @@ def _plan_job_is_stale(
     worker restart, or an onboarding request that persisted the job but lost
     the task message.
     """
-    last_update = job.updated_at or job.created_at
+    last_update = getattr(job, "updated_at", None) or job.created_at
     if last_update is None:
         return True
     if last_update.tzinfo is None:
@@ -91,12 +93,12 @@ def _detail_job_is_stale(
     *,
     now: datetime | None = None,
 ) -> bool:
-    created_at = job.created_at
-    if created_at is None:
+    last_update = getattr(job, "updated_at", None) or job.created_at
+    if last_update is None:
         return True
-    if created_at.tzinfo is None:
-        created_at = created_at.replace(tzinfo=timezone.utc)
-    return (now or datetime.now(timezone.utc)) - created_at >= DETAIL_JOB_STALE_AFTER
+    if last_update.tzinfo is None:
+        last_update = last_update.replace(tzinfo=timezone.utc)
+    return (now or datetime.now(timezone.utc)) - last_update >= DETAIL_JOB_STALE_AFTER
 
 
 def _count_remaining_missions(items, completed_item_ids: set[str]) -> int:
@@ -119,8 +121,18 @@ def _should_clear_completed_at(completed_at_set: bool, next_cycle_exists: bool) 
     return completed_at_set and not next_cycle_exists
 
 
-def _item_to_response(item: PlanItem) -> PlanItemResponse:
+def _item_to_response(
+    item: PlanItem,
+    *,
+    completed_item_ids: set[str] | None = None,
+) -> PlanItemResponse:
     """Convert plan item model to response."""
+    completed_from_record = (
+        item.type not in DAILY_TYPES
+        and completed_item_ids is not None
+        and str(item.id) in completed_item_ids
+    )
+    is_daily = item.type in DAILY_TYPES
     return PlanItemResponse(
         id=item.id,
         planId=item.plan_id,
@@ -131,8 +143,16 @@ def _item_to_response(item: PlanItem) -> PlanItemResponse:
         weekEnd=item.week_end,
         successMetric=item.success_metric,
         estimatedHours=item.estimated_hours,
-        status=item.status,
-        progressPercent=item.progress_percent,
+        status=(
+            PlanItemStatus.NOT_STARTED
+            if is_daily
+            else PlanItemStatus.COMPLETED
+            if completed_from_record
+            else item.status
+        ),
+        progressPercent=(
+            0 if is_daily else 100 if completed_from_record else item.progress_percent
+        ),
         notes=item.notes,
         resourceTitle=item.resource_title,
         resourceUrl=item.resource_url,
@@ -141,10 +161,18 @@ def _item_to_response(item: PlanItem) -> PlanItemResponse:
     )
 
 
-def _plan_to_response(plan: Plan, idol_name: str | None = None) -> PlanResponse:
+def _plan_to_response(
+    plan: Plan,
+    idol_name: str | None = None,
+    *,
+    completed_item_ids: set[str] | None = None,
+) -> PlanResponse:
     """Convert plan model to response."""
-    items = [_item_to_response(i) for i in plan.items]
-    completed = sum(1 for i in plan.items if i.status == PlanItemStatus.COMPLETED)
+    items = [
+        _item_to_response(i, completed_item_ids=completed_item_ids)
+        for i in plan.items
+    ]
+    completed = sum(1 for item in items if item.status == PlanItemStatus.COMPLETED)
     total = len(plan.items)
     
     # Extract roadmap data from JSONB
@@ -185,12 +213,15 @@ async def _enqueue_week1_details_generation(plan: Plan, user_id: str) -> None:
     # Get Week 1 items, sorted by week_start then by creation order
     week1_items = [
         item for item in plan.items
-        if item.week_start == 1
+        if item.week_start == 1 and item.type in MISSION_TYPES
     ]
     
     # If no week 1 items, take the first N items regardless of week
     if not week1_items:
-        week1_items = sorted(plan.items, key=lambda x: (x.week_start, x.id))
+        week1_items = sorted(
+            (item for item in plan.items if item.type in MISSION_TYPES),
+            key=lambda x: (x.week_start, x.id),
+        )
     
     # Limit to MAX_PREGENERATE_ITEMS
     items_to_generate = week1_items[:MAX_PREGENERATE_ITEMS]
@@ -353,9 +384,27 @@ async def get_current_plan(
     
     if not plan:
         return None
-    
+
+    item_ids = [str(item.id) for item in plan.items]
+    completed_item_ids: set[str] = set()
+    if item_ids:
+        completion_result = await db.execute(
+            select(PlanItemCompletion.plan_item_id).where(
+                PlanItemCompletion.user_id == current_user.id,
+                PlanItemCompletion.plan_item_id.in_(item_ids),
+                PlanItemCompletion.completed_at.isnot(None),
+            )
+        )
+        completed_item_ids = {
+            str(item_id) for item_id in completion_result.scalars().all()
+        }
+
     idol_name = plan.idol.name if plan.idol else None
-    return _plan_to_response(plan, idol_name)
+    return _plan_to_response(
+        plan,
+        idol_name,
+        completed_item_ids=completed_item_ids,
+    )
 
 @router.post("/{plan_id}/items", response_model=PlanItemResponse, status_code=status.HTTP_201_CREATED)
 async def create_plan_item(
@@ -651,14 +700,24 @@ def _lesson_details_meet_quality(details_json: dict | None) -> bool:
     """Treat legacy short lessons as missing so they are upgraded on open."""
     if not details_json:
         return False
-    lessons = [
-        str(step.get("lesson_content") or "")
-        for step in details_json.get("steps", [])
-        if step.get("lesson_content")
-    ]
-    return not lessons or all(
-        len(lesson.split()) >= MIN_PLAN_DETAIL_LESSON_WORDS for lesson in lessons
+    steps = details_json.get("steps", [])
+    if len(steps) != 3:
+        return False
+    lessons = [str(step.get("lesson_content") or "") for step in steps]
+    return all(
+        lesson.strip() and len(lesson.split()) >= MIN_PLAN_DETAIL_LESSON_WORDS
+        for lesson in lessons
     )
+
+
+def _daily_instructions_for_plan_item(item: PlanItem) -> str | None:
+    """Read the generated daily script without requiring lesson generation."""
+    for payload in (item.meta_json, item.details_json):
+        if isinstance(payload, dict):
+            value = payload.get("daily_instructions")
+            if value and str(value).strip():
+                return str(value).strip()
+    return None
 
 
 @items_router.get("/{item_id}/detailed", response_model=PlanItemDetailedResponse)
@@ -675,6 +734,31 @@ async def get_plan_item_detailed(
     LLM USAGE: INDIRECT (may enqueue Celery task if details missing)
     """
     item = await _get_item_for_user(db, item_id, current_user.id)
+
+    # Habits and practices are lightweight daily rhythms. They reset every
+    # day and must never wait for (or pay for) a three-lesson mission module.
+    if item.type in DAILY_TYPES:
+        completed_today = await db.scalar(
+            select(func.count())
+            .select_from(DailyTaskCompletion)
+            .where(
+                DailyTaskCompletion.user_id == current_user.id,
+                DailyTaskCompletion.plan_item_id == item.id,
+                DailyTaskCompletion.completed_date == datetime.now(timezone.utc).date(),
+            )
+        )
+        return PlanItemDetailedResponse(
+            item=_item_to_response(item),
+            details=None,
+            progress=ItemProgress(),
+            completed=False,
+            completed_step_ids=[],
+            details_status=DetailsStatus.AVAILABLE,
+            job_id=None,
+            daily_instructions=_daily_instructions_for_plan_item(item),
+            completed_today=bool(completed_today),
+        )
+
     progress, is_completed = await _compute_item_progress(db, current_user.id, item)
     completed_steps_result = await db.execute(
         select(PlanItemStepCompletion.step_id).where(
@@ -701,48 +785,46 @@ async def get_plan_item_detailed(
             job_id=None,
         )
     
-    # No details (or legacy thin details) - check for an active upgrade job.
-    active_job_stmt = (
+    # No details (or legacy thin details) - inspect the latest generation job.
+    # Failed/invalid jobs are surfaced to the client so it can offer one
+    # explicit retry; silently creating a new job on every poll caused an
+    # unbounded loading loop when generation repeatedly failed.
+    latest_job_stmt = (
         select(PlanItemDetailJob)
         .where(
             and_(
                 PlanItemDetailJob.plan_item_id == item_id,
                 PlanItemDetailJob.user_id == current_user.id,
-                PlanItemDetailJob.status.in_(["queued", "running", "pending"]),
             )
         )
         .order_by(PlanItemDetailJob.created_at.desc())
         .limit(1)
     )
-    result = await db.execute(active_job_stmt)
+    result = await db.execute(latest_job_stmt)
     existing_job = result.scalar_one_or_none()
     
-    if existing_job:
+    if existing_job and existing_job.status in {"queued", "running", "pending"}:
         if _detail_job_is_stale(existing_job):
-            from app.tasks.plans import regenerate_plan_item_details
-
-            stale_job = existing_job
-            stale_job.status = "failed"
-            stale_job.step = "error"
-            stale_job.error_message = "Generation worker stopped before completion"
-            existing_job = PlanItemDetailJob(
-                plan_item_id=item_id,
-                user_id=current_user.id,
-                status="queued",
-                step="loading_context",
-                progress_percent=0,
-            )
-            db.add(existing_job)
+            existing_job.status = "failed"
+            existing_job.step = "error"
+            existing_job.error_message = "Generation worker stopped before completion"
             await db.commit()
-            await db.refresh(existing_job)
-            regenerate_plan_item_details.apply_async(
-                args=[str(existing_job.id)], queue="high_priority"
-            )
             logger.warning(
-                "[PLAN_ITEM] Replaced stale detail job item_id=%s old_job_id=%s new_job_id=%s",
+                "[PLAN_ITEM] Stopped stale detail job item_id=%s job_id=%s",
                 item_id,
-                stale_job.id,
                 existing_job.id,
+            )
+            return PlanItemDetailedResponse(
+                item=_item_to_response(item),
+                details=None,
+                progress=progress,
+                completed=is_completed,
+                completed_step_ids=completed_step_ids,
+                details_status=DetailsStatus.FAILED,
+                job_id=existing_job.id,
+                details_error=(
+                    "Lesson preparation stopped before it finished. Generate it again to retry."
+                ),
             )
         logger.info(f"[PLAN_ITEM] Active job already exists for item_id={item_id}, job_id={existing_job.id}")
         return PlanItemDetailedResponse(
@@ -751,8 +833,32 @@ async def get_plan_item_detailed(
             progress=progress,
             completed=is_completed,
             completed_step_ids=completed_step_ids,
-            details_status=DetailsStatus.PENDING,
+            details_status=(
+                DetailsStatus.GENERATING
+                if existing_job.status == "running"
+                else DetailsStatus.PENDING
+            ),
             job_id=existing_job.id,
+        )
+
+    if existing_job and existing_job.status in {"failed", "completed"}:
+        logger.warning(
+            "[PLAN_ITEM] Latest detail job has no usable lesson item_id=%s job_id=%s status=%s",
+            item_id,
+            existing_job.id,
+            existing_job.status,
+        )
+        return PlanItemDetailedResponse(
+            item=_item_to_response(item),
+            details=None,
+            progress=progress,
+            completed=is_completed,
+            completed_step_ids=completed_step_ids,
+            details_status=DetailsStatus.FAILED,
+            job_id=existing_job.id,
+            details_error=(
+                "This lesson could not be prepared. Generate it again to retry."
+            ),
         )
 
     # No details and no active job - enqueue generation job
@@ -818,6 +924,12 @@ async def toggle_item_complete(
         # Currently complete -> uncomplete
         completion.completed_at = None
         new_completed = False
+        item.status = (
+            PlanItemStatus.IN_PROGRESS
+            if item.details_json and item.details_json.get("steps")
+            else PlanItemStatus.NOT_STARTED
+        )
+        item.progress_percent = min(item.progress_percent, 99)
     else:
         if completion:
             # Exists but not completed -> mark complete
@@ -832,6 +944,8 @@ async def toggle_item_complete(
             db.add(completion)
         
         new_completed = True
+        item.status = PlanItemStatus.COMPLETED
+        item.progress_percent = 100
         
         # If marking complete AND details exist, also mark all steps complete
         if item.details_json and "steps" in item.details_json:
@@ -1041,9 +1155,21 @@ async def toggle_step_complete(
                 completed_at=now,
             )
             db.add(item_completion)
-        
+
+        item.status = PlanItemStatus.COMPLETED
+        item.progress_percent = 100
         await db.commit()
         is_item_completed = True
+    else:
+        item.status = (
+            PlanItemStatus.COMPLETED
+            if is_item_completed
+            else PlanItemStatus.IN_PROGRESS
+            if progress.completed_steps > 0
+            else PlanItemStatus.NOT_STARTED
+        )
+        item.progress_percent = int(round(progress.percent))
+        await db.commit()
     
     return ToggleStepResponse(
         step_id=step_id,
@@ -1066,7 +1192,33 @@ async def regenerate_item_details(
     
     Returns job_id to poll for completion.
     """
-    await _get_item_for_user(db, item_id, current_user.id)
+    item = await _get_item_for_user(db, item_id, current_user.id)
+    if item.type in DAILY_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Daily rhythms do not require lesson generation",
+        )
+
+    # Make retries idempotent. A double tap or transport retry should observe
+    # the same active job instead of charging for two long-form generations.
+    active_result = await db.execute(
+        select(PlanItemDetailJob)
+        .where(
+            PlanItemDetailJob.plan_item_id == item_id,
+            PlanItemDetailJob.user_id == current_user.id,
+            PlanItemDetailJob.status.in_(["queued", "running", "pending"]),
+        )
+        .order_by(PlanItemDetailJob.created_at.desc())
+        .limit(1)
+    )
+    active_job = active_result.scalar_one_or_none()
+    if active_job and not _detail_job_is_stale(active_job):
+        return RegenerateDetailsResponse(job_id=active_job.id)
+    if active_job:
+        active_job.status = "failed"
+        active_job.step = "error"
+        active_job.error_message = "Generation worker stopped before completion"
+        await db.commit()
     
     # Create job
     job = PlanItemDetailJob(

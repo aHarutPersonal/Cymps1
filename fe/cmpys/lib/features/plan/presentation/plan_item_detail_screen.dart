@@ -40,6 +40,7 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
   PlanItemDetailed? _detailed;
   String? _error;
   bool _toggling = false;
+  bool _retrying = false;
   Timer? _poll;
 
   @override
@@ -65,9 +66,9 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
         _detailed = detailed;
         _error = null;
       });
-      if (!detailed.detailsReady) {
+      if (detailed.detailsLoading) {
         // Worker is still writing the lesson — re-fetch until it lands.
-        _poll = Timer.periodic(const Duration(seconds: 4), (_) => _load());
+        _poll = Timer(const Duration(seconds: 4), _load);
       }
     } catch (e) {
       debugPrint('⚠️ plan item detail load failed (${widget.itemId}): $e');
@@ -75,8 +76,8 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
       // A failed background poll must not replace already-loaded content —
       // keep the screen and retry on the next tick.
       if (_detailed != null) {
-        if (!_detailed!.detailsReady) {
-          _poll = Timer.periodic(const Duration(seconds: 4), (_) => _load());
+        if (_detailed!.detailsLoading) {
+          _poll = Timer(const Duration(seconds: 4), _load);
         }
         return;
       }
@@ -92,6 +93,10 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
   Future<void> _toggleComplete() async {
     final detailed = _detailed;
     if (detailed == null || _toggling) return;
+    if (detailed.item.isDailyRhythm) {
+      await _toggleDaily();
+      return;
+    }
     setState(() => _toggling = true);
     try {
       final result = await ref
@@ -142,6 +147,61 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
       }
     } finally {
       if (mounted) setState(() => _toggling = false);
+    }
+  }
+
+  Future<void> _toggleDaily() async {
+    final detailed = _detailed;
+    if (detailed == null || _toggling) return;
+    setState(() => _toggling = true);
+    try {
+      final completed = await ref
+          .read(planRepositoryProvider)
+          .toggleDailyTask(detailed.item.id);
+      if (!mounted) return;
+      await _load();
+      ref.invalidate(todayViewProvider);
+      if (!mounted) return;
+      showCmpysToast(
+        context,
+        completed ? 'Daily rhythm complete.' : 'Daily rhythm reopened.',
+        icon: completed ? Icons.check_rounded : Icons.undo_rounded,
+        tone: completed ? AppColors.green : AppColors.ink2,
+      );
+    } catch (_) {
+      if (mounted) {
+        showCmpysToast(
+          context,
+          'Couldn’t update today’s rhythm — try again.',
+          icon: Icons.error_outline_rounded,
+          tone: AppColors.ink2,
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _toggling = false);
+    }
+  }
+
+  Future<void> _retryDetails() async {
+    final detailed = _detailed;
+    if (detailed == null || _retrying) return;
+    setState(() => _retrying = true);
+    try {
+      await ref
+          .read(planRepositoryProvider)
+          .regeneratePlanItemDetails(detailed.item.id);
+      await _load();
+    } catch (_) {
+      if (mounted) {
+        showCmpysToast(
+          context,
+          'Couldn’t restart this lesson — try again.',
+          icon: Icons.error_outline_rounded,
+          tone: AppColors.danger,
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _retrying = false);
     }
   }
 
@@ -204,6 +264,7 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
 
   Widget _content(PlanItemDetailed d) {
     final item = d.item;
+    final done = item.isDailyRhythm ? d.completedToday : d.completed;
     return ListView(
       padding: EdgeInsets.fromLTRB(
         22,
@@ -233,7 +294,7 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
             _chip(_typeMeta(item.type).icon, _typeMeta(item.type).label),
             const SizedBox(width: 8),
             _chip(PhosphorIconsRegular.clock, '~${item.estimatedHours}h'),
-            if (d.completed) ...[
+            if (done) ...[
               const SizedBox(width: 8),
               _chip(Icons.check_rounded, 'Done', tone: AppColors.green),
             ],
@@ -273,8 +334,10 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
           ),
         ],
         const SizedBox(height: 26),
-        if (!d.detailsReady)
-          _generatingCard()
+        if (item.isDailyRhythm)
+          _dailyRhythmCard(d)
+        else if (!d.detailsReady)
+          _generatingCard(d)
         else ...[
           if (d.steps.isNotEmpty) ...[
             Row(
@@ -315,7 +378,27 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
           ],
         ],
         const SizedBox(height: 18),
-        if (d.steps.isEmpty)
+        if (item.isDailyRhythm)
+          CmpysButton(
+            variant: d.completedToday
+                ? CmpysBtnVariant.dark
+                : CmpysBtnVariant.primary,
+            size: CmpysBtnSize.lg,
+            full: true,
+            disabled: _toggling,
+            leadingIcon: d.completedToday
+                ? Icons.undo_rounded
+                : Icons.check_rounded,
+            onTap: _toggleDaily,
+            child: Text(
+              d.completedToday
+                  ? 'Mark as not done today'
+                  : 'Complete for today',
+            ),
+          )
+        else if (!d.detailsReady)
+          const SizedBox.shrink()
+        else if (d.steps.isEmpty)
           CmpysButton(
             variant: d.completed
                 ? CmpysBtnVariant.dark
@@ -374,7 +457,84 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
     );
   }
 
-  Widget _generatingCard() {
+  Widget _dailyRhythmCard(PlanItemDetailed detailed) {
+    final instructions = detailed.dailyInstructions?.trim();
+    return CmpysCardSurface(
+      color: AppColors.greenSoft,
+      border: false,
+      pad: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                PhosphorIconsRegular.repeat,
+                size: 19,
+                color: AppColors.green2,
+              ),
+              const SizedBox(width: 9),
+              Text(
+                'TODAY’S RHYTHM',
+                style: AppTypography.kicker.copyWith(color: AppColors.green2),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            instructions == null || instructions.isEmpty
+                ? detailed.item.description
+                : instructions,
+            style: AppTypography.body.copyWith(fontSize: 14, height: 1.5),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            'This resets each day and never blocks the next week.',
+            style: AppTypography.caption.copyWith(
+              color: AppColors.ink3,
+              fontSize: 12.5,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _generatingCard(PlanItemDetailed detailed) {
+    if (detailed.detailsFailed) {
+      return CmpysCardSurface(
+        pad: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Icon(
+              Icons.error_outline_rounded,
+              size: 24,
+              color: AppColors.ochre2,
+            ),
+            const SizedBox(height: 10),
+            Text(
+              detailed.detailsError ??
+                  'This lesson could not be prepared. Please try again.',
+              style: AppTypography.body.copyWith(
+                fontSize: 13.5,
+                color: AppColors.ink2,
+                height: 1.45,
+              ),
+            ),
+            const SizedBox(height: 14),
+            CmpysButton(
+              variant: CmpysBtnVariant.primary,
+              size: CmpysBtnSize.md,
+              leadingIcon: Icons.refresh_rounded,
+              disabled: _retrying,
+              onTap: _retryDetails,
+              child: Text(_retrying ? 'Restarting…' : 'Generate again'),
+            ),
+          ],
+        ),
+      );
+    }
     return CmpysCardSurface(
       pad: const EdgeInsets.all(18),
       child: Row(

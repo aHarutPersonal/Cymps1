@@ -12,6 +12,7 @@ Future<void> streamGenerateResults({
   required AgenticSessionRepository repo,
   required String sessionId,
   void Function(String status)? onStatus,
+  void Function(String section)? onSection,
   void Function(String accumulated)? onComparison,
   void Function(String accumulated)? onBlueprint,
   void Function(String jobId)? onPlanJob,
@@ -39,6 +40,7 @@ Future<void> streamGenerateResults({
             blueprint.flush();
           }
           section = nextSection;
+          if (section.isNotEmpty) onSection?.call(section);
           break;
         case 'chunk':
           final content = ev['content'] as String? ?? '';

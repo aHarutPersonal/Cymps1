@@ -15,7 +15,7 @@ import json as json_lib
 import logging
 import re
 import uuid
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -1148,6 +1148,101 @@ async def interview(
 # =============================================================================
 
 
+async def _get_or_create_session_plan_job(
+    db,
+    *,
+    session: IntakeSession,
+    user_id: str,
+    weekly_hours: int,
+) -> PlanGenerationJob | None:
+    """Create the staged plan job as soon as result generation begins.
+
+    The job remains at ``waiting_for_strategy`` until comparison + blueprint
+    are persisted. This makes the post-interview pipeline immediate and
+    observable without sacrificing plan quality by generating before its
+    strategic inputs exist. Replays reuse active/completed work; a failed job
+    gets one fresh row when the user explicitly retries the pipeline.
+    """
+    if not session.idol_id:
+        return None
+
+    existing = (
+        await db.execute(
+            select(PlanGenerationJob)
+            .where(
+                PlanGenerationJob.user_id == user_id,
+                PlanGenerationJob.idol_id == session.idol_id,
+                PlanGenerationJob.session_id == session.id,
+                PlanGenerationJob.status.in_(["pending", "running", "completed"]),
+            )
+            .order_by(PlanGenerationJob.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if existing:
+        if existing.status in {"pending", "running"}:
+            last_update = getattr(existing, "updated_at", None) or getattr(
+                existing, "created_at", None
+            )
+            if last_update is not None:
+                if last_update.tzinfo is None:
+                    last_update = last_update.replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) - last_update >= timedelta(minutes=15):
+                    existing.status = "failed"
+                    existing.step = "error"
+                    existing.error_message = "Generation worker stopped before completion"
+                    await db.commit()
+                    existing = None
+
+    if existing:
+        if existing.status == "pending" and existing.step == "waiting_for_strategy":
+            existing.weekly_hours = weekly_hours
+            await db.commit()
+        return existing
+
+    job = PlanGenerationJob(
+        user_id=user_id,
+        idol_id=session.idol_id,
+        session_id=session.id,
+        target_age=session.user_age or 24,
+        duration_weeks=12,
+        weekly_hours=weekly_hours,
+        status="pending",
+        progress_percent=0,
+        step="waiting_for_strategy",
+    )
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+    return job
+
+
+async def _dispatch_session_plan_job(db, job: PlanGenerationJob | None) -> None:
+    """Publish a staged plan job once its comparison/blueprint inputs exist."""
+    if job is None or job.status in {"running", "completed"}:
+        return
+    if job.status == "pending" and job.step != "waiting_for_strategy":
+        # Already published; Celery has not moved it to running yet.
+        return
+
+    job.status = "pending"
+    job.step = "analyzing_gaps"
+    job.progress_percent = 0
+    job.error_message = None
+    await db.commit()
+
+    try:
+        from app.tasks.plans import run_plan_generation
+
+        run_plan_generation.delay(str(job.id))
+    except Exception as exc:
+        job.status = "failed"
+        job.step = "error"
+        job.error_message = "Plan generation could not be queued"
+        await db.commit()
+        raise exc
+
+
 @router.post("/{session_id}/generate-results")
 async def generate_results(
     session_id: str,
@@ -1155,24 +1250,28 @@ async def generate_results(
     current_user: Annotated[User, Depends(get_current_user)],
 ):
     """
-    Generate the brutal comparison and quarterly blueprint (SSE stream).
+    Run the automatic post-interview strategy pipeline (SSE stream).
 
-    Streams two sections sequentially:
-    1. Comparison (Phase 4) - emotionally intense reality check
-    2. Blueprint (Phase 5) - actionable Q1-Q4 roadmap
+    Streams comparison and strategic blueprint sequentially, then dispatches
+    the staged 12-week execution plan. The order preserves plan quality while
+    the client presents useful mentor-learning cards instead of a wait screen.
     """
     session = await _get_session(session_id, current_user.id, db)
-    # Allow retry from COMPARISON or BLUEPRINT phase (blueprint may have failed)
-    if session.phase not in (SessionPhase.COMPARISON, SessionPhase.BLUEPRINT):
+    # Idempotent from every post-interview phase. BLUEPRINT resumes without
+    # regenerating a successful comparison; COMPLETED replays cached artifacts
+    # and recovers/returns the plan job after a dropped client connection.
+    if session.phase not in (
+        SessionPhase.COMPARISON,
+        SessionPhase.BLUEPRINT,
+        SessionPhase.COMPLETED,
+    ):
         raise HTTPException(
             status_code=409,
-            detail=f"Session is in phase '{session.phase.value}', expected 'comparison' or 'blueprint'",
+            detail=(
+                f"Session is in phase '{session.phase.value}', expected "
+                "'comparison', 'blueprint', or 'completed'"
+            ),
         )
-    # If in BLUEPRINT phase (retry scenario), reset blueprint output
-    if session.phase == SessionPhase.BLUEPRINT:
-        session.blueprint_output = None
-        session.transition_to(SessionPhase.COMPARISON)
-        await db.commit()
 
     if not session.interview_thread_id:
         raise HTTPException(status_code=400, detail="No interview thread")
@@ -1210,44 +1309,72 @@ async def generate_results(
     # to "your persona (in the system prompt)" — so it must be the full pack.
     persona_system = _render_persona_system(idol_name, idol_persona)
 
+    # Stage the plan job immediately. It is intentionally not published to a
+    # worker until comparison + blueprint are ready, because those artifacts
+    # are required inputs to the quality contract.
+    plan_job = await _get_or_create_session_plan_job(
+        db,
+        session=session,
+        user_id=current_user.id,
+        weekly_hours=weekly_hours,
+    )
+
     # Everything needed by the generator is now materialized in memory.
     # Release the connection while the two long model streams are running;
     # later persistence calls transparently acquire it again.
     await db.commit()
 
     async def generate_stream():
+        if plan_job is not None:
+            yield f"data: {json_lib.dumps({'type': 'plan_job', 'job_id': str(plan_job.id)})}\n\n"
+
         # =====================================================================
-        # Part 1: Brutal Comparison (Phase 4)
+        # Part 1: Comparison — generate once, then replay on retry/resume.
         # =====================================================================
+        scores_task = None
+        full_comparison = session.comparison_output or ""
         yield f"data: {json_lib.dumps({'type': 'section', 'section': 'comparison'})}\n\n"
 
-        comparison_prompt = load_and_render("comparison_generate.txt", {
-            "idol_name": idol_name,
-            "user_age": str(session.user_age),
-            "user_profile_json": json_lib.dumps(user_profile),
-            "interview_transcript_json": interview_transcript,
-            "idol_facts_json": json_lib.dumps(session.idol_facts_json or {}),
-        })
+        if full_comparison:
+            yield f"data: {json_lib.dumps({'type': 'chunk', 'section': 'comparison', 'content': full_comparison})}\n\n"
+        else:
+            if session.phase == SessionPhase.BLUEPRINT:
+                # Repair the only inconsistent recoverable state: blueprint
+                # phase without its prerequisite comparison artifact.
+                session.transition_to(SessionPhase.COMPARISON)
+                await db.commit()
 
-        full_comparison = ""
-        try:
-            async for chunk in comparison_stream(
-                system_prompt=persona_system,
-                user_message=comparison_prompt,
-            ):
-                full_comparison += chunk
-                yield f"data: {json_lib.dumps({'type': 'chunk', 'section': 'comparison', 'content': chunk})}\n\n"
+            comparison_prompt = load_and_render("comparison_generate.txt", {
+                "idol_name": idol_name,
+                "user_age": str(session.user_age),
+                "user_profile_json": json_lib.dumps(user_profile),
+                "interview_transcript_json": interview_transcript,
+                "idol_facts_json": json_lib.dumps(session.idol_facts_json or {}),
+            })
+            try:
+                async for chunk in comparison_stream(
+                    system_prompt=persona_system,
+                    user_message=comparison_prompt,
+                ):
+                    full_comparison += chunk
+                    yield f"data: {json_lib.dumps({'type': 'chunk', 'section': 'comparison', 'content': chunk})}\n\n"
 
-            # Persist comparison output
-            session.comparison_output = full_comparison
-            session.transition_to(SessionPhase.BLUEPRINT)
-            await db.commit()
+                session.comparison_output = full_comparison
+                if session.phase == SessionPhase.COMPARISON:
+                    session.transition_to(SessionPhase.BLUEPRINT)
+                await db.commit()
+            except Exception as e:
+                logger.error(f"[SESSION] Comparison stream error: {e}")
+                # Remain in COMPARISON so the same endpoint can retry without
+                # making the user repeat the interview.
+                session.comparison_output = None
+                await db.commit()
+                yield f"data: {json_lib.dumps({'type': 'error', 'section': 'comparison', 'message': 'Comparison generation failed. Please try again.', 'retryable': True})}\n\n"
+                return
 
-            # Comparison scores depend only on the comparison (not the
-            # blueprint) and are pure LLM work — start them now so they run
-            # concurrently with the blueprint stream instead of adding their
-            # wall time (5-50s) to the SSE tail. DB writes happen later, on
-            # this session, after the blueprint commit.
+        if session.comparison_scores_json is None:
+            # Score generation depends only on the comparison, so overlap it
+            # with blueprint writing and plan preparation.
             scores_task = asyncio.create_task(generate_comparison_scores(
                 get_llm_client(),
                 idol_name=idol_name,
@@ -1258,87 +1385,56 @@ async def generate_results(
                 comparison_summary=full_comparison,
             ))
 
-        except Exception as e:
-            logger.error(f"[SESSION] Comparison stream error: {e}")
-            # Roll back to INTERVIEW phase so the user can retry
-            session.transition_to(SessionPhase.INTERVIEW)
-            session.comparison_output = None
-            await db.commit()
-            yield f"data: {json_lib.dumps({'type': 'error', 'section': 'comparison', 'message': f'Comparison generation failed. You can retry. Error: {str(e)}', 'retryable': True})}\n\n"
-            return
-
         # =====================================================================
-        # Part 2: Quarterly Blueprint (Phase 5)
+        # Part 2: Blueprint — resume without repeating comparison work.
         # =====================================================================
         yield f"data: {json_lib.dumps({'type': 'section', 'section': 'blueprint'})}\n\n"
-
-        blueprint_prompt = load_and_render("blueprint_generate.txt", {
-            "idol_name": idol_name,
-            "user_age": str(session.user_age),
-            "user_profile_json": json_lib.dumps(user_profile),
-            "interview_transcript_json": interview_transcript,
-            "comparison_summary": full_comparison[:2000],  # Truncate for context window
-            "idol_facts_json": json_lib.dumps(session.idol_facts_json or {}),
-            "weekly_hours": str(weekly_hours),
-        })
-
-        full_blueprint = ""
-        try:
-            async for chunk in blueprint_stream(
-                system_prompt=persona_system,
-                user_message=blueprint_prompt,
-            ):
-                full_blueprint += chunk
-                yield f"data: {json_lib.dumps({'type': 'chunk', 'section': 'blueprint', 'content': chunk})}\n\n"
-
-            # Persist blueprint and transition to completed
-            session.blueprint_output = full_blueprint
-            session.transition_to(SessionPhase.COMPLETED)
-            await db.commit()
-
-        except Exception as e:
-            logger.error(f"[SESSION] Blueprint stream error: {e}")
-            # Don't leave the concurrent scores task dangling on early return
-            scores_task.cancel()
-            # Roll back to COMPARISON phase so the user can retry
-            session.transition_to(SessionPhase.COMPARISON)
-            session.blueprint_output = None
-            await db.commit()
-            yield f"data: {json_lib.dumps({'type': 'error', 'section': 'blueprint', 'message': f'Blueprint generation failed. You can retry. Error: {str(e)}', 'retryable': True})}\n\n"
-            return
-
-        # =====================================================================
-        # Part 3: Kick off 12-week plan generation
-        # =====================================================================
-        # The blueprint is the committed arc; the plan is what *implements* it as
-        # day-by-day tasks. Enqueue generation now and hand the client the job id
-        # via a `plan_job` event so it can poll while the user reads the
-        # blueprint — otherwise no plan is ever produced and the Plan tab shows
-        # only the seeded demo. Best-effort: a failure here must not fail the
-        # already-succeeded results stream, so we log and still emit `done`.
-        if session.idol_id:
+        full_blueprint = session.blueprint_output or ""
+        if full_blueprint:
+            yield f"data: {json_lib.dumps({'type': 'chunk', 'section': 'blueprint', 'content': full_blueprint})}\n\n"
+        else:
+            blueprint_prompt = load_and_render("blueprint_generate.txt", {
+                "idol_name": idol_name,
+                "user_age": str(session.user_age),
+                "user_profile_json": json_lib.dumps(user_profile),
+                "interview_transcript_json": interview_transcript,
+                "comparison_summary": full_comparison[:2000],
+                "idol_facts_json": json_lib.dumps(session.idol_facts_json or {}),
+                "weekly_hours": str(weekly_hours),
+            })
             try:
-                plan_job = PlanGenerationJob(
-                    user_id=current_user.id,
-                    idol_id=session.idol_id,
-                    session_id=session.id,
-                    target_age=session.user_age or 24,
-                    duration_weeks=12,
-                    weekly_hours=weekly_hours,
-                    status="pending",
-                    progress_percent=0,
-                    step="analyzing_gaps",
-                )
-                db.add(plan_job)
+                async for chunk in blueprint_stream(
+                    system_prompt=persona_system,
+                    user_message=blueprint_prompt,
+                ):
+                    full_blueprint += chunk
+                    yield f"data: {json_lib.dumps({'type': 'chunk', 'section': 'blueprint', 'content': chunk})}\n\n"
+
+                session.blueprint_output = full_blueprint
+                if session.phase == SessionPhase.BLUEPRINT:
+                    session.transition_to(SessionPhase.COMPLETED)
                 await db.commit()
-                await db.refresh(plan_job)
-
-                from app.tasks.plans import run_plan_generation
-                run_plan_generation.delay(str(plan_job.id))
-
-                yield f"data: {json_lib.dumps({'type': 'plan_job', 'job_id': str(plan_job.id)})}\n\n"
             except Exception as e:
-                logger.error(f"[SESSION] Failed to enqueue plan generation: {e}")
+                logger.error(f"[SESSION] Blueprint stream error: {e}")
+                if scores_task is not None:
+                    scores_task.cancel()
+                # Remain in BLUEPRINT; the retry reuses the finished comparison.
+                session.blueprint_output = None
+                await db.commit()
+                yield f"data: {json_lib.dumps({'type': 'error', 'section': 'blueprint', 'message': 'Blueprint generation failed. Please try again.', 'retryable': True})}\n\n"
+                return
+
+        # =====================================================================
+        # Part 3: Dispatch the staged 12-week plan job.
+        # =====================================================================
+        try:
+            await _dispatch_session_plan_job(db, plan_job)
+        except Exception as e:
+            logger.error(f"[SESSION] Failed to enqueue plan generation: {e}")
+            if scores_task is not None:
+                scores_task.cancel()
+            yield f"data: {json_lib.dumps({'type': 'error', 'section': 'plan', 'message': 'Plan generation could not start. Please try again.', 'retryable': True})}\n\n"
+            return
 
         # =====================================================================
         # Part 3.5: Structured comparison scores (best-effort)
@@ -1348,14 +1444,17 @@ async def generate_results(
         # comparison is the mirror; these are the numbers behind the Compare
         # screen's gauges/radar. Best-effort: a failure leaves
         # comparison_scores_json null and the client shows a pending state.
-        try:
-            scores = await scores_task
-            if scores:
-                session.comparison_scores_json = scores
-                await db.commit()
-                yield f"data: {json_lib.dumps({'type': 'comparison_scores', 'ready': True})}\n\n"
-        except Exception as e:
-            logger.error(f"[SESSION] comparison scores failed: {e}")
+        if session.comparison_scores_json is not None:
+            yield f"data: {json_lib.dumps({'type': 'comparison_scores', 'ready': True})}\n\n"
+        elif scores_task is not None:
+            try:
+                scores = await scores_task
+                if scores:
+                    session.comparison_scores_json = scores
+                    await db.commit()
+                    yield f"data: {json_lib.dumps({'type': 'comparison_scores', 'ready': True})}\n\n"
+            except Exception as e:
+                logger.error(f"[SESSION] comparison scores failed: {e}")
 
         # Final done event
         yield f"data: {json_lib.dumps({'type': 'done', 'phase': 'completed'})}\n\n"

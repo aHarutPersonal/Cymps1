@@ -56,7 +56,7 @@ class BackendPlanItem {
   final String? resourceTitle;
   final String? resourceUrl;
 
-  bool get isDailyRhythm => type == 'habit';
+  bool get isDailyRhythm => type == 'habit' || type == 'practice';
   bool get isMissionTask =>
       type == 'project' || type == 'course' || type == 'reading';
   bool get isCompleted => status == 'completed';
@@ -597,6 +597,9 @@ class PlanItemDetailed {
     this.completedSteps = 0,
     this.totalSteps = 0,
     this.jobId,
+    this.detailsError,
+    this.dailyInstructions,
+    this.completedToday = false,
   });
 
   final BackendPlanItem item;
@@ -608,8 +611,14 @@ class PlanItemDetailed {
   final int completedSteps;
   final int totalSteps;
   final String? jobId;
+  final String? detailsError;
+  final String? dailyInstructions;
+  final bool completedToday;
 
   bool get detailsReady => detailsStatus == 'available';
+  bool get detailsFailed => detailsStatus == 'failed';
+  bool get detailsLoading =>
+      detailsStatus == 'pending' || detailsStatus == 'generating';
 
   bool isStepCompleted(String stepId) => completedStepIds.contains(stepId);
 
@@ -652,6 +661,9 @@ class PlanItemDetailed {
       completedSteps: (progress?['completed_steps'] as num?)?.toInt() ?? 0,
       totalSteps: (progress?['total_steps'] as num?)?.toInt() ?? 0,
       jobId: j['job_id']?.toString(),
+      detailsError: j['details_error']?.toString(),
+      dailyInstructions: j['daily_instructions']?.toString(),
+      completedToday: j['completed_today'] as bool? ?? false,
     );
   }
 }

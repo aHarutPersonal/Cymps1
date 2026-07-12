@@ -1033,7 +1033,15 @@ async def _enqueue_all_details_generation_async(db, plan, user_id):
         .order_by(PlanItem.week_start.asc(), PlanItem.id.asc())
     )
     items_result = await db.execute(items_stmt)
-    all_items = list(items_result.scalars().all())
+    all_items = [
+        item
+        for item in items_result.scalars().all()
+        if item.type in {
+            PlanItemType.PROJECT,
+            PlanItemType.COURSE,
+            PlanItemType.READING,
+        }
+    ]
     week_one = [item for item in all_items if item.week_start == 1]
     # Prime only the immediately useful work. Generating every week at once
     # occupies every worker for minutes, delays comparison/recovery jobs, and

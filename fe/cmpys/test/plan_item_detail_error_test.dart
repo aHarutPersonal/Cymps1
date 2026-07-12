@@ -13,6 +13,8 @@ class _ScriptedRepo extends Fake implements PlanRepository {
   _ScriptedRepo(this._script);
   final List<Object> _script; // PlanItemDetailed | Exception
   int _calls = 0;
+  int retries = 0;
+  int dailyToggles = 0;
 
   @override
   Future<PlanItemDetailed> getPlanItemDetailed(String itemId) async {
@@ -21,39 +23,79 @@ class _ScriptedRepo extends Fake implements PlanRepository {
     if (step is Exception) throw step;
     return step as PlanItemDetailed;
   }
+
+  @override
+  Future<String> regeneratePlanItemDetails(String itemId) async {
+    retries++;
+    return 'retry-job';
+  }
+
+  @override
+  Future<bool> toggleDailyTask(String itemId) async {
+    dailyToggles++;
+    return true;
+  }
 }
 
 PlanItemDetailed _pendingItem() => PlanItemDetailed(
-      item: BackendPlanItem.fromJson(const {'id': 'x', 'title': 'Read a book'}),
-      detailsStatus: 'pending',
-    );
+  item: BackendPlanItem.fromJson(const {'id': 'x', 'title': 'Read a book'}),
+  detailsStatus: 'pending',
+);
+
+PlanItemDetailed _failedItem() => PlanItemDetailed(
+  item: BackendPlanItem.fromJson(const {
+    'id': 'x',
+    'title': 'Build the prototype',
+    'description': 'Ship a working prototype.',
+  }),
+  detailsStatus: 'failed',
+  detailsError: 'This lesson could not be prepared.',
+);
+
+PlanItemDetailed _dailyItem({bool completed = false}) => PlanItemDetailed(
+  item: BackendPlanItem.fromJson(const {
+    'id': 'x',
+    'title': 'Deliberate practice',
+    'type': 'practice',
+    'description': 'Practice the core skill every day.',
+  }),
+  detailsStatus: 'available',
+  dailyInstructions: 'Run one focused drill and write down the result.',
+  completedToday: completed,
+);
 
 Widget _app(PlanRepository repo) => ProviderScope(
-      overrides: [planRepositoryProvider.overrideWithValue(repo)],
-      child: const MaterialApp(home: PlanItemDetailScreen(itemId: 'x')),
-    );
+  overrides: [planRepositoryProvider.overrideWithValue(repo)],
+  child: const MaterialApp(home: PlanItemDetailScreen(itemId: 'x')),
+);
 
 void main() {
-  testWidgets('network failure shows the connection error copy',
-      (tester) async {
+  testWidgets('network failure shows the connection error copy', (
+    tester,
+  ) async {
     await tester.pumpWidget(_app(_ScriptedRepo([const TimeoutError()])));
     await tester.pumpAndSettle();
     expect(find.textContaining('Check your connection'), findsOneWidget);
   });
 
-  testWidgets('non-network failure shows a generic error, not connection copy',
-      (tester) async {
-    await tester.pumpWidget(
-        _app(_ScriptedRepo([Exception('parse failure')])));
-    await tester.pumpAndSettle();
-    expect(find.textContaining('Check your connection'), findsNothing);
-    expect(find.textContaining('Something went wrong'), findsOneWidget);
-  });
+  testWidgets(
+    'non-network failure shows a generic error, not connection copy',
+    (tester) async {
+      await tester.pumpWidget(
+        _app(_ScriptedRepo([Exception('parse failure')])),
+      );
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Check your connection'), findsNothing);
+      expect(find.textContaining('Something went wrong'), findsOneWidget);
+    },
+  );
 
-  testWidgets('a failed background poll keeps the loaded content on screen',
-      (tester) async {
-    await tester
-        .pumpWidget(_app(_ScriptedRepo([_pendingItem(), const TimeoutError()])));
+  testWidgets('a failed background poll keeps the loaded content on screen', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _app(_ScriptedRepo([_pendingItem(), const TimeoutError()])),
+    );
     // Discrete pumps: the pending-details state animates a spinner, so
     // pumpAndSettle would never settle.
     await tester.pump();
@@ -68,5 +110,47 @@ void main() {
 
     // Dispose the screen so the retry poll timer is cancelled.
     await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('failed detail generation stops loading and offers retry', (
+    tester,
+  ) async {
+    final repo = _ScriptedRepo([_failedItem(), _pendingItem()]);
+    await tester.pumpWidget(_app(repo));
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('This lesson could not be prepared.'), findsOneWidget);
+    expect(find.text('Generate again'), findsOneWidget);
+
+    await tester.tap(find.text('Generate again'));
+    await tester.pump();
+    await tester.pump();
+    expect(repo.retries, 1);
+
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('practice item renders as a daily rhythm without generation', (
+    tester,
+  ) async {
+    final repo = _ScriptedRepo([_dailyItem(), _dailyItem(completed: true)]);
+    await tester.pumpWidget(_app(repo));
+    await tester.pumpAndSettle();
+
+    expect(find.text('DAILY RHYTHM · WEEK 1'), findsOneWidget);
+    expect(
+      find.text('Run one focused drill and write down the result.'),
+      findsOneWidget,
+    );
+    expect(find.text('Complete for today'), findsOneWidget);
+    expect(find.textContaining('Writing your lesson'), findsNothing);
+
+    await tester.tap(find.text('Complete for today'));
+    await tester.pumpAndSettle();
+    expect(repo.dailyToggles, 1);
+    expect(find.text('Mark as not done today'), findsOneWidget);
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
   });
 }

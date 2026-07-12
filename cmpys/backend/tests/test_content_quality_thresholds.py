@@ -39,9 +39,16 @@ def test_legacy_short_lesson_is_upgraded_when_opened():
     assert not _lesson_details_meet_quality(
         {"steps": [{"lesson_content": "word " * 500}]}
     )
-    assert _lesson_details_meet_quality(
+    assert not _lesson_details_meet_quality(
         {"steps": [{"lesson_content": "word " * 1200}]}
     )
+    assert _lesson_details_meet_quality({
+        "steps": [
+            {"lesson_content": "word " * 1200},
+            {"lesson_content": "word " * 1200},
+            {"lesson_content": "word " * 1200},
+        ]
+    })
 
 
 def test_book_quality_gate_requires_structure_not_only_length():

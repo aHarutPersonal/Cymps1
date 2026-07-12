@@ -15,12 +15,15 @@ from typing import Annotated
 from app.api.dependencies import get_current_user
 from app.core.db import get_db
 from app.models.daily_task_completion import DailyTaskCompletion
-from app.models.plan import Plan, PlanItem, PlanItemType
+from app.models.plan import Plan, PlanItem, PlanItemCompletion, PlanItemType
 from app.models.user import User
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["daily-tasks"])
+
+MISSION_TYPES = {PlanItemType.PROJECT, PlanItemType.COURSE, PlanItemType.READING}
+DAILY_TYPES = {PlanItemType.HABIT, PlanItemType.PRACTICE}
 
 
 # =============================================================================
@@ -111,6 +114,59 @@ def _get_current_plan_week(plan_created_at: datetime) -> int:
     now = datetime.now(timezone.utc)
     days_diff = (now - plan_created_at).days
     return max(1, (days_diff // 7) + 1)
+
+
+def _execution_focus_week(
+    items: list[PlanItem],
+    completed_item_ids: set[str],
+    duration_weeks: int,
+) -> int:
+    """Return the first week with unfinished mission work.
+
+    CMPYS advances by execution, not by time elapsed since plan creation.
+    Daily rhythms never gate progression. Once every mission is complete, the
+    final week remains the active daily-rhythm context for the cycle recap.
+    """
+    incomplete_weeks = [
+        item.week_start
+        for item in items
+        if item.type in MISSION_TYPES and str(item.id) not in completed_item_ids
+    ]
+    if incomplete_weeks:
+        return min(max(1, min(incomplete_weeks)), max(1, duration_weeks))
+
+    has_missions = any(item.type in MISSION_TYPES for item in items)
+    return max(1, duration_weeks) if has_missions else 1
+
+
+async def _items_and_execution_week(
+    db: AsyncSession,
+    *,
+    plan: Plan,
+    user_id: str,
+) -> tuple[list[PlanItem], int]:
+    items_result = await db.execute(
+        select(PlanItem).where(PlanItem.plan_id == plan.id)
+    )
+    items = list(items_result.scalars().all())
+    mission_ids = [str(item.id) for item in items if item.type in MISSION_TYPES]
+    completed_item_ids: set[str] = set()
+    if mission_ids:
+        completion_result = await db.execute(
+            select(PlanItemCompletion.plan_item_id).where(
+                PlanItemCompletion.user_id == user_id,
+                PlanItemCompletion.plan_item_id.in_(mission_ids),
+                PlanItemCompletion.completed_at.isnot(None),
+            )
+        )
+        completed_item_ids = {
+            str(item_id) for item_id in completion_result.scalars().all()
+        }
+    return items, _execution_focus_week(
+        items,
+        completed_item_ids,
+        plan.duration_weeks,
+    )
 
 
 def _get_week_start_end(ref_date: date) -> tuple[date, date]:
@@ -296,24 +352,22 @@ async def get_today_view(
             detail="Plan not found",
         )
 
-    # Determine current week
-    current_week = _get_current_plan_week(plan.created_at)
+    # Determine the active execution week from completed missions. Calendar
+    # age is deliberately irrelevant: Week 2 unlocks immediately after Week 1
+    # is finished, and an older plan does not lose its current daily rhythm.
+    plan_items, current_week = await _items_and_execution_week(
+        db,
+        plan=plan,
+        user_id=current_user.id,
+    )
     today = date.today()
 
-    # Get all habit/practice items for the current week
-    items_stmt = (
-        select(PlanItem)
-        .where(
-            and_(
-                PlanItem.plan_id == plan_id,
-                PlanItem.type.in_([PlanItemType.HABIT, PlanItemType.PRACTICE]),
-                PlanItem.week_start <= current_week,
-                PlanItem.week_end >= current_week,
-            )
-        )
-    )
-    items_result = await db.execute(items_stmt)
-    items = list(items_result.scalars().all())
+    items = [
+        item
+        for item in plan_items
+        if item.type in DAILY_TYPES
+        and item.week_start <= current_week <= item.week_end
+    ]
 
     # Get all completions for today for these items
     item_ids = [item.id for item in items]
@@ -487,24 +541,23 @@ async def get_daily_focus(
 
     focus_item = None
     if plan:
-        current_week = _get_current_plan_week(plan.created_at)
+        plan_items, current_week = await _items_and_execution_week(
+            db,
+            plan=plan,
+            user_id=current_user.id,
+        )
         today = date.today()
 
         # Get habit/practice items for the current week that aren't completed today
-        items_stmt = (
-            select(PlanItem)
-            .where(
-                and_(
-                    PlanItem.plan_id == plan.id,
-                    PlanItem.type.in_([PlanItemType.HABIT, PlanItemType.PRACTICE]),
-                    PlanItem.week_start <= current_week,
-                    PlanItem.week_end >= current_week,
-                )
-            )
-            .order_by(PlanItem.week_start.asc())
+        items = sorted(
+            (
+                item
+                for item in plan_items
+                if item.type in DAILY_TYPES
+                and item.week_start <= current_week <= item.week_end
+            ),
+            key=lambda item: item.week_start,
         )
-        items_result = await db.execute(items_stmt)
-        items = list(items_result.scalars().all())
 
         # Find the first item not completed today
         completed_ids: set[str] = set()
