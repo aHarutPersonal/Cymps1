@@ -3,6 +3,7 @@ import 'package:cmpys/core/storage/token_store.dart';
 import 'package:cmpys/features/plan/data/plan_repository.dart';
 import 'package:cmpys/features/plan/models/plan_models.dart';
 import 'package:cmpys/features/plan/presentation/lesson_reader_screen.dart';
+import 'package:cmpys/features/plan/presentation/material_reader_screen.dart';
 import 'package:cmpys/features/plan/presentation/plan_item_detail_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -28,6 +29,15 @@ class _FocusedPlanRepository extends Fake implements PlanRepository {
         completedStepIds: {'s1'},
         completedSteps: 1,
         totalSteps: 3,
+      );
+}
+
+class _EmptyResourcePlanRepository extends Fake implements PlanRepository {
+  @override
+  Future<ContentResourceDetail> getContentResource(String resourceId) async =>
+      const ContentResourceDetail(
+        id: 'empty-course',
+        title: 'Introduction to Business Analytics',
       );
 }
 
@@ -215,6 +225,43 @@ Set a timer, write the decision boundary, then test it against two choices.
 
     expect(find.text('Lesson 3 is locked'), findsOneWidget);
     expect(find.textContaining('Complete Lesson 2 first'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('metadata-only resource shows an honest unavailable state', (
+    tester,
+  ) async {
+    const material = PlanMaterialDetail(
+      title: 'Introduction to Business Analytics',
+      type: 'course',
+      authorOrCreator: 'University of Pennsylvania (Coursera)',
+      contentResourceId: 'legacy-empty-resource',
+      durationMinutes: 120,
+      reason: 'A useful external course recommendation.',
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          planRepositoryProvider.overrideWithValue(
+            _EmptyResourcePlanRepository(),
+          ),
+        ],
+        child: const MaterialApp(
+          home: MaterialReaderScreen(material: material),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('The full content for this resource is not available.'),
+      findsOneWidget,
+    );
+    expect(
+      find.text('A useful external course recommendation.'),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
   });
 }

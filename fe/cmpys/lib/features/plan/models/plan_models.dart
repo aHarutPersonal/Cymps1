@@ -16,10 +16,10 @@ class ToggleResult {
   final int? missionTasksRemaining;
 
   factory ToggleResult.fromJson(Map<String, dynamic> j) => ToggleResult(
-        completed: j['completed'] as bool? ?? false,
-        planComplete: j['planComplete'] as bool? ?? false,
-        missionTasksRemaining: (j['missionTasksRemaining'] as num?)?.toInt(),
-      );
+    completed: j['completed'] as bool? ?? false,
+    planComplete: j['planComplete'] as bool? ?? false,
+    missionTasksRemaining: (j['missionTasksRemaining'] as num?)?.toInt(),
+  );
 }
 
 /// One generated plan item. `type == 'habit'` items are the week's daily
@@ -43,7 +43,8 @@ class BackendPlanItem {
 
   final String id;
   final String title;
-  final String type; // habit | project | reading | course | practice | reflection
+  final String
+  type; // habit | project | reading | course | practice | reflection
   final String description;
   final int weekStart;
   final int weekEnd;
@@ -61,20 +62,20 @@ class BackendPlanItem {
   bool get isCompleted => status == 'completed';
 
   factory BackendPlanItem.fromJson(Map<String, dynamic> j) => BackendPlanItem(
-        id: j['id']?.toString() ?? '',
-        title: j['title'] as String? ?? '',
-        type: j['type'] as String? ?? 'project',
-        description: j['description'] as String? ?? '',
-        weekStart: (j['weekStart'] as num?)?.toInt() ?? 1,
-        weekEnd: (j['weekEnd'] as num?)?.toInt() ?? 1,
-        successMetric: j['successMetric'] as String? ?? '',
-        estimatedHours: (j['estimatedHours'] as num?)?.toInt() ?? 1,
-        status: j['status'] as String? ?? 'not_started',
-        progressPercent: (j['progressPercent'] as num?)?.toInt() ?? 0,
-        notes: j['notes'] as String?,
-        resourceTitle: j['resourceTitle'] as String?,
-        resourceUrl: j['resourceUrl'] as String?,
-      );
+    id: j['id']?.toString() ?? '',
+    title: j['title'] as String? ?? '',
+    type: j['type'] as String? ?? 'project',
+    description: j['description'] as String? ?? '',
+    weekStart: (j['weekStart'] as num?)?.toInt() ?? 1,
+    weekEnd: (j['weekEnd'] as num?)?.toInt() ?? 1,
+    successMetric: j['successMetric'] as String? ?? '',
+    estimatedHours: (j['estimatedHours'] as num?)?.toInt() ?? 1,
+    status: j['status'] as String? ?? 'not_started',
+    progressPercent: (j['progressPercent'] as num?)?.toInt() ?? 0,
+    notes: j['notes'] as String?,
+    resourceTitle: j['resourceTitle'] as String?,
+    resourceUrl: j['resourceUrl'] as String?,
+  );
 }
 
 /// The user's generated 12-week plan.
@@ -156,17 +157,18 @@ class BackendPlan {
         : (durationWeeks == 0 ? 1 : durationWeeks);
   }
 
-  bool get allMissionWorkComplete =>
-      items.where((item) => !item.isDailyRhythm).every((item) => item.isCompleted);
+  bool get allMissionWorkComplete => items
+      .where((item) => !item.isDailyRhythm)
+      .every((item) => item.isCompleted);
 
   /// Past weeks are reviewable, the focus week is actionable, and every
   /// future week stays locked until the current focus advances.
   bool isWeekUnlocked(int week) => allMissionWorkComplete || week <= focusWeek;
 
   BackendPlanItem? focusedItemForWeek(int week) {
-    final remaining = missionsForWeek(week)
-        .where((item) => !item.isCompleted)
-        .toList(growable: false);
+    final remaining = missionsForWeek(
+      week,
+    ).where((item) => !item.isCompleted).toList(growable: false);
     if (remaining.isEmpty) return null;
 
     BackendPlanItem best = remaining.first;
@@ -192,25 +194,26 @@ class BackendPlan {
   }
 
   factory BackendPlan.fromJson(Map<String, dynamic> j) => BackendPlan(
-        id: j['id']?.toString() ?? '',
-        durationWeeks: (j['durationWeeks'] as num?)?.toInt() ?? 12,
-        weeklyHours: (j['weeklyHours'] as num?)?.toInt() ?? 10,
-        cycleNumber: (j['cycleNumber'] as num?)?.toInt() ?? 1,
-        items: (j['items'] as List?)
-                ?.whereType<Map<String, dynamic>>()
-                .map(BackendPlanItem.fromJson)
-                .toList() ??
-            const [],
-        idolName: j['idolName'] as String?,
-        roadmapThesis: j['roadmapThesis'] as String?,
-        antiGoals:
-            (j['antiGoals'] as List?)?.map((e) => e.toString()).toList() ??
-                const [],
-        totalItems: (j['totalItems'] as num?)?.toInt() ?? 0,
-        completedItems: (j['completedItems'] as num?)?.toInt() ?? 0,
-        overallProgress: (j['overallProgress'] as num?)?.toDouble() ?? 0,
-        createdAt: DateTime.tryParse(j['createdAt']?.toString() ?? ''),
-      );
+    id: j['id']?.toString() ?? '',
+    durationWeeks: (j['durationWeeks'] as num?)?.toInt() ?? 12,
+    weeklyHours: (j['weeklyHours'] as num?)?.toInt() ?? 10,
+    cycleNumber: (j['cycleNumber'] as num?)?.toInt() ?? 1,
+    items:
+        (j['items'] as List?)
+            ?.whereType<Map<String, dynamic>>()
+            .map(BackendPlanItem.fromJson)
+            .toList() ??
+        const [],
+    idolName: j['idolName'] as String?,
+    roadmapThesis: j['roadmapThesis'] as String?,
+    antiGoals:
+        (j['antiGoals'] as List?)?.map((e) => e.toString()).toList() ??
+        const [],
+    totalItems: (j['totalItems'] as num?)?.toInt() ?? 0,
+    completedItems: (j['completedItems'] as num?)?.toInt() ?? 0,
+    overallProgress: (j['overallProgress'] as num?)?.toDouble() ?? 0,
+    createdAt: DateTime.tryParse(j['createdAt']?.toString() ?? ''),
+  );
 }
 
 /// One habit/practice item in today's view (GET /plans/{id}/today) with its
@@ -233,13 +236,13 @@ class TodayTaskItem {
   final String? dailyInstructions;
 
   factory TodayTaskItem.fromJson(Map<String, dynamic> j) => TodayTaskItem(
-        id: j['id']?.toString() ?? '',
-        title: j['title'] as String? ?? '',
-        type: j['type'] as String? ?? 'habit',
-        estimatedHours: (j['estimated_hours'] as num?)?.toInt() ?? 1,
-        completedToday: j['completed_today'] as bool? ?? false,
-        dailyInstructions: j['daily_instructions'] as String?,
-      );
+    id: j['id']?.toString() ?? '',
+    title: j['title'] as String? ?? '',
+    type: j['type'] as String? ?? 'habit',
+    estimatedHours: (j['estimated_hours'] as num?)?.toInt() ?? 1,
+    completedToday: j['completed_today'] as bool? ?? false,
+    dailyInstructions: j['daily_instructions'] as String?,
+  );
 }
 
 /// Today's daily rhythm for the current plan week, plus streak.
@@ -257,15 +260,16 @@ class TodayView {
   final int totalToday;
 
   factory TodayView.fromJson(Map<String, dynamic> j) => TodayView(
-        items: (j['items'] as List?)
-                ?.whereType<Map<String, dynamic>>()
-                .map(TodayTaskItem.fromJson)
-                .toList() ??
-            const [],
-        streak: (j['streak'] as num?)?.toInt() ?? 0,
-        completedToday: (j['completed_today'] as num?)?.toInt() ?? 0,
-        totalToday: (j['total_today'] as num?)?.toInt() ?? 0,
-      );
+    items:
+        (j['items'] as List?)
+            ?.whereType<Map<String, dynamic>>()
+            .map(TodayTaskItem.fromJson)
+            .toList() ??
+        const [],
+    streak: (j['streak'] as num?)?.toInt() ?? 0,
+    completedToday: (j['completed_today'] as num?)?.toInt() ?? 0,
+    totalToday: (j['total_today'] as num?)?.toInt() ?? 0,
+  );
 }
 
 /// Status of an async backend job (GET /jobs/{id}).
@@ -292,14 +296,13 @@ class PlanJobStatus {
   bool get isFailed => status == 'failed';
 
   factory PlanJobStatus.fromJson(Map<String, dynamic> j) => PlanJobStatus(
-        id: j['id']?.toString() ?? '',
-        status: j['status'] as String? ?? 'pending',
-        progressPercent: (j['progressPercent'] as num?)?.toInt() ?? 0,
-        step: j['step'] as String?,
-        errorMessage: j['errorMessage'] as String?,
-        thinkingLine:
-            (j['thinkingStream'] as Map?)?['currentLine']?.toString(),
-      );
+    id: j['id']?.toString() ?? '',
+    status: j['status'] as String? ?? 'pending',
+    progressPercent: (j['progressPercent'] as num?)?.toInt() ?? 0,
+    step: j['step'] as String?,
+    errorMessage: j['errorMessage'] as String?,
+    thinkingLine: (j['thinkingStream'] as Map?)?['currentLine']?.toString(),
+  );
 }
 
 /// One teach-first step inside a plan item's generated lesson details.
@@ -331,23 +334,22 @@ class PlanStepDetail {
   final String? lessonContent;
 
   factory PlanStepDetail.fromJson(Map<String, dynamic> j) => PlanStepDetail(
-        id: j['id']?.toString() ?? '',
-        title: j['title'] as String? ?? '',
-        description: j['description'] as String?,
-        expectedOutput: j['expected_output'] as String?,
-        estimateMinutes: (j['estimate_minutes'] as num?)?.toInt(),
-        readingMinutes:
-            (j['reading_minutes'] ?? j['readingMinutes'] as num?)?.toInt(),
-        practiceMinutes:
-            (j['practice_minutes'] ?? j['practiceMinutes'] as num?)?.toInt(),
-        resources:
-            (j['resources'] as List?)?.map((e) => e.toString()).toList() ??
-                const [],
-        substeps:
-            (j['substeps'] as List?)?.map((e) => e.toString()).toList() ??
-                const [],
-        lessonContent: j['lesson_content'] as String?,
-      );
+    id: j['id']?.toString() ?? '',
+    title: j['title'] as String? ?? '',
+    description: j['description'] as String?,
+    expectedOutput: j['expected_output'] as String?,
+    estimateMinutes: (j['estimate_minutes'] as num?)?.toInt(),
+    readingMinutes: (j['reading_minutes'] ?? j['readingMinutes'] as num?)
+        ?.toInt(),
+    practiceMinutes: (j['practice_minutes'] ?? j['practiceMinutes'] as num?)
+        ?.toInt(),
+    resources:
+        (j['resources'] as List?)?.map((e) => e.toString()).toList() ??
+        const [],
+    substeps:
+        (j['substeps'] as List?)?.map((e) => e.toString()).toList() ?? const [],
+    lessonContent: j['lesson_content'] as String?,
+  );
 }
 
 /// A Deepstash-style idea card extracted from a book material.
@@ -363,10 +365,10 @@ class BookIdea {
   final String category;
 
   factory BookIdea.fromJson(Map<String, dynamic> j) => BookIdea(
-        title: j['title'] as String? ?? '',
-        content: j['content'] as String? ?? '',
-        category: j['category'] as String? ?? 'Mindset',
-      );
+    title: j['title'] as String? ?? '',
+    content: j['content'] as String? ?? '',
+    category: j['category'] as String? ?? 'Mindset',
+  );
 }
 
 /// A material/resource attached to a plan item (book, video, in-app lesson…).
@@ -419,10 +421,22 @@ class PlanMaterialDetail {
     return null;
   }
 
-  bool get hasInAppContent =>
+  bool get hasInlineContent =>
       (contentMarkdown != null && contentMarkdown!.trim().isNotEmpty) ||
-      (contentResourceId != null && contentResourceId!.isNotEmpty) ||
       ideas.isNotEmpty;
+
+  /// External courses/tools/templates are recommendations, not reading
+  /// lessons. Legacy rows may still carry a metadata-only resource id, so a
+  /// real external link must win unless genuine inline content exists.
+  bool get prefersExternalLink =>
+      (url != null && url!.trim().isNotEmpty) &&
+      const {'course', 'tool', 'template'}.contains(type) &&
+      !hasInlineContent;
+
+  bool get hasInAppContent =>
+      hasInlineContent ||
+      ((contentResourceId != null && contentResourceId!.isNotEmpty) &&
+          const {'book', 'article', 'in_app_lesson'}.contains(type));
 
   factory PlanMaterialDetail.fromJson(Map<String, dynamic> j) =>
       PlanMaterialDetail(
@@ -434,7 +448,8 @@ class PlanMaterialDetail {
         reason: j['reason'] as String?,
         contentMarkdown: j['content_markdown'] as String?,
         contentResourceId: j['content_resource_id']?.toString(),
-        ideas: (j['ideas'] as List?)
+        ideas:
+            (j['ideas'] as List?)
                 ?.whereType<Map<String, dynamic>>()
                 .map(BookIdea.fromJson)
                 .toList() ??
@@ -481,7 +496,8 @@ class ContentResourceDetail {
         kind: j['kind'] as String?,
         progressPercent: (j['progressPercent'] as num?)?.toInt() ?? 0,
         cursorJson: (j['cursorJson'] as Map?)?.cast<String, dynamic>(),
-        ideas: ((j['summaryJson'] as Map?)?['ideas'] as List?)
+        ideas:
+            ((j['summaryJson'] as Map?)?['ideas'] as List?)
                 ?.whereType<Map<String, dynamic>>()
                 .map(BookIdea.fromJson)
                 .toList() ??
@@ -540,15 +556,23 @@ List<BookChapter> splitBookChapters(String markdown) {
     part.writeln();
     words += p.split(' ').length;
     if (words >= 2500) {
-      parts.add(BookChapter(
-          title: 'Part ${parts.length + 1}', markdown: part.toString().trim()));
+      parts.add(
+        BookChapter(
+          title: 'Part ${parts.length + 1}',
+          markdown: part.toString().trim(),
+        ),
+      );
       part.clear();
       words = 0;
     }
   }
   if (part.toString().trim().isNotEmpty) {
-    parts.add(BookChapter(
-        title: 'Part ${parts.length + 1}', markdown: part.toString().trim()));
+    parts.add(
+      BookChapter(
+        title: 'Part ${parts.length + 1}',
+        markdown: part.toString().trim(),
+      ),
+    );
   }
   if (parts.length <= 1) {
     return [BookChapter(title: 'Full text', markdown: text)];
@@ -601,26 +625,28 @@ class PlanItemDetailed {
     final progress = j['progress'] as Map<String, dynamic>?;
     return PlanItemDetailed(
       item: BackendPlanItem.fromJson(
-          (j['item'] as Map?)?.cast<String, dynamic>() ?? const {}),
+        (j['item'] as Map?)?.cast<String, dynamic>() ?? const {},
+      ),
       detailsStatus: j['details_status'] as String? ?? 'available',
-      steps: (details?['steps'] as List?)
+      steps:
+          (details?['steps'] as List?)
               ?.whereType<Map<String, dynamic>>()
               .map(PlanStepDetail.fromJson)
               .toList() ??
           const [],
-      materials: (details?['materials'] as List?)
+      materials:
+          (details?['materials'] as List?)
               ?.whereType<Map<String, dynamic>>()
               .map(PlanMaterialDetail.fromJson)
               .toList() ??
           const [],
       completed: j['completed'] as bool? ?? false,
-      completedStepIds: ((j['completed_step_ids'] ??
-                  j['completedStepIds']) as List? ??
-              const [])
-          .map((e) => e.toString())
-          .toSet(),
-      completedSteps:
-          (progress?['completed_steps'] as num?)?.toInt() ?? 0,
+      completedStepIds:
+          ((j['completed_step_ids'] ?? j['completedStepIds']) as List? ??
+                  const [])
+              .map((e) => e.toString())
+              .toSet(),
+      completedSteps: (progress?['completed_steps'] as num?)?.toInt() ?? 0,
       totalSteps: (progress?['total_steps'] as num?)?.toInt() ?? 0,
       jobId: j['job_id']?.toString(),
     );

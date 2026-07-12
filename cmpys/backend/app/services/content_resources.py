@@ -231,6 +231,11 @@ def material_to_resource_payload(material: dict[str, Any]) -> dict[str, Any] | N
         }
 
     if raw_type in {"article", "course", "tool", "template", "in_app_lesson"}:
+        # Do not manufacture an in-app resource from title/reason metadata.
+        # External recommendations must keep opening their source URL unless
+        # the generator supplied an actual lesson body or idea cards.
+        if not (str(material.get("content_markdown") or "").strip() or material.get("ideas")):
+            return None
         return {
             "kind": ContentResourceKind.IN_APP_LESSON
             if raw_type == "in_app_lesson"

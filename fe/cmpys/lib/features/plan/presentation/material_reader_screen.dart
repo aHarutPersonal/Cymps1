@@ -9,8 +9,10 @@ import '../../../app/design_tokens.dart';
 import '../../../core/ui/app_shell.dart';
 import '../../../core/ui/cmpys/cmpys_markdown.dart';
 import '../../../core/ui/cmpys/cmpys_primitives.dart';
+import '../../../core/ui/motion/page_transition.dart';
 import '../data/plan_repository.dart';
 import '../models/plan_models.dart';
+import 'material_web_screen.dart';
 
 class MaterialReaderScreen extends ConsumerStatefulWidget {
   const MaterialReaderScreen({super.key, required this.material});
@@ -93,22 +95,32 @@ class _MaterialReaderScreenState extends ConsumerState<MaterialReaderScreen> {
                         shape: BoxShape.circle,
                         border: Border.all(color: AppColors.hair),
                       ),
-                      child: const Icon(Icons.chevron_left_rounded,
-                          size: 22, color: AppColors.ink),
+                      child: const Icon(
+                        Icons.chevron_left_rounded,
+                        size: 22,
+                        color: AppColors.ink,
+                      ),
                     ),
                   ),
                 ),
               ),
             ),
             SliverPadding(
-              padding: EdgeInsets.fromLTRB(22, 6, 22, AppShell.bottomNavClearance(context)),
+              padding: EdgeInsets.fromLTRB(
+                22,
+                6,
+                22,
+                AppShell.bottomNavClearance(context),
+              ),
               sliver: SliverList.list(
                 children: [
                   Row(
                     children: [
                       Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 5),
+                          horizontal: 10,
+                          vertical: 5,
+                        ),
                         decoration: BoxDecoration(
                           color: _kindColor(m.type).withValues(alpha: 0.14),
                           borderRadius: BorderRadius.circular(999),
@@ -116,28 +128,42 @@ class _MaterialReaderScreenState extends ConsumerState<MaterialReaderScreen> {
                         child: Text(
                           _kindLabel(m.type).toUpperCase(),
                           style: AppTypography.kicker.copyWith(
-                              color: _kindColor(m.type), fontSize: 10.5),
+                            color: _kindColor(m.type),
+                            fontSize: 10.5,
+                          ),
                         ),
                       ),
                       if (m.durationMinutes != null) ...[
                         const SizedBox(width: 10),
-                        Text('${m.durationMinutes} min',
-                            style: AppTypography.caption.copyWith(
-                                color: AppColors.ink3, fontSize: 12.5)),
+                        Text(
+                          '${m.durationMinutes} min',
+                          style: AppTypography.caption.copyWith(
+                            color: AppColors.ink3,
+                            fontSize: 12.5,
+                          ),
+                        ),
                       ],
                     ],
                   ),
                   const SizedBox(height: 14),
-                  Text(m.title,
-                      style: AppTypography.h1.copyWith(
-                          fontSize: 30, letterSpacing: -0.5, height: 1.12)),
+                  Text(
+                    m.title,
+                    style: AppTypography.h1.copyWith(
+                      fontSize: 30,
+                      letterSpacing: -0.5,
+                      height: 1.12,
+                    ),
+                  ),
                   if (m.authorOrCreator != null &&
                       m.authorOrCreator!.isNotEmpty) ...[
                     const SizedBox(height: 12),
-                    Text('By ${m.authorOrCreator}',
-                        style: AppTypography.captionMedium.copyWith(
-                            color: AppColors.ink3,
-                            fontWeight: FontWeight.w600)),
+                    Text(
+                      'By ${m.authorOrCreator}',
+                      style: AppTypography.captionMedium.copyWith(
+                        color: AppColors.ink3,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ],
                   const SizedBox(height: 24),
                   if (_loading)
@@ -150,7 +176,8 @@ class _MaterialReaderScreenState extends ConsumerState<MaterialReaderScreen> {
                           child: CircularProgressIndicator(
                             strokeWidth: 2,
                             valueColor: AlwaysStoppedAnimation<Color>(
-                                AppColors.green),
+                              AppColors.green,
+                            ),
                           ),
                         ),
                       ),
@@ -160,13 +187,20 @@ class _MaterialReaderScreenState extends ConsumerState<MaterialReaderScreen> {
                       onTap: _fetchResource,
                       child: Row(
                         children: [
-                          const Icon(Icons.refresh_rounded,
-                              size: 18, color: AppColors.ink3),
+                          const Icon(
+                            Icons.refresh_rounded,
+                            size: 18,
+                            color: AppColors.ink3,
+                          ),
                           const SizedBox(width: 10),
                           Expanded(
-                            child: Text('$_error Tap to retry.',
-                                style: AppTypography.caption.copyWith(
-                                    color: AppColors.ink2, fontSize: 13.5)),
+                            child: Text(
+                              '$_error Tap to retry.',
+                              style: AppTypography.caption.copyWith(
+                                color: AppColors.ink2,
+                                fontSize: 13.5,
+                              ),
+                            ),
                           ),
                         ],
                       ),
@@ -182,18 +216,58 @@ class _MaterialReaderScreenState extends ConsumerState<MaterialReaderScreen> {
                         const SizedBox(height: 12),
                       ],
                     ],
-                    if (!hasText && !hasIdeas)
-                      Text(
-                        m.reason ??
-                            'No in-app content for this material yet.',
-                        style: AppTypography.bodyDim,
-                      ),
+                    if (!hasText && !hasIdeas) _unavailableState(m),
                   ],
                 ],
               ),
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _unavailableState(PlanMaterialDetail material) {
+    final hasLink = material.url != null && material.url!.trim().isNotEmpty;
+    return CmpysCardSurface(
+      color: AppColors.paper2,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(
+            Icons.open_in_new_rounded,
+            size: 22,
+            color: AppColors.ink3,
+          ),
+          const SizedBox(height: 12),
+          Text(
+            hasLink
+                ? 'This is an external resource, not an in-app lesson.'
+                : 'The full content for this resource is not available.',
+            style: AppTypography.bodyMedium.copyWith(fontSize: 15),
+          ),
+          if (material.reason != null &&
+              material.reason!.trim().isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(material.reason!, style: AppTypography.bodyDim),
+          ],
+          if (hasLink) ...[
+            const SizedBox(height: 18),
+            CmpysButton(
+              full: true,
+              leadingIcon: Icons.open_in_new_rounded,
+              onTap: () => Navigator.of(context, rootNavigator: true).push(
+                CmpysPageRoute<void>(
+                  builder: (_) => MaterialWebScreen(
+                    title: material.title,
+                    url: material.url!,
+                  ),
+                ),
+              ),
+              child: const Text('Open original resource'),
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -207,27 +281,39 @@ class _MaterialReaderScreenState extends ConsumerState<MaterialReaderScreen> {
         borderRadius: AppRadii.lg,
         boxShadow: [
           BoxShadow(
-              color: AppColors.green2.withValues(alpha: 0.22),
-              blurRadius: 16,
-              offset: const Offset(0, 8)),
+            color: AppColors.green2.withValues(alpha: 0.22),
+            blurRadius: 16,
+            offset: const Offset(0, 8),
+          ),
         ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(idea.category.toUpperCase(),
-              style: AppTypography.kicker
-                  .copyWith(color: Colors.white.withValues(alpha: 0.7))),
+          Text(
+            idea.category.toUpperCase(),
+            style: AppTypography.kicker.copyWith(
+              color: Colors.white.withValues(alpha: 0.7),
+            ),
+          ),
           const SizedBox(height: 8),
-          Text(idea.title,
-              style: AppTypography.h3.copyWith(
-                  color: Colors.white, fontSize: 18, height: 1.25)),
+          Text(
+            idea.title,
+            style: AppTypography.h3.copyWith(
+              color: Colors.white,
+              fontSize: 18,
+              height: 1.25,
+            ),
+          ),
           const SizedBox(height: 8),
-          Text(idea.content,
-              style: AppTypography.body.copyWith(
-                  color: Colors.white.withValues(alpha: 0.92),
-                  fontSize: 14.5,
-                  height: 1.5)),
+          Text(
+            idea.content,
+            style: AppTypography.body.copyWith(
+              color: Colors.white.withValues(alpha: 0.92),
+              fontSize: 14.5,
+              height: 1.5,
+            ),
+          ),
         ],
       ),
     );

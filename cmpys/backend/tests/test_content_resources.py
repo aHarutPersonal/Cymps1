@@ -306,6 +306,7 @@ def test_material_to_resource_payload_converts_article_material():
             "type": "article",
             "url": "https://example.com/deliberate-practice",
             "reason": "Useful guided learning source.",
+            "content_markdown": "# Deliberate practice\n\nA complete in-app article.",
         }
     )
 
@@ -314,6 +315,18 @@ def test_material_to_resource_payload_converts_article_material():
     assert payload["license_status"] == LicenseStatus.EXTERNAL_LINK
     assert payload["canonical_key"] == "article:how_to_practice_deliberately"
     assert payload["metadata_json"]["reason"] == "Useful guided learning source."
+
+
+def test_material_to_resource_payload_rejects_metadata_only_external_course():
+    assert material_to_resource_payload(
+        {
+            "title": "Introduction to Business Analytics",
+            "type": "course",
+            "url": "https://www.coursera.org/search?query=business+analytics",
+            "reason": "A useful external course recommendation.",
+            "duration_minutes": 120,
+        }
+    ) is None
 
 
 @pytest.mark.asyncio

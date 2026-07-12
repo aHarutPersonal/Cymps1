@@ -57,8 +57,9 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
   Future<void> _load() async {
     _poll?.cancel();
     try {
-      final detailed =
-          await ref.read(planRepositoryProvider).getPlanItemDetailed(widget.itemId);
+      final detailed = await ref
+          .read(planRepositoryProvider)
+          .getPlanItemDetailed(widget.itemId);
       if (!mounted) return;
       setState(() {
         _detailed = detailed;
@@ -80,9 +81,11 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
         return;
       }
       final isConnection = e is TimeoutError || e is NetworkError;
-      setState(() => _error = isConnection
-          ? 'Couldn’t load this task. Check your connection and try again.'
-          : 'Something went wrong loading this task — try again.');
+      setState(
+        () => _error = isConnection
+            ? 'Couldn’t load this task. Check your connection and try again.'
+            : 'Something went wrong loading this task — try again.',
+      );
     }
   }
 
@@ -96,8 +99,12 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
           .toggleItemComplete(detailed.item.id);
       if (!mounted) return;
       if (result.completed) {
-        showCmpysToast(context, "Marked done. Kept your word.",
-            icon: Icons.check_rounded, tone: AppColors.green);
+        showCmpysToast(
+          context,
+          "Marked done. Kept your word.",
+          icon: Icons.check_rounded,
+          tone: AppColors.green,
+        );
       }
       // Refresh both this screen and the plan-wide progress numbers.
       await _load();
@@ -126,8 +133,12 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
       }
     } catch (_) {
       if (mounted) {
-        showCmpysToast(context, "Couldn’t update - try again.",
-            icon: Icons.error_outline_rounded, tone: AppColors.ink2);
+        showCmpysToast(
+          context,
+          "Couldn’t update - try again.",
+          icon: Icons.error_outline_rounded,
+          tone: AppColors.ink2,
+        );
       }
     } finally {
       if (mounted) setState(() => _toggling = false);
@@ -149,18 +160,17 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
       body: _error != null
           ? _errorView()
           : _detailed == null
-              ? const Center(
-                  child: SizedBox(
-                    width: 22,
-                    height: 22,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      valueColor:
-                          AlwaysStoppedAnimation<Color>(AppColors.green),
-                    ),
-                  ),
-                )
-              : _content(_detailed!),
+          ? const Center(
+              child: SizedBox(
+                width: 22,
+                height: 22,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  valueColor: AlwaysStoppedAnimation<Color>(AppColors.green),
+                ),
+              ),
+            )
+          : _content(_detailed!),
     );
   }
 
@@ -173,8 +183,11 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
           children: [
             const Icon(Icons.wifi_off_rounded, size: 32, color: AppColors.ink3),
             const SizedBox(height: 14),
-            Text(_error!,
-                textAlign: TextAlign.center, style: AppTypography.bodyDim),
+            Text(
+              _error!,
+              textAlign: TextAlign.center,
+              style: AppTypography.bodyDim,
+            ),
             const SizedBox(height: 18),
             CmpysButton(
               variant: CmpysBtnVariant.primary,
@@ -192,18 +205,28 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
   Widget _content(PlanItemDetailed d) {
     final item = d.item;
     return ListView(
-      padding: EdgeInsets.fromLTRB(22, 4, 22, AppShell.bottomNavClearance(context)),
+      padding: EdgeInsets.fromLTRB(
+        22,
+        4,
+        22,
+        AppShell.bottomNavClearance(context),
+      ),
       children: [
         CmpysKicker(
           item.isDailyRhythm
               ? 'Daily rhythm · Week ${item.weekStart}'
               : 'Week ${item.weekStart}'
-                  '${item.weekEnd != item.weekStart ? '–${item.weekEnd}' : ''} mission',
+                    '${item.weekEnd != item.weekStart ? '–${item.weekEnd}' : ''} mission',
         ),
         const SizedBox(height: 8),
-        Text(item.title,
-            style: AppTypography.h1
-                .copyWith(fontSize: 26, letterSpacing: -0.4, height: 1.25)),
+        Text(
+          item.title,
+          style: AppTypography.h1.copyWith(
+            fontSize: 26,
+            letterSpacing: -0.4,
+            height: 1.25,
+          ),
+        ),
         const SizedBox(height: 10),
         Row(
           children: [
@@ -217,8 +240,10 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
           ],
         ),
         const SizedBox(height: 18),
-        Text(item.description,
-            style: AppTypography.body.copyWith(fontSize: 15, height: 1.55)),
+        Text(
+          item.description,
+          style: AppTypography.body.copyWith(fontSize: 15, height: 1.55),
+        ),
         if (item.successMetric.isNotEmpty) ...[
           const SizedBox(height: 16),
           CmpysCardSurface(
@@ -228,13 +253,20 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Icon(PhosphorIconsRegular.target,
-                    size: 18, color: AppColors.green),
+                const Icon(
+                  PhosphorIconsRegular.target,
+                  size: 18,
+                  color: AppColors.green,
+                ),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: Text(item.successMetric,
-                      style: AppTypography.bodyMedium
-                          .copyWith(fontSize: 14, height: 1.45)),
+                  child: Text(
+                    item.successMetric,
+                    style: AppTypography.bodyMedium.copyWith(
+                      fontSize: 14,
+                      height: 1.45,
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -285,13 +317,13 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
         const SizedBox(height: 18),
         if (d.steps.isEmpty)
           CmpysButton(
-            variant:
-                d.completed ? CmpysBtnVariant.dark : CmpysBtnVariant.primary,
+            variant: d.completed
+                ? CmpysBtnVariant.dark
+                : CmpysBtnVariant.primary,
             size: CmpysBtnSize.lg,
             full: true,
             disabled: _toggling,
-            leadingIcon:
-                d.completed ? Icons.undo_rounded : Icons.check_rounded,
+            leadingIcon: d.completed ? Icons.undo_rounded : Icons.check_rounded,
             onTap: _toggleComplete,
             child: Text(d.completed ? 'Mark as not done' : 'Mark as done'),
           )
@@ -301,10 +333,7 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
             border: false,
             child: Row(
               children: [
-                const Icon(
-                  Icons.check_circle_rounded,
-                  color: AppColors.green2,
-                ),
+                const Icon(Icons.check_circle_rounded, color: AppColors.green2),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
@@ -363,9 +392,10 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
             child: Text(
               'Writing your lesson — steps and materials will appear here in a moment.',
               style: AppTypography.body.copyWith(
-                  fontSize: 13.5,
-                  color: AppColors.ink2,
-                  fontStyle: FontStyle.italic),
+                fontSize: 13.5,
+                color: AppColors.ink2,
+                fontStyle: FontStyle.italic,
+              ),
             ),
           ),
         ],
@@ -373,7 +403,11 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
     );
   }
 
-  Widget _lessonCard(PlanItemDetailed detailed, PlanStepDetail step, int index) {
+  Widget _lessonCard(
+    PlanItemDetailed detailed,
+    PlanStepDetail step,
+    int index,
+  ) {
     final completed = detailed.isStepCompleted(step.id);
     final unlocked = detailed.isStepUnlocked(index);
     final active = unlocked && !completed;
@@ -381,18 +415,24 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
         step.lessonContent != null && step.lessonContent!.trim().isNotEmpty;
 
     return CmpysCardSurface(
-      key: Key('lesson-${index + 1}-${completed ? 'completed' : active ? 'active' : 'locked'}'),
+      key: Key(
+        'lesson-${index + 1}-${completed
+            ? 'completed'
+            : active
+            ? 'active'
+            : 'locked'}',
+      ),
       color: active
           ? AppColors.greenSoft
           : unlocked
-              ? AppColors.card
-              : AppColors.paper2,
+          ? AppColors.card
+          : AppColors.paper2,
       raised: active,
       onTap: !unlocked
           ? () => _showLessonLocked(index, detailed.activeStepIndex)
           : hasLesson
-              ? () => _openLesson(detailed, step, index)
-              : null,
+          ? () => _openLesson(detailed, step, index)
+          : null,
       pad: const EdgeInsets.all(16),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -405,25 +445,25 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
               color: completed
                   ? AppColors.green
                   : active
-                      ? Colors.white
-                      : AppColors.card.withValues(alpha: 0.7),
+                  ? Colors.white
+                  : AppColors.card.withValues(alpha: 0.7),
               shape: BoxShape.circle,
             ),
             child: completed
                 ? const Icon(Icons.check_rounded, color: Colors.white, size: 18)
                 : unlocked
-                    ? Text(
-                        '${index + 1}',
-                        style: AppTypography.captionMedium.copyWith(
-                          color: AppColors.green2,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      )
-                    : const Icon(
-                        PhosphorIconsRegular.lockSimple,
-                        color: AppColors.ink3,
-                        size: 16,
-                      ),
+                ? Text(
+                    '${index + 1}',
+                    style: AppTypography.captionMedium.copyWith(
+                      color: AppColors.green2,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  )
+                : const Icon(
+                    PhosphorIconsRegular.lockSimple,
+                    color: AppColors.ink3,
+                    size: 16,
+                  ),
           ),
           const SizedBox(width: 13),
           Expanded(
@@ -434,14 +474,14 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
                   active
                       ? 'CURRENT LESSON'
                       : completed
-                          ? 'COMPLETED · TAP TO REVIEW'
-                          : 'LOCKED',
+                      ? 'COMPLETED · TAP TO REVIEW'
+                      : 'LOCKED',
                   style: AppTypography.kicker.copyWith(
                     color: active
                         ? AppColors.green2
                         : completed
-                            ? AppColors.green
-                            : AppColors.ink3,
+                        ? AppColors.green
+                        : AppColors.ink3,
                     fontSize: 8.5,
                   ),
                 ),
@@ -606,7 +646,11 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
       screen = MaterialVideoScreen(material: m, videoId: videoId);
     } else if (m.type == 'book' && m.contentResourceId != null) {
       screen = BookReaderScreen(
-          resourceId: m.contentResourceId!, fallbackTitle: m.title);
+        resourceId: m.contentResourceId!,
+        fallbackTitle: m.title,
+      );
+    } else if (m.prefersExternalLink) {
+      screen = MaterialWebScreen(title: m.title, url: m.url!);
     } else if (m.hasInAppContent) {
       screen = MaterialReaderScreen(material: m);
     } else if (m.url != null && m.url!.isNotEmpty) {
@@ -622,6 +666,9 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
   ({IconData icon, String label})? _materialAction(PlanMaterialDetail m) {
     if (m.youtubeVideoId != null) {
       return (icon: PhosphorIconsFill.playCircle, label: 'Watch');
+    }
+    if (m.prefersExternalLink) {
+      return (icon: PhosphorIconsRegular.globe, label: 'Open');
     }
     if (m.hasInAppContent) {
       return (icon: PhosphorIconsRegular.bookOpen, label: 'Read');
@@ -646,20 +693,31 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(m.title,
-                    style: AppTypography.bodyMedium.copyWith(fontSize: 14.5)),
+                Text(
+                  m.title,
+                  style: AppTypography.bodyMedium.copyWith(fontSize: 14.5),
+                ),
                 if (m.authorOrCreator != null &&
                     m.authorOrCreator!.isNotEmpty) ...[
                   const SizedBox(height: 2),
-                  Text(m.authorOrCreator!,
-                      style: AppTypography.caption
-                          .copyWith(color: AppColors.ink3, fontSize: 12.5)),
+                  Text(
+                    m.authorOrCreator!,
+                    style: AppTypography.caption.copyWith(
+                      color: AppColors.ink3,
+                      fontSize: 12.5,
+                    ),
+                  ),
                 ],
                 if (m.reason != null && m.reason!.isNotEmpty) ...[
                   const SizedBox(height: 6),
-                  Text(m.reason!,
-                      style: AppTypography.caption.copyWith(
-                          color: AppColors.ink2, fontSize: 13, height: 1.4)),
+                  Text(
+                    m.reason!,
+                    style: AppTypography.caption.copyWith(
+                      color: AppColors.ink2,
+                      fontSize: 13,
+                      height: 1.4,
+                    ),
+                  ),
                 ],
               ],
             ),
@@ -667,8 +725,7 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
           if (action != null) ...[
             const SizedBox(width: 10),
             Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
               decoration: BoxDecoration(
                 color: AppColors.greenSoft,
                 borderRadius: BorderRadius.circular(999),
@@ -678,11 +735,14 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
                 children: [
                   Icon(action.icon, size: 14, color: AppColors.green2),
                   const SizedBox(width: 5),
-                  Text(action.label,
-                      style: AppTypography.caption.copyWith(
-                          color: AppColors.green2,
-                          fontSize: 12.5,
-                          fontWeight: FontWeight.w700)),
+                  Text(
+                    action.label,
+                    style: AppTypography.caption.copyWith(
+                      color: AppColors.green2,
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -704,9 +764,14 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
         children: [
           Icon(icon, size: 13, color: tone),
           const SizedBox(width: 5),
-          Text(label,
-              style: AppTypography.caption.copyWith(
-                  color: tone, fontSize: 12, fontWeight: FontWeight.w600)),
+          Text(
+            label,
+            style: AppTypography.caption.copyWith(
+              color: tone,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
         ],
       ),
     );

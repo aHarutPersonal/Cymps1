@@ -94,16 +94,20 @@ void main() {
 
   test('PlanMaterialDetail extracts YouTube ids and in-app content', () {
     PlanMaterialDetail mat(String? url) => PlanMaterialDetail.fromJson({
-          'title': 'Video',
-          'type': 'video',
-          'url': url,
-        });
+      'title': 'Video',
+      'type': 'video',
+      'url': url,
+    });
 
-    expect(mat('https://www.youtube.com/watch?v=CHsjWfBfHAw').youtubeVideoId,
-        'CHsjWfBfHAw');
+    expect(
+      mat('https://www.youtube.com/watch?v=CHsjWfBfHAw').youtubeVideoId,
+      'CHsjWfBfHAw',
+    );
     expect(mat('https://youtu.be/abc123XYZ_-').youtubeVideoId, 'abc123XYZ_-');
-    expect(mat('https://youtube.com/shorts/sh0rtID9x_Q').youtubeVideoId,
-        'sh0rtID9x_Q');
+    expect(
+      mat('https://youtube.com/shorts/sh0rtID9x_Q').youtubeVideoId,
+      'sh0rtID9x_Q',
+    );
     expect(mat('https://www.amazon.com/s?k=book').youtubeVideoId, isNull);
     expect(mat(null).youtubeVideoId, isNull);
 
@@ -118,6 +122,15 @@ void main() {
     expect(lesson.hasInAppContent, isTrue);
     expect(lesson.ideas.single.category, 'Discipline');
     expect(mat('https://www.amazon.com/s?k=book').hasInAppContent, isFalse);
+
+    final externalCourse = PlanMaterialDetail.fromJson({
+      'title': 'Introduction to Business Analytics',
+      'type': 'course',
+      'url': 'https://www.coursera.org/search?query=business+analytics',
+      'content_resource_id': 'legacy-metadata-only-resource',
+    });
+    expect(externalCourse.prefersExternalLink, isTrue);
+    expect(externalCourse.hasInAppContent, isFalse);
   });
 
   test('splitBookChapters splits on chapter headings with part fallback', () {
@@ -136,8 +149,10 @@ void main() {
     expect(single.first.markdown, contains('Just one short lesson.'));
 
     // No headings, long text → fixed-size parts.
-    final longText = List.generate(40, (_) => List.filled(200, 'w').join(' '))
-        .join('\n\n');
+    final longText = List.generate(
+      40,
+      (_) => List.filled(200, 'w').join(' '),
+    ).join('\n\n');
     final parts = splitBookChapters(longText);
     expect(parts.length, greaterThan(1));
     expect(parts.first.title, 'Part 1');

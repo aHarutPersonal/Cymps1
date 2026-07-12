@@ -457,6 +457,7 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
       return 'Read book';
     }
     if (material.youtubeVideoId != null) return 'Watch';
+    if (material.prefersExternalLink) return 'Open';
     if (material.hasInAppContent) return 'Read';
     if ((material.url ?? '').isNotEmpty) return 'Open';
     return null;
@@ -472,6 +473,8 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
       );
     } else if (videoId != null) {
       screen = MaterialVideoScreen(material: material, videoId: videoId);
+    } else if (material.prefersExternalLink) {
+      screen = MaterialWebScreen(title: material.title, url: material.url!);
     } else if (material.hasInAppContent) {
       screen = MaterialReaderScreen(material: material);
     } else if ((material.url ?? '').isNotEmpty) {
