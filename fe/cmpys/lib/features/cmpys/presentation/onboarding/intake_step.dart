@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../app/design_tokens.dart';
+import '../../../../core/network/api_error.dart';
 import '../../../../core/network/coalesced_text.dart';
 import '../../../../core/ui/cmpys/cmpys_primitives.dart';
 import '../../../session/data/session_repository.dart';
@@ -102,7 +103,10 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
           session.phase == SessionPhase.intake) {
         session = await repo.selectIdol(
           _sessionId!,
-          SelectIdolRequest(idolName: widget.idol.name),
+          SelectIdolRequest(
+            idolName: widget.idol.name,
+            wikidataId: widget.idol.wikidataId,
+          ),
         );
       }
       if (session.phase == SessionPhase.comparison ||
@@ -118,9 +122,11 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
       setState(() {
         _typing = false;
         _streaming = false;
-        _error = 'Couldn’t reach ${widget.idol.short}. Check your connection.';
-        _lastSent = _kickoff;
-        _lastSentWasKickoff = true;
+        _error = _setupErrorMessage(e);
+        // Mentor selection did not complete, so Retry must re-run bootstrap
+        // and selection. Sending the kickoff directly would always 409.
+        _lastSent = null;
+        _lastSentWasKickoff = false;
       });
     }
   }
@@ -220,16 +226,47 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
     } catch (e) {
       if (!mounted) return;
       debugPrint('💥 interview send failed: $e');
+      final setupConflict =
+          isKickoff && e is ApiError && e.statusCode == 409;
       setState(() {
         _typing = false;
         _streaming = false;
         _streamingText.value = '';
-        _error =
-            '${widget.idol.short} got cut off. Tap retry to continue the conversation.';
+        _error = _turnErrorMessage(e);
+        if (setupConflict) {
+          _lastSent = null;
+          _lastSentWasKickoff = false;
+        }
       });
     } finally {
       streamed.dispose();
     }
+  }
+
+  String _setupErrorMessage(Object error) {
+    if (error is NetworkError) {
+      return 'Couldn’t reach ${widget.idol.short}. Check your connection and retry.';
+    }
+    if (error is TimeoutError) {
+      return '${widget.idol.short} is taking longer than expected. Tap retry.';
+    }
+    return 'Couldn’t prepare ${widget.idol.short}. Tap retry to try the setup again.';
+  }
+
+  String _turnErrorMessage(Object error) {
+    if (error is ApiError && error.statusCode == 409) {
+      return '${widget.idol.short} isn’t ready yet. Tap retry to finish setup.';
+    }
+    if (error is SseIncompleteException) {
+      return '${widget.idol.short} got cut off before finishing. Tap retry.';
+    }
+    if (error is NetworkError) {
+      return 'Couldn’t reach ${widget.idol.short}. Check your connection and retry.';
+    }
+    if (error is TimeoutError) {
+      return '${widget.idol.short} is taking longer than expected. Tap retry.';
+    }
+    return '${widget.idol.short} couldn’t finish that reply. Tap retry.';
   }
 
   void _advance() {

@@ -302,6 +302,24 @@ async def _catalog_idol_suggestions(
         )
 
     ranked.sort(key=lambda entry: entry[0], reverse=True)
+
+    # Import pipelines may leave multiple records for the same public figure
+    # (for example a Wikidata-backed row and an older LLM-discovered row).
+    # Never spend two of the three suggestion slots on the same display name.
+    unique_ranked: list[tuple[float, str, IdolSuggestionItem]] = []
+    seen_names: set[str] = set()
+    for entry in ranked:
+        normalized_name = re.sub(
+            r"\s+",
+            " ",
+            entry[2].name.strip().casefold(),
+        )
+        if normalized_name in seen_names:
+            continue
+        seen_names.add(normalized_name)
+        unique_ranked.append(entry)
+    ranked = unique_ranked
+
     if len(ranked) < limit:
         return []
 
@@ -393,6 +411,35 @@ def _strip_json_fences(text: str) -> str:
         if stripped.endswith("```"):
             stripped = stripped[:-3]
     return stripped.strip()
+
+
+def _unique_idol_suggestions(
+    suggestions: list[IdolSuggestionItem],
+    *,
+    limit: int = 3,
+) -> list[IdolSuggestionItem]:
+    """Keep the first suggestion for each stable identity and display name."""
+    unique: list[IdolSuggestionItem] = []
+    seen_external_ids: set[str] = set()
+    seen_names: set[str] = set()
+    for suggestion in suggestions:
+        normalized_name = re.sub(
+            r"\s+",
+            " ",
+            suggestion.name.strip().casefold(),
+        )
+        external_id = (suggestion.wikidata_id or "").strip().casefold()
+        if normalized_name in seen_names:
+            continue
+        if external_id and external_id in seen_external_ids:
+            continue
+        seen_names.add(normalized_name)
+        if external_id:
+            seen_external_ids.add(external_id)
+        unique.append(suggestion)
+        if len(unique) >= limit:
+            break
+    return unique
 
 
 def _render_persona_system(idol_name: str, idol_persona: dict) -> str:
@@ -624,9 +671,24 @@ async def suggest_idols(
     # first successful generation is definitive — reuse it on retries and
     # back-navigation instead of a fresh 5-15s grounded LLM call.
     if session.idol_suggestions_json:
-        cached = [IdolSuggestionItem(**s) for s in session.idol_suggestions_json]
-        logger.info(f"[SESSION] Returning {len(cached)} cached idol suggestions for session {session_id}")
-        return IdolSuggestionsResponse(suggestions=cached)
+        cached = _unique_idol_suggestions(
+            [IdolSuggestionItem(**s) for s in session.idol_suggestions_json]
+        )
+        if len(cached) >= 3:
+            if len(cached) != len(session.idol_suggestions_json):
+                session.idol_suggestions_json = [
+                    suggestion.model_dump(mode="json") for suggestion in cached
+                ]
+                await db.commit()
+            logger.info(
+                "[SESSION] Returning %s cached idol suggestions for session %s",
+                len(cached),
+                session_id,
+            )
+            return IdolSuggestionsResponse(suggestions=cached)
+        # A stale duplicate-filled cache does not satisfy the three-mentor
+        # contract. Let the catalog/grounded fallback replace it below.
+        session.idol_suggestions_json = None
 
     # Fast path: use high-quality, age-grounded entries already paid for and
     # verified in the shared catalog. The helper returns an empty list unless
@@ -676,7 +738,7 @@ async def suggest_idols(
 
         parsed = json_lib.loads(_strip_json_fences(full_response))
         suggestions_raw = parsed.get("suggestions", [])
-        suggestions = [
+        suggestions = _unique_idol_suggestions([
             IdolSuggestionItem(
                 name=s.get("name", "Unknown"),
                 era=s.get("era", "Unknown"),
@@ -686,7 +748,7 @@ async def suggest_idols(
                 confidence=s.get("confidence", 0.8),
             )
             for s in suggestions_raw[:3]
-        ]
+        ])
     except Exception as e:
         logger.error(f"[SESSION] Idol suggestion generation failed ({e}); using fallback")
 
@@ -723,16 +785,55 @@ async def select_idol(
     session = await _get_session(session_id, current_user.id, db)
     _require_phase(session, SessionPhase.IDOL_SELECTION)
 
-    # Try to find existing idol by name
-    stmt = select(Idol).where(Idol.name == data.idol_name)
+    # Prefer an existing canonical identity. Names are not unique in legacy
+    # catalog data, so collect every case-insensitive match and rank them
+    # deterministically instead of calling scalar_one_or_none (which raises
+    # MultipleResultsFound and leaves the session in idol_selection).
+    clean_name = data.idol_name.strip()
+    stmt = (
+        select(Idol)
+        .options(selectinload(Idol.external_ids))
+        .where(func.lower(func.trim(Idol.name)) == clean_name.lower())
+    )
     result = await db.execute(stmt)
-    idol = result.scalar_one_or_none()
+    candidates = list(result.scalars().all())
+
+    def selection_rank(candidate: Idol) -> tuple[int, int, int, float, int, str]:
+        external_ids = list(candidate.external_ids)
+        requested_identity = bool(
+            data.wikidata_id
+            and any(
+                external.provider == "wikidata"
+                and external.external_id == data.wikidata_id
+                for external in external_ids
+            )
+        )
+        has_wikidata = any(
+            external.provider == "wikidata" for external in external_ids
+        )
+        return (
+            int(requested_identity),
+            int(candidate.status == CatalogStatus.PUBLISHED),
+            int(has_wikidata),
+            candidate.quality_score if candidate.quality_score is not None else -1.0,
+            int(candidate.published_at is not None),
+            str(candidate.id),
+        )
+
+    idol = max(candidates, key=selection_rank, default=None)
+    if len(candidates) > 1:
+        logger.warning(
+            "[SESSION] Resolved %s catalog rows named %r to idol %s",
+            len(candidates),
+            clean_name,
+            idol.id if idol else "none",
+        )
 
     if not idol:
         # Create a minimal idol record; full import can happen async
         idol = Idol(
             id=str(uuid.uuid4()),
-            name=data.idol_name,
+            name=clean_name,
             domain="unknown",  # Placeholder until ingestion fills it in
         )
         # Store wikidata_id as an external ID if provided
@@ -1024,22 +1125,80 @@ async def interview(
     if not thread:
         raise HTTPException(status_code=404, detail="Interview thread not found")
 
+    history_messages = list(thread.messages)
+
+    # A reconstructed onboarding screen sends the hidden kickoff again. If an
+    # opening question is already durable, replay it instead of charging for a
+    # second model call and incrementing the interview twice.
+    if (
+        data.is_kickoff
+        and session.interview_turn_count > 0
+        and history_messages
+        and history_messages[-1].role == MessageRole.ASSISTANT
+    ):
+        previous_question = history_messages[-1].content
+        current_turn = session.interview_turn_count
+        await db.commit()
+
+        async def replay_opening_question():
+            yield f"data: {json_lib.dumps({'type': 'chunk', 'content': previous_question})}\n\n"
+            yield f"data: {json_lib.dumps({'type': 'done', 'turn': current_turn, 'max_turns': MAX_INTERVIEW_TURNS, 'phase_transition': False})}\n\n"
+
+        logger.info(
+            "[SESSION] Replaying completed interview turn %s for session %s",
+            current_turn,
+            session_id,
+        )
+        return StreamingResponse(
+            replay_opening_question(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    has_pending_user_turn = bool(
+        history_messages
+        and history_messages[-1].role == MessageRole.USER
+    )
+    # If the screen was reconstructed after an answered turn failed, its
+    # generic kickoff acts as a recovery signal: retry the durable unanswered
+    # answer rather than discarding it and starting the interview over.
+    resume_pending_answer = bool(data.is_kickoff and has_pending_user_turn)
+    user_content = (
+        history_messages[-1].content
+        if resume_pending_answer
+        else data.content
+    )
+    effective_kickoff = data.is_kickoff and not resume_pending_answer
+    pending_retry = bool(
+        has_pending_user_turn
+        and history_messages[-1].content == user_content
+    )
+    prompt_history = (
+        history_messages[:-1]
+        if has_pending_user_turn
+        else history_messages
+    )
+
     # Persist the user's message — but never the kickoff protocol message.
     # It is the client speaking, not the person; persisting it would leak
     # "Hi — I'm ready. Ask me your first question." into the transcript that
     # comparison/blueprint later quote as the user's own words.
-    if not data.is_kickoff:
+    if not effective_kickoff and not pending_retry:
         user_msg = ChatMessage(
             id=str(uuid.uuid4()),
             thread_id=thread.id,
             role=MessageRole.USER,
-            content=data.content,
+            content=user_content,
         )
         db.add(user_msg)
         await db.flush()
 
     # Build context for the prompt
-    chat_history_json = _build_chat_history_json(thread.messages)
+    chat_history_json = _build_chat_history_json(prompt_history)
 
     idol_name = session.idol.name if session.idol else "Unknown"
     idol_persona_obj = getattr(session.idol, "persona", None)
@@ -1091,7 +1250,7 @@ async def interview(
                 idol_persona=idol_persona,
                 chat_history_json=chat_history_json,
                 current_turn=current_turn,
-                user_message=data.content,
+                user_message=user_content,
             )
 
             async for chunk in interview_stream(
@@ -1106,46 +1265,48 @@ async def interview(
             clean_response = full_response.replace(
                 INTERVIEW_COMPLETE_MARKER, ""
             ).rstrip()
-            async with db.begin_nested():
-                ai_msg = ChatMessage(
-                    id=str(uuid.uuid4()),
-                    thread_id=thread.id,
-                    role=MessageRole.ASSISTANT,
-                    content=clean_response,
-                )
-                db.add(ai_msg)
+            if not clean_response.strip():
+                raise RuntimeError("Interview model returned an empty response")
 
-                # Update turn count
-                session.interview_turn_count = current_turn
+            ai_msg = ChatMessage(
+                id=str(uuid.uuid4()),
+                thread_id=thread.id,
+                role=MessageRole.ASSISTANT,
+                content=clean_response,
+            )
+            db.add(ai_msg)
 
-                # Soft transition after min turns: the explicit marker the
-                # prompt instructs the model to append is the primary signal;
-                # a couple of unambiguous closing phrases are the fallback.
-                if current_turn >= MIN_INTERVIEW_TURNS:
-                    lower = full_response.lower()
-                    if INTERVIEW_COMPLETE_MARKER.lower() in lower or any(
-                        sig in lower for sig in _COMPLETION_FALLBACK_SIGNALS
-                    ):
-                        should_transition = True
+            # Update turn count
+            session.interview_turn_count = current_turn
 
-                # Hard cap enforcement
-                if should_transition:
-                    session.transition_to(SessionPhase.COMPARISON)
+            # Soft transition after min turns: the explicit marker the
+            # prompt instructs the model to append is the primary signal;
+            # a couple of unambiguous closing phrases are the fallback.
+            if current_turn >= MIN_INTERVIEW_TURNS:
+                lower = full_response.lower()
+                if INTERVIEW_COMPLETE_MARKER.lower() in lower or any(
+                    sig in lower for sig in _COMPLETION_FALLBACK_SIGNALS
+                ):
+                    should_transition = True
 
-                await db.commit()
+            # Hard cap enforcement
+            if should_transition:
+                session.transition_to(SessionPhase.COMPARISON)
+
+            await db.commit()
 
             # Send done event with phase transition info
             yield f"data: {json_lib.dumps({'type': 'done', 'turn': current_turn, 'max_turns': MAX_INTERVIEW_TURNS, 'phase_transition': should_transition})}\n\n"
 
         except Exception as e:
-            logger.error(f"[SESSION] Interview stream error: {e}")
-            yield f"data: {json_lib.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            logger.exception("[SESSION] Interview stream error: %s", e)
+            yield f"data: {json_lib.dumps({'type': 'error', 'message': 'The interview reply could not be completed. Please retry.'})}\n\n"
 
     return StreamingResponse(
         generate_stream(),
         media_type="text/event-stream",
         headers={
-            "Cache-Control": "no-cache",
+            "Cache-Control": "no-cache, no-transform",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         },

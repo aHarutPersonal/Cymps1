@@ -115,6 +115,7 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
       era: s.era,
       summary: s.relevanceSummary,
       domains: s.domains,
+      wikidataId: s.wikidataId,
     );
     final score = (s.confidence * 100).clamp(0, 99).round();
     final reason = s.relevanceSummary.trim().isEmpty

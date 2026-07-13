@@ -4,6 +4,17 @@
 
 ---
 
+## 2026-07-13: Mentor Selection & Interview Retry Recovery
+
+- Fixed mentor selection crashing when legacy ingestion left multiple catalog rows with the same name; selection now resolves all matches deterministically and prefers the published Wikidata-backed identity.
+- Deduplicated cached, catalog, and generated mentor suggestions, and preserved Wikidata identity from the suggestion card through the Flutter selection request.
+- Changed onboarding Retry to repeat failed mentor setup before sending the interview kickoff, preventing the invalid `idol_selection` → interview request that returned HTTP 409.
+- Made interview retries reuse unanswered learner turns, replay an already-persisted opening question without another model call, and resume a durable pending answer after screen reconstruction.
+- Rejected empty interview output and replaced raw provider diagnostics with a safe terminal error while retaining immediate, proxy-safe SSE behavior.
+- Live-data verification found both duplicate Elon Musk rows, selected the canonical Wikidata identity, and confirmed the failed session remained cleanly in `idol_selection` with no partial mentor or thread linkage. The recovered session's real kickoff completed in 7.0 seconds; retry replay returned in 18 ms with zero duplicate messages. All 395 backend tests and 135 Flutter tests passed, along with Ruff, Python compilation, Flutter analysis, diff validation, and a release web build.
+
+---
+
 ## 2026-07-13: Mentor Chat First-Turn & Streaming Reliability
 
 - Fixed first-message chat failure caused by asynchronously lazy-loading a newly created thread's empty message relationship; thread creation, session linkage, and the learner turn now commit atomically before streaming.

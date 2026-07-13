@@ -29,6 +29,7 @@ class CmpysIdol {
     this.atYourAge,
     this.pillars = const [],
     this.featured = false,
+    this.wikidataId,
   });
 
   final String id;
@@ -47,6 +48,30 @@ class CmpysIdol {
   final String? atYourAge;
   final List<String> pillars;
   final bool featured;
+  final String? wikidataId;
+
+  CmpysIdol withWikidataId(String? value) {
+    if (value == null || value.isEmpty || value == wikidataId) return this;
+    return CmpysIdol(
+      id: id,
+      slug: slug,
+      name: name,
+      short: short,
+      initials: initials,
+      title: title,
+      era: era,
+      field: field,
+      color: color,
+      tint: tint,
+      tag: tag,
+      blurb: blurb,
+      quote: quote,
+      atYourAge: atYourAge,
+      pillars: pillars,
+      featured: featured,
+      wikidataId: value,
+    );
+  }
 }
 
 const cmpysIdols = <CmpysIdol>[
@@ -681,6 +706,7 @@ Map<String, dynamic> cmpysIdolToJson(CmpysIdol i) => {
       'quote': i.quote,
       'atYourAge': i.atYourAge,
       'pillars': i.pillars,
+      if (i.wikidataId != null) 'wikidataId': i.wikidataId,
     };
 
 CmpysIdol cmpysIdolFromJson(Map<String, dynamic> j) {
@@ -688,7 +714,9 @@ CmpysIdol cmpysIdolFromJson(Map<String, dynamic> j) {
   final id = j['id'] as String?;
   if (id != null) {
     final match = cmpysIdols.where((i) => i.id == id);
-    if (match.isNotEmpty) return match.first;
+    if (match.isNotEmpty) {
+      return match.first.withWikidataId(j['wikidataId'] as String?);
+    }
   }
   return CmpysIdol(
     id: id ?? 'idol',
@@ -707,6 +735,7 @@ CmpysIdol cmpysIdolFromJson(Map<String, dynamic> j) {
     atYourAge: j['atYourAge'] as String?,
     pillars: (j['pillars'] as List?)?.map((e) => e.toString()).toList() ??
         const [],
+    wikidataId: j['wikidataId'] as String?,
   );
 }
 
@@ -744,10 +773,11 @@ CmpysIdol cmpysIdolFromSuggestion({
   required String era,
   required String summary,
   required List<String> domains,
+  String? wikidataId,
 }) {
   final match = cmpysIdols
       .where((i) => i.name.toLowerCase().trim() == name.toLowerCase().trim());
-  if (match.isNotEmpty) return match.first;
+  if (match.isNotEmpty) return match.first.withWikidataId(wikidataId);
 
   const palette = <List<Color>>[
     [AppColors.green, AppColors.greenSoft],
@@ -784,6 +814,7 @@ CmpysIdol cmpysIdolFromSuggestion({
     quote: cleanSummary,
     atYourAge: null,
     pillars: domains.map(_cap).take(3).toList(),
+    wikidataId: wikidataId,
   );
 }
 
