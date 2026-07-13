@@ -4,6 +4,19 @@
 
 ---
 
+## 2026-07-13: Plan Detail Loading Hardening
+
+- Fixed the simulator launcher so its local API and Celery worker are the services Flutter actually uses; debug iOS/desktop now defaults to localhost, while `API_BASE_URL` remains an explicit override.
+- Added startup migration/API/worker readiness checks so Flutter is not launched against unavailable or outdated local services.
+- Completed legacy missions now return a terminal completed detail state and never spend tokens or remain on a contradictory “Done” + “Writing your lesson” screen.
+- Replaced repeated full-detail downloads with typed lightweight detail-job polling, live stage/percentage feedback, adaptive backoff, and a bounded foreground wait that lets the user leave while generation continues.
+- Promoted an opened prefetched lesson to the user-facing queue, while atomically claiming jobs so low/high-priority copies cannot both generate the same expensive artifact.
+- Added a detail-job heartbeat migration, queue/running lease windows aligned with worker limits, a soft timeout, pre-prompt failure persistence, and terminal broker-publication failures.
+- Moved comparison-score backfill polling out of the global Today/Plan shell and into Compare, eliminating the unrelated `/sessions/latest` loop visible beside plan-detail polling.
+- Verification: all 346 backend tests (including the live local migration integration test) and all 123 Flutter tests passed, along with Ruff, Python compilation, Flutter analysis, shell validation, migration-head validation, diff validation, and a release web build.
+
+---
+
 ## 2026-07-13: Automatic Post-Interview Mentor Lab
 
 - Replaced the separate comparison reveal and blueprint waiting screens with one automatic Mentor Lab transition immediately after the final interview answer.

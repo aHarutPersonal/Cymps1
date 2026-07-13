@@ -18,3 +18,8 @@ def test_migration_applies_and_creates_schema():
         assert cur.fetchone()[0] == "review_queue", "review_queue view not found"
         cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='idols' AND column_name='embedding'")
         assert cur.fetchone() is not None, "idols.embedding not found"
+        cur.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name='plan_item_detail_jobs' AND column_name='updated_at'"
+        )
+        assert cur.fetchone() is not None, "detail job heartbeat column not found"

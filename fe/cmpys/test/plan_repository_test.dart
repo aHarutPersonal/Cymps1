@@ -17,6 +17,17 @@ void main() {
     expect(job.status, 'running');
   });
 
+  test('getPlanDetailJobStatus narrows polling to detail jobs', () async {
+    final client = _RecordingDioClient();
+    final repository = PlanRepository(dioClient: client);
+
+    final job = await repository.getPlanDetailJobStatus('detail-job-123');
+
+    expect(client.requestedPath, '/jobs/detail-job-123');
+    expect(client.requestedQuery, const {'type': 'plan_detail'});
+    expect(job.status, 'running');
+  });
+
   test('resolveContentResourceId late-binds a generated book', () async {
     final client = _RecordingDioClient();
     final repository = PlanRepository(dioClient: client);

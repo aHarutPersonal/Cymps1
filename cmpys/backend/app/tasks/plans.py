@@ -2,7 +2,7 @@ import logging
 from typing import Any
 
 from pydantic import ValidationError
-from sqlalchemy import and_, select
+from sqlalchemy import and_, select, update
 from sqlalchemy.orm import selectinload
 
 from app.core.celery import celery_app
@@ -569,7 +569,7 @@ async def _run_plan_generation_async(job_id: str) -> dict:
     await db.commit()
 
 
-@celery_app.task(bind=True)
+@celery_app.task(bind=True, soft_time_limit=540, time_limit=600)
 def regenerate_plan_item_details(self, job_id: str) -> dict:
     """
     Regenerate details (steps + materials) for a plan item using LLM.
@@ -581,7 +581,36 @@ def regenerate_plan_item_details(self, job_id: str) -> dict:
         return result
     except Exception as e:
         logger.exception(f"[PLAN_DETAILS] Error regenerating job_id={job_id}: {e}")
+        # Context loading and strict prompt rendering happen before the inner
+        # provider try/except. Persist those failures (and the 9-minute soft
+        # timeout) so the client receives a terminal retry state instead of a
+        # job that says "running" forever.
+        try:
+            run_async(_mark_plan_detail_job_failed(job_id, str(e)))
+        except Exception:
+            logger.exception(
+                "[PLAN_DETAILS] Could not persist failure job_id=%s", job_id
+            )
         raise
+
+
+async def _mark_plan_detail_job_failed(job_id: str, error: str) -> None:
+    from app.models.item_detail_job import PlanItemDetailJob
+
+    async with async_session_maker() as db:
+        await db.execute(
+            update(PlanItemDetailJob)
+            .where(
+                PlanItemDetailJob.id == job_id,
+                PlanItemDetailJob.status != "completed",
+            )
+            .values(
+                status="failed",
+                step="error",
+                error_message=error[:4000],
+            )
+        )
+        await db.commit()
 
 
 async def _regenerate_plan_item_details_async(job_id: str) -> dict:
@@ -600,7 +629,38 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
     )
     
     async with async_session_maker() as db:
-        # Load job
+        # Atomically claim the row. A prefetched low-priority message may be
+        # republished to high priority when its screen is opened; only one
+        # worker may perform the expensive generation.
+        claim_result = await db.execute(
+            update(PlanItemDetailJob)
+            .where(
+                PlanItemDetailJob.id == job_id,
+                PlanItemDetailJob.status.in_(["queued", "pending"]),
+            )
+            .values(
+                status="running",
+                step="loading_context",
+                progress_percent=10,
+                error_message=None,
+            )
+        )
+        await db.commit()
+        if claim_result.rowcount != 1:
+            status_result = await db.execute(
+                select(PlanItemDetailJob.status).where(
+                    PlanItemDetailJob.id == job_id
+                )
+            )
+            existing_status = status_result.scalar_one_or_none()
+            if existing_status is None:
+                return {"status": "failed", "error": "Job not found"}
+            return {
+                "status": "skipped",
+                "reason": f"job_already_{existing_status}",
+            }
+
+        # Load the claimed job and its complete generation context.
         stmt = (
             select(PlanItemDetailJob)
             .options(
@@ -617,9 +677,7 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
         item = job.plan_item
         user_id = job.user_id
         
-        # Step 1: Loading context
-        await _update_job(db, job, status="running", step="loading_context", progress=10)
-        
+        # Step 1: Loading context (the atomic claim above persisted 10%).
         plan = item.plan
         idol = plan.idol if plan else None
         idol_name = idol.name if idol else "this person"
@@ -1054,7 +1112,9 @@ async def _enqueue_all_details_generation_async(db, plan, user_id):
         job = PlanItemDetailJob(
             user_id=user_id,
             plan_item_id=item.id,
-            status="pending"
+            status="pending",
+            step="prefetch_queued",
+            progress_percent=0,
         )
         db.add(job)
         jobs.append(job)
@@ -1066,11 +1126,33 @@ async def _enqueue_all_details_generation_async(db, plan, user_id):
     await db.flush()
     await db.commit()
 
+    publish_failures = 0
     for job in jobs:
-        regenerate_plan_item_details.apply_async(
-            args=[str(job.id)], queue="low_priority"
-        )
+        try:
+            regenerate_plan_item_details.apply_async(
+                args=[str(job.id)], queue="low_priority"
+            )
+        except Exception as exc:
+            publish_failures += 1
+            logger.exception(
+                "[PLANNING] Could not publish detail prefetch job_id=%s",
+                job.id,
+            )
+            await db.execute(
+                update(PlanItemDetailJob)
+                .where(PlanItemDetailJob.id == job.id)
+                .values(
+                    status="failed",
+                    step="error",
+                    error_message=f"Could not start lesson generation: {exc}"[:4000],
+                )
+            )
+
+    if publish_failures:
+        await db.commit()
 
     logger.info(
-        f"[PLANNING] Enqueued {len(jobs)} items for detail generation (All Weeks)"
+        "[PLANNING] Enqueued %s week-one detail jobs (%s publish failures)",
+        len(jobs),
+        publish_failures,
     )

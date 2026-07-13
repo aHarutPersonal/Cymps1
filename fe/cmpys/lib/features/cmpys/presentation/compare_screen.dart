@@ -43,6 +43,7 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
   Widget build(BuildContext context) {
     final st = ref.watch(cmpysStoreProvider);
     ref.watch(cmpysBackendSyncProvider);
+    ref.watch(cmpysComparisonScoresSyncProvider);
     final idol = st.idol;
     final dims = st.liveDims();
     final ms = st.liveMilestones();
@@ -123,7 +124,7 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
 
   Widget _comparisonScoresPending() {
     return CmpysCardSurface(
-      onTap: () => ref.invalidate(cmpysBackendSyncProvider),
+      onTap: () => ref.invalidate(cmpysComparisonScoresSyncProvider),
       raised: true,
       child: Row(
         children: [

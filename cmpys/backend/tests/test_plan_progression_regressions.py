@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -131,11 +131,65 @@ class _Result:
 
 
 @pytest.mark.asyncio
+async def test_opening_prefetched_detail_promotes_it_once() -> None:
+    job = SimpleNamespace(
+        id="job-prefetch",
+        plan_item_id="mission-1",
+        status="pending",
+        step="prefetch_queued",
+        error_message=None,
+    )
+    db = AsyncMock()
+    db.execute.return_value = SimpleNamespace(rowcount=1)
+
+    with patch(
+        "app.tasks.plans.regenerate_plan_item_details.apply_async"
+    ) as enqueue:
+        result = await plans._promote_prefetched_detail_job(db, job)
+
+    assert result == "promoted"
+    assert job.status == "queued"
+    enqueue.assert_called_once_with(
+        args=["job-prefetch"], queue="high_priority"
+    )
+    db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_prefetch_publish_failure_becomes_terminal() -> None:
+    job = SimpleNamespace(
+        id="job-prefetch",
+        plan_item_id="mission-1",
+        status="pending",
+        step="prefetch_queued",
+        error_message=None,
+    )
+    db = AsyncMock()
+    db.execute.side_effect = [
+        SimpleNamespace(rowcount=1),
+        SimpleNamespace(rowcount=1),
+    ]
+
+    with patch(
+        "app.tasks.plans.regenerate_plan_item_details.apply_async",
+        side_effect=RuntimeError("broker unavailable"),
+    ):
+        result = await plans._promote_prefetched_detail_job(db, job)
+
+    assert result == "failed"
+    assert job.status == "failed"
+    assert db.commit.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_failed_detail_job_is_returned_instead_of_requeued_forever() -> None:
     item = _item("mission-1", PlanItemType.PROJECT, 1)
     failed_job = SimpleNamespace(
         id="job-1",
         status="failed",
+        step="error",
+        progress_percent=60,
+        error_message="provider failed",
         created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
     )
@@ -147,9 +201,7 @@ async def test_failed_detail_job_is_returned_instead_of_requeued_forever() -> No
     original_get = plans._get_item_for_user
     original_progress = plans._compute_item_progress
     plans._get_item_for_user = AsyncMock(return_value=item)
-    plans._compute_item_progress = AsyncMock(
-        return_value=(ItemProgress(), False)
-    )
+    plans._compute_item_progress = AsyncMock(return_value=(ItemProgress(), False))
     try:
         response = await plans.get_plan_item_detailed(
             "mission-1",
@@ -167,6 +219,39 @@ async def test_failed_detail_job_is_returned_instead_of_requeued_forever() -> No
 
 
 @pytest.mark.asyncio
+async def test_completed_legacy_mission_never_enqueues_or_polls_details() -> None:
+    item = _item(
+        "mission-complete",
+        PlanItemType.PROJECT,
+        1,
+        status=PlanItemStatus.COMPLETED,
+    )
+    db = AsyncMock()
+    db.execute.return_value = _Result(scalars=[])
+    original_get = plans._get_item_for_user
+    original_progress = plans._compute_item_progress
+    plans._get_item_for_user = AsyncMock(return_value=item)
+    plans._compute_item_progress = AsyncMock(
+        return_value=(ItemProgress(percent=100), True)
+    )
+    try:
+        response = await plans.get_plan_item_detailed(
+            "mission-complete",
+            db,
+            SimpleNamespace(id="user-1"),
+        )
+    finally:
+        plans._get_item_for_user = original_get
+        plans._compute_item_progress = original_progress
+
+    assert response.completed is True
+    assert response.details_status == DetailsStatus.AVAILABLE
+    assert response.job_id is None
+    assert db.execute.await_count == 1
+    assert db.add.call_count == 0
+
+
+@pytest.mark.asyncio
 async def test_stale_detail_job_stops_and_requires_explicit_retry() -> None:
     item = _item("mission-1", PlanItemType.PROJECT, 1)
     stale_time = datetime(2020, 1, 1, tzinfo=timezone.utc)
@@ -174,6 +259,7 @@ async def test_stale_detail_job_stops_and_requires_explicit_retry() -> None:
         id="job-stale",
         status="running",
         step="generating",
+        progress_percent=60,
         error_message=None,
         created_at=stale_time,
         updated_at=stale_time,
@@ -186,9 +272,7 @@ async def test_stale_detail_job_stops_and_requires_explicit_retry() -> None:
     original_get = plans._get_item_for_user
     original_progress = plans._compute_item_progress
     plans._get_item_for_user = AsyncMock(return_value=item)
-    plans._compute_item_progress = AsyncMock(
-        return_value=(ItemProgress(), False)
-    )
+    plans._compute_item_progress = AsyncMock(return_value=(ItemProgress(), False))
     try:
         response = await plans.get_plan_item_detailed(
             "mission-1",

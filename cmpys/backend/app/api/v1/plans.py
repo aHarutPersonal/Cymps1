@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import and_, select, func
+from sqlalchemy import and_, select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -65,7 +65,8 @@ router = APIRouter(prefix="/plans", tags=["plans"])
 MISSION_TYPES = {PlanItemType.PROJECT, PlanItemType.COURSE, PlanItemType.READING}
 DAILY_TYPES = {PlanItemType.HABIT, PlanItemType.PRACTICE}
 PLAN_JOB_STALE_AFTER = timedelta(minutes=15)
-DETAIL_JOB_STALE_AFTER = timedelta(minutes=5)
+DETAIL_JOB_QUEUE_STALE_AFTER = timedelta(minutes=2)
+DETAIL_JOB_RUNNING_STALE_AFTER = timedelta(minutes=10)
 
 
 def _plan_job_is_stale(
@@ -98,7 +99,82 @@ def _detail_job_is_stale(
         return True
     if last_update.tzinfo is None:
         last_update = last_update.replace(tzinfo=timezone.utc)
-    return (now or datetime.now(timezone.utc)) - last_update >= DETAIL_JOB_STALE_AFTER
+    stale_after = (
+        DETAIL_JOB_RUNNING_STALE_AFTER
+        if getattr(job, "status", None) == "running"
+        else DETAIL_JOB_QUEUE_STALE_AFTER
+    )
+    return (now or datetime.now(timezone.utc)) - last_update >= stale_after
+
+
+async def _promote_prefetched_detail_job(
+    db: AsyncSession,
+    job: PlanItemDetailJob,
+) -> str | None:
+    """Republish an unopened prefetch on the user-facing priority queue.
+
+    The worker atomically claims queued/pending rows, so the original
+    low-priority message and this promoted message cannot both generate the
+    lesson. Returns ``promoted``, ``failed``, or ``None`` when no promotion was
+    needed (or another worker already claimed it).
+    """
+    if job.status != "pending":
+        return None
+
+    promoted = await db.execute(
+        update(PlanItemDetailJob)
+        .where(
+            PlanItemDetailJob.id == job.id,
+            PlanItemDetailJob.status == "pending",
+        )
+        .values(
+            status="queued",
+            step="user_priority",
+            error_message=None,
+        )
+    )
+    await db.commit()
+    if promoted.rowcount != 1:
+        await db.refresh(job)
+        return None
+
+    job.status = "queued"
+    job.step = "user_priority"
+    try:
+        from app.tasks.plans import regenerate_plan_item_details
+
+        regenerate_plan_item_details.apply_async(
+            args=[job.id], queue="high_priority"
+        )
+        logger.info(
+            "[PLAN_ITEM] Promoted prefetched detail job item_id=%s job_id=%s",
+            job.plan_item_id,
+            job.id,
+        )
+        return "promoted"
+    except Exception as exc:
+        logger.exception(
+            "[PLAN_ITEM] Could not publish promoted job item_id=%s job_id=%s",
+            job.plan_item_id,
+            job.id,
+        )
+        await db.execute(
+            update(PlanItemDetailJob)
+            .where(
+                PlanItemDetailJob.id == job.id,
+                PlanItemDetailJob.status == "queued",
+            )
+            .values(
+                status="failed",
+                step="error",
+                error_message=f"Could not start lesson generation: {exc}"[:4000],
+            )
+        )
+        await db.commit()
+        job.status = "failed"
+        job.step = "error"
+        job.error_message = "Could not start lesson generation"
+        return "failed"
 
 
 def _count_remaining_missions(items, completed_item_ids: set[str]) -> int:
@@ -784,6 +860,21 @@ async def get_plan_item_detailed(
             details_status=DetailsStatus.AVAILABLE,
             job_id=None,
         )
+
+    # Legacy clients allowed a mission to be marked complete before teach-first
+    # lessons existed. Completed work is already terminal: do not spend tokens
+    # generating a curriculum the user no longer needs, and never show the
+    # contradictory "Done" + "Writing your lesson" state.
+    if is_completed:
+        return PlanItemDetailedResponse(
+            item=_item_to_response(item),
+            details=None,
+            progress=progress,
+            completed=True,
+            completed_step_ids=completed_step_ids,
+            details_status=DetailsStatus.AVAILABLE,
+            job_id=None,
+        )
     
     # No details (or legacy thin details) - inspect the latest generation job.
     # Failed/invalid jobs are surfaced to the client so it can offer one
@@ -802,6 +893,9 @@ async def get_plan_item_detailed(
     )
     result = await db.execute(latest_job_stmt)
     existing_job = result.scalar_one_or_none()
+
+    if existing_job and existing_job.status == "pending":
+        await _promote_prefetched_detail_job(db, existing_job)
     
     if existing_job and existing_job.status in {"queued", "running", "pending"}:
         if _detail_job_is_stale(existing_job):
@@ -822,6 +916,8 @@ async def get_plan_item_detailed(
                 completed_step_ids=completed_step_ids,
                 details_status=DetailsStatus.FAILED,
                 job_id=existing_job.id,
+                details_progress=existing_job.progress_percent,
+                details_step=existing_job.step,
                 details_error=(
                     "Lesson preparation stopped before it finished. Generate it again to retry."
                 ),
@@ -839,6 +935,8 @@ async def get_plan_item_detailed(
                 else DetailsStatus.PENDING
             ),
             job_id=existing_job.id,
+            details_progress=existing_job.progress_percent,
+            details_step=existing_job.step,
         )
 
     if existing_job and existing_job.status in {"failed", "completed"}:
@@ -856,6 +954,8 @@ async def get_plan_item_detailed(
             completed_step_ids=completed_step_ids,
             details_status=DetailsStatus.FAILED,
             job_id=existing_job.id,
+            details_progress=existing_job.progress_percent,
+            details_step=existing_job.step,
             details_error=(
                 "This lesson could not be prepared. Generate it again to retry."
             ),
@@ -877,7 +977,34 @@ async def get_plan_item_detailed(
     await db.refresh(job)
 
     # Queue the regeneration task on high priority since user is waiting
-    regenerate_plan_item_details.apply_async(args=[job.id], queue="high_priority")
+    try:
+        regenerate_plan_item_details.apply_async(
+            args=[job.id], queue="high_priority"
+        )
+    except Exception as exc:
+        logger.exception(
+            "[PLAN_ITEM] Could not publish details job item_id=%s job_id=%s",
+            item_id,
+            job.id,
+        )
+        job.status = "failed"
+        job.step = "error"
+        job.error_message = f"Could not start lesson generation: {exc}"[:4000]
+        await db.commit()
+        return PlanItemDetailedResponse(
+            item=_item_to_response(item),
+            details=None,
+            progress=progress,
+            completed=is_completed,
+            completed_step_ids=completed_step_ids,
+            details_status=DetailsStatus.FAILED,
+            job_id=job.id,
+            details_progress=0,
+            details_step="error",
+            details_error=(
+                "Lesson preparation could not start. Generate it again to retry."
+            ),
+        )
     logger.info(f"[PLAN_ITEM] Enqueued high_priority details generation for item_id={item_id}, job_id={job.id}")
     
     return PlanItemDetailedResponse(
@@ -888,6 +1015,8 @@ async def get_plan_item_detailed(
         completed_step_ids=completed_step_ids,
         details_status=DetailsStatus.PENDING,
         job_id=job.id,
+        details_progress=0,
+        details_step=job.step,
     )
 
 
@@ -1212,6 +1341,10 @@ async def regenerate_item_details(
         .limit(1)
     )
     active_job = active_result.scalar_one_or_none()
+    if active_job and active_job.status == "pending":
+        promotion = await _promote_prefetched_detail_job(db, active_job)
+        if promotion in {"promoted", "failed"}:
+            return RegenerateDetailsResponse(job_id=active_job.id)
     if active_job and not _detail_job_is_stale(active_job):
         return RegenerateDetailsResponse(job_id=active_job.id)
     if active_job:
@@ -1235,7 +1368,24 @@ async def regenerate_item_details(
     from app.tasks.plans import regenerate_plan_item_details
     
     # Queue the regeneration task on high priority
-    regenerate_plan_item_details.apply_async(args=[job.id], queue="high_priority")
+    try:
+        regenerate_plan_item_details.apply_async(
+            args=[job.id], queue="high_priority"
+        )
+    except Exception as exc:
+        logger.exception(
+            "[PLAN_ITEM] Could not publish retry item_id=%s job_id=%s",
+            item_id,
+            job.id,
+        )
+        job.status = "failed"
+        job.step = "error"
+        job.error_message = f"Could not start lesson generation: {exc}"[:4000]
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Lesson generation is temporarily unavailable",
+        ) from exc
     
     return RegenerateDetailsResponse(job_id=job.id)
 

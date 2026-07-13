@@ -44,5 +44,23 @@ void main() {
       ),
       Env.apiBaseUrlIosSimulator,
     );
+    expect(
+      Env.resolveApiBaseUrl(
+        definedUrl: '',
+        isRelease: false,
+        isWeb: false,
+        platform: TargetPlatform.iOS,
+      ),
+      Env.apiBaseUrlLocalhost,
+    );
+    expect(
+      Env.resolveApiBaseUrl(
+        definedUrl: '',
+        isRelease: false,
+        isWeb: false,
+        platform: TargetPlatform.macOS,
+      ),
+      Env.apiBaseUrlLocalhost,
+    );
   });
 }

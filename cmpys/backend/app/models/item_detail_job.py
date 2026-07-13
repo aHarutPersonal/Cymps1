@@ -4,14 +4,14 @@ from sqlalchemy import ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base, TimestampMixin, UUIDMixin
+from app.models.base import Base, TimestampUpdateMixin, UUIDMixin
 
 if TYPE_CHECKING:
     from app.models.plan import PlanItem
     from app.models.user import User
 
 
-class PlanItemDetailJob(Base, UUIDMixin, TimestampMixin):
+class PlanItemDetailJob(Base, UUIDMixin, TimestampUpdateMixin):
     """
     Tracks the status and thinking text of a plan item detail (steps/materials) regeneration.
     """

@@ -54,9 +54,12 @@ abstract final class Env {
         'Build with --dart-define=API_BASE_URL=https://…',
       );
     }
-    if (isWeb) return apiBaseUrlIosSimulator;
+    if (isWeb) return apiBaseUrlLocalhost;
     if (platform == TargetPlatform.android) return apiBaseUrlAndroidEmulator;
-    return apiBaseUrlProduction;
+    // iOS Simulator and desktop debug builds share the host's loopback
+    // interface. Debug must never silently target production: it bypasses the
+    // locally-started API/worker and makes local fixes appear ineffective.
+    return apiBaseUrlLocalhost;
   }
 
   /// Development API base URL based on platform.
@@ -65,7 +68,10 @@ abstract final class Env {
   /// - Android Emulator: 10.0.2.2 is special alias for host machine
   /// - Web: localhost works directly
   /// API base URL for iOS Simulator (localhost works directly).
-  static const String apiBaseUrlIosSimulator = 'http://localhost:8000/api/v1';
+  static const String apiBaseUrlLocalhost = 'http://localhost:8000/api/v1';
+
+  /// Backward-compatible name used by older tests/callers.
+  static const String apiBaseUrlIosSimulator = apiBaseUrlLocalhost;
 
   /// API base URL for Android Emulator (10.0.2.2 maps to host localhost).
   static const String apiBaseUrlAndroidEmulator = 'http://10.0.2.2:8000/api/v1';

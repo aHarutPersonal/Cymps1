@@ -33,6 +33,17 @@ class PlanRepository {
     return PlanJobStatus.fromJson(response.data as Map<String, dynamic>);
   }
 
+  /// Lightweight polling target for a mission's lesson-generation job.
+  /// Keeping this separate from [getJobStatus] prevents detail jobs from being
+  /// looked up as plan jobs and avoids repeatedly downloading the full item.
+  Future<PlanJobStatus> getPlanDetailJobStatus(String jobId) async {
+    final response = await _dioClient.get(
+      '/jobs/$jobId',
+      queryParameters: const {'type': 'plan_detail'},
+    );
+    return PlanJobStatus.fromJson(response.data as Map<String, dynamic>);
+  }
+
   /// Item + lesson details (steps, materials). If details aren't generated
   /// yet the backend enqueues a job and returns `details_status: pending`
   /// with a `job_id` to poll.

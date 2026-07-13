@@ -37,16 +37,26 @@ class PlanItemDetailScreen extends ConsumerStatefulWidget {
 }
 
 class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
+  static const _foregroundPollBudget = Duration(minutes: 2);
+  static const _maxForegroundPollAttempts = 20;
+
   PlanItemDetailed? _detailed;
+  PlanJobStatus? _detailJob;
   String? _error;
   bool _toggling = false;
   bool _retrying = false;
+  bool _loading = false;
+  bool _pollingJob = false;
+  bool _detailJobPollingUnsupported = false;
+  bool _takingLong = false;
+  DateTime? _pollStartedAt;
+  int _pollAttempt = 0;
   Timer? _poll;
 
   @override
   void initState() {
     super.initState();
-    _load();
+    _load(resetPolling: true);
   }
 
   @override
@@ -55,8 +65,17 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
     super.dispose();
   }
 
-  Future<void> _load() async {
+  Future<void> _load({bool resetPolling = false}) async {
+    if (_loading) return;
+    _loading = true;
     _poll?.cancel();
+    if (resetPolling) {
+      _pollStartedAt = DateTime.now();
+      _pollAttempt = 0;
+      _detailJob = null;
+      _detailJobPollingUnsupported = false;
+      _takingLong = false;
+    }
     try {
       final detailed = await ref
           .read(planRepositoryProvider)
@@ -66,18 +85,21 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
         _detailed = detailed;
         _error = null;
       });
-      if (detailed.detailsLoading) {
-        // Worker is still writing the lesson — re-fetch until it lands.
-        _poll = Timer(const Duration(seconds: 4), _load);
+      if (detailed.detailsLoading && !detailed.completed) {
+        _pollStartedAt ??= DateTime.now();
+        _scheduleDetailPoll();
+      } else {
+        _pollStartedAt = null;
+        _takingLong = false;
       }
     } catch (e) {
       debugPrint('⚠️ plan item detail load failed (${widget.itemId}): $e');
       if (!mounted) return;
       // A failed background poll must not replace already-loaded content —
-      // keep the screen and retry on the next tick.
+      // keep the screen and use bounded backoff.
       if (_detailed != null) {
-        if (_detailed!.detailsLoading) {
-          _poll = Timer(const Duration(seconds: 4), _load);
+        if (_detailed!.detailsLoading && !_detailed!.completed) {
+          _scheduleDetailPoll();
         }
         return;
       }
@@ -87,7 +109,70 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
             ? 'Couldn’t load this task. Check your connection and try again.'
             : 'Something went wrong loading this task — try again.',
       );
+    } finally {
+      _loading = false;
     }
+  }
+
+  void _scheduleDetailPoll() {
+    _poll?.cancel();
+    if (!mounted || _takingLong) return;
+    final startedAt = _pollStartedAt ??= DateTime.now();
+    if (_pollAttempt >= _maxForegroundPollAttempts ||
+        DateTime.now().difference(startedAt) >= _foregroundPollBudget) {
+      setState(() => _takingLong = true);
+      return;
+    }
+    final delay = _pollAttempt < 4
+        ? const Duration(seconds: 2)
+        : _pollAttempt < 10
+        ? const Duration(seconds: 4)
+        : const Duration(seconds: 8);
+    _poll = Timer(delay, _pollDetailJob);
+  }
+
+  Future<void> _pollDetailJob() async {
+    if (!mounted || _pollingJob || _takingLong) return;
+    final detailed = _detailed;
+    if (detailed == null || !detailed.detailsLoading || detailed.completed) {
+      return;
+    }
+    _pollingJob = true;
+    _pollAttempt++;
+    try {
+      final jobId = detailed.jobId;
+      if (jobId == null || jobId.isEmpty || _detailJobPollingUnsupported) {
+        await _load();
+        return;
+      }
+
+      final job = await ref
+          .read(planRepositoryProvider)
+          .getPlanDetailJobStatus(jobId);
+      if (!mounted) return;
+      setState(() => _detailJob = job);
+      if (job.isCompleted || job.isFailed) {
+        await _load();
+      } else {
+        _scheduleDetailPoll();
+      }
+    } catch (e) {
+      if (!mounted) return;
+      // Older APIs may not support the typed detail-job lookup. Fall back to
+      // the detailed endpoint, still under the same bounded polling budget.
+      if (e is ApiError && e.statusCode == 404) {
+        _detailJobPollingUnsupported = true;
+        await _load();
+      } else {
+        _scheduleDetailPoll();
+      }
+    } finally {
+      _pollingJob = false;
+    }
+  }
+
+  Future<void> _checkDetailsAgain() async {
+    await _load(resetPolling: true);
   }
 
   Future<void> _toggleComplete() async {
@@ -190,7 +275,7 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
       await ref
           .read(planRepositoryProvider)
           .regeneratePlanItemDetails(detailed.item.id);
-      await _load();
+      await _load(resetPolling: true);
     } catch (_) {
       if (mounted) {
         showCmpysToast(
@@ -253,7 +338,7 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
               variant: CmpysBtnVariant.primary,
               size: CmpysBtnSize.md,
               leadingIcon: Icons.refresh_rounded,
-              onTap: _load,
+              onTap: () => _load(resetPolling: true),
               child: const Text('Try again'),
             ),
           ],
@@ -336,6 +421,8 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
         const SizedBox(height: 26),
         if (item.isDailyRhythm)
           _dailyRhythmCard(d)
+        else if (d.completed && d.steps.isEmpty)
+          _completedWithoutLessonCard()
         else if (!d.detailsReady)
           _generatingCard(d)
         else ...[
@@ -396,7 +483,7 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
                   : 'Complete for today',
             ),
           )
-        else if (!d.detailsReady)
+        else if (!d.detailsReady && !d.completed)
           const SizedBox.shrink()
         else if (d.steps.isEmpty)
           CmpysButton(
@@ -500,6 +587,32 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
     );
   }
 
+  Widget _completedWithoutLessonCard() {
+    return CmpysCardSurface(
+      color: AppColors.greenSoft,
+      border: false,
+      pad: const EdgeInsets.all(18),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.check_circle_rounded, color: AppColors.green2),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'This mission was completed before focused lessons were added. '
+              'Your completion is preserved—there is nothing left to load.',
+              style: AppTypography.bodyMedium.copyWith(
+                color: AppColors.green2,
+                fontSize: 14,
+                height: 1.45,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _generatingCard(PlanItemDetailed detailed) {
     if (detailed.detailsFailed) {
       return CmpysCardSurface(
@@ -535,32 +648,111 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
         ),
       );
     }
-    return CmpysCardSurface(
-      pad: const EdgeInsets.all(18),
-      child: Row(
-        children: [
-          const SizedBox(
-            width: 16,
-            height: 16,
-            child: CircularProgressIndicator(
-              strokeWidth: 2,
-              valueColor: AlwaysStoppedAnimation<Color>(AppColors.green),
+    if (_takingLong) {
+      return CmpysCardSurface(
+        pad: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Icon(
+              PhosphorIconsRegular.clock,
+              size: 24,
+              color: AppColors.ochre2,
             ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              'Writing your lesson — steps and materials will appear here in a moment.',
+            const SizedBox(height: 10),
+            Text(
+              'This lesson is still being prepared in the background. You can '
+              'leave this screen and return later—your place is saved.',
               style: AppTypography.body.copyWith(
                 fontSize: 13.5,
                 color: AppColors.ink2,
-                fontStyle: FontStyle.italic,
+                height: 1.45,
               ),
+            ),
+            const SizedBox(height: 14),
+            CmpysButton(
+              variant: CmpysBtnVariant.outline,
+              size: CmpysBtnSize.md,
+              leadingIcon: Icons.refresh_rounded,
+              onTap: _checkDetailsAgain,
+              child: const Text('Check status'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final progress = (_detailJob?.progressPercent ?? detailed.detailsProgress)
+        .clamp(0, 100);
+    final step = _detailJob?.step ?? detailed.detailsStep;
+    final progressValue = progress > 0 ? progress / 100.0 : null;
+    return CmpysCardSurface(
+      pad: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                  value: progressValue,
+                  strokeWidth: 2,
+                  valueColor: const AlwaysStoppedAnimation<Color>(
+                    AppColors.green,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  _detailProgressCopy(step),
+                  style: AppTypography.body.copyWith(
+                    fontSize: 13.5,
+                    color: AppColors.ink2,
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+              ),
+              if (progress > 0) ...[
+                const SizedBox(width: 8),
+                Text(
+                  '$progress%',
+                  style: AppTypography.captionMedium.copyWith(
+                    color: AppColors.green2,
+                  ),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 12),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: progressValue,
+              minHeight: 4,
+              backgroundColor: AppColors.hair,
+              valueColor: const AlwaysStoppedAnimation<Color>(AppColors.green),
             ),
           ),
         ],
       ),
     );
+  }
+
+  String _detailProgressCopy(String? step) {
+    return switch (step) {
+      'prefetch_queued' ||
+      'user_priority' ||
+      'loading_context' => 'Preparing the mentor context for your lesson…',
+      'generating_curriculum' =>
+        'Writing your three focused lessons and guided practice…',
+      'resolving_materials' => 'Checking and organizing your materials…',
+      'finalizing_steps' => 'Finalizing the lesson sequence…',
+      _ =>
+        'Writing your lesson — steps and materials will appear here shortly.',
+    };
   }
 
   Widget _lessonCard(

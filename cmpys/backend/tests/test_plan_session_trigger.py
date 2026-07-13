@@ -13,6 +13,7 @@ from app.services.llm.prompt_loader import _UNTRUSTED_OPEN, load_and_render
 from app.services.transcripts import build_chat_history_json
 from app.tasks.plans import _blueprint_phase_for_week, _load_session_context
 from app.api.v1.plans import _detail_job_is_stale, _plan_job_is_stale
+from app.models.item_detail_job import PlanItemDetailJob
 
 
 class _FakeMessage:
@@ -81,24 +82,43 @@ class TestPlanJobRecovery:
 
     def test_old_detail_job_is_stale(self):
         now = datetime(2026, 7, 11, tzinfo=timezone.utc)
-        job = SimpleNamespace(created_at=now - timedelta(minutes=16))
+        job = SimpleNamespace(
+            status="running",
+            created_at=now - timedelta(minutes=16),
+        )
 
         assert _detail_job_is_stale(job, now=now) is True
 
     def test_recent_detail_job_is_not_stale(self):
         now = datetime(2026, 7, 11, tzinfo=timezone.utc)
-        job = SimpleNamespace(created_at=now - timedelta(minutes=2))
+        job = SimpleNamespace(
+            status="running",
+            created_at=now - timedelta(minutes=2),
+        )
 
         assert _detail_job_is_stale(job, now=now) is False
 
     def test_recent_detail_progress_keeps_an_older_job_active(self):
         now = datetime(2026, 7, 11, tzinfo=timezone.utc)
         job = SimpleNamespace(
+            status="running",
             created_at=now - timedelta(minutes=20),
             updated_at=now - timedelta(seconds=30),
         )
 
         assert _detail_job_is_stale(job, now=now) is False
+
+    def test_unclaimed_detail_job_uses_shorter_queue_lease(self):
+        now = datetime(2026, 7, 11, tzinfo=timezone.utc)
+        job = SimpleNamespace(
+            status="queued",
+            created_at=now - timedelta(minutes=3),
+        )
+
+        assert _detail_job_is_stale(job, now=now) is True
+
+    def test_detail_job_model_has_progress_heartbeat(self):
+        assert "updated_at" in PlanItemDetailJob.__table__.columns
 
 
 class TestLoadSessionContext:

@@ -598,6 +598,8 @@ class PlanItemDetailed {
     this.totalSteps = 0,
     this.jobId,
     this.detailsError,
+    this.detailsProgress = 0,
+    this.detailsStep,
     this.dailyInstructions,
     this.completedToday = false,
   });
@@ -612,11 +614,14 @@ class PlanItemDetailed {
   final int totalSteps;
   final String? jobId;
   final String? detailsError;
+  final int detailsProgress;
+  final String? detailsStep;
   final String? dailyInstructions;
   final bool completedToday;
 
   bool get detailsReady => detailsStatus == 'available';
-  bool get detailsFailed => detailsStatus == 'failed';
+  bool get detailsFailed =>
+      detailsStatus == 'failed' || (!detailsReady && !detailsLoading);
   bool get detailsLoading =>
       detailsStatus == 'pending' || detailsStatus == 'generating';
 
@@ -662,6 +667,8 @@ class PlanItemDetailed {
       totalSteps: (progress?['total_steps'] as num?)?.toInt() ?? 0,
       jobId: j['job_id']?.toString(),
       detailsError: j['details_error']?.toString(),
+      detailsProgress: (j['details_progress'] as num?)?.toInt() ?? 0,
+      detailsStep: j['details_step']?.toString(),
       dailyInstructions: j['daily_instructions']?.toString(),
       completedToday: j['completed_today'] as bool? ?? false,
     );

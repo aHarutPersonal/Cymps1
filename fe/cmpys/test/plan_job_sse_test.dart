@@ -118,11 +118,23 @@ void main() {
       'item': {'id': 'mission-1', 'title': 'Build the prototype'},
       'details_status': 'failed',
       'details_error': 'Generate it again.',
+      'details_progress': 60,
+      'details_step': 'error',
       'progress': const <String, dynamic>{},
     });
     expect(failed.detailsFailed, isTrue);
     expect(failed.detailsLoading, isFalse);
     expect(failed.detailsError, 'Generate it again.');
+    expect(failed.detailsProgress, 60);
+    expect(failed.detailsStep, 'error');
+
+    final unknown = PlanItemDetailed.fromJson({
+      'item': {'id': 'mission-2', 'title': 'Unknown state'},
+      'details_status': 'stuck_on_old_server',
+      'progress': const <String, dynamic>{},
+    });
+    expect(unknown.detailsFailed, isTrue);
+    expect(unknown.detailsLoading, isFalse);
 
     final daily = PlanItemDetailed.fromJson({
       'item': {'id': 'daily-1', 'title': 'Practice', 'type': 'practice'},
