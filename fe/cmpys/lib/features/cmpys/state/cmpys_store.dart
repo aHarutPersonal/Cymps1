@@ -342,6 +342,7 @@ class CmpysState {
         'comparisonMd': comparisonMd,
         'blueprintMd': blueprintMd,
         'planJobId': planJobId,
+        'liveComparisonScores': liveComparisonScores,
       };
 
   factory CmpysState.fromJson(Map<String, dynamic> j) {
@@ -394,6 +395,9 @@ class CmpysState {
       comparisonMd: j['comparisonMd'] as String?,
       blueprintMd: j['blueprintMd'] as String?,
       planJobId: j['planJobId'] as String?,
+      liveComparisonScores: j['liveComparisonScores'] is Map
+          ? (j['liveComparisonScores'] as Map).cast<String, dynamic>()
+          : null,
     );
   }
 
@@ -441,8 +445,13 @@ class CmpysState {
 
 class CmpysStore extends StateNotifier<CmpysState> {
   CmpysStore() : super(CmpysState.initial()) {
-    _load();
+    ready = _load();
   }
+
+  /// Completes after persisted state has been hydrated. Backend sync waits on
+  /// this barrier so a slower preferences read can never overwrite a fresher
+  /// session (including newly generated comparison scores).
+  late final Future<void> ready;
 
   int _noteSeq = 0;
   Timer? _persistTimer;

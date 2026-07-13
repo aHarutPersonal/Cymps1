@@ -10,14 +10,19 @@ import 'package:cmpys/features/plan/presentation/plan_item_detail_screen.dart';
 /// Scripted repository: returns each queued result (value or error) in order,
 /// repeating the last one when the queue runs out.
 class _ScriptedRepo extends Fake implements PlanRepository {
-  _ScriptedRepo(this._script, {List<Object>? jobScript})
-    : _jobScript = jobScript ?? const [];
+  _ScriptedRepo(
+    this._script, {
+    List<Object>? jobScript,
+    this.retryJobId = 'retry-job',
+  }) : _jobScript = jobScript ?? const [];
   final List<Object> _script; // PlanItemDetailed | Exception
   final List<Object> _jobScript; // PlanJobStatus | Exception
+  final String retryJobId;
   int _calls = 0;
   int _jobCalls = 0;
   int retries = 0;
   int dailyToggles = 0;
+  final List<String> polledJobIds = [];
 
   int get calls => _calls;
   int get jobCalls => _jobCalls;
@@ -32,6 +37,7 @@ class _ScriptedRepo extends Fake implements PlanRepository {
 
   @override
   Future<PlanJobStatus> getPlanDetailJobStatus(String jobId) async {
+    polledJobIds.add(jobId);
     final step = _jobScript[_jobCalls.clamp(0, _jobScript.length - 1)];
     _jobCalls++;
     if (step is Exception) throw step;
@@ -41,7 +47,7 @@ class _ScriptedRepo extends Fake implements PlanRepository {
   @override
   Future<String> regeneratePlanItemDetails(String itemId) async {
     retries++;
-    return 'retry-job';
+    return retryJobId;
   }
 
   @override
@@ -76,6 +82,14 @@ const _completedJob = PlanJobStatus(
   status: 'completed',
   progressPercent: 100,
   step: 'done',
+);
+
+const _failedJob = PlanJobStatus(
+  id: 'detail-job',
+  status: 'failed',
+  progressPercent: 60,
+  step: 'error',
+  errorMessage: 'This lesson failed its final quality check.',
 );
 
 PlanItemDetailed _failedItem() => PlanItemDetailed(
@@ -166,6 +180,87 @@ void main() {
 
     await tester.pumpWidget(const SizedBox());
   });
+
+  testWidgets(
+    'successful retry keeps its returned job id when detail refresh fails',
+    (tester) async {
+      final repo = _ScriptedRepo(
+        [_failedItem(), const TimeoutError()],
+        jobScript: const [_runningJob],
+      );
+      await tester.pumpWidget(_app(repo));
+      await tester.pump();
+      await tester.pump();
+
+      await tester.tap(find.text('Generate again'));
+      await tester.pump();
+      await tester.pump();
+
+      expect(repo.retries, 1);
+      expect(find.text('Generate again'), findsNothing);
+      expect(find.textContaining('Writing your lesson'), findsOneWidget);
+
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pump();
+      expect(repo.polledJobIds, const ['retry-job']);
+
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets('empty retry job id refreshes already-finished details', (
+    tester,
+  ) async {
+    final repo = _ScriptedRepo([
+      _failedItem(),
+      _availableItem(),
+    ], retryJobId: '');
+    await tester.pumpWidget(_app(repo));
+    await tester.pump();
+    await tester.pump();
+
+    await tester.tap(find.text('Generate again'));
+    await tester.pump();
+    await tester.pump();
+
+    expect(repo.retries, 1);
+    expect(repo.calls, 2);
+    expect(repo.jobCalls, 0);
+    expect(find.text('Generate again'), findsNothing);
+
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets(
+    'failed job plus detail refresh failure is terminal and stops polling',
+    (tester) async {
+      final repo = _ScriptedRepo(
+        [_pendingItem(jobId: 'detail-job'), const TimeoutError()],
+        jobScript: const [_failedJob],
+      );
+      await tester.pumpWidget(_app(repo));
+      await tester.pump();
+      await tester.pump();
+
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pump();
+
+      expect(repo.jobCalls, 1);
+      expect(repo.calls, 2);
+      expect(
+        find.text('This lesson failed its final quality check.'),
+        findsOneWidget,
+      );
+      expect(find.text('Generate again'), findsOneWidget);
+
+      await tester.pump(const Duration(seconds: 30));
+      await tester.pump();
+      expect(repo.jobCalls, 1);
+      expect(repo.calls, 2);
+
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 
   testWidgets('completed legacy mission never enters the lesson polling loop', (
     tester,

@@ -1,6 +1,7 @@
 """Schemas for agentic session workflow."""
 from datetime import datetime
 from enum import Enum
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -93,11 +94,19 @@ class SessionResponse(BaseModel):
     interview_turn_count: int = 0
     comparison_output: str | None = None
     blueprint_output: str | None = None
+    # The Flutter client contract intentionally uses this camelCase key.
+    # Declaring the alias is essential: FastAPI filters endpoint dictionaries
+    # through this response model and otherwise silently drops generated
+    # comparison scores even when they are present in the database.
+    comparison_scores: dict[str, Any] | None = Field(
+        default=None,
+        alias="comparisonScores",
+    )
     interview_thread_id: str | None = None
     created_at: datetime
     updated_at: datetime
 
-    model_config = {"from_attributes": True}
+    model_config = {"from_attributes": True, "populate_by_name": True}
 
 
 class IdolSuggestionItem(BaseModel):

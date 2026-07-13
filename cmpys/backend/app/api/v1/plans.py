@@ -640,7 +640,9 @@ async def update_plan_item(
 async def _get_item_for_user(
     db: AsyncSession, 
     item_id: str, 
-    user_id: str
+    user_id: str,
+    *,
+    for_update: bool = False,
 ) -> PlanItem:
     """Get a plan item, verifying ownership."""
     stmt = (
@@ -653,6 +655,14 @@ async def _get_item_for_user(
             )
         )
     )
+    if for_update:
+        # Detail generation is a paid, side-effecting operation. Lock the
+        # owned item row while deciding whether an active job can be reused or
+        # a new one must be created, so concurrent opens/retries serialize
+        # without requiring a schema migration.
+        stmt = stmt.with_for_update(of=PlanItem).execution_options(
+            populate_existing=True
+        )
     result = await db.execute(stmt)
     item = result.scalar_one_or_none()
     
@@ -866,6 +876,36 @@ async def get_plan_item_detailed(
     # generating a curriculum the user no longer needs, and never show the
     # contradictory "Done" + "Writing your lesson" state.
     if is_completed:
+        return PlanItemDetailedResponse(
+            item=_item_to_response(item),
+            details=None,
+            progress=progress,
+            completed=True,
+            completed_step_ids=completed_step_ids,
+            details_status=DetailsStatus.AVAILABLE,
+            job_id=None,
+        )
+
+    # Serialize the side-effecting job lookup/create section on the plan item.
+    # Re-read under the lock because another request or worker may have made
+    # the lesson available while this request was computing progress.
+    item = await _get_item_for_user(
+        db,
+        item_id,
+        current_user.id,
+        for_update=True,
+    )
+    if _lesson_details_meet_quality(item.details_json):
+        return PlanItemDetailedResponse(
+            item=_item_to_response(item),
+            details=_parse_item_details(item.details_json),
+            progress=progress,
+            completed=is_completed,
+            completed_step_ids=completed_step_ids,
+            details_status=DetailsStatus.AVAILABLE,
+            job_id=None,
+        )
+    if item.status == PlanItemStatus.COMPLETED:
         return PlanItemDetailedResponse(
             item=_item_to_response(item),
             details=None,
@@ -1321,12 +1361,27 @@ async def regenerate_item_details(
     
     Returns job_id to poll for completion.
     """
-    item = await _get_item_for_user(db, item_id, current_user.id)
+    # The row lock makes the active-job check plus insert atomic with respect
+    # to every other detail open/retry for this item. The lock is released by
+    # the commit that persists a new job (or when this request transaction
+    # closes on a no-op/reuse response).
+    item = await _get_item_for_user(
+        db,
+        item_id,
+        current_user.id,
+        for_update=True,
+    )
     if item.type in DAILY_TYPES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Daily rhythms do not require lesson generation",
         )
+
+    # A stale client may retry after another worker already finished. Do not
+    # create a second paid generation in that race; Flutter refreshes the
+    # detailed endpoint immediately and does not require a non-empty job id.
+    if _lesson_details_meet_quality(item.details_json):
+        return RegenerateDetailsResponse(job_id="")
 
     # Make retries idempotent. A double tap or transport retry should observe
     # the same active job instead of charging for two long-form generations.
@@ -1343,15 +1398,43 @@ async def regenerate_item_details(
     active_job = active_result.scalar_one_or_none()
     if active_job and active_job.status == "pending":
         promotion = await _promote_prefetched_detail_job(db, active_job)
-        if promotion in {"promoted", "failed"}:
+        if promotion == "promoted":
             return RegenerateDetailsResponse(job_id=active_job.id)
+        if promotion == "failed":
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Lesson generation is temporarily unavailable",
+            )
     if active_job and not _detail_job_is_stale(active_job):
         return RegenerateDetailsResponse(job_id=active_job.id)
+
+    # Completion records are the authoritative state (item.status can be stale
+    # on legacy rows). Recheck immediately before enqueueing a replacement.
+    completion_result = await db.execute(
+        select(PlanItemCompletion.id)
+        .where(
+            PlanItemCompletion.user_id == current_user.id,
+            PlanItemCompletion.plan_item_id == item_id,
+            PlanItemCompletion.completed_at.isnot(None),
+        )
+        .limit(1)
+    )
+    completed = (
+        item.status == PlanItemStatus.COMPLETED
+        or completion_result.scalar_one_or_none() is not None
+    )
+    if completed:
+        if active_job:
+            active_job.status = "failed"
+            active_job.step = "error"
+            active_job.error_message = "Mission completed before lesson retry"
+            await db.commit()
+        return RegenerateDetailsResponse(job_id="")
+
     if active_job:
         active_job.status = "failed"
         active_job.step = "error"
         active_job.error_message = "Generation worker stopped before completion"
-        await db.commit()
     
     # Create job
     job = PlanItemDetailJob(

@@ -14,6 +14,7 @@ import asyncio
 import json as json_lib
 import logging
 import re
+import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Annotated
@@ -504,7 +505,11 @@ def _build_session_response(session: IntakeSession) -> dict:
     }
 
 
-def _build_chat_history_json(messages: list[ChatMessage]) -> str:
+def _build_chat_history_json(
+    messages: list[ChatMessage],
+    *,
+    max_chars: int | None = None,
+) -> str:
     """Build a JSON string of chat history for prompt injection.
 
     Delegates to the shared serializer with ``sanitize_user=True`` so
@@ -512,7 +517,11 @@ def _build_chat_history_json(messages: list[ChatMessage]) -> str:
     model treats them as DATA, not instructions) in interview / comparison /
     blueprint generation. Assistant turns are model-generated and left as-is.
     """
-    return build_chat_history_json(messages, sanitize_user=True)
+    return build_chat_history_json(
+        messages,
+        max_chars=max_chars,
+        sanitize_user=True,
+    )
 
 
 # =============================================================================
@@ -1567,23 +1576,62 @@ async def guided_learning(
         db.add(thread)
         await db.flush()
         session.learning_thread_id = thread.id
-        await db.commit()
+        # A newly flushed ORM relationship is not loaded. Accessing
+        # ``thread.messages`` (even through ``hasattr``) attempts async I/O
+        # from a synchronous attribute descriptor and raises MissingGreenlet.
+        # The new thread has no history by definition, so keep that fact
+        # explicit and never touch the relationship on the first turn.
+        history_messages: list[ChatMessage] = []
     else:
-        stmt = select(ChatThread).options(selectinload(ChatThread.messages)).where(ChatThread.id == session.learning_thread_id)
+        stmt = (
+            select(ChatThread)
+            .options(selectinload(ChatThread.messages))
+            .where(ChatThread.id == session.learning_thread_id)
+        )
         result = await db.execute(stmt)
         thread = result.scalar_one()
+        history_messages = list(thread.messages)
+
+    thread_id = str(thread.id)
+
+    # A failed provider stream leaves the already-committed user turn as the
+    # final message. Manual Retry sends the same text; reuse that pending turn
+    # instead of duplicating the transcript and model context.
+    has_pending_user_turn = bool(
+        history_messages
+        and history_messages[-1].role == MessageRole.USER
+    )
+    pending_retry = bool(
+        has_pending_user_turn
+        and history_messages[-1].content == data.content
+    )
+
+    # A final user-only turn means its provider stream never completed. Do not
+    # present that abandoned request as answered conversation context, even
+    # when the learner moves on with a different question.
+    prompt_history = (
+        history_messages[:-1]
+        if has_pending_user_turn
+        else history_messages
+    )
 
     # Persist user message
-    user_msg = ChatMessage(
-        id=str(uuid.uuid4()),
-        thread_id=session.learning_thread_id,
-        role=MessageRole.USER,
-        content=data.content,
-    )
-    db.add(user_msg)
-    await db.flush()
+    if not pending_retry:
+        user_msg = ChatMessage(
+            id=str(uuid.uuid4()),
+            thread_id=thread_id,
+            role=MessageRole.USER,
+            content=data.content,
+        )
+        db.add(user_msg)
+        await db.flush()
 
-    chat_history_json = _build_chat_history_json(thread.messages if 'thread' in locals() and hasattr(thread, 'messages') else [])
+    # Recent complete turns carry the useful tutoring signal. Bounding this
+    # prevents latency and token cost from growing forever with chat age.
+    chat_history_json = _build_chat_history_json(
+        prompt_history,
+        max_chars=12_000,
+    )
 
     idol_name = session.idol.name if session.idol else "Your Mentor"
     idol_persona_obj = getattr(session.idol, "persona", None)
@@ -1592,9 +1640,29 @@ async def guided_learning(
     # Render the Socratic tutor system prompt with the full persona pack.
     # strict=False: the conversation history contains user-typed text whose
     # stray braces would otherwise read as unresolved placeholders.
+    goal = getattr(session, "user_goal", None)
+    blueprint = getattr(session, "blueprint_output", None)
+    topic_context = "\n".join(
+        part
+        for part in [
+            (
+                "Learner goal: " + sanitize_untrusted_input(str(goal))
+                if goal
+                else ""
+            ),
+            (
+                "Strategic blueprint excerpt: "
+                + sanitize_untrusted_input(str(blueprint)[:2_000])
+                if blueprint
+                else ""
+            ),
+        ]
+        if part
+    )
+
     tutor_system_prompt = load_and_render("guided_learning_system.txt", {
         "idol_name": idol_name,
-        "topic": "",
+        "topic": topic_context or "No saved goal or blueprint is available.",
         "voice_style": idol_persona.get("voice_style") or "direct and authoritative",
         "principles": "; ".join(idol_persona.get("principles", [])) or "none documented",
         "dos": "; ".join(idol_persona.get("dos", [])) or "none documented",
@@ -1615,33 +1683,62 @@ async def guided_learning(
 
     async def generate_stream():
         full_response = ""
+        started = time.perf_counter()
+        first_chunk_at: float | None = None
         try:
+            # Establish SSE immediately. The provider has a bounded 60-second
+            # deadline, while clients keep a larger margin to receive the
+            # terminal error if that deadline is reached.
+            yield f"data: {json_lib.dumps({'type': 'status', 'message': 'thinking'})}\n\n"
+
             async for chunk in stream_learnlm(
                 system_prompt=tutor_system_prompt,
                 user_message=data.content,
             ):
+                if first_chunk_at is None:
+                    first_chunk_at = time.perf_counter()
                 full_response += chunk
                 yield f"data: {json_lib.dumps({'type': 'chunk', 'content': chunk})}\n\n"
 
-            async with db.begin_nested():
-                ai_msg = ChatMessage(
-                    id=str(uuid.uuid4()),
-                    thread_id=session.learning_thread_id,
-                    role=MessageRole.ASSISTANT,
-                    content=full_response,
-                )
-                db.add(ai_msg)
-                await db.commit()
+            if not full_response.strip():
+                raise RuntimeError("Tutor returned an empty response")
+
+            ai_msg = ChatMessage(
+                id=str(uuid.uuid4()),
+                thread_id=thread_id,
+                role=MessageRole.ASSISTANT,
+                content=full_response,
+            )
+            db.add(ai_msg)
+            await db.commit()
+
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            first_chunk_ms = (
+                (first_chunk_at - started) * 1000
+                if first_chunk_at is not None
+                else None
+            )
+            logger.info(
+                "[SESSION] Guided learning completed in %.0fms "
+                "(first chunk %.0fms, %s chars)",
+                elapsed_ms,
+                first_chunk_ms or 0,
+                len(full_response),
+            )
 
             yield f"data: {json_lib.dumps({'type': 'done'})}\n\n"
         except Exception as e:
-            logger.error(f"[SESSION] Guided learning stream error: {e}")
-            yield f"data: {json_lib.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            logger.exception("[SESSION] Guided learning stream error: %s", e)
+            yield f"data: {json_lib.dumps({'type': 'error', 'message': 'The mentor reply could not be completed. Please retry.'})}\n\n"
 
     return StreamingResponse(
         generate_stream(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"}
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 # =============================================================================

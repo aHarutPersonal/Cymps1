@@ -4,6 +4,40 @@
 
 ---
 
+## 2026-07-13: Mentor Chat First-Turn & Streaming Reliability
+
+- Fixed first-message chat failure caused by asynchronously lazy-loading a newly created thread's empty message relationship; thread creation, session linkage, and the learner turn now commit atomically before streaming.
+- Made manual retry reuse the unanswered learner turn instead of duplicating it, and excluded abandoned unanswered turns from later mentor context.
+- Established the SSE connection immediately, disabled proxy buffering, gave the client a safe timeout margin, and treated `done` as terminal without waiting for a clean socket close.
+- Rejected empty and explicitly truncated model replies, kept partial replies out of storage, returned safe user-facing errors, and removed hidden client reposts that could duplicate messages and model cost.
+- Added bounded recent conversation history plus the learner goal and blueprint excerpt to the mentor prompt, with a 1,200-token concise-response ceiling and first-text/finish telemetry.
+- Live provider verification: first text arrived in 1.7 seconds and the complete 354-character response finished in 1.8 seconds. All 382 backend tests and 134 Flutter tests passed, along with Ruff, Python compilation, Flutter analysis, diff validation, and a release web build.
+
+---
+
+## 2026-07-13: Plan Lesson Generation Reliability
+
+- Fixed contradictory lesson-writer guidance whose section ranges could exceed the artifact ceiling and whose own examples violated the substep and duration rules.
+- Kept the 1,200-1,800-word quality floor, while targeting 1,400-1,600 words to give the model a safe counting margin.
+- Changed semantic validation to report every defect in one pass and repair only invalid lessons concurrently, preserving already-valid lessons and materials instead of regenerating the complete artifact.
+- Added a small substep-only repair path for an otherwise complete lesson, plus a quality-tier escalation for a lesson that still fails deterministic checks.
+- Accepted only a narrow 601-650-word overrun for in-app readings while retaining the 400-600-word prompt target; materially short or long content still fails validation.
+- Added explicit repair/material progress states and provider finish-reason logging so terminal failures are diagnosable instead of appearing as unexplained generation failures.
+- Verification: a real failed local mission regenerated and persisted in 46.3 seconds with three 1,409-1,480-word lessons, compliant substeps, and three materials. All 373 backend tests and 131 Flutter tests passed, along with Ruff, Python compilation, Flutter analysis, diff validation, and a release web build.
+
+---
+
+## 2026-07-13: Comparison Completion Contract Repair
+
+- Fixed the session response schema so FastAPI no longer strips already-generated `comparisonScores`; the Compare screen now receives the five dimensions and milestones persisted during Mentor Lab.
+- Added response-model serialization coverage at the actual Pydantic filtering boundary, plus client compatibility coverage for both camel-case and snake-case score payloads.
+- Made Compare polling immediate, cancellable, and bounded with explicit unavailable, timeout, and retry states instead of an indefinite spinner.
+- Prevented taps from restarting active polling and persisted generated scores locally for instant cold-start rendering.
+- Added a store hydration barrier so a delayed preferences read cannot overwrite fresher backend session data.
+- Verification: all 347 backend tests and all 128 Flutter tests passed, along with Flutter analysis and the response-model wire-contract check.
+
+---
+
 ## 2026-07-13: Plan Detail Loading Hardening
 
 - Fixed the simulator launcher so its local API and Celery worker are the services Flutter actually uses; debug iOS/desktop now defaults to localhost, while `API_BASE_URL` remains an explicit override.

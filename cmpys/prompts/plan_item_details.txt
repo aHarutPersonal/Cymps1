@@ -29,17 +29,17 @@ CRITICAL RULES:
    - BAD: "Take notes" (3 minutes, not a real step)
    - BAD: "Reflect on what you learned" (vague, not teachable)
    - GOOD: "Master the core framework of [topic] — read the key definitions, work through 3 examples, and apply it to your own situation" (45-60 min)
-   - GOOD: "Practice [specific technique] with these exercises — start with the guided example, then solve 5 problems independently" (60-90 min)
+   - GOOD: "Practice [specific technique] with these exercises — start with the guided example, then solve 5 problems independently" (45-60 min)
    - GOOD: "Build [specific artifact] using [specific tool/method] — follow the template below, customize it for your context" (45-60 min)
 
-2. **EACH STEP HAS A COMPLETE LESSON (1,200-1,800 WORDS; HARD RANGE).** Every step MUST include a `lesson_content` field that can stand alone in the lesson reader. At 200 words per minute this provides 6-9 minutes of teaching, followed by 30-50 minutes of guided practice. Structure every lesson with these exact second-level headings:
-   - `## Why This Matters` — 100-150 words connecting the skill to the mission and the user's context.
-   - `## Core Framework` — 350-500 words explaining the mechanism, components, trade-offs, and two concepts learners commonly confuse.
-   - `## Worked Example` — 250-350 words showing the complete reasoning or execution. Use DOCUMENTED MENTOR EVIDENCE when available; otherwise label it **Practical scenario**. Never invent an anecdote, quotation, date, or result and attribute it to {idol_name}.
-   - `## Failure Modes` — 150-250 words covering at least three mistakes, symptoms, and corrections.
-   - `## Guided Practice` — 300-450 words with 3-5 numbered phases totaling 30-45 minutes. Every phase names a timer, tool/template, expected output, and success criterion.
-   - `## Check Your Understanding` — 100-150 words with three diagnostic questions and an answer/check rubric.
-   - `## References` — 60-120 words naming the exact supplied material(s) that deepen this lesson and explaining what to read/watch. Never invent chapter numbers.
+2. **EACH STEP HAS A COMPLETE LESSON (1,200-1,800 WORDS; TARGET 1,400-1,600).** Every step MUST include a `lesson_content` field that can stand alone in the lesson reader. Aim for the target band so tokenization or word-count differences never put a useful lesson below the hard floor. At 200 words per minute this provides 7-8 minutes of teaching, followed by 30-50 minutes of guided practice. Structure every lesson with these exact second-level headings:
+   - `## Why This Matters` — about 110-140 words connecting the skill to the mission and the user's context.
+   - `## Core Framework` — about 360-450 words explaining the mechanism, components, trade-offs, and two concepts learners commonly confuse.
+   - `## Worked Example` — about 260-320 words showing the complete reasoning or execution. Use DOCUMENTED MENTOR EVIDENCE when available; otherwise label it **Practical scenario**. Never invent an anecdote, quotation, date, or result and attribute it to {idol_name}.
+   - `## Failure Modes` — about 160-210 words covering at least three mistakes, symptoms, and corrections.
+   - `## Guided Practice` — about 320-400 words with 3-5 numbered phases totaling 30-45 minutes. Every phase names a timer, tool/template, expected output, and success criterion.
+   - `## Check Your Understanding` — about 110-140 words with three diagnostic questions and an answer/check rubric.
+   - `## References` — about 70-100 words naming the exact supplied material(s) that deepen this lesson and explaining what to read/watch. Never invent chapter numbers.
 
 3. **100% USEFUL MATERIALS.** Do not suggest generic ideas. Suggest specific, highly effective, renowned, or industry-standard materials.
 
@@ -86,9 +86,9 @@ OUTPUT FORMAT (strict JSON, no extra keys, no markdown):
       "lesson_content": "# Step Title\n\n## Why This Matters\n...\n\n## Core Framework\n...\n\n## Worked Example\n...\n\n## Failure Modes\n...\n\n## Guided Practice\n1. ...\n\n## Check Your Understanding\n...\n\n## References\n...",
       "resources": ["Exact Book Title", "Exact Video Title"],
       "substeps": [
-        "Specific practice exercise 1 with tool, time estimate, and success criteria (20-50 words)",
-        "Specific practice exercise 2 with tool, time estimate, and success criteria (20-50 words)",
-        "Validation: how to confirm you've mastered this with measurable criteria"
+        "Set a twenty-minute timer, apply the named framework to one real artifact using the supplied template, and save the completed output for review against the lesson rubric.",
+        "Run a second independent attempt without looking at the worked example, record each decision you make, and compare the result with every stated success criterion.",
+        "Review both attempts, identify the largest measurable gap, revise the weaker artifact once, and document the evidence that now demonstrates mastery of this step."
       ]
     }
   ],
@@ -116,4 +116,4 @@ OUTPUT FORMAT (strict JSON, no extra keys, no markdown):
   "mental_model": "Name of 1 specific mental model that unlocks efficiency for this task."
 }
 
-Provide exactly 3 sequential, focused steps (40-60 minutes each). Each step MUST be a complete skill-building lesson with 1,200-1,800 words of lesson_content, an auditable reading/practice time split, 2-3 practice substeps, and references to 1-2 exact titles from the materials array. Steps must TEACH, not advise. Provide exactly 3 elite materials: exactly 1 book with exact title/author and no generated content, exactly 1 video, and 1 article/course/tool/in_app_lesson. Never pad or repeat to fill the range.
+Provide exactly 3 sequential, focused steps (40-60 minutes each). Each step MUST be a complete skill-building lesson in the 1,200-1,800 hard range, targeting 1,400-1,600 words of lesson_content, with an auditable reading/practice time split, 2-3 practice substeps of 20-50 words each, and references to 1-2 exact titles from the materials array. Steps must TEACH, not advise. Provide exactly 3 elite materials: exactly 1 book with exact title/author and no generated content, exactly 1 video, and 1 article/course/tool/in_app_lesson. Never pad or repeat to fill the range.

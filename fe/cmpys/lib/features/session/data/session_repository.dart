@@ -64,6 +64,22 @@ Stream<Map<String, dynamic>> parseSseEvents(Stream<List<int>> stream) async* {
   }
 }
 
+/// Parse an SSE response and finish as soon as its terminal event arrives.
+///
+/// A valid `done` must not depend on a later clean TCP close: mobile networks
+/// and proxies may reset an already-complete socket. Waiting for EOF would
+/// turn a complete mentor reply into a false "cut off" error.
+Stream<Map<String, dynamic>> parseCompletedSseEvents(
+  Stream<List<int>> stream,
+) async* {
+  await for (final event in parseSseEvents(stream)) {
+    final type = event['type'];
+    yield event;
+    if (type == 'done' || type == 'error') return;
+  }
+  throw const SseIncompleteException();
+}
+
 /// Repository for the 5-phase agentic session workflow.
 ///
 /// Handles all API communication for:
@@ -81,16 +97,17 @@ class SessionRepository {
   /// interceptor — a fresh Dio would 401 the moment the access token expired
   /// mid-session (e.g. between select-idol and the interview) with no way to
   /// recover.
-  Future<Response<dynamic>> _streamPost(
-    String path,
-    Object data,
-  ) {
-    return _dioClient.dio.post(
+  Future<Response<dynamic>> _streamPost(String path, Object data) {
+    return _dioClient.post<dynamic>(
       path,
       data: data,
       options: Options(
         responseType: ResponseType.stream,
         headers: {'Accept': 'text/event-stream'},
+        // The server/provider deadline is 60 seconds. Keep enough margin to
+        // receive its terminal SSE error instead of racing it with Dio's
+        // shared 60-second timeout.
+        receiveTimeout: const Duration(seconds: 90),
       ),
     );
   }
@@ -102,13 +119,7 @@ class SessionRepository {
   Stream<Map<String, dynamic>> _sseWithCompletion(
     Stream<List<int>> stream,
   ) async* {
-    var sawTerminal = false;
-    await for (final event in parseSseEvents(stream)) {
-      final type = event['type'];
-      if (type == 'done' || type == 'error') sawTerminal = true;
-      yield event;
-    }
-    if (!sawTerminal) throw const SseIncompleteException();
+    yield* parseCompletedSseEvents(stream);
   }
 
   // ===========================================================================
@@ -249,10 +260,10 @@ class SessionRepository {
   }) async* {
     debugPrint('💬 Sending interview message to session $sessionId');
 
-    final response = await _streamPost(
-      '/sessions/$sessionId/interview',
-      {'content': content, 'is_kickoff': isKickoff},
-    );
+    final response = await _streamPost('/sessions/$sessionId/interview', {
+      'content': content,
+      'is_kickoff': isKickoff,
+    });
 
     final stream = response.data.stream as Stream<List<int>>;
 
@@ -324,10 +335,9 @@ class SessionRepository {
   ) async* {
     debugPrint('🎓 Sending guided learning message to session $sessionId');
 
-    final response = await _streamPost(
-      '/sessions/$sessionId/guided-learning',
-      {'content': content},
-    );
+    final response = await _streamPost('/sessions/$sessionId/guided-learning', {
+      'content': content,
+    });
 
     final stream = response.data.stream as Stream<List<int>>;
 

@@ -26,4 +26,22 @@ void main() {
     });
     expect(s.comparisonScores, isNull);
   });
+
+  test('Session.fromJson accepts snake-case comparison scores for compatibility',
+      () {
+    final s = Session.fromJson({
+      'id': 's1',
+      'phase': 'completed',
+      'user_age': 24,
+      'user_interests': <String>[],
+      'comparison_scores': {
+        'dimensions': [
+          {'id': 'clarity', 'you': 40, 'idol': 80},
+        ],
+      },
+    });
+
+    expect((s.comparisonScores!['dimensions'] as List).first['id'], 'clarity');
+    expect(s.toJson()['comparisonScores'], s.comparisonScores);
+  });
 }

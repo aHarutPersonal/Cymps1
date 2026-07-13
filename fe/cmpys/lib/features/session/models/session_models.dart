@@ -110,6 +110,8 @@ class Session with _$Session {
   }) = _Session;
 
   factory Session.fromJson(Map<String, dynamic> json) {
+    final rawComparisonScores =
+        json['comparisonScores'] ?? json['comparison_scores'];
     return Session(
       id: json['id']?.toString() ?? '',
       phase: SessionPhase.fromString(json['phase']?.toString() ?? 'intake'),
@@ -124,8 +126,8 @@ class Session with _$Session {
       interviewTurnCount: _parseInt(json['interview_turn_count']) ?? 0,
       comparisonOutput: json['comparison_output']?.toString(),
       blueprintOutput: json['blueprint_output']?.toString(),
-      comparisonScores: json['comparisonScores'] is Map
-          ? (json['comparisonScores'] as Map).cast<String, dynamic>()
+      comparisonScores: rawComparisonScores is Map
+          ? rawComparisonScores.cast<String, dynamic>()
           : null,
       interviewThreadId: json['interview_thread_id']?.toString(),
       createdAt: _parseDate(json['created_at']),
@@ -143,6 +145,7 @@ class Session with _$Session {
     'interview_turn_count': interviewTurnCount,
     if (comparisonOutput != null) 'comparison_output': comparisonOutput,
     if (blueprintOutput != null) 'blueprint_output': blueprintOutput,
+    if (comparisonScores != null) 'comparisonScores': comparisonScores,
     if (interviewThreadId != null) 'interview_thread_id': interviewThreadId,
     if (createdAt != null) 'created_at': createdAt!.toIso8601String(),
     if (updatedAt != null) 'updated_at': updatedAt!.toIso8601String(),

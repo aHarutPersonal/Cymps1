@@ -43,7 +43,7 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
   Widget build(BuildContext context) {
     final st = ref.watch(cmpysStoreProvider);
     ref.watch(cmpysBackendSyncProvider);
-    ref.watch(cmpysComparisonScoresSyncProvider);
+    final scoresSync = ref.watch(cmpysComparisonScoresSyncProvider);
     final idol = st.idol;
     final dims = st.liveDims();
     final ms = st.liveMilestones();
@@ -83,7 +83,7 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
             if (hasScores)
               _gaugeHero(st, idol, youAvg, idolAvg, overall, initial)
             else
-              _comparisonScoresPending(),
+              _comparisonScoresStatus(scoresSync),
             const SizedBox(height: 14),
             _aiVerdictCard(st, idol),
             const SizedBox(height: 14),
@@ -122,30 +122,89 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
     );
   }
 
-  Widget _comparisonScoresPending() {
+  Widget _comparisonScoresStatus(
+    AsyncValue<ComparisonScoresSyncResult> scoresSync,
+  ) {
+    return scoresSync.when(
+      loading: () => _comparisonScoresCard(
+        key: const Key('comparison-scores-pending'),
+        title: 'Your comparison scores are being prepared.',
+        subtitle: 'This usually takes less than a minute.',
+        loading: true,
+      ),
+      error: (error, stackTrace) => _comparisonScoresCard(
+        key: const Key('comparison-scores-retry'),
+        title: 'We couldn’t refresh your comparison.',
+        subtitle: 'Tap to try again now.',
+        onRetry: () => ref.invalidate(cmpysComparisonScoresSyncProvider),
+      ),
+      data: (result) {
+        switch (result) {
+          case ComparisonScoresSyncResult.unavailable:
+            return _comparisonScoresCard(
+              key: const Key('comparison-scores-unavailable'),
+              title: 'Comparison scores aren’t available yet.',
+              subtitle: 'Complete your mentor interview to create them.',
+            );
+          case ComparisonScoresSyncResult.timedOut:
+            return _comparisonScoresCard(
+              key: const Key('comparison-scores-retry'),
+              title: 'Your comparison is still being prepared.',
+              subtitle: 'Tap to check again now.',
+              onRetry: () => ref.invalidate(cmpysComparisonScoresSyncProvider),
+            );
+          case ComparisonScoresSyncResult.ready:
+            // A ready result normally rebuilds this screen with dimensions.
+            // If a malformed payload slipped through, never show a spinner.
+            return _comparisonScoresCard(
+              key: const Key('comparison-scores-retry'),
+              title: 'We couldn’t read your comparison scores.',
+              subtitle: 'Tap to refresh them.',
+              onRetry: () => ref.invalidate(cmpysComparisonScoresSyncProvider),
+            );
+        }
+      },
+    );
+  }
+
+  Widget _comparisonScoresCard({
+    required Key key,
+    required String title,
+    required String subtitle,
+    bool loading = false,
+    VoidCallback? onRetry,
+  }) {
     return CmpysCardSurface(
-      onTap: () => ref.invalidate(cmpysComparisonScoresSyncProvider),
+      key: key,
+      onTap: onRetry,
       raised: true,
       child: Row(
         children: [
-          const SizedBox(
+          SizedBox(
             width: 20,
             height: 20,
-            child: CircularProgressIndicator(
-              strokeWidth: 2,
-              valueColor: AlwaysStoppedAnimation<Color>(AppColors.ochre),
-            ),
+            child: loading
+                ? const CircularProgressIndicator(
+                    strokeWidth: 2,
+                    valueColor:
+                        AlwaysStoppedAnimation<Color>(AppColors.ochre),
+                  )
+                : const Icon(
+                    PhosphorIconsBold.arrowClockwise,
+                    size: 20,
+                    color: AppColors.ochre,
+                  ),
           ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Your comparison scores are being prepared.',
+                Text(title,
                     style: AppTypography.bodyMedium
                         .copyWith(color: AppColors.ink, fontSize: 14.5)),
                 const SizedBox(height: 3),
-                Text('Tap to check again.',
+                Text(subtitle,
                     style: AppTypography.caption
                         .copyWith(color: AppColors.ink3, fontSize: 12.5)),
               ],

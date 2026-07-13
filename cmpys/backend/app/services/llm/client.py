@@ -768,16 +768,25 @@ class GeminiLLMClient(BaseLLMClient):
                     data={},
                     error="Empty response from Gemini",
                 )
+
+            finish_reason = "unknown"
+            if getattr(response, "candidates", None):
+                reason = getattr(response.candidates[0], "finish_reason", None)
+                finish_reason = getattr(reason, "name", None) or str(reason)
             
             # Log usage
             if response.usage_metadata:
                 logger.info(
                     f"[LLM] Gemini response: {duration_ms:.0f}ms, "
                     f"prompt_tokens={response.usage_metadata.prompt_token_count}, "
-                    f"completion_tokens={response.usage_metadata.candidates_token_count}"
+                    f"completion_tokens={response.usage_metadata.candidates_token_count}, "
+                    f"finish_reason={finish_reason}"
                 )
             else:
-                logger.info(f"[LLM] Gemini response: {duration_ms:.0f}ms")
+                logger.info(
+                    f"[LLM] Gemini response: {duration_ms:.0f}ms, "
+                    f"finish_reason={finish_reason}"
+                )
             
             try:
                 data = json.loads(raw_content)

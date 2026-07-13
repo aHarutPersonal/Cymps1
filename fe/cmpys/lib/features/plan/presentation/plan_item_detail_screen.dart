@@ -42,6 +42,8 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
 
   PlanItemDetailed? _detailed;
   PlanJobStatus? _detailJob;
+  String? _activeDetailJobId;
+  String? _terminalDetailError;
   String? _error;
   bool _toggling = false;
   bool _retrying = false;
@@ -74,6 +76,7 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
       _pollAttempt = 0;
       _detailJob = null;
       _detailJobPollingUnsupported = false;
+      _terminalDetailError = null;
       _takingLong = false;
     }
     try {
@@ -84,8 +87,23 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
       setState(() {
         _detailed = detailed;
         _error = null;
+        if (detailed.detailsReady || detailed.completed) {
+          _activeDetailJobId = null;
+          _terminalDetailError = null;
+          _detailJob = null;
+        } else if (detailed.detailsFailed &&
+            _activeDetailJobId != null &&
+            detailed.jobId?.trim() == _activeDetailJobId) {
+          // A failed response for the exact retry job is authoritative. A
+          // failed response for an older id can be a brief post-retry race and
+          // must not replace the active job returned by the POST.
+          _activeDetailJobId = null;
+          _terminalDetailError =
+              detailed.detailsError ??
+              'This lesson could not be prepared. Please generate it again.';
+        }
       });
-      if (detailed.detailsLoading && !detailed.completed) {
+      if (_shouldPollDetails(detailed)) {
         _pollStartedAt ??= DateTime.now();
         _scheduleDetailPoll();
       } else {
@@ -98,7 +116,7 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
       // A failed background poll must not replace already-loaded content —
       // keep the screen and use bounded backoff.
       if (_detailed != null) {
-        if (_detailed!.detailsLoading && !_detailed!.completed) {
+        if (_shouldPollDetails(_detailed)) {
           _scheduleDetailPoll();
         }
         return;
@@ -114,9 +132,48 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
     }
   }
 
+  String? get _pollingDetailJobId {
+    final activeJobId = _activeDetailJobId?.trim();
+    if (activeJobId != null && activeJobId.isNotEmpty) return activeJobId;
+    final responseJobId = _detailed?.jobId?.trim();
+    if (responseJobId != null && responseJobId.isNotEmpty) {
+      return responseJobId;
+    }
+    return null;
+  }
+
+  bool _shouldPollDetails(PlanItemDetailed? detailed) {
+    if (detailed == null ||
+        detailed.completed ||
+        detailed.detailsReady ||
+        _terminalDetailError != null) {
+      return false;
+    }
+    return detailed.detailsLoading || _pollingDetailJobId != null;
+  }
+
+  void _beginDetailJobPolling(String jobId) {
+    final normalizedJobId = jobId.trim();
+    if (normalizedJobId.isEmpty) {
+      throw StateError('Lesson regeneration did not return a job id.');
+    }
+    _poll?.cancel();
+    setState(() {
+      _activeDetailJobId = normalizedJobId;
+      _terminalDetailError = null;
+      _detailJob = null;
+      _detailJobPollingUnsupported = false;
+      _pollStartedAt = DateTime.now();
+      _pollAttempt = 0;
+      _takingLong = false;
+      _error = null;
+    });
+    _scheduleDetailPoll();
+  }
+
   void _scheduleDetailPoll() {
     _poll?.cancel();
-    if (!mounted || _takingLong) return;
+    if (!mounted || _takingLong || !_shouldPollDetails(_detailed)) return;
     final startedAt = _pollStartedAt ??= DateTime.now();
     if (_pollAttempt >= _maxForegroundPollAttempts ||
         DateTime.now().difference(startedAt) >= _foregroundPollBudget) {
@@ -134,13 +191,11 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
   Future<void> _pollDetailJob() async {
     if (!mounted || _pollingJob || _takingLong) return;
     final detailed = _detailed;
-    if (detailed == null || !detailed.detailsLoading || detailed.completed) {
-      return;
-    }
+    if (!_shouldPollDetails(detailed)) return;
     _pollingJob = true;
     _pollAttempt++;
     try {
-      final jobId = detailed.jobId;
+      final jobId = _pollingDetailJobId;
       if (jobId == null || jobId.isEmpty || _detailJobPollingUnsupported) {
         await _load();
         return;
@@ -151,7 +206,21 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
           .getPlanDetailJobStatus(jobId);
       if (!mounted) return;
       setState(() => _detailJob = job);
-      if (job.isCompleted || job.isFailed) {
+      if (job.isFailed) {
+        final reportedError = job.errorMessage?.trim();
+        setState(() {
+          _activeDetailJobId = null;
+          _terminalDetailError =
+              reportedError != null && reportedError.isNotEmpty
+              ? reportedError
+              : 'This lesson could not be prepared. Please generate it again.';
+        });
+        _poll?.cancel();
+        // Prefer the detailed endpoint's user-facing error when it is
+        // available. The job failure remains terminal if this refresh races
+        // the backend or the network, so polling cannot restart forever.
+        await _load();
+      } else if (job.isCompleted) {
         await _load();
       } else {
         _scheduleDetailPoll();
@@ -272,10 +341,21 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
     if (detailed == null || _retrying) return;
     setState(() => _retrying = true);
     try {
-      await ref
+      final retryJobId = await ref
           .read(planRepositoryProvider)
           .regeneratePlanItemDetails(detailed.item.id);
-      await _load(resetPolling: true);
+      if (!mounted) return;
+      // The detailed endpoint can briefly fail or still describe the previous
+      // failed job after a successful retry POST. Keep the authoritative job
+      // id returned by POST and poll it until refreshed details catch up.
+      if (retryJobId.trim().isNotEmpty) {
+        _beginDetailJobPolling(retryJobId);
+        await _load();
+      } else {
+        // An empty id means the retry endpoint found that the lesson or
+        // mission had already become terminal while the request was in flight.
+        await _load(resetPolling: true);
+      }
     } catch (_) {
       if (mounted) {
         showCmpysToast(
@@ -614,7 +694,11 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
   }
 
   Widget _generatingCard(PlanItemDetailed detailed) {
-    if (detailed.detailsFailed) {
+    final activeRetry =
+        _activeDetailJobId != null && _terminalDetailError == null;
+    final failureMessage = _terminalDetailError ?? detailed.detailsError;
+    if (_terminalDetailError != null ||
+        (detailed.detailsFailed && !activeRetry)) {
       return CmpysCardSurface(
         pad: const EdgeInsets.all(18),
         child: Column(
@@ -627,7 +711,7 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
             ),
             const SizedBox(height: 10),
             Text(
-              detailed.detailsError ??
+              failureMessage ??
                   'This lesson could not be prepared. Please try again.',
               style: AppTypography.body.copyWith(
                 fontSize: 13.5,
@@ -748,6 +832,8 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
       'loading_context' => 'Preparing the mentor context for your lesson…',
       'generating_curriculum' =>
         'Writing your three focused lessons and guided practice…',
+      'repairing_lessons' =>
+        'Strengthening the lessons that missed a quality check…',
       'resolving_materials' => 'Checking and organizing your materials…',
       'finalizing_steps' => 'Finalizing the lesson sequence…',
       _ =>

@@ -109,6 +109,63 @@ async def test_agentic_streams_have_a_bounded_provider_timeout(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_guided_stream_has_a_short_response_budget(monkeypatch):
+    captured = {}
+
+    class FakeModels:
+        def generate_content_stream(self, **kwargs):
+            captured["config"] = kwargs["config"]
+
+            async def stream():
+                yield SimpleNamespace(text="A focused answer.")
+
+            return stream()
+
+    client = SimpleNamespace(aio=SimpleNamespace(models=FakeModels()))
+    monkeypatch.setattr(gemini, "_gemini_client", lambda: client)
+
+    chunks = [
+        chunk
+        async for chunk in gemini.stream_learnlm(
+            system_prompt="system",
+            user_message="question",
+        )
+    ]
+
+    assert chunks == ["A focused answer."]
+    assert captured["config"].max_output_tokens == 1200
+
+
+@pytest.mark.asyncio
+async def test_stream_rejects_an_explicit_non_stop_finish_reason(monkeypatch):
+    class FakeModels:
+        def generate_content_stream(self, **_kwargs):
+            async def stream():
+                yield SimpleNamespace(
+                    text="A truncated answer",
+                    candidates=[
+                        SimpleNamespace(
+                            finish_reason=SimpleNamespace(name="MAX_TOKENS")
+                        )
+                    ],
+                )
+
+            return stream()
+
+    client = SimpleNamespace(aio=SimpleNamespace(models=FakeModels()))
+    monkeypatch.setattr(gemini, "_gemini_client", lambda: client)
+
+    with pytest.raises(RuntimeError, match="ended incompletely"):
+        _ = [
+            chunk
+            async for chunk in gemini.stream_learnlm(
+                system_prompt="system",
+                user_message="question",
+            )
+        ]
+
+
+@pytest.mark.asyncio
 async def test_agentic_streams_use_expected_grounding_policy(monkeypatch):
     calls = []
 

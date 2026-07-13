@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
+from app.api.dependencies import get_current_user
 from app.core.db import get_db
 from app.models.idol_job import IdolImportJob
 from app.models.plan_job import PlanGenerationJob
@@ -14,6 +15,7 @@ from app.models.suggest_job import IdolSuggestJob
 from app.models.idol_profile import IdolProfile
 from app.models.idol_timeline import IdolTimelineEvent
 from app.models.plan import Plan, PlanItem
+from app.models.user import User
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -130,6 +132,16 @@ THINKING_NARRATIVES = {
         "Selecting resources that connect directly to this week's mission.",
         "Checking that each step has a concrete definition of done.",
     ],
+    "repairing_lessons": [
+        "Strengthening the lessons that missed the reader-quality checks.",
+        "Preserving complete sections while repairing only the thin ones.",
+        "Rechecking depth, practice steps, and resource references.",
+    ],
+    "resolving_materials": [
+        "Checking that every recommended resource is specific and findable.",
+        "Connecting each lesson to the most relevant book and video.",
+        "Preparing the final material links and references.",
+    ],
     "finalizing_steps": [
         "Finalizing your personalized tasks...",
         "Polishing the instructions and success metrics...",
@@ -218,8 +230,10 @@ def get_thinking_stream(
         "filtering_matches": (70, 100),
         # Plan Item Detail steps
         "loading_context": (0, 30),
-        "generating_curriculum": (30, 70),
-        "finalizing_steps": (70, 100),
+        "generating_curriculum": (30, 68),
+        "repairing_lessons": (60, 75),
+        "resolving_materials": (70, 85),
+        "finalizing_steps": (80, 100),
     }
     
     start, end = step_progress_map.get(step, (0, 100))
@@ -320,6 +334,7 @@ class JobStatusResponse(BaseModel):
 async def get_job_status(
     job_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
     job_type: Annotated[
         Literal["import", "plan", "plan_detail", "suggest"] | None,
         Query(alias="type"),
@@ -339,7 +354,10 @@ async def get_job_status(
         stmt = (
             select(IdolImportJob)
             .options(joinedload(IdolImportJob.idol))
-            .where(IdolImportJob.id == job_id)
+            .where(
+                IdolImportJob.id == job_id,
+                IdolImportJob.user_id == current_user.id,
+            )
         )
         result = await db.execute(stmt)
         job = result.scalar_one_or_none()
@@ -349,7 +367,10 @@ async def get_job_status(
         stmt = (
             select(PlanGenerationJob)
             .options(joinedload(PlanGenerationJob.idol))
-            .where(PlanGenerationJob.id == job_id)
+            .where(
+                PlanGenerationJob.id == job_id,
+                PlanGenerationJob.user_id == current_user.id,
+            )
         )
         result = await db.execute(stmt)
         job = result.scalar_one_or_none()
@@ -363,7 +384,10 @@ async def get_job_status(
                 .joinedload(PlanItem.plan)
                 .joinedload(Plan.idol)
             )
-            .where(PlanItemDetailJob.id == job_id)
+            .where(
+                PlanItemDetailJob.id == job_id,
+                PlanItemDetailJob.user_id == current_user.id,
+            )
         )
         result = await db.execute(stmt)
         job = result.scalar_one_or_none()
@@ -372,7 +396,10 @@ async def get_job_status(
         # Try Idol Suggest Job
         stmt = (
             select(IdolSuggestJob)
-            .where(IdolSuggestJob.id == job_id)
+            .where(
+                IdolSuggestJob.id == job_id,
+                IdolSuggestJob.user_id == current_user.id,
+            )
         )
         result = await db.execute(stmt)
         job = result.scalar_one_or_none()

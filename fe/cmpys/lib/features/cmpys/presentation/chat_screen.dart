@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/design_tokens.dart';
 import '../../../app/router.dart';
+import '../../../core/network/api_error.dart';
 import '../../../core/network/coalesced_text.dart';
 import '../../../core/ui/app_shell.dart';
 import '../../../core/ui/cmpys/cmpys_primitives.dart';
@@ -123,7 +124,7 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
       _error = null;
       _waiting = true;
       _streamingText.value = '';
-      if (reportingWin) _pendingWinText = text;
+      _pendingWinText = reportingWin ? text : null;
     });
     _scrollToBottom();
     await _streamReply(text, reportingWin: reportingWin);
@@ -144,7 +145,6 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
     _lastSent = text;
     final idol = ref.read(cmpysStoreProvider).idol;
 
-    final hadCachedId = _cachedSessionId != null;
     final sessionId = _cachedSessionId ?? await _resolveSessionId();
     if (sessionId == null) {
       if (!mounted) return;
@@ -190,6 +190,8 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
           streamed.add(ev['content'] as String? ?? '');
         } else if (type == 'error') {
           throw StateError(ev['message']?.toString() ?? 'chat error');
+        } else if (type == 'done') {
+          break;
         }
       }
       if (!mounted) return;
@@ -229,22 +231,34 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
       if (!mounted) return;
       acc = streamed.close(emitPending: false);
       _cachedSessionId = null;
-      if (hadCachedId && acc.isEmpty) {
-        // The cached id may have gone stale — re-resolve once and retry,
-        // matching the pre-cache behavior of resolving before every send.
-        await _streamReply(text, reportingWin: reportingWin);
-        return;
-      }
       setState(() {
         _waiting = false;
         _streaming = false;
         _streamingText.value = '';
-        _error =
-            '${idol.short} got cut off. Check your connection and tap retry.';
+        _error = _mentorErrorMessage(e, idol.short);
       });
     } finally {
       streamed.dispose();
     }
+  }
+
+  String _mentorErrorMessage(Object error, String mentor) {
+    if (error is SseIncompleteException) {
+      return '$mentor got cut off before finishing. Tap retry.';
+    }
+    if (error is TimeoutError) {
+      return '$mentor is taking longer than expected. Tap retry.';
+    }
+    if (error is NetworkError) {
+      return 'Couldn’t reach $mentor. Check your connection and tap retry.';
+    }
+    if (error is ApiError && error.statusCode == 429) {
+      return '$mentor is handling many requests. Wait a moment and retry.';
+    }
+    if (error is ApiError && (error.statusCode ?? 0) >= 500) {
+      return '$mentor is temporarily unavailable. Tap retry.';
+    }
+    return '$mentor couldn’t finish that reply. Tap retry.';
   }
 
   void _startWinReport() {

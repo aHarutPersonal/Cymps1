@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 from app.api.v1 import plans
 from app.api.v1.daily_tasks import _execution_focus_week
@@ -302,7 +303,8 @@ async def test_detail_retry_reuses_an_active_job() -> None:
     db = AsyncMock()
     db.execute.return_value = _Result(scalar_one=active_job)
     original_get = plans._get_item_for_user
-    plans._get_item_for_user = AsyncMock(return_value=item)
+    get_item = AsyncMock(return_value=item)
+    plans._get_item_for_user = get_item
     try:
         response = await plans.regenerate_item_details(
             "mission-1",
@@ -315,3 +317,119 @@ async def test_detail_retry_reuses_an_active_job() -> None:
     assert response.job_id == "job-active"
     assert db.add.call_count == 0
     db.commit.assert_not_awaited()
+    assert get_item.await_args.kwargs["for_update"] is True
+
+
+@pytest.mark.asyncio
+async def test_detail_retry_does_not_enqueue_when_lesson_is_already_ready() -> None:
+    item = _item("mission-ready", PlanItemType.PROJECT, 1)
+    item.details_json = {
+        "steps": [
+            {
+                "id": f"step-{index}",
+                "lesson_content": "word " * 1200,
+            }
+            for index in range(3)
+        ]
+    }
+    db = AsyncMock()
+    original_get = plans._get_item_for_user
+    plans._get_item_for_user = AsyncMock(return_value=item)
+    try:
+        with patch(
+            "app.tasks.plans.regenerate_plan_item_details.apply_async"
+        ) as enqueue:
+            response = await plans.regenerate_item_details(
+                "mission-ready",
+                db,
+                SimpleNamespace(id="user-1"),
+            )
+    finally:
+        plans._get_item_for_user = original_get
+
+    assert response.job_id == ""
+    enqueue.assert_not_called()
+    db.execute.assert_not_awaited()
+    assert db.add.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_detail_retry_does_not_enqueue_an_authoritatively_completed_item() -> None:
+    item = _item("mission-completed", PlanItemType.PROJECT, 1)
+    completion = SimpleNamespace(id="completion-1")
+    db = AsyncMock()
+    db.execute.side_effect = [
+        _Result(scalar_one=None),  # no active detail job
+        _Result(scalar_one=completion),  # authoritative completion record
+    ]
+    original_get = plans._get_item_for_user
+    plans._get_item_for_user = AsyncMock(return_value=item)
+    try:
+        with patch(
+            "app.tasks.plans.regenerate_plan_item_details.apply_async"
+        ) as enqueue:
+            response = await plans.regenerate_item_details(
+                "mission-completed",
+                db,
+                SimpleNamespace(id="user-1"),
+            )
+    finally:
+        plans._get_item_for_user = original_get
+
+    assert response.job_id == ""
+    enqueue.assert_not_called()
+    assert db.add.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_detail_retry_surfaces_prefetch_publish_failure_as_503() -> None:
+    item = _item("mission-1", PlanItemType.PROJECT, 1)
+    pending_job = SimpleNamespace(id="job-pending", status="pending")
+    db = AsyncMock()
+    db.execute.return_value = _Result(scalar_one=pending_job)
+    original_get = plans._get_item_for_user
+    original_promote = plans._promote_prefetched_detail_job
+    plans._get_item_for_user = AsyncMock(return_value=item)
+    plans._promote_prefetched_detail_job = AsyncMock(return_value="failed")
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await plans.regenerate_item_details(
+                "mission-1",
+                db,
+                SimpleNamespace(id="user-1"),
+            )
+    finally:
+        plans._get_item_for_user = original_get
+        plans._promote_prefetched_detail_job = original_promote
+
+    assert exc_info.value.status_code == 503
+    assert db.add.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_detail_generation_lock_uses_owned_plan_item_row() -> None:
+    item = _item("mission-locked", PlanItemType.PROJECT, 1)
+
+    class Result:
+        def scalar_one_or_none(self):
+            return item
+
+    class Database:
+        statement = None
+
+        async def execute(self, statement):
+            self.statement = statement
+            return Result()
+
+    db = Database()
+    result = await plans._get_item_for_user(
+        db,
+        "mission-locked",
+        "user-1",
+        for_update=True,
+    )
+
+    assert result is item
+    assert db.statement._for_update_arg is not None
+    assert "plans.user_id" in str(db.statement)
+    assert "user-1" in db.statement.compile().params.values()

@@ -161,6 +161,7 @@ async def _stream_generate(
     label: str,
     grounded: bool = True,
     temperature: float = 0.7,
+    max_output_tokens: int | None = None,
 ) -> AsyncGenerator[str, None]:
     """
     True token streaming via generate_content_stream (the pattern proven by
@@ -171,6 +172,10 @@ async def _stream_generate(
     """
     client = _gemini_client()
     tools = [types.Tool(google_search=types.GoogleSearch())] if grounded else None
+    started = time.perf_counter()
+    first_text_at: float | None = None
+    response_chars = 0
+    finish_reason = "unknown"
 
     try:
         stream = client.aio.models.generate_content_stream(
@@ -180,6 +185,7 @@ async def _stream_generate(
                 system_instruction=system_prompt,
                 tools=tools,
                 temperature=temperature,
+                max_output_tokens=max_output_tokens,
                 http_options=types.HttpOptions(
                     timeout=GEMINI_REQUEST_TIMEOUT_MS,
                 ),
@@ -190,9 +196,40 @@ async def _stream_generate(
         if inspect.iscoroutine(stream):
             stream = await stream
         async for chunk in stream:
+            for candidate in getattr(chunk, "candidates", None) or []:
+                reason = getattr(candidate, "finish_reason", None)
+                if reason is not None:
+                    finish_reason = (
+                        getattr(reason, "name", None)
+                        or str(reason).rsplit(".", maxsplit=1)[-1]
+                    )
             text = getattr(chunk, "text", None)
             if text:
+                if first_text_at is None:
+                    first_text_at = time.perf_counter()
+                response_chars += len(text)
                 yield text
+
+        if finish_reason not in {"unknown", "STOP", "FINISH_REASON_UNSPECIFIED"}:
+            raise RuntimeError(
+                f"{label} response ended incompletely ({finish_reason})"
+            )
+
+        duration_ms = (time.perf_counter() - started) * 1000
+        first_text_ms = (
+            (first_text_at - started) * 1000
+            if first_text_at is not None
+            else 0
+        )
+        logger.info(
+            "[GEMINI] %s stream completed: %.0fms, first_text=%.0fms, "
+            "chars=%s, finish_reason=%s",
+            label,
+            duration_ms,
+            first_text_ms,
+            response_chars,
+            finish_reason,
+        )
     except Exception as e:
         logger.error(f"[GEMINI] {label} stream error: {e}")
         raise
@@ -218,6 +255,7 @@ async def stream_learnlm(
         label="LearnLM",
         grounded=False,
         temperature=0.8,
+        max_output_tokens=1200,
     ):
         yield text
 

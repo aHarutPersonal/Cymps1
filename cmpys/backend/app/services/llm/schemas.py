@@ -270,76 +270,156 @@ class PlanDetailStepOutput(BaseModel):
     substeps: list[str] = Field(min_length=2, max_length=3)
 
 
-class PlanItemDetailsOutput(BaseModel):
-    """Native structured-output contract for long plan-item lessons."""
+PLAN_DETAIL_REQUIRED_HEADINGS = (
+    "## Why This Matters",
+    "## Core Framework",
+    "## Worked Example",
+    "## Failure Modes",
+    "## Guided Practice",
+    "## Check Your Understanding",
+    "## References",
+)
+
+
+def plan_detail_step_quality_issues(
+    step: PlanDetailStepOutput,
+    *,
+    material_titles: set[str] | None = None,
+) -> list[str]:
+    """Return every semantic defect so recovery never chases one at a time."""
+    issues: list[str] = []
+    lesson_words = len(step.lesson_content.split())
+    if not 1200 <= lesson_words <= 1800:
+        issues.append(
+            f"{step.id} lesson_content has {lesson_words} words; "
+            "required range is 1200-1800"
+        )
+    missing = [
+        heading
+        for heading in PLAN_DETAIL_REQUIRED_HEADINGS
+        if heading not in step.lesson_content
+    ]
+    if missing:
+        issues.append(f"{step.id} is missing lesson headings: {missing}")
+    if material_titles is not None:
+        invalid_resources = [
+            title for title in step.resources if title not in material_titles
+        ]
+        if invalid_resources:
+            issues.append(
+                f"{step.id} resources must exactly match top-level material titles: "
+                f"{invalid_resources}"
+            )
+    for index, substep in enumerate(step.substeps, start=1):
+        words = len(substep.split())
+        if not 20 <= words <= 50:
+            issues.append(
+                f"{step.id} substep {index} has {words} words; "
+                "required range is 20-50"
+            )
+    return issues
+
+
+def plan_detail_material_quality_issues(
+    materials: list[PlanDetailMaterialOutput],
+) -> list[str]:
+    issues: list[str] = []
+    kinds = [material.type for material in materials]
+    if kinds.count("book") != 1 or kinds.count("video") != 1:
+        issues.append("materials must contain exactly one book and one video")
+    if (
+        sum(
+            kind in {"article", "course", "tool", "in_app_lesson"}
+            for kind in kinds
+        )
+        != 1
+    ):
+        issues.append(
+            "the third material must be an article, course, tool, or in_app_lesson"
+        )
+
+    for material in materials:
+        content = material.content_markdown
+        if material.type == "in_app_lesson":
+            words = len((content or "").split())
+            # The prompt still targets 400-600 words. Allow a narrow overrun so
+            # a complete lesson is not discarded for a handful of extra words;
+            # materially overlong readings remain invalid.
+            if not 400 <= words <= 650:
+                issues.append(
+                    f"in_app_lesson '{material.title}' content_markdown has "
+                    f"{words} words; accepted range is 400-650 "
+                    "(target 400-600)"
+                )
+        elif content is not None:
+            issues.append(
+                f"{material.type} material '{material.title}' "
+                "content_markdown must be null"
+            )
+        if material.type == "book" and material.ideas:
+            issues.append(f"book material '{material.title}' ideas must be empty")
+    return issues
+
+
+class PlanDetailStepRepairOutput(PlanDetailStepOutput):
+    """A single lesson repair with constraints visible to local validation."""
+
+    @model_validator(mode="after")
+    def require_complete_lesson(self) -> "PlanDetailStepRepairOutput":
+        issues = plan_detail_step_quality_issues(self)
+        if issues:
+            raise ValueError("; ".join(issues))
+        return self
+
+
+class PlanDetailSubstepsRepairOutput(BaseModel):
+    """Small repair payload for an otherwise-valid lesson."""
+
+    substeps: list[str] = Field(min_length=2, max_length=3)
+
+    @model_validator(mode="after")
+    def require_actionable_substeps(self) -> "PlanDetailSubstepsRepairOutput":
+        issues = []
+        for index, substep in enumerate(self.substeps, start=1):
+            words = len(substep.split())
+            if not 20 <= words <= 50:
+                issues.append(
+                    f"substep {index} has {words} words; required range is 20-50"
+                )
+        if issues:
+            raise ValueError("; ".join(issues))
+        return self
+
+
+class PlanItemDetailsDraftOutput(BaseModel):
+    """Structurally valid draft that can be repaired without discarding it."""
 
     steps: list[PlanDetailStepOutput] = Field(min_length=3, max_length=3)
     materials: list[PlanDetailMaterialOutput] = Field(min_length=3, max_length=3)
     definition_of_done: str
     mental_model: str
 
+
+class PlanItemDetailsOutput(PlanItemDetailsDraftOutput):
+    """Complete quality contract for long plan-item lessons."""
+
     @model_validator(mode="after")
     def require_complete_learning_contract(self) -> "PlanItemDetailsOutput":
         """Protect reader depth and resource integrity before persistence."""
-        required_headings = (
-            "## Why This Matters",
-            "## Core Framework",
-            "## Worked Example",
-            "## Failure Modes",
-            "## Guided Practice",
-            "## Check Your Understanding",
-            "## References",
-        )
         material_titles = {material.title for material in self.materials}
-
+        issues: list[str] = []
         if len({step.id for step in self.steps}) != 3:
-            raise ValueError("step ids must be unique")
+            issues.append("step ids must be unique")
         for step in self.steps:
-            lesson_words = len(step.lesson_content.split())
-            if not 1200 <= lesson_words <= 1800:
-                raise ValueError(
-                    f"{step.id} lesson_content has {lesson_words} words; "
-                    "required range is 1200-1800"
+            issues.extend(
+                plan_detail_step_quality_issues(
+                    step,
+                    material_titles=material_titles,
                 )
-            missing = [
-                heading for heading in required_headings
-                if heading not in step.lesson_content
-            ]
-            if missing:
-                raise ValueError(f"{step.id} is missing lesson headings: {missing}")
-            if any(title not in material_titles for title in step.resources):
-                raise ValueError(
-                    f"{step.id} resources must exactly match top-level material titles"
-                )
-            for substep in step.substeps:
-                words = len(substep.split())
-                if not 20 <= words <= 50:
-                    raise ValueError(
-                        f"{step.id} substeps must contain 20-50 words"
-                    )
-
-        kinds = [material.type for material in self.materials]
-        if kinds.count("book") != 1 or kinds.count("video") != 1:
-            raise ValueError("materials must contain exactly one book and one video")
-        if sum(kind in {"article", "course", "tool", "in_app_lesson"} for kind in kinds) != 1:
-            raise ValueError(
-                "the third material must be an article, course, tool, or in_app_lesson"
             )
-
-        for material in self.materials:
-            content = material.content_markdown
-            if material.type == "in_app_lesson":
-                words = len((content or "").split())
-                if not 400 <= words <= 600:
-                    raise ValueError(
-                        "in_app_lesson content_markdown must contain 400-600 words"
-                    )
-            elif content is not None:
-                raise ValueError(
-                    f"{material.type} material content_markdown must be null"
-                )
-            if material.type == "book" and material.ideas:
-                raise ValueError("book material ideas must be empty")
+        issues.extend(plan_detail_material_quality_issues(self.materials))
+        if issues:
+            raise ValueError("; ".join(issues))
         return self
 
 
