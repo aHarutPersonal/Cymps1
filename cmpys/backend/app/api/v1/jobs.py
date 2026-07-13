@@ -105,6 +105,11 @@ THINKING_NARRATIVES = {
         "Synthesizing {idol_name}'s principles into actionable tasks...",
         "Your path to success is almost ready!",
     ],
+    "preparing_current_week": [
+        "Your roadmap is ready. Starting Week 1 lessons in the background...",
+        "Publishing the current missions before opening your plan...",
+        "You will not need to open a lesson to start its preparation.",
+    ],
     # Idol Suggestion narratives
     "analyzing_interests": [
         "Analyzing your profile & interests...",
@@ -131,6 +136,11 @@ THINKING_NARRATIVES = {
         "Writing teach-first steps with examples, practice, and reflection.",
         "Selecting resources that connect directly to this week's mission.",
         "Checking that each step has a concrete definition of done.",
+    ],
+    "generating_lessons": [
+        "The curriculum outline is ready; writing the focused lessons in parallel.",
+        "Building examples and guided practice for each lesson at the same time.",
+        "Keeping the full reader depth while reducing the wait.",
     ],
     "repairing_lessons": [
         "Strengthening the lessons that missed the reader-quality checks.",
@@ -224,6 +234,7 @@ def get_thinking_stream(
         "done": (95, 100),
         # Plan steps
         "finalizing_plan": (85, 100),
+        "preparing_current_week": (90, 100),
         # Idol Suggestion steps
         "analyzing_interests": (0, 30),
         "querying_knowledge_base": (30, 70),
@@ -231,6 +242,7 @@ def get_thinking_stream(
         # Plan Item Detail steps
         "loading_context": (0, 30),
         "generating_curriculum": (30, 68),
+        "generating_lessons": (45, 75),
         "repairing_lessons": (60, 75),
         "resolving_materials": (70, 85),
         "finalizing_steps": (80, 100),

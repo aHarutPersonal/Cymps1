@@ -832,6 +832,7 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
       'loading_context' => 'Preparing the mentor context for your lesson…',
       'generating_curriculum' =>
         'Writing your three focused lessons and guided practice…',
+      'generating_lessons' => 'Writing your focused lessons in parallel…',
       'repairing_lessons' =>
         'Strengthening the lessons that missed a quality check…',
       'resolving_materials' => 'Checking and organizing your materials…',

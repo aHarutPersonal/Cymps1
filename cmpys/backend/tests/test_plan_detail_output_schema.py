@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import re
 from types import SimpleNamespace
@@ -6,18 +7,23 @@ import pytest
 
 from app.services.llm.prompt_loader import load_prompt
 from app.services.llm.schemas import (
+    PlanDetailLessonSectionsOutput,
     PlanDetailStepRepairOutput,
     PlanDetailSubstepsRepairOutput,
+    PlanItemDetailsOutlineOutput,
     PlanItemDetailsOutput,
 )
 from app.tasks.plans import (
+    _generate_plan_item_details_parallel,
     _merge_plan_detail_repairs,
     _plan_detail_repair_plan,
     _plan_detail_recovery_prompt,
     _plan_detail_step_repair_prompt,
     _plan_detail_substeps_repair_prompt,
     _validate_plan_detail_response,
+    _validate_plan_detail_outline_response,
     _validate_plan_detail_step_response,
+    _writing_thinking_budget,
 )
 
 
@@ -432,3 +438,191 @@ def test_plan_detail_prompt_examples_obey_their_own_constraints() -> None:
     substeps = re.findall(r'^\s*"([^"]+)"', example, flags=re.MULTILINE)
     assert len(substeps) == 3
     assert all(20 <= len(substep.split()) <= 50 for substep in substeps)
+
+
+def _outline_payload() -> dict:
+    payload = _valid_payload()
+    return {
+        **payload,
+        "steps": [
+            {
+                "id": step["id"],
+                "title": step["title"],
+                "description": step["description"],
+                "resources": step["resources"],
+            }
+            for step in payload["steps"]
+        ],
+    }
+
+
+def _lesson_sections_payload() -> dict:
+    return {
+        "why_this_matters": "substance " * 160,
+        "core_framework": "substance " * 310,
+        "worked_example": "substance " * 230,
+        "failure_modes": "substance " * 190,
+        "guided_practice": "substance " * 280,
+        "check_your_understanding": "substance " * 160,
+        "references": "substance " * 55,
+        "substeps": _valid_payload()["steps"][0]["substeps"],
+    }
+
+
+def test_parallel_outline_is_small_and_resource_consistent() -> None:
+    outline = PlanItemDetailsOutlineOutput.model_validate(_outline_payload())
+
+    assert [step.id for step in outline.steps] == [
+        "step_1",
+        "step_2",
+        "step_3",
+    ]
+    assert len(outline.materials) == 3
+
+
+def test_parallel_outline_maps_alternative_resource_names_to_materials() -> None:
+    payload = _outline_payload()
+    payload["materials"][0]["title"] = "The Lean Startup"
+    payload["materials"][0]["reason"] = "Lean product experimentation."
+    payload["steps"][1]["resources"] = [
+        "Running Lean",
+        "Scientific experimentation guide",
+    ]
+    response = SimpleNamespace(data=payload, error=None)
+
+    _validate_plan_detail_outline_response(response)
+
+    assert response.error is None
+    assert set(response.data["steps"][1]["resources"]).issubset(
+        {material["title"] for material in response.data["materials"]}
+    )
+    assert "The Lean Startup" in response.data["steps"][1]["resources"]
+
+
+def test_quality_writing_keeps_required_model_thinking_enabled() -> None:
+    assert _writing_thinking_budget("quality") is None
+    assert _writing_thinking_budget("balanced") == 0
+
+
+@pytest.mark.asyncio
+async def test_long_lessons_are_requested_concurrently_after_outline() -> None:
+    payload = _valid_payload()
+    outline = _outline_payload()
+    started: set[str] = set()
+    all_started = asyncio.Event()
+
+    class FakeClient:
+        model = "fake-model"
+
+        async def generate_json(self, *, user_prompt, output_model, **kwargs):
+            if output_model is PlanItemDetailsOutlineOutput:
+                return SimpleNamespace(data=copy.deepcopy(outline), error=None)
+
+            step = next(
+                candidate
+                for candidate in payload["steps"]
+                if f'"id":"{candidate["id"]}"' in user_prompt
+            )
+            started.add(step["id"])
+            if len(started) == 3:
+                all_started.set()
+            await asyncio.wait_for(all_started.wait(), timeout=1)
+            return SimpleNamespace(
+                data=copy.deepcopy(_lesson_sections_payload()),
+                error=None,
+            )
+
+    def client_factory(**kwargs):
+        return FakeClient()
+
+    result, calls, error = await _generate_plan_item_details_parallel(
+        system_prompt="planner",
+        task_title="Build a validated experiment",
+        mission_hours=5,
+        user_goal="learn product experimentation",
+        learning_preferences="reading and practice",
+        idol_name="Mentor",
+        idol_domain="technology",
+        idol_evidence={},
+        session_context="",
+        active_tier="balanced",
+        routing_reason="test",
+        client_factory=client_factory,
+    )
+
+    assert error is None
+    assert result is not None
+    assert started == {"step_1", "step_2", "step_3"}
+    assert all(
+        1200 <= len(step["lesson_content"].split()) <= 1800
+        for step in result["steps"]
+    )
+    assert all(
+        "## References" in step["lesson_content"]
+        for step in result["steps"]
+    )
+    assert [stage for stage, *_ in calls] == [
+        "parallel_outline_attempt_1",
+        "parallel_lesson_step_1_attempt_1",
+        "parallel_lesson_step_2_attempt_1",
+        "parallel_lesson_step_3_attempt_1",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_invalid_small_outline_retries_before_long_lessons() -> None:
+    payload = _valid_payload()
+    invalid_outline = _outline_payload()
+    invalid_outline["materials"][0]["type"] = "course"
+    valid_outline = _outline_payload()
+    outline_attempts = 0
+    outline_prompts: list[str] = []
+
+    class FakeClient:
+        model = "fake-model"
+
+        async def generate_json(self, *, user_prompt, output_model, **kwargs):
+            nonlocal outline_attempts
+            if output_model is PlanItemDetailsOutlineOutput:
+                outline_attempts += 1
+                outline_prompts.append(user_prompt)
+                outline = invalid_outline if outline_attempts == 1 else valid_outline
+                return SimpleNamespace(data=copy.deepcopy(outline), error=None)
+
+            step = next(
+                candidate
+                for candidate in payload["steps"]
+                if f'"id":"{candidate["id"]}"' in user_prompt
+            )
+            assert step["id"] in {"step_1", "step_2", "step_3"}
+            assert output_model is PlanDetailLessonSectionsOutput
+            return SimpleNamespace(
+                data=copy.deepcopy(_lesson_sections_payload()),
+                error=None,
+            )
+
+    result, calls, error = await _generate_plan_item_details_parallel(
+        system_prompt="planner",
+        task_title="Build a validated experiment",
+        mission_hours=5,
+        user_goal="learn product experimentation",
+        learning_preferences="reading and practice",
+        idol_name="Mentor",
+        idol_domain="technology",
+        idol_evidence={},
+        session_context="",
+        active_tier="balanced",
+        routing_reason="test",
+        client_factory=lambda **kwargs: FakeClient(),
+    )
+
+    assert error is None
+    assert result is not None
+    assert outline_attempts == 2
+    assert [stage for stage, *_ in calls[:2]] == [
+        "parallel_outline_attempt_1",
+        "parallel_outline_attempt_2",
+    ]
+    assert "OUTLINE CONTRACT RETRY" not in outline_prompts[0]
+    assert "OUTLINE CONTRACT RETRY" in outline_prompts[1]
+    assert "exactly one book and one video" in outline_prompts[1]

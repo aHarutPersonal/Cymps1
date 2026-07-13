@@ -10,6 +10,8 @@ _Learn about the person you're helping. Update this as you go._
 - **Notes:** For book-learning features, prefers genuinely long-form material (more than 15 minutes) and a dedicated app-like reader with selection-based notes.
 - **Notes:** Prefers plans to emphasize one current-week focus and unlock future weeks sequentially after completion.
 - **Notes:** For lessons, prefers honest 40–60 minute learning sessions, a dedicated reader with relevant book references, and one sequentially unlocked focus lesson at a time.
+- **Notes:** Expects each week’s required learning workload to add up to the stated weekly time budget and dislikes plans whose required lessons materially underfill it.
+- **Notes:** Wants current-week learning content prepared automatically in the background, without opening the week, and prefers quality-preserving latency optimizations.
 
 ## Context
 

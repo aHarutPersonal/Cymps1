@@ -6,7 +6,7 @@ and are used to validate LLM responses.
 """
 import datetime
 from enum import Enum
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -258,6 +258,65 @@ class PlanDetailMaterialOutput(BaseModel):
     ideas: list[PlanDetailIdeaOutput] = Field(default_factory=list)
 
 
+class PlanDetailStepOutlineOutput(BaseModel):
+    """Small curriculum scaffold produced before long lessons are written."""
+
+    id: str = Field(pattern=r"^step_[1-3]$")
+    title: str = Field(max_length=60)
+    description: str
+    resources: list[str] = Field(min_length=1, max_length=2)
+
+
+class PlanItemDetailsOutlineOutput(BaseModel):
+    """Shared lesson sequence and materials for parallel lesson generation."""
+
+    steps: list[PlanDetailStepOutlineOutput] = Field(min_length=3, max_length=3)
+    materials: list[PlanDetailMaterialOutput] = Field(min_length=3, max_length=3)
+    definition_of_done: str
+    mental_model: str
+
+    @model_validator(mode="after")
+    def require_consistent_outline(self) -> "PlanItemDetailsOutlineOutput":
+        issues: list[str] = []
+        expected_ids = ["step_1", "step_2", "step_3"]
+        if [step.id for step in self.steps] != expected_ids:
+            issues.append(
+                "outline step ids must be step_1, step_2, and step_3 in order"
+            )
+
+        material_titles = {material.title for material in self.materials}
+        for step in self.steps:
+            invalid_resources = [
+                title for title in step.resources if title not in material_titles
+            ]
+            if invalid_resources:
+                issues.append(
+                    f"{step.id} resources must exactly match outline material titles: "
+                    f"{invalid_resources}"
+                )
+
+        kinds = [material.type for material in self.materials]
+        if kinds.count("book") != 1 or kinds.count("video") != 1:
+            issues.append("outline materials must contain exactly one book and one video")
+        if sum(kind in {"article", "course", "tool"} for kind in kinds) != 1:
+            issues.append(
+                "outline third material must be an article, course, or tool"
+            )
+        for material in self.materials:
+            if material.content_markdown is not None:
+                issues.append(
+                    f"outline material '{material.title}' content_markdown must be null"
+                )
+            if material.ideas:
+                issues.append(
+                    f"outline material '{material.title}' ideas must be empty"
+                )
+
+        if issues:
+            raise ValueError("; ".join(issues))
+        return self
+
+
 class PlanDetailStepOutput(BaseModel):
     id: str = Field(pattern=r"^step_[1-3]$")
     title: str = Field(max_length=60)
@@ -370,6 +429,74 @@ class PlanDetailStepRepairOutput(PlanDetailStepOutput):
         if issues:
             raise ValueError("; ".join(issues))
         return self
+
+
+class PlanDetailLessonSectionsOutput(BaseModel):
+    """Provider-facing long lesson shape used by the parallel fast path.
+
+    Separate required fields make schema-constrained decoding finish every
+    section instead of returning a valid JSON string containing half a lesson.
+    The backend joins these fields into the canonical ``lesson_content`` shape
+    and applies the same word-count and action-quality contract as every other
+    detail-generation path.
+    """
+
+    why_this_matters: str = Field(
+        min_length=650,
+        description="150-180 substantive words explaining relevance and stakes.",
+    )
+    core_framework: str = Field(
+        min_length=1300,
+        description=(
+            "300-350 substantive words teaching the mechanism, components, "
+            "trade-offs, and commonly confused concepts."
+        ),
+    )
+    worked_example: str = Field(
+        min_length=950,
+        description=(
+            "220-260 substantive words showing complete reasoning in a factual "
+            "example or an explicitly labeled Practical scenario."
+        ),
+    )
+    failure_modes: str = Field(
+        min_length=750,
+        description=(
+            "180-220 substantive words covering at least three symptoms and "
+            "their corrections."
+        ),
+    )
+    guided_practice: str = Field(
+        min_length=1100,
+        description=(
+            "260-320 substantive words with 3-5 numbered timed phases, tools, "
+            "outputs, and success criteria."
+        ),
+    )
+    check_your_understanding: str = Field(
+        min_length=600,
+        description=(
+            "140-180 substantive words containing three diagnostic questions "
+            "and an answer or checking rubric."
+        ),
+    )
+    references: str = Field(
+        min_length=180,
+        description=(
+            "40-70 substantive words naming only approved resource titles and "
+            "explaining what to use from each."
+        ),
+    )
+    substeps: list[
+        Annotated[str, Field(min_length=120, max_length=400)]
+    ] = Field(
+        min_length=2,
+        max_length=3,
+        description=(
+            "Two or three distinct 28-40-word actions; each includes scope or "
+            "timer, tool or behavior, output, and success criterion."
+        ),
+    )
 
 
 class PlanDetailSubstepsRepairOutput(BaseModel):

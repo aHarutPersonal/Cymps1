@@ -118,14 +118,17 @@ async def _promote_prefetched_detail_job(
     lesson. Returns ``promoted``, ``failed``, or ``None`` when no promotion was
     needed (or another worker already claimed it).
     """
-    if job.status != "pending":
+    prefetch_steps = {"prefetch_queued", "background_queued"}
+    if job.status not in {"pending", "queued"} or job.step not in prefetch_steps:
         return None
 
+    original_status = job.status
     promoted = await db.execute(
         update(PlanItemDetailJob)
         .where(
             PlanItemDetailJob.id == job.id,
-            PlanItemDetailJob.status == "pending",
+            PlanItemDetailJob.status == original_status,
+            PlanItemDetailJob.step.in_(prefetch_steps),
         )
         .values(
             status="queued",
@@ -934,7 +937,7 @@ async def get_plan_item_detailed(
     result = await db.execute(latest_job_stmt)
     existing_job = result.scalar_one_or_none()
 
-    if existing_job and existing_job.status == "pending":
+    if existing_job and existing_job.status in {"pending", "queued"}:
         await _promote_prefetched_detail_job(db, existing_job)
     
     if existing_job and existing_job.status in {"queued", "running", "pending"}:
@@ -1230,6 +1233,7 @@ async def toggle_step_complete(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Step {step_id} not found in item",
         )
+    step_index = step_ids.index(step_id)
     
     # Check current step completion status
     step_stmt = (
@@ -1266,7 +1270,6 @@ async def toggle_step_complete(
         # Lessons are intentionally sequential. The API enforces the same gate
         # as the UI so a future lesson cannot be completed through a stale or
         # handcrafted client request.
-        step_index = step_ids.index(step_id)
         prior_step_ids = [sid for sid in step_ids[:step_index] if sid]
         if prior_step_ids:
             prior_result = await db.execute(
@@ -1339,6 +1342,34 @@ async def toggle_step_complete(
         )
         item.progress_percent = int(round(progress.percent))
         await db.commit()
+
+    # As soon as the user completes the first lesson of this week, prepare the
+    # next week's missions at low priority. This gives the background workers
+    # the rest of the current week to finish, while current user-facing work
+    # always retains queue priority. The organizer is idempotent.
+    if new_step_completed and step_index == 0:
+        duration_weeks = await db.scalar(
+            select(Plan.duration_weeks).where(Plan.id == item.plan_id)
+        )
+        next_week = item.week_end + 1
+        if duration_weeks is not None and next_week <= duration_weeks:
+            try:
+                from app.tasks.plans import prefetch_plan_week_details
+
+                prefetch_plan_week_details.apply_async(
+                    args=[str(item.plan_id), str(current_user.id), next_week],
+                    kwargs={"priority": "low"},
+                    queue="default",
+                )
+            except Exception:
+                # Lesson completion is authoritative and must never fail merely
+                # because speculative look-ahead publishing is unavailable.
+                logger.exception(
+                    "[PLAN_ITEM] Could not schedule week look-ahead "
+                    "plan_id=%s week=%s",
+                    item.plan_id,
+                    next_week,
+                )
     
     return ToggleStepResponse(
         step_id=step_id,
@@ -1396,7 +1427,7 @@ async def regenerate_item_details(
         .limit(1)
     )
     active_job = active_result.scalar_one_or_none()
-    if active_job and active_job.status == "pending":
+    if active_job and active_job.status in {"pending", "queued"}:
         promotion = await _promote_prefetched_detail_job(db, active_job)
         if promotion == "promoted":
             return RegenerateDetailsResponse(job_id=active_job.id)

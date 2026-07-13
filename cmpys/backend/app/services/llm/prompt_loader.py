@@ -27,7 +27,9 @@ User prompts and their consumers (placeholders per PROMPT_PLACEHOLDERS below):
   milestones_by_age.txt — ingestion + extraction services.
 - persona_pack.txt — persona generation in ingestion (profile/sources via f-string).
 - plan_generate.txt — generate_plan() in planning.
-- plan_item_details.txt — regenerate_plan_item_details in tasks/plans.py.
+- plan_item_details_outline.txt + plan_item_detail_lesson.txt — the fast,
+  parallel lesson-detail path in tasks/plans.py. plan_item_details.txt remains
+  the complete-artifact recovery path.
 - book_module_generate.txt — generate_book_module() in content_resources.py.
 - interview_question.txt / comparison_generate.txt / comparison_scores.txt /
   blueprint_generate.txt — agentic session flow in api/v1/sessions.py.
@@ -161,6 +163,30 @@ PROMPT_PLACEHOLDERS = {
         "idol_domain",
         "idol_evidence_json",
         "session_context",
+    ],
+
+    "plan_item_details_outline.txt": [
+        "task_title",
+        "mission_hours",
+        "user_goal",
+        "learning_preferences",
+        "idol_name",
+        "idol_domain",
+        "idol_evidence_json",
+        "session_context",
+    ],
+
+    "plan_item_detail_lesson.txt": [
+        "task_title",
+        "mission_hours",
+        "user_goal",
+        "learning_preferences",
+        "idol_name",
+        "idol_evidence_json",
+        "session_context",
+        "step_json",
+        "materials_json",
+        "prior_error",
     ],
 
     "book_module_generate.txt": [
@@ -543,7 +569,12 @@ PROMPT_REGISTRY = {
     # Plan generation
     "planning": {
         "generate_plan": ["planner_system.txt", "plan_generate.txt"],
-        "generate_item_details": ["planner_system.txt", "plan_item_details.txt"],
+        "generate_item_details": [
+            "planner_system.txt",
+            "plan_item_details_outline.txt",
+            "plan_item_detail_lesson.txt",
+            "plan_item_details.txt",
+        ],
         "generate_book_module": ["planner_system.txt", "book_module_generate.txt"],
     },
     # Milestones query

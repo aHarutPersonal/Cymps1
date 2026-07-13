@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -11,6 +11,7 @@ from app.api.v1 import plans
 from app.api.v1.daily_tasks import _execution_focus_week
 from app.models.plan import PlanItem, PlanItemStatus, PlanItemType
 from app.schemas.plan import DetailsStatus, ItemProgress
+from app.tasks import plans as plan_tasks
 
 
 def _item(
@@ -132,12 +133,99 @@ class _Result:
 
 
 @pytest.mark.asyncio
-async def test_opening_prefetched_detail_promotes_it_once() -> None:
+async def test_current_week_details_publish_in_background_at_high_priority() -> None:
+    missions = [
+        _item("mission-1", PlanItemType.PROJECT, 1),
+        _item("mission-2", PlanItemType.READING, 1),
+    ]
+    db = AsyncMock()
+    db.add = MagicMock()
+    db.execute.side_effect = [
+        _Result(scalars=missions),
+        _Result(scalars=[]),
+    ]
+
+    async def assign_job_ids() -> None:
+        for index, call in enumerate(db.add.call_args_list, start=1):
+            call.args[0].id = f"detail-job-{index}"
+
+    db.flush.side_effect = assign_job_ids
+
+    with patch(
+        "app.tasks.plans.regenerate_plan_item_details.apply_async"
+    ) as enqueue:
+        job_ids = await plan_tasks._enqueue_plan_week_details_generation_async(
+            db,
+            plan_id="plan-1",
+            user_id="user-1",
+            week=1,
+            priority="high",
+        )
+
+    assert job_ids == ["detail-job-1", "detail-job-2"]
+    assert [call.args[0].status for call in db.add.call_args_list] == [
+        "queued",
+        "queued",
+    ]
+    assert [call.args[0].step for call in db.add.call_args_list] == [
+        "background_queued",
+        "background_queued",
+    ]
+    assert enqueue.call_count == 2
+    assert all(
+        call.kwargs["queue"] == "high_priority"
+        for call in enqueue.call_args_list
+    )
+    db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_week_prefetch_reuses_active_jobs_instead_of_duplicating() -> None:
+    missions = [
+        _item("mission-1", PlanItemType.PROJECT, 2),
+        _item("mission-2", PlanItemType.READING, 2),
+    ]
+    db = AsyncMock()
+    db.add = MagicMock()
+    db.execute.side_effect = [
+        _Result(scalars=missions),
+        _Result(scalars=["mission-1", "mission-2"]),
+    ]
+
+    with patch(
+        "app.tasks.plans.regenerate_plan_item_details.apply_async"
+    ) as enqueue:
+        job_ids = await plan_tasks._enqueue_plan_week_details_generation_async(
+            db,
+            plan_id="plan-1",
+            user_id="user-1",
+            week=2,
+            priority="low",
+        )
+
+    assert job_ids == []
+    db.add.assert_not_called()
+    enqueue.assert_not_called()
+    db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("initial_status", "initial_step"),
+    [
+        ("pending", "prefetch_queued"),
+        ("queued", "background_queued"),
+    ],
+)
+async def test_opening_prefetched_detail_promotes_it_once(
+    initial_status: str,
+    initial_step: str,
+) -> None:
     job = SimpleNamespace(
         id="job-prefetch",
         plan_item_id="mission-1",
-        status="pending",
-        step="prefetch_queued",
+        status=initial_status,
+        step=initial_step,
         error_message=None,
     )
     db = AsyncMock()
