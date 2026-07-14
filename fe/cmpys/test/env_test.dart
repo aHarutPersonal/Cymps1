@@ -3,15 +3,15 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('release configuration requires an explicit API base URL', () {
+  test('release configuration defaults to the deployed API', () {
     expect(
-      () => Env.resolveApiBaseUrl(
+      Env.resolveApiBaseUrl(
         definedUrl: '',
         isRelease: true,
         isWeb: false,
         platform: TargetPlatform.android,
       ),
-      throwsA(isA<StateError>()),
+      Env.apiBaseUrlProduction,
     );
 
     expect(

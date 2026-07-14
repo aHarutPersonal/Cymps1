@@ -22,7 +22,7 @@ import 'package:flutter/foundation.dart';
 ///
 /// - **iOS Simulator**: Uses `http://localhost:8000` (connects to host machine)
 /// - **Android Emulator**: Uses `http://10.0.2.2:8000` (special alias for host)
-/// - **Physical devices**: Uses production URL or requires override
+/// - **Physical/release builds**: Uses the deployed API unless overridden
 ///
 abstract final class Env {
   /// API base URL from dart-define, or platform-specific default.
@@ -37,8 +37,8 @@ abstract final class Env {
   }
 
   /// Resolve the API URL without ever shipping an emulator/development fallback
-  /// in a release build. Keeping this pure makes the release guard testable in
-  /// the normal debug test runner.
+  /// in a release build. Keeping this pure makes the production fallback
+  /// testable in the normal debug test runner.
   @visibleForTesting
   static String resolveApiBaseUrl({
     required String definedUrl,
@@ -48,12 +48,7 @@ abstract final class Env {
   }) {
     final configured = definedUrl.trim();
     if (configured.isNotEmpty) return configured;
-    if (isRelease) {
-      throw StateError(
-        'API_BASE_URL is required for release builds. '
-        'Build with --dart-define=API_BASE_URL=https://…',
-      );
-    }
+    if (isRelease) return apiBaseUrlProduction;
     if (isWeb) return apiBaseUrlLocalhost;
     if (platform == TargetPlatform.android) return apiBaseUrlAndroidEmulator;
     // iOS Simulator and desktop debug builds share the host's loopback

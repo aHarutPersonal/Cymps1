@@ -1,6 +1,10 @@
 #!/bin/bash
 set -e
 
+# CocoaPods requires a UTF-8 locale when Flutter refreshes iOS plugins.
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+
 # Automatically figure out the directory this script lives in
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
@@ -179,13 +183,14 @@ echo "Looking for active iOS simulator..."
 FLUTTER_API_ARGS=(--dart-define="API_BASE_URL=$APP_API_BASE_URL")
 echo "Flutter API target: $APP_API_BASE_URL"
 
-# Parse flutter devices to extract the UUID of the first iOS device
-IOS_DEVICE_ID=$(flutter devices | grep -i "ios" | head -n 1 | awk -F'•' '{print $2}' | tr -d ' ')
+# Select a simulator only. Installing this debug build on a physical iPhone
+# makes it terminate when reopened without Flutter tooling attached.
+IOS_DEVICE_ID=$(flutter devices | grep -i "ios" | grep -i "simulator" | head -n 1 | awk -F'•' '{print $2}' | tr -d ' ')
 
 if [ ! -z "$IOS_DEVICE_ID" ]; then
     echo "Found iOS simulator: $IOS_DEVICE_ID"
     flutter run -d "$IOS_DEVICE_ID" "${FLUTTER_API_ARGS[@]}"
 else
-    echo "No active iOS simulator found. Flutter will prompt you to choose:"
-    flutter run "${FLUTTER_API_ARGS[@]}"
+    echo "❌ No active iOS simulator found. Start one in Xcode and run this script again."
+    exit 1
 fi
