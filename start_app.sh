@@ -4,23 +4,36 @@ set -e
 # Automatically figure out the directory this script lives in
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
+# The app uses the deployed backend unless a local API is requested explicitly.
+APP_API_BASE_URL="${API_BASE_URL:-http://54.158.122.215/api/v1}"
+case "$APP_API_BASE_URL" in
+    http://localhost:*|http://127.0.0.1:*|http://10.0.2.2:*)
+        USE_LOCAL_BACKEND=true
+        ;;
+    *)
+        USE_LOCAL_BACKEND=false
+        ;;
+esac
+
 # Clean up function to shut down the background processes when Flutter closes
 cleanup() {
-    echo -e "\nShutting down backend services..."
-    if [ ! -z "$UVICORN_PID" ]; then 
-        kill -TERM $UVICORN_PID 2>/dev/null || true
-    fi
-    if [ ! -z "$CELERY_BEAT_PID" ]; then
-        kill -TERM $CELERY_BEAT_PID 2>/dev/null || true
-    fi
-    if [ ! -z "$CATALOG_CONTROL_PID" ]; then
-        kill -TERM $CATALOG_CONTROL_PID 2>/dev/null || true
-    fi
-    if [ ! -z "$CATALOG_WORKER_PID" ]; then
-        kill -TERM $CATALOG_WORKER_PID 2>/dev/null || true
-    fi
-    if [ ! -z "$CELERY_PID" ]; then 
-        kill -TERM $CELERY_PID 2>/dev/null || true
+    if [ "$USE_LOCAL_BACKEND" = true ]; then
+        echo -e "\nShutting down local backend services..."
+        if [ ! -z "$UVICORN_PID" ]; then
+            kill -TERM "$UVICORN_PID" 2>/dev/null || true
+        fi
+        if [ ! -z "$CELERY_BEAT_PID" ]; then
+            kill -TERM "$CELERY_BEAT_PID" 2>/dev/null || true
+        fi
+        if [ ! -z "$CATALOG_CONTROL_PID" ]; then
+            kill -TERM "$CATALOG_CONTROL_PID" 2>/dev/null || true
+        fi
+        if [ ! -z "$CATALOG_WORKER_PID" ]; then
+            kill -TERM "$CATALOG_WORKER_PID" 2>/dev/null || true
+        fi
+        if [ ! -z "$CELERY_PID" ]; then
+            kill -TERM "$CELERY_PID" 2>/dev/null || true
+        fi
     fi
     echo "Goodbye."
 }
@@ -32,6 +45,7 @@ echo "--------------------------------------------------------"
 echo "🚀 Starting CMPYS Stack"
 echo "--------------------------------------------------------"
 
+if [ "$USE_LOCAL_BACKEND" = true ]; then
 # 0. Start Databases (Postgres & Redis) via Docker
 echo "Starting Database Infrastructure..."
 cd "$DIR/cmpys/infra"
@@ -136,21 +150,34 @@ if ! kill -0 "$CELERY_BEAT_PID" 2>/dev/null; then
     exit 1
 fi
 echo "✅ Catalog scheduler running in background (PID: $CELERY_BEAT_PID)"
+else
+    REMOTE_READY_URL="${API_READY_URL:-${APP_API_BASE_URL%/api/v1}/ready}"
+    echo "Checking deployed backend readiness..."
+    if ! curl --silent --show-error --fail --max-time 12 "$REMOTE_READY_URL" >/dev/null; then
+        echo "❌ Deployed API is not ready: $REMOTE_READY_URL"
+        exit 1
+    fi
+    echo "✅ Deployed API is ready"
+fi
 
 echo "--------------------------------------------------------"
 echo "Starting Flutter Frontend on iOS Simulator..."
-echo "(Press 'q' in this terminal to quit and stop the backend)"
+if [ "$USE_LOCAL_BACKEND" = true ]; then
+    echo "(Press 'q' in this terminal to quit and stop the local backend)"
+else
+    echo "(Press 'q' in this terminal to quit Flutter)"
+fi
 echo "--------------------------------------------------------"
 
 # 3. Start Frontend
 cd "$DIR/fe/cmpys"
 echo "Looking for active iOS simulator..."
 
-# The launcher owns a local backend and worker, so make the target explicit.
-# Without this define, iOS debug builds previously fell back to the deployed
-# API and silently bypassed both local services.
-LOCAL_API_BASE_URL="${API_BASE_URL:-http://localhost:8000/api/v1}"
-FLUTTER_API_ARGS=(--dart-define="API_BASE_URL=$LOCAL_API_BASE_URL")
+# Run the simulator against the deployed backend by default so it uses the
+# shared remote data. Local development remains available as an explicit
+# override: API_BASE_URL=http://localhost:8000/api/v1 ./start_app.sh
+FLUTTER_API_ARGS=(--dart-define="API_BASE_URL=$APP_API_BASE_URL")
+echo "Flutter API target: $APP_API_BASE_URL"
 
 # Parse flutter devices to extract the UUID of the first iOS device
 IOS_DEVICE_ID=$(flutter devices | grep -i "ios" | head -n 1 | awk -F'•' '{print $2}' | tr -d ' ')

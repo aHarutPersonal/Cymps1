@@ -14,6 +14,7 @@ _Learn about the person you're helping. Update this as you go._
 - **Notes:** Wants current-week learning content prepared automatically in the background, without opening the week, and prefers quality-preserving latency optimizations.
 - **Notes:** Wants books and idol profiles populated autonomously during backend idle time, including sourced idol photos, with generated long-form prose written in a natural editorial voice.
 - **Notes:** Wants the post-intake plan-generation cards to include sourced quotations about learning from role models, paired with portraits of the quoted people.
+- **Notes:** Prefers the CMPYS iOS simulator app to use the deployed remote backend by default, with localhost available only as an explicit development override.
 
 ## Context
 
