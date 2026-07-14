@@ -20,20 +20,18 @@ SOURCE DISCIPLINE — APPLY IN THIS ORDER:
 QUALITY CONTRACT:
 - `content_markdown`: target 3,500-4,200 words and never go below 3,200. This is a hard constraint. The material must take more than 15 minutes at a 200-words-per-minute learning pace, before practice time.
 - Exactly 6 substantive sections, followed by one `## Closing Synthesis` section.
-- Each substantive section contains 500-620 words across 4-6 concise paragraphs. The closing synthesis contains 250-400 words and gives the reader a concrete seven-day integration plan.
+- Let substantive sections vary naturally between roughly 430 and 720 words while keeping the total word contract. Use as many paragraphs as the idea needs; do not make every section the same shape. The closing synthesis contains 250-400 words and gives the reader a concrete seven-day integration plan.
 - Each section teaches one distinct framework or component; sections must not repeat one another.
-- Each section includes:
-  - the book's core claim in precise language;
-  - the mechanism that explains why the idea works;
-  - a grounded example from SOURCE CONTEXT or a clearly labeled, realistic practical scenario;
-  - a boundary, trade-off, failure mode, or counterexample so the reader knows when the idea does not apply;
-  - a short reflection prompt that asks the reader to connect the idea to their own situation;
-  - `### Practice This` with 2-4 numbered, measurable actions;
-  - one sentence connecting the section to the next idea.
+- Every substantive section includes `### Practice This` with 2-4 numbered, measurable actions. Vary the lead-in and the kind of practice instead of repeating one exercise formula.
 - Open with a 120-180 word orientation inside the first section that explains what this guide covers, what it intentionally leaves to the full book, and what tangible output the reader will produce.
-- Across the module, include at least 3 detailed practical scenarios from different contexts, 2 comparisons between easily confused concepts, and 2 diagnostic checklists.
+- Across the module—not in an identical order inside every section—cover the book's central claims and their mechanisms, at least 3 detailed practical scenarios from different contexts, 2 comparisons between easily confused concepts, 2 diagnostic checklists, and at least 2 meaningful boundaries, trade-offs, failure modes, or counterexamples.
+- Include short reflection prompts where they genuinely help the reader make a decision. Do not mechanically end every section with a question or a bridge to the next heading.
 - Prefer concrete mechanisms, trade-offs, boundaries, and counterexamples over motivational language.
+- Write like a thoughtful editor addressing one reader: direct, calm, specific, and free of performance or hype.
+- Vary paragraph purpose and sentence openings. Do not force claim, mechanism, example, caveat, and reflection into the same order in every section.
 - Never use filler such as "Let's dive in", "In this section we'll explore", "It's important to note", or "As mentioned earlier".
+- Never use canned labels such as "Key takeaway", "Why this matters", "Real-world example", or "Replicable angle". Do not use generic encouragement, invented dialogue, simulated personal experience, or imitation of the author's voice.
+- Use rhetorical questions sparingly—at most 2 in the full module—and only when a question sharpens a real decision.
 - Use `##` section headings, `### Practice This`, and **bold** key concepts.
 - `duration_minutes` is only a placeholder; the backend recalculates it from the final word count.
 

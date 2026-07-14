@@ -10,6 +10,43 @@ from app.tasks.plans import (
 )
 
 
+def _quality_ready_book_module(*, templated: bool = False) -> dict:
+    sections = [
+        {
+            "title": f"Framework {index + 1}",
+            "summary": " ".join(f"summary{index}_{word}" for word in range(70)),
+            "exercise": " ".join(f"exercise{index}_{word}" for word in range(35)),
+        }
+        for index in range(6)
+    ]
+    markdown_parts = []
+    for index in range(6):
+        if templated:
+            body = " ".join(f"shared{word}" for word in range(520))
+            body = f"{body} variation{index}"
+        else:
+            body = " ".join(f"section{index}term{word}" for word in range(520))
+        markdown_parts.append(
+            f"## Framework {index + 1}\n\n{body}\n\n"
+            "### Practice This\n1. Apply one step.\n2. Record one result."
+        )
+    closing = " ".join(f"synthesis{word}" for word in range(180))
+    markdown_parts.append(f"## Closing Synthesis\n\n{closing}")
+    return {
+        "content_markdown": "\n\n".join(markdown_parts),
+        "sections": sections,
+        "ideas": [
+            {
+                "title": f"Idea {index + 1}",
+                "content": " ".join(
+                    f"application{index}_{word}" for word in range(40)
+                ),
+            }
+            for index in range(7)
+        ],
+    }
+
+
 def test_content_quality_thresholds_match_prd_minimums():
     assert MIN_BOOK_MODULE_WORDS == 3200
     assert MIN_PLAN_DETAIL_LESSON_WORDS == 1200
@@ -99,3 +136,74 @@ def test_book_grounding_gate_accepts_quote_present_in_source():
     )
 
     assert report.metrics["unmatched_attributed_quote_count"] == 0
+
+
+def test_book_quality_gate_hard_fails_canned_filler_in_otherwise_valid_module():
+    module = _quality_ready_book_module()
+    module["content_markdown"] = module["content_markdown"].replace(
+        "section0term0",
+        "Let's dive in before section0term0",
+        1,
+    )
+
+    report = evaluate_book_module(module)
+
+    assert report.passed is False
+    assert report.metrics["filler_phrase_count"] == 1
+    assert any("canned" in issue for issue in report.issues)
+
+
+def test_book_quality_gate_rejects_near_duplicate_section_templates():
+    report = evaluate_book_module(_quality_ready_book_module(templated=True))
+
+    assert report.passed is False
+    assert report.metrics["near_duplicate_paragraph_ratio"] > 0.10
+    assert any("templated paragraph" in issue for issue in report.issues)
+
+
+def test_book_quality_gate_rejects_repeated_sentence_openings():
+    module = _quality_ready_book_module()
+    repeated_stems = " ".join(
+        f"The practical result becomes visible through distinct application {index}."
+        for index in range(14)
+    )
+    module["content_markdown"] += f"\n\n{repeated_stems}"
+
+    report = evaluate_book_module(module)
+
+    assert report.passed is False
+    assert report.metrics["repeated_sentence_opening_count"] >= 4
+    assert any("sentence opening" in issue for issue in report.issues)
+
+
+def test_book_grounding_gate_checks_short_source_contexts():
+    module = _quality_ready_book_module()
+    invented = (
+        'The author writes, "This invented quotation is deliberately long enough '
+        'to be treated as an attributed factual quotation by the quality gate."'
+    )
+    module["content_markdown"] = invented + "\n\n" + module["content_markdown"]
+
+    report = evaluate_book_module(
+        module,
+        source_context="A short catalog description with no direct quotation.",
+    )
+
+    assert report.metrics["source_grounding_eligible"] == 1
+    assert report.metrics["unmatched_attributed_quote_count"] == 1
+    assert report.passed is False
+
+
+def test_book_quality_gate_requires_one_closing_synthesis_heading():
+    module = _quality_ready_book_module()
+    module["content_markdown"] = module["content_markdown"].replace(
+        "## Closing Synthesis",
+        "## Final Integration",
+    )
+
+    report = evaluate_book_module(module)
+
+    assert report.passed is False
+    assert report.metrics["heading_count"] == 7
+    assert report.metrics["closing_synthesis_count"] == 0
+    assert any("Closing Synthesis" in issue for issue in report.issues)

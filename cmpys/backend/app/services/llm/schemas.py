@@ -70,7 +70,7 @@ class Evidence(BaseModel):
     source_id: str
     chunk_index: int = Field(ge=0)
     source_url: str
-    snippet: str = Field(max_length=500)
+    snippet: str = Field(max_length=240)
     confidence: float = Field(ge=0.0, le=1.0)
 
 

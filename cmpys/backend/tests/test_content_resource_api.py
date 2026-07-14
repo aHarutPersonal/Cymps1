@@ -28,4 +28,6 @@ async def test_delete_content_highlight_removes_only_current_users_resource_note
         current_user=current_user,
     )
 
+    resource_lookup = str(db.execute.await_args_list[0].args[0])
+    assert "content_resources.status" in resource_lookup
     db.delete.assert_awaited_once_with(highlight)

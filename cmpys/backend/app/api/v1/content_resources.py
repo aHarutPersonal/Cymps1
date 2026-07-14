@@ -88,7 +88,13 @@ def _highlight_response(highlight: UserContentHighlight) -> ContentHighlightResp
 
 
 async def _get_resource(db: AsyncSession, resource_id: str) -> ContentResource:
-    resource = await db.get(ContentResource, resource_id)
+    result = await db.execute(
+        select(ContentResource).where(
+            ContentResource.id == resource_id,
+            ContentResource.status == CatalogStatus.PUBLISHED,
+        )
+    )
+    resource = result.scalar_one_or_none()
     if not resource:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
     return resource
@@ -132,7 +138,11 @@ async def list_content_resources(
     offset: int = Query(default=0, ge=0),
 ) -> ContentResourceListResponse:
     """List reusable resources, optionally filtered by kind/search."""
-    stmt = select(ContentResource).options(defer(ContentResource.content_markdown))
+    stmt = (
+        select(ContentResource)
+        .options(defer(ContentResource.content_markdown))
+        .where(ContentResource.status == CatalogStatus.PUBLISHED)
+    )
     if kind:
         try:
             parsed_kind = ContentResourceKind(kind)
@@ -202,7 +212,12 @@ async def list_vault_resources(
 ) -> ContentResourceListResponse:
     """List the current user's saved books, videos, articles, and lessons."""
     total_result = await db.execute(
-        select(func.count(UserContentSave.id)).where(UserContentSave.user_id == current_user.id)
+        select(func.count(UserContentSave.id))
+        .join(ContentResource, UserContentSave.content_resource_id == ContentResource.id)
+        .where(
+            UserContentSave.user_id == current_user.id,
+            ContentResource.status == CatalogStatus.PUBLISHED,
+        )
     )
     total = total_result.scalar() or 0
 
@@ -217,7 +232,10 @@ async def list_vault_resources(
                 UserContentProgress.user_id == current_user.id,
             ),
         )
-        .where(UserContentSave.user_id == current_user.id)
+        .where(
+            UserContentSave.user_id == current_user.id,
+            ContentResource.status == CatalogStatus.PUBLISHED,
+        )
         .order_by(UserContentSave.created_at.desc())
         .offset(offset)
         .limit(limit)
@@ -274,10 +292,18 @@ async def list_library_resources(
         )
         resource_ids.update(row[0] for row in link_result.fetchall())
 
-    # 3. Public domain books (always available)
+    # 3. Every published shared book guide. Autonomous catalog books should be
+    # discoverable here once (and only once) they pass the same quality gate as
+    # user-requested guides.
     pd_result = await db.execute(
         select(ContentResource.id).where(
-            ContentResource.kind == ContentResourceKind.PUBLIC_DOMAIN_BOOK
+            ContentResource.kind.in_(
+                [
+                    ContentResourceKind.PUBLIC_DOMAIN_BOOK,
+                    ContentResourceKind.LLM_BOOK_SUMMARY,
+                ]
+            ),
+            ContentResource.status == CatalogStatus.PUBLISHED,
         )
     )
     resource_ids.update(row[0] for row in pd_result.fetchall())
@@ -289,7 +315,10 @@ async def list_library_resources(
     stmt = (
         select(ContentResource)
         .options(defer(ContentResource.content_markdown))
-        .where(ContentResource.id.in_(resource_ids))
+        .where(
+            ContentResource.id.in_(resource_ids),
+            ContentResource.status == CatalogStatus.PUBLISHED,
+        )
     )
 
     # Apply kind filter
@@ -383,6 +412,7 @@ async def get_continue_reading(
             UserContentProgress.user_id == current_user.id,
             UserContentProgress.progress_percent > 0,
             UserContentProgress.progress_percent < 100,
+            ContentResource.status == CatalogStatus.PUBLISHED,
         )
         .order_by(UserContentProgress.updated_at.desc())
         .limit(1)

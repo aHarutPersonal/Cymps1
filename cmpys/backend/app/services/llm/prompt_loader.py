@@ -11,9 +11,10 @@ System prompts (no placeholders unless noted):
 
 - extractor_system.txt — strict evidence-grounded extraction. System prompt for
   the ingestion pipeline ONLY (profile/achievements/timeline/milestones/persona).
-- planner_system.txt — plan/lesson/book-module generation. System prompt for the
-  planning trio (plan_generate, plan_item_details, book_module_generate); unlike
-  extractor_system it permits world knowledge of real books/courses.
+- planner_system.txt — plan and lesson generation; unlike extractor_system it
+  permits world knowledge of real books/courses.
+- book_writer_system.txt — source-disciplined nonfiction editorial voice for
+  book_module_generate.
 - persona_system.txt — full idol persona pack; system prompt wherever the model
   speaks AS the idol (comparison, blueprint, daily feed).
 - guided_learning_system.txt — idol persona as Socratic tutor (guided learning).
@@ -64,6 +65,7 @@ _loaded_prompts: set[str] = set()
 PROMPT_PLACEHOLDERS = {
     "extractor_system.txt": [],  # No placeholders - pure system prompt
     "planner_system.txt": [],  # No placeholders - pure system prompt
+    "book_writer_system.txt": [],  # No placeholders - pure system prompt
     "idol_suggest_system.txt": [],  # No placeholders - pure system prompt
     "learning_materials_system.txt": [],  # No placeholders - pure system prompt
 
@@ -575,7 +577,10 @@ PROMPT_REGISTRY = {
             "plan_item_detail_lesson.txt",
             "plan_item_details.txt",
         ],
-        "generate_book_module": ["planner_system.txt", "book_module_generate.txt"],
+        "generate_book_module": [
+            "book_writer_system.txt",
+            "book_module_generate.txt",
+        ],
     },
     # Milestones query
     "milestones": {

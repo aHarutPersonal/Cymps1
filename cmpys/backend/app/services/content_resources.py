@@ -19,7 +19,12 @@ from app.models.content_resource import ContentResource, ContentResourceKind, Li
 from app.models.idol import CatalogStatus
 from app.models.plan import PlanItemContentResource
 from app.services.content_quality import (
+    EXPECTED_BOOK_HEADING_COUNT,
+    EXPECTED_BOOK_PRACTICE_COUNT,
     MAX_BOOK_MODULE_WORDS,
+    MAX_DUPLICATE_PARAGRAPH_RATIO,
+    MAX_NEAR_DUPLICATE_PARAGRAPH_RATIO,
+    MAX_REPEATED_SENTENCE_OPENING_RATIO,
     MIN_BOOK_MODULE_WORDS,
     build_book_retry_instruction,
     evaluate_book_module,
@@ -78,18 +83,42 @@ class BookModuleMetadataOutput(BaseModel):
 def _book_core_is_sound(report: Any) -> bool:
     metrics = report.metrics
     section_count = int(metrics.get("section_count", 0))
-    required_practices = min(max(section_count, 5), 7)
     return (
         MIN_BOOK_MODULE_WORDS
         <= int(metrics.get("word_count", 0))
         <= MAX_BOOK_MODULE_WORDS
         and 5 <= section_count <= 7
         and 6 <= int(metrics.get("idea_count", 0)) <= 10
-        and int(metrics.get("heading_count", 0)) >= 6
-        and int(metrics.get("practice_block_count", 0)) >= required_practices
+        and int(metrics.get("heading_count", 0)) == EXPECTED_BOOK_HEADING_COUNT
+        and int(metrics.get("practice_block_count", 0))
+        == EXPECTED_BOOK_PRACTICE_COUNT
+        and int(metrics.get("closing_synthesis_count", 0)) == 1
         and int(metrics.get("filler_phrase_count", 0)) == 0
-        and float(metrics.get("duplicate_paragraph_ratio", 0)) <= 0.12
+        and float(metrics.get("duplicate_paragraph_ratio", 0))
+        <= MAX_DUPLICATE_PARAGRAPH_RATIO
+        and float(metrics.get("near_duplicate_paragraph_ratio", 0))
+        <= MAX_NEAR_DUPLICATE_PARAGRAPH_RATIO
+        and (
+            int(metrics.get("repeated_sentence_opening_count", 0)) < 4
+            or float(metrics.get("repeated_sentence_opening_ratio", 0))
+            <= MAX_REPEATED_SENTENCE_OPENING_RATIO
+        )
     )
+
+
+def _book_report_is_better(candidate: Any, current: Any) -> bool:
+    """Prefer a passing rewrite even when two drafts have the same score.
+
+    Some hard contracts (for example the exact Closing Synthesis heading) are
+    intentionally binary and do not each carry a score penalty. Comparing only
+    numeric scores could therefore keep a polished-looking but unpublishable
+    draft over an equally scored draft that fixed the actual defect.
+    """
+    if bool(candidate.passed) != bool(current.passed):
+        return bool(candidate.passed)
+    if len(candidate.issues) != len(current.issues):
+        return len(candidate.issues) < len(current.issues)
+    return float(candidate.score) > float(current.score)
 
 
 def _slug(value: str | None, fallback: str = "unknown") -> str:
@@ -310,9 +339,9 @@ async def generate_book_module(
     from app.services.llm.prompt_loader import load_and_render
     from app.services.llm.routing import choose_llm_tier
 
-    # planner_system.txt, not extractor_system.txt: writing a book module needs
-    # world knowledge of the book, which the extraction prompt forbids.
-    system_prompt = load_and_render("planner_system.txt", {}, strict=False)
+    # Long-form guides use a dedicated nonfiction-editor voice. This preserves
+    # the planner's source flexibility without inheriting its coaching tone.
+    system_prompt = load_and_render("book_writer_system.txt", {}, strict=False)
     user_prompt = load_and_render(
         "book_module_generate.txt",
         {
@@ -516,7 +545,7 @@ async def generate_book_module(
         generation_calls[-1]["result_status"] = (
             "quality_passed" if candidate_report.passed else "quality_failed"
         )
-        if candidate_report.score >= current_report.score:
+        if _book_report_is_better(candidate_report, current_report):
             return candidate, candidate_report
         return current_data, current_report
 
@@ -567,7 +596,7 @@ async def generate_book_module(
             generation_calls[-1]["result_status"] = (
                 "quality_passed" if retry_report.passed else "quality_failed"
             )
-            if retry_report.score > report.score:
+            if _book_report_is_better(retry_report, report):
                 data = retry_response.data
                 report = retry_report
 
@@ -603,7 +632,7 @@ async def generate_book_module(
             generation_calls[-1]["result_status"] = (
                 "quality_passed" if quality_report.passed else "quality_failed"
             )
-            if quality_report.score > report.score:
+            if _book_report_is_better(quality_report, report):
                 data = quality_response.data
                 report = quality_report
 
@@ -935,9 +964,14 @@ async def get_or_create_book_module_resource(
             title=str(source.get("title") or title),
             author=source.get("author_or_creator") or author,
             user_goal=SHARED_BOOK_GOAL,
-            source_context=source.get("source_context") or source_md or (
-                "Only bibliographic metadata was available. Stay conservative and do not "
-                "invent scenes, quotations, chapter names, or author anecdotes."
+            source_context=(
+                source.get("source_context")
+                or source_md
+                or source_context
+                or (
+                    "Only bibliographic metadata was available. Stay conservative and "
+                    "do not invent scenes, quotations, chapter names, or author anecdotes."
+                )
             ),
         )
         module_md = module.get("content_markdown", "") or ""
@@ -989,9 +1023,12 @@ async def get_or_create_book_module_resource(
         # module is neutral and reusable for every user.
         user_goal=SHARED_BOOK_GOAL,
         source_context=(
-            "No licensed source text was provided. Use only well-established concepts "
-            "you are confident belong to this exact book. Do not invent quotations, "
-            "chapter names, studies, scenes, or author anecdotes."
+            source_context
+            or (
+                "No licensed source text was provided. Use only well-established concepts "
+                "you are confident belong to this exact book. Do not invent quotations, "
+                "chapter names, studies, scenes, or author anecdotes."
+            )
         ),
     )
 

@@ -59,6 +59,8 @@ def _idol_catalog_quality(
     timeline_events: list,
     persona_generated: bool,
     persona_evidence_count: int,
+    require_verified_image: bool = False,
+    image_verified: bool = False,
 ) -> tuple[float, bool]:
     """Require source evidence, not merely model-reported confidence."""
     event_count = len(timeline_events)
@@ -82,8 +84,113 @@ def _idol_catalog_quality(
         and profile_evidence_count >= 1
         and evidence_backed_events >= 2
         and score >= 0.70
+        and (not require_verified_image or image_verified)
     )
     return score, publishable
+
+
+MAX_EVIDENCE_SNIPPET_CHARS = 240
+
+
+def _filter_valid_source_evidence(
+    evidence_items: list,
+    *,
+    source: IdolSource,
+    chunks: list[SourceChunk],
+) -> list:
+    """Keep only evidence that points to an exact supplied source substring."""
+    source_id = str(source.id)
+    source_url = str(source.url)
+    chunks_by_index = {
+        int(chunk.chunk_index): str(chunk.text or "")
+        for chunk in chunks
+    }
+    valid = []
+    seen: set[tuple[int, str]] = set()
+    for item in evidence_items or []:
+        try:
+            item_source_id = str(item.source_id)
+            item_index = int(item.chunk_index)
+            item_url = str(item.source_url)
+            snippet = str(item.snippet)
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if item_source_id != source_id or item_url != source_url:
+            continue
+        chunk_text = chunks_by_index.get(item_index)
+        if chunk_text is None:
+            continue
+        if (
+            not snippet.strip()
+            or len(snippet) > MAX_EVIDENCE_SNIPPET_CHARS
+            or snippet not in chunk_text
+        ):
+            continue
+        key = (item_index, snippet)
+        if key in seen:
+            continue
+        seen.add(key)
+        valid.append(item)
+    return valid
+
+
+def _retain_evidence_backed_items(
+    items: list,
+    *,
+    source: IdolSource,
+    chunks: list[SourceChunk],
+) -> list:
+    """Validate evidence and remove claims left with no exact source support."""
+    retained = []
+    for item in items or []:
+        item.evidence = _filter_valid_source_evidence(
+            getattr(item, "evidence", []),
+            source=source,
+            chunks=chunks,
+        )
+        if item.evidence:
+            retained.append(item)
+    return retained
+
+
+async def _resolve_ingestion_photo(
+    db,
+    idol: Idol,
+    *,
+    wikidata_qid: str | None,
+    wikipedia_url: str | None,
+    source_url: str | None,
+) -> bool:
+    """Best-effort upgrade of a raw image hint to verified Commons metadata."""
+    from app.services.idol_photos import (
+        get_or_resolve_idol_photo,
+        is_verified_idol_photo,
+    )
+
+    try:
+        await get_or_resolve_idol_photo(
+            db,
+            idol,
+            wikidata_qid=wikidata_qid,
+            wikipedia_url=wikipedia_url or source_url,
+            hints=[
+                str(idol.image_url or ""),
+                str(wikipedia_url or ""),
+                str(source_url or ""),
+            ],
+        )
+        image_verified = is_verified_idol_photo(idol)
+        await db.commit()
+        return image_verified
+    except Exception as exc:
+        # An unavailable photo must not discard otherwise useful sourced
+        # biography work. Catalog callers may opt into an image-required gate.
+        logger.warning("Verified photo resolution failed for %s: %s", idol.name, exc)
+        try:
+            await db.rollback()
+        except Exception:
+            logger.exception("Could not roll back failed idol photo persistence")
+        return False
 
 
 def sanitize_for_postgres(data: Any) -> Any:
@@ -208,6 +315,17 @@ async def _run_ingestion_async(job_id: str) -> dict:
                 )
                 return {"error": "No chunks created from source"}
 
+            # A raw Wikidata P18 or Wikipedia thumbnail is only a hint. Resolve
+            # it through Commons imageinfo/extmetadata and persist the exact
+            # file page, license, and attribution before publication scoring.
+            image_verified = await _resolve_ingestion_photo(
+                db,
+                job.idol,
+                wikidata_qid=wikidata_qid,
+                wikipedia_url=wikipedia_url,
+                source_url=source.url,
+            )
+
             # =================================================================
             # Steps 2+3: Extract profile AND achievements in parallel
             # =================================================================
@@ -256,6 +374,27 @@ async def _run_ingestion_async(job_id: str) -> dict:
                 achievements_response = _create_fallback_achievements()
             else:
                 logger.info(f"[INGESTION][{job_id}] Extracted {len(achievements_response.candidates)} achievement candidates")
+
+            # Pydantic proves shape, not provenance. Validate the LLM's source
+            # pointers and verbatim snippets against the exact chunks it saw.
+            profile_response.profile.evidence = _filter_valid_source_evidence(
+                profile_response.profile.evidence,
+                source=source,
+                chunks=chunks,
+            )
+            extracted_candidate_count = len(achievements_response.candidates)
+            achievements_response.candidates = _retain_evidence_backed_items(
+                achievements_response.candidates,
+                source=source,
+                chunks=chunks,
+            )
+            if len(achievements_response.candidates) != extracted_candidate_count:
+                logger.warning(
+                    "[INGESTION][%s] Removed %s achievement candidates with "
+                    "invalid source evidence",
+                    job_id,
+                    extracted_candidate_count - len(achievements_response.candidates),
+                )
 
             await _update_job(
                 db, job, 
@@ -306,6 +445,42 @@ async def _run_ingestion_async(job_id: str) -> dict:
             else:
                 logger.warning(f"[INGESTION][{job_id}] Persona generation returned None")
 
+            timeline_event_count = len(timeline_response.timeline)
+            timeline_response.timeline = _retain_evidence_backed_items(
+                timeline_response.timeline,
+                source=source,
+                chunks=chunks,
+            )
+            if len(timeline_response.timeline) != timeline_event_count:
+                logger.warning(
+                    "[INGESTION][%s] Removed %s timeline events with invalid "
+                    "source evidence",
+                    job_id,
+                    timeline_event_count - len(timeline_response.timeline),
+                )
+            # The initial deterministic age pass ran before provenance
+            # filtering. Recompute so an invalid age-bearing snippet cannot
+            # influence an otherwise supported event.
+            from app.services.ingestion.dates import apply_computed_timeline_ages
+
+            apply_computed_timeline_ages(profile_response, timeline_response)
+            if persona_response:
+                persona = persona_response.persona
+                persona.grounding_evidence = _filter_valid_source_evidence(
+                    persona.grounding_evidence,
+                    source=source,
+                    chunks=chunks,
+                )
+                grounded_snippets = [
+                    evidence.snippet for evidence in persona.grounding_evidence
+                ]
+                persona.signature_phrases = [
+                    phrase
+                    for phrase in persona.signature_phrases
+                    if phrase
+                    and any(phrase in snippet for snippet in grounded_snippets)
+                ]
+
             await _update_job(
                 db, job, 
                 step="generating_persona", 
@@ -347,6 +522,7 @@ async def _run_ingestion_async(job_id: str) -> dict:
                     if persona_response
                     else 0
                 ),
+                image_verified=image_verified,
             )
             job.idol.quality_score = quality_score
             if profile_response.profile.domains and job.idol.domain in {"", "unknown"}:
@@ -377,6 +553,7 @@ async def _run_ingestion_async(job_id: str) -> dict:
                 "achievements_count": len(achievements_response.candidates) if achievements_response else 0,
                 "timeline_events": len(timeline_response.timeline) if timeline_response else 0,
                 "persona_generated": persona_response is not None,
+                "image_verified": image_verified,
                 "catalog_status": job.idol.status.value,
                 "quality_score": quality_score,
             }
@@ -642,12 +819,7 @@ async def _store_timeline(
     source: IdolSource,
 ) -> list[IdolTimelineEvent]:
     """Store timeline events."""
-    # Delete existing timeline events
-    stmt = select(IdolTimelineEvent).where(IdolTimelineEvent.idol_id == idol.id)
-    result = await db.execute(stmt)
-    existing = result.scalars().all()
-    for e in existing:
-        await db.delete(e)
+    await _delete_existing_timeline_records(db, idol.id)
     
     events = []
     for t in timeline_response.timeline:
@@ -703,6 +875,14 @@ async def _store_timeline(
     
     await db.commit()
     return events
+
+
+async def _delete_existing_timeline_records(db, idol_id: str) -> None:
+    """Replace both canonical and legacy timelines without duplicate rows."""
+    for model in (IdolTimelineEvent, IdolAchievement):
+        result = await db.execute(select(model).where(model.idol_id == idol_id))
+        for record in result.scalars().all():
+            await db.delete(record)
 
 
 async def _store_persona(

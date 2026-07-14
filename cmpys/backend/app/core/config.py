@@ -69,6 +69,19 @@ class Settings(BaseSettings):
     catalog_quote_verification_batch_size: int = 4
     catalog_quote_verification_daily_limit: int = 2
 
+    # When every user-facing generation queue and tracked catalog job is idle,
+    # discover at most one new book or idol candidate on this slower cadence.
+    # The kinds alternate by UTC time bucket and still pass through the normal
+    # catalog budget, retry, evidence, and publication-quality gates.
+    catalog_idle_discovery_enabled: bool = True
+    catalog_idle_discovery_interval_seconds: int = 15 * 60
+    catalog_idle_discovery_daily_limit: int = 6
+    catalog_idle_discovery_recent_user_minutes: int = 10
+    catalog_idle_discovery_priority: int = 10
+    catalog_idle_discovery_interactive_queues: str = (
+        "high_priority,default,low_priority"
+    )
+
     # Persist model usage and downstream quality outcomes. Recording failures
     # never fail the user-facing operation.
     llm_usage_telemetry_enabled: bool = True

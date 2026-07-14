@@ -22,7 +22,9 @@ python3.11 -m venv .venv
 cp .env.example .env        # fill in keys
 .venv/bin/alembic upgrade heads
 .venv/bin/uvicorn app.main:app --port 8000 --reload
-.venv/bin/celery -A app.core.celery.celery_app worker -Q default,high_priority,low_priority,catalog,catalog_control
+.venv/bin/celery -A app.core.celery.celery_app worker -n interactive@%h -Q default,high_priority,low_priority
+.venv/bin/celery -A app.core.celery.celery_app worker -n catalog@%h --concurrency=1 -Q catalog
+.venv/bin/celery -A app.core.celery.celery_app worker -n catalog-control@%h --concurrency=1 -Q catalog_control
 .venv/bin/celery -A app.core.celery.celery_app beat
 ```
 
@@ -45,6 +47,12 @@ Health check: `curl http://localhost:8000/health`
 | `CATALOG_QUOTE_VERIFICATION_ENABLED` | Enable independent Gemini Search cross-checks |
 | `CATALOG_QUOTE_VERIFICATION_BATCH_SIZE` | Quotes checked in one grounded call (default 4) |
 | `CATALOG_QUOTE_VERIFICATION_DAILY_LIMIT` | Maximum grounded quote calls per UTC day (default 2) |
+| `CATALOG_IDLE_DISCOVERY_ENABLED` | Seed new books/idols only while interactive and catalog work are idle |
+| `CATALOG_IDLE_DISCOVERY_INTERVAL_SECONDS` | Idle-discovery Beat cadence and deterministic UTC bucket width (default 900) |
+| `CATALOG_IDLE_DISCOVERY_DAILY_LIMIT` | Maximum proactively seeded book/idol jobs per UTC day (default 6) |
+| `CATALOG_IDLE_DISCOVERY_RECENT_USER_MINUTES` | Recent durable user-job window that suppresses discovery (default 10) |
+| `CATALOG_IDLE_DISCOVERY_PRIORITY` | Priority assigned to proactive jobs (default 10) |
+| `CATALOG_IDLE_DISCOVERY_INTERACTIVE_QUEUES` | Redis queues that must be empty before discovery (default `high_priority,default,low_priority`) |
 | `LLM_USAGE_TELEMETRY_ENABLED` | Persist tokens, latency, status, and quality outcome |
 | `ADAPTIVE_ROUTING_ENABLED` | Enable quality-gated Fast-Lite canaries |
 | `ADAPTIVE_ROUTING_CANARY_PERCENT` | Initial eligible traffic sent to Fast-Lite (default 10%) |
@@ -58,6 +66,24 @@ Celery Beat runs `catalog_tick` every minute. Each tick:
 2. seeds missing idol profiles, pending books, and source-backed quote imports;
 3. enforces the configured daily start limit;
 4. dispatches a small priority-ordered batch to the `catalog` queue.
+
+A separate, slower Beat task performs idle discovery. It fails closed unless
+the configured interactive Redis queues are empty, no recent user-generation
+job is active, no tracked catalog job is queued/running, and both the proactive
+daily cap and existing background LLM budget have room. Adjacent UTC time
+buckets alternate between a bounded Google Books non-fiction search and a
+narrow Wikidata occupation search. Selection is random but reproducible for a
+given bucket, and exactly one low-priority candidate is inserted. Books dedupe
+by canonical title/author; idols dedupe by Wikidata QID and require a verified,
+freely licensed Commons photo before an idle-discovered profile can remain
+published. If either public search endpoint is temporarily throttled, a bounded
+curated identity pool keeps discovery moving; the ordinary direct source,
+human-identity, image-license, and publication checks still apply.
+
+Production runs interactive, catalog, and catalog-control queues in separate
+worker processes. Long book/idol generation therefore cannot occupy an
+interactive worker slot; the DB/Redis idle checks remain the admission guard
+for provider quota and background spend.
 
 Book cache misses are inserted idempotently using their canonical key. Failed
 jobs use exponential backoff and stop after `CATALOG_MAX_ATTEMPTS`. Generated

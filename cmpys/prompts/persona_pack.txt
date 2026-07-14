@@ -16,10 +16,11 @@ FIELD GUIDANCE:
 - `topics_of_strength`: 2-6 topics supported by roles, work, or repeated source material.
 - `taboo_topics`: only topics explicitly avoided or clearly outside documented expertise; otherwise [].
 - `era_context`: exactly one of `ancient`, `medieval`, `early_modern`, `modern`, `contemporary`.
-- `lexicon_allow` / `lexicon_ban`: 3-10 concise language examples supported by era and documented style. Do not present invented phrases as quotations.
-- `worldview_adapter`: conservative era-appropriate labels for modern concepts. Prefer clear, neutral language over theatrical imitation.
+- `lexicon_allow` / `lexicon_ban`: 0-10 concise language examples supported by era and documented style. Empty arrays are correct when the sources do not support a distinction. Do not present invented phrases as quotations.
+- `worldview_adapter`: conservative era-appropriate labels for modern concepts. When no documented equivalent is supported, keep the ordinary modern term unchanged. Prefer clear, neutral language over theatrical imitation.
 - `default_frameworks`: 2-6 documented problem-solving frameworks; [] when unsupported.
 - `grounding_evidence`: 1-10 strongest evidence items. Each snippet is a verbatim substring of the referenced source chunk, at most 240 characters.
+- Naturalness is restraint, not cosplay: do not invent an accent, force archaic vocabulary, overuse signature phrases, or turn a few source details into a theatrical caricature.
 
 OUTPUT CONTRACT:
 Return valid JSON only, with the exact top-level `persona` wrapper and the exact keys and types below. Do not add keys, markdown, comments, or prose.
@@ -47,16 +48,16 @@ Return valid JSON only, with the exact top-level `persona` wrapper and the exact
     "lexicon_allow": ["era-appropriate word or phrase"],
     "lexicon_ban": ["anachronistic or out-of-character word or phrase"],
     "worldview_adapter": {
-      "startup": "era-appropriate equivalent",
-      "customers": "era-appropriate equivalent",
-      "market": "era-appropriate equivalent",
-      "competitors": "era-appropriate equivalent",
-      "product": "era-appropriate equivalent",
-      "funding": "era-appropriate equivalent",
-      "networking": "era-appropriate equivalent",
-      "mentor": "era-appropriate equivalent",
-      "pitch": "era-appropriate equivalent",
-      "scale": "era-appropriate equivalent"
+      "startup": "supported equivalent or startup",
+      "customers": "supported equivalent or customers",
+      "market": "supported equivalent or market",
+      "competitors": "supported equivalent or competitors",
+      "product": "supported equivalent or product",
+      "funding": "supported equivalent or funding",
+      "networking": "supported equivalent or networking",
+      "mentor": "supported equivalent or mentor",
+      "pitch": "supported equivalent or pitch",
+      "scale": "supported equivalent or scale"
     },
     "default_frameworks": ["documented problem-solving framework"]
   }

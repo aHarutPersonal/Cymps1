@@ -28,6 +28,7 @@ celery_app.conf.update(
     task_routes={
         "app.tasks.ingestion.run_generate_idea_cards": {"queue": "low_priority"},
         "app.tasks.catalog.catalog_tick": {"queue": "catalog_control"},
+        "app.tasks.catalog.catalog_discovery_tick": {"queue": "catalog_control"},
         "app.tasks.catalog.enqueue_catalog_book": {"queue": "catalog_control"},
         "app.tasks.catalog.process_catalog_job": {"queue": "catalog"},
     },
@@ -35,6 +36,13 @@ celery_app.conf.update(
         "catalog-tick": {
             "task": "app.tasks.catalog.catalog_tick",
             "schedule": settings.catalog_tick_seconds,
+            "options": {"queue": "catalog_control"},
+        },
+        "idle-catalog-discovery": {
+            "task": "app.tasks.catalog.catalog_discovery_tick",
+            # A malformed environment value must not turn Beat into a tight
+            # speculative-discovery loop.
+            "schedule": max(settings.catalog_idle_discovery_interval_seconds, 60),
             "options": {"queue": "catalog_control"},
         },
     },

@@ -10,7 +10,7 @@ GOAL:
 Return a high-signal list of milestones that can be used for:
 1) building an idol timeline,
 2) comparing user vs idol at the same age,
-3) deriving "replicable" behaviors for plan generation.
+3) giving later plan generation enough grounded facts to derive useful lessons separately.
 
 OUTPUT RULES (MANDATORY):
 - Output MUST be valid JSON only (no markdown, no commentary).
@@ -33,17 +33,15 @@ EXCLUDE (NOT achievements):
 - Rumors, speculation, "reportedly", or unverifiable claims.
 - General claims without an action (e.g., "was influential").
 
-ACTIONABILITY REQUIREMENT (CMPYS-specific):
-Each candidate must be written so a user can "learn from it".
-Therefore:
+EDITORIAL DESCRIPTION REQUIREMENT (CMPYS-specific):
 - title must be action-oriented ("Founded X", "Joined Y as Z", "Published A", "Pivoted strategy to B").
-- description must contain:
-  (a) WHAT they did (concrete action),
-  (b) WHY it mattered (impact/trajectory),
-  (c) a short "replicable angle" stated as a generalizable lesson, but WITHOUT inventing details.
+- description must read like compact public-biography copy: one clear sentence, or two only when the evidence needs the space.
+- State WHAT they did. Explain WHY it mattered only when the supplied evidence explicitly supports that significance; otherwise stop after the grounded action and result.
+- Use active, concrete language. Across the list, vary syntax naturally without sacrificing precision.
+- Do not add second-person advice, a moral, a coaching lesson, celebratory hype, or labels such as "Key takeaway", "Why it mattered", or "This teaches us". Later planning code derives lessons separately.
 
-Example structure (do NOT literally label it):
-"Buffett formed Buffett Partnership Ltd. in 1956, creating a vehicle to apply value investing systematically. Replicable angle: start with a small, focused vehicle to compound results and iterate."
+Example structure:
+"Buffett formed Buffett Partnership Ltd. in 1956, creating a formal vehicle for the investment approach documented in the source."
 
 DATE RULES (partial-date storage convention):
 - If exact day is stated -> date="YYYY-MM-DD", date_precision="day".
@@ -102,7 +100,7 @@ Return JSON EXACTLY matching this schema:
   "candidates": [
     {
       "title": "string (short, action-oriented, e.g., 'Founded Partnership', 'First Stock Purchase')",
-      "description": "string (1-2 sentences: WHAT they did, WHY it mattered, plus a short replicable angle)",
+      "description": "string (1-2 natural, factual sentences: WHAT they did, plus source-supported significance when available)",
       "date": "YYYY-MM-DD|null",
       "date_precision": "day|month|year|unknown",
       "age_at_event": null,

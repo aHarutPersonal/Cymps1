@@ -125,8 +125,15 @@ async def fetch_entity_by_id(qid: str) -> dict | None:
 
         # Parse claims
         claims = entity.get("claims", {})
+        # Direct imports must enforce the same human-only boundary as search.
+        # A caller can otherwise submit an arbitrary city/company QID and the
+        # ingestion pipeline will try to portray it as a person.
+        if not _is_human(claims):
+            return None
+
         birth_date = _get_birth_date(claims)
-        image_url = _get_image_url(claims)
+        image_filename = _get_image_filename(claims)
+        image_url = _commons_file_url(image_filename) if image_filename else None
 
         # Get Wikipedia URL from sitelinks
         sitelinks = entity.get("sitelinks", {})
@@ -141,6 +148,7 @@ async def fetch_entity_by_id(qid: str) -> dict | None:
             "birth_date": birth_date,
             "wikipedia_url": wikipedia_url,
             "image_url": image_url,
+            "image_filename": image_filename,
         }
 
 _SEARCH_CACHE = {}
@@ -386,6 +394,12 @@ def _get_occupations(claims: dict) -> list[str]:
 
 def _get_image_url(claims: dict) -> str | None:
     """Extract a Wikimedia Commons image URL from P18."""
+    filename = _get_image_filename(claims)
+    return _commons_file_url(filename) if filename else None
+
+
+def _get_image_filename(claims: dict) -> str | None:
+    """Extract the exact Wikimedia Commons filename stored in P18."""
     image_claims = claims.get(P_IMAGE, [])
     for claim in image_claims:
         mainsnak = claim.get("mainsnak", {})
@@ -393,7 +407,7 @@ def _get_image_url(claims: dict) -> str | None:
         if datavalue.get("type") == "string":
             filename = datavalue.get("value")
             if filename:
-                return _commons_file_url(str(filename))
+                return str(filename)
     return None
 
 

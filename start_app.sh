@@ -13,6 +13,12 @@ cleanup() {
     if [ ! -z "$CELERY_BEAT_PID" ]; then
         kill -TERM $CELERY_BEAT_PID 2>/dev/null || true
     fi
+    if [ ! -z "$CATALOG_CONTROL_PID" ]; then
+        kill -TERM $CATALOG_CONTROL_PID 2>/dev/null || true
+    fi
+    if [ ! -z "$CATALOG_WORKER_PID" ]; then
+        kill -TERM $CATALOG_WORKER_PID 2>/dev/null || true
+    fi
     if [ ! -z "$CELERY_PID" ]; then 
         kill -TERM $CELERY_PID 2>/dev/null || true
     fi
@@ -74,25 +80,41 @@ fi
 
 # 2. Start Celery Worker
 echo "Starting Celery Worker..."
-celery -A app.core.celery worker -Q high_priority,default,low_priority,catalog,catalog_control --loglevel=info > celery.log 2>&1 &
+celery -A app.core.celery worker -n interactive@%h -Q high_priority,default,low_priority --loglevel=info > celery.log 2>&1 &
 CELERY_PID=$!
 echo "✅ Celery running in background (PID: $CELERY_PID)"
 echo "   (Logs: tail -f cmpys/backend/celery.log)"
 
+# Autonomous catalog generation must not consume the worker slots used by
+# onboarding, plans, or lessons. Long catalog work and its lightweight control
+# plane therefore have their own bounded workers.
+echo "Starting Catalog Worker..."
+celery -A app.core.celery worker -n catalog@%h -Q catalog --concurrency=1 --loglevel=info > celery-catalog.log 2>&1 &
+CATALOG_WORKER_PID=$!
+echo "✅ Catalog worker running in background (PID: $CATALOG_WORKER_PID)"
+
+echo "Starting Catalog Control Worker..."
+celery -A app.core.celery worker -n catalog-control@%h -Q catalog_control --concurrency=1 --loglevel=info > celery-catalog-control.log 2>&1 &
+CATALOG_CONTROL_PID=$!
+echo "✅ Catalog control worker running in background (PID: $CATALOG_CONTROL_PID)"
+
 echo "Waiting for the generation worker..."
 WORKER_READY=false
 for _ in {1..20}; do
-    if ! kill -0 "$CELERY_PID" 2>/dev/null; then
+    if ! kill -0 "$CELERY_PID" 2>/dev/null \
+        || ! kill -0 "$CATALOG_WORKER_PID" 2>/dev/null \
+        || ! kill -0 "$CATALOG_CONTROL_PID" 2>/dev/null; then
         break
     fi
-    if celery -A app.core.celery inspect ping --timeout=1 2>/dev/null | grep -q "pong"; then
+    PONG_COUNT=$(celery -A app.core.celery inspect ping --timeout=1 2>/dev/null | grep -c "pong" || true)
+    if [ "$PONG_COUNT" -ge 3 ]; then
         WORKER_READY=true
         break
     fi
     sleep 0.5
 done
 if [ "$WORKER_READY" != true ]; then
-    echo "❌ Generation worker did not become ready. See cmpys/backend/celery.log"
+    echo "❌ Generation workers did not become ready. See cmpys/backend/celery*.log"
     exit 1
 fi
 

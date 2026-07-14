@@ -122,4 +122,69 @@ void main() {
 
     await tester.pumpWidget(const SizedBox());
   });
+
+  testWidgets('verified role-model quotes include portraits and sources', (
+    tester,
+  ) async {
+    final draft = CmpysOnboardingDraft()..sessionId = 'session-1';
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          sessionRepositoryProvider.overrideWithValue(_ResultsRepo()),
+          planRepositoryProvider.overrideWithValue(_CompletedPlanRepo()),
+        ],
+        child: MaterialApp(
+          home: CmpysMentorLabStep(
+            idol: defaultIdol(),
+            draft: draft,
+            onDone: () {},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.drag(find.byType(PageView), const Offset(-700, 0));
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(PageView), const Offset(-700, 0));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Seneca'), findsOneWidget);
+    expect(find.byKey(const Key('mentor-voice-Seneca')), findsOneWidget);
+    expect(
+      find.text('Source: Moral Letters to Lucilius, Letter 11'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('protector or your pattern'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    await tester.drag(find.byType(PageView), const Offset(-700, 0));
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(PageView), const Offset(-700, 0));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Isaac Newton'), findsOneWidget);
+    expect(find.byKey(const Key('mentor-voice-Isaac Newton')), findsOneWidget);
+    expect(
+      find.text('Source: Letter to Robert Hooke, 5 February 1676'),
+      findsOneWidget,
+    );
+
+    await tester.drag(find.byType(PageView), const Offset(-700, 0));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Warren Buffett'), findsOneWidget);
+    expect(
+      find.byKey(const Key('mentor-voice-Warren Buffett')),
+      findsOneWidget,
+    );
+    expect(
+      find.text('Source: Columbia Business School, “Fast Forward,” 2015'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('choose your heroes'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    await tester.pumpWidget(const SizedBox());
+  });
 }

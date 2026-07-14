@@ -173,6 +173,39 @@ async def test_generate_book_module_retries_until_prd_minimum(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_generate_book_module_prefers_equal_score_passing_rewrite(monkeypatch):
+    """A binary structure repair must win even when its score is unchanged."""
+    invalid = _valid_book_module()
+    invalid["content_markdown"] = invalid["content_markdown"].replace(
+        "## Closing Synthesis",
+        "## Seven-Day Integration",
+    )
+    valid = _valid_book_module()
+    calls = 0
+
+    class Client:
+        async def generate_json(self, **_kwargs):
+            nonlocal calls
+            calls += 1
+            return LLMResponse(invalid if calls == 1 else valid)
+
+    monkeypatch.setattr(
+        "app.services.llm.client.get_llm_client",
+        lambda **_kwargs: Client(),
+    )
+
+    result = await generate_book_module(
+        title="Deep Work",
+        author="Cal Newport",
+        user_goal="focus better",
+    )
+
+    assert calls == 2
+    assert "## Closing Synthesis" in result["content_markdown"]
+    assert result["quality_report"]["passed"] is True
+
+
+@pytest.mark.asyncio
 async def test_generate_book_module_repairs_metadata_without_regenerating_lesson(monkeypatch):
     draft = _valid_book_module()
     draft["ideas"] = [
@@ -394,6 +427,7 @@ async def test_get_or_create_book_module_resource_generates_and_saves_once_when_
         title="Deep Work",
         author="Cal Newport",
         user_goal="focus better",
+        source_context="Catalog overview supplied during idle discovery.",
         source_lookup=no_source,
         module_factory=factory,
     )
@@ -401,6 +435,9 @@ async def test_get_or_create_book_module_resource_generates_and_saves_once_when_
     assert len(factory_calls) == 1
     assert factory_calls[0]["title"] == "Deep Work"
     assert factory_calls[0]["author"] == "Cal Newport"
+    assert factory_calls[0]["source_context"] == (
+        "Catalog overview supplied during idle discovery."
+    )
     assert result.canonical_key == "book:cal_newport:deep_work"
     assert result.kind == ContentResourceKind.LLM_BOOK_SUMMARY
     assert result.license_status == LicenseStatus.LLM_SUMMARY

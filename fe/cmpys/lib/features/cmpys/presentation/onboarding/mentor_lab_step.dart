@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -49,8 +50,8 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep> {
   bool _jobCompleted = false;
   bool _planReady = false;
 
-  static const _benefits = <_MentorBenefit>[
-    _MentorBenefit(
+  static const _cardsContent = <_MentorLabCard>[
+    _MentorLabCard.benefit(
       icon: PhosphorIconsRegular.chatCenteredText,
       eyebrow: 'YOUR WORDS BECOME INPUTS',
       title: 'The interview is not a personality quiz.',
@@ -58,7 +59,7 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep> {
           'Your answers become constraints for the plan: what you want, where you are starting, how much time you can commit, and which obstacles keep repeating. CMPYS uses that context to choose priorities instead of handing everyone the same checklist.',
       proof: 'Personalized from this conversation—not a generic template.',
     ),
-    _MentorBenefit(
+    _MentorLabCard.benefit(
       icon: PhosphorIconsRegular.path,
       eyebrow: 'MENTOR AS A DECISION LENS',
       title: 'Learn the pattern, not the costume.',
@@ -67,7 +68,18 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep> {
       proof:
           'Evidence informs the direction; your reality determines the action.',
     ),
-    _MentorBenefit(
+    _MentorLabCard.voice(
+      eyebrow: 'WHY ROLE MODELS WORK',
+      speaker: 'Seneca',
+      descriptor: 'Stoic philosopher · Letter 11, c. 63 AD',
+      quote:
+          '“Choose a master whose life, conversation, and soul-expressing face have satisfied you; picture him always to yourself as your protector or your pattern.”',
+      takeaway:
+          'A role model gives you a standard to measure decisions against—not a life to copy blindly.',
+      portraitAsset: 'assets/images/voices/seneca.jpg',
+      source: 'Moral Letters to Lucilius, Letter 11',
+    ),
+    _MentorLabCard.benefit(
       icon: PhosphorIconsRegular.numberCircleOne,
       eyebrow: 'ONE WEEK AT A TIME',
       title: 'Focus is part of the product—not a suggestion.',
@@ -75,7 +87,30 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep> {
           'You receive a complete twelve-week path, but only the current week asks for attention. Finish its mission and the next week unlocks. That keeps the roadmap visible without turning future work into today’s distraction.',
       proof: 'Sequential unlocking protects attention and momentum.',
     ),
-    _MentorBenefit(
+    _MentorLabCard.voice(
+      eyebrow: 'LEARNING IS CUMULATIVE',
+      speaker: 'Isaac Newton',
+      descriptor: 'Mathematician & physicist · 1676',
+      quote:
+          '“If I have seen further it is by standing on the shoulders of Giants.”',
+      takeaway:
+          'Progress starts by studying what great people already discovered, then building beyond it in your own context.',
+      portraitAsset: 'assets/images/voices/isaac_newton.jpg',
+      source: 'Letter to Robert Hooke, 5 February 1676',
+    ),
+    _MentorLabCard.voice(
+      eyebrow: 'CHOOSE YOUR HEROES CAREFULLY',
+      speaker: 'Warren Buffett',
+      descriptor: 'Investor · Columbia Business School, 2015',
+      quote:
+          '“Be careful how you choose your heroes because that’s how you’re going to turn out.”',
+      takeaway:
+          'Choose heroes for character, not fame. The behavior you admire and study quietly becomes your own standard.',
+      portraitAsset: 'assets/images/voices/warren_buffett.jpg',
+      source: 'Columbia Business School, “Fast Forward,” 2015',
+      portraitContain: true,
+    ),
+    _MentorLabCard.benefit(
       icon: PhosphorIconsRegular.bookOpenText,
       eyebrow: 'TEACH, THEN PRACTICE',
       title: 'A lesson should change what you can do.',
@@ -83,7 +118,7 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep> {
           'Mission lessons combine a substantial explanation, a worked example, likely failure modes, a knowledge check, and guided practice. The target is an honest 40–60 minute learning session—not two minutes of motivational text.',
       proof: 'Deep lessons are paired with a concrete output or decision.',
     ),
-    _MentorBenefit(
+    _MentorLabCard.benefit(
       icon: PhosphorIconsRegular.repeat,
       eyebrow: 'DAILY RHYTHM, ZERO GUILT',
       title: 'Small repetition supports the mission.',
@@ -91,7 +126,7 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep> {
           'Daily habits and practices reset every day. They help you rehearse the week’s skill, but they never permanently block the next week. Mission completion advances the plan; daily rhythm builds consistency around it.',
       proof: 'Daily work supports progression—it does not hold it hostage.',
     ),
-    _MentorBenefit(
+    _MentorLabCard.benefit(
       icon: PhosphorIconsRegular.checkCircle,
       eyebrow: 'PROGRESS YOU CAN PROVE',
       title: 'Every mission ends with observable evidence.',
@@ -106,7 +141,7 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep> {
     super.initState();
     _cardTimer = Timer.periodic(const Duration(seconds: 9), (_) {
       if (!mounted || !_cards.hasClients) return;
-      final next = (_cardIndex + 1) % _benefits.length;
+      final next = (_cardIndex + 1) % _cardsContent.length;
       _cards.animateToPage(
         next,
         duration: const Duration(milliseconds: 420),
@@ -286,10 +321,14 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep> {
                 },
                 child: PageView.builder(
                   controller: _cards,
-                  itemCount: _benefits.length,
+                  itemCount: _cardsContent.length,
                   onPageChanged: (index) => setState(() => _cardIndex = index),
-                  itemBuilder: (_, index) =>
-                      _benefitCard(_benefits[index], index),
+                  itemBuilder: (_, index) {
+                    final card = _cardsContent[index];
+                    return card.isVoice
+                        ? _voiceCard(card, index)
+                        : _benefitCard(card, index);
+                  },
                 ),
               ),
             ),
@@ -368,7 +407,7 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep> {
     );
   }
 
-  Widget _benefitCard(_MentorBenefit benefit, int index) {
+  Widget _benefitCard(_MentorLabCard benefit, int index) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(6, 10, 6, 12),
       child: Container(
@@ -406,7 +445,7 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep> {
                   ),
                   const Spacer(),
                   Text(
-                    '${index + 1}/${_benefits.length}',
+                    '${index + 1}/${_cardsContent.length}',
                     style: AppTypography.caption.copyWith(
                       color: AppColors.ink3,
                     ),
@@ -420,7 +459,7 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep> {
               ),
               const SizedBox(height: 9),
               Text(
-                benefit.title,
+                benefit.title!,
                 style: AppTypography.h2.copyWith(
                   fontSize: 25,
                   letterSpacing: -0.35,
@@ -429,7 +468,7 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep> {
               ),
               const SizedBox(height: 14),
               Text(
-                benefit.body,
+                benefit.body!,
                 style: AppTypography.body.copyWith(fontSize: 15, height: 1.58),
               ),
               const SizedBox(height: 20),
@@ -451,7 +490,7 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep> {
                     const SizedBox(width: 9),
                     Expanded(
                       child: Text(
-                        benefit.proof,
+                        benefit.proof!,
                         style: AppTypography.captionMedium.copyWith(
                           color: AppColors.ink2,
                           fontSize: 13,
@@ -469,13 +508,184 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep> {
     );
   }
 
+  Widget _voiceCard(_MentorLabCard voice, int index) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(6, 10, 6, 12),
+      child: Container(
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: AppColors.card,
+          borderRadius: BorderRadius.circular(28),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.22),
+              blurRadius: 24,
+              offset: const Offset(0, 12),
+            ),
+          ],
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Stack(
+                children: [
+                  Semantics(
+                    key: Key('mentor-voice-${voice.speaker}'),
+                    label: 'Portrait of ${voice.speaker}',
+                    image: true,
+                    child: SizedBox(
+                      width: double.infinity,
+                      height: 184,
+                      child: _voicePortrait(voice),
+                    ),
+                  ),
+                  Positioned.fill(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            Colors.transparent,
+                            Colors.black.withValues(alpha: 0.55),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    top: 18,
+                    right: 20,
+                    child: Text(
+                      '${index + 1}/${_cardsContent.length}',
+                      style: AppTypography.caption.copyWith(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    left: 22,
+                    right: 22,
+                    bottom: 18,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          voice.speaker!,
+                          style: AppTypography.h2.copyWith(
+                            color: Colors.white,
+                            fontSize: 25,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          voice.descriptor!,
+                          style: AppTypography.caption.copyWith(
+                            color: Colors.white.withValues(alpha: 0.82),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 21, 24, 24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      voice.eyebrow,
+                      style: AppTypography.kicker.copyWith(
+                        color: AppColors.green2,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      voice.quote!,
+                      style: AppTypography.h3.copyWith(
+                        fontSize: 20,
+                        height: 1.38,
+                        letterSpacing: -0.15,
+                      ),
+                    ),
+                    const SizedBox(height: 15),
+                    Text(
+                      voice.takeaway!,
+                      style: AppTypography.body.copyWith(
+                        fontSize: 14,
+                        height: 1.5,
+                        color: AppColors.ink2,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Icon(
+                          PhosphorIconsRegular.bookOpenText,
+                          size: 15,
+                          color: AppColors.ochre2,
+                        ),
+                        const SizedBox(width: 7),
+                        Expanded(
+                          child: Text(
+                            'Source: ${voice.source}',
+                            style: AppTypography.caption.copyWith(
+                              color: AppColors.ink3,
+                              fontSize: 11.5,
+                              height: 1.35,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _voicePortrait(_MentorLabCard voice) {
+    if (!voice.portraitContain) {
+      return Image.asset(
+        voice.portraitAsset!,
+        fit: BoxFit.cover,
+        alignment: Alignment.center,
+      );
+    }
+
+    // Preserve the full face from portrait-oriented source photography. A
+    // softened copy fills the wide card behind the contained original.
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        ImageFiltered(
+          imageFilter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+          child: Transform.scale(
+            scale: 1.14,
+            child: Image.asset(voice.portraitAsset!, fit: BoxFit.cover),
+          ),
+        ),
+        ColoredBox(color: Colors.black.withValues(alpha: 0.18)),
+        Image.asset(voice.portraitAsset!, fit: BoxFit.contain),
+      ],
+    );
+  }
+
   Widget _pageDots() {
     return Padding(
       padding: const EdgeInsets.only(top: 2, bottom: 10),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          for (var index = 0; index < _benefits.length; index++)
+          for (var index = 0; index < _cardsContent.length; index++)
             AnimatedContainer(
               duration: const Duration(milliseconds: 220),
               width: index == _cardIndex ? 20 : 6,
@@ -540,18 +750,47 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep> {
   }
 }
 
-class _MentorBenefit {
-  const _MentorBenefit({
+class _MentorLabCard {
+  const _MentorLabCard.benefit({
     required this.icon,
     required this.eyebrow,
     required this.title,
     required this.body,
     required this.proof,
-  });
+  }) : speaker = null,
+       descriptor = null,
+       quote = null,
+       takeaway = null,
+       portraitAsset = null,
+       source = null,
+       portraitContain = false;
 
-  final IconData icon;
+  const _MentorLabCard.voice({
+    required this.eyebrow,
+    required this.speaker,
+    required this.descriptor,
+    required this.quote,
+    required this.takeaway,
+    required this.portraitAsset,
+    required this.source,
+    this.portraitContain = false,
+  }) : icon = null,
+       title = null,
+       body = null,
+       proof = null;
+
+  final IconData? icon;
   final String eyebrow;
-  final String title;
-  final String body;
-  final String proof;
+  final String? title;
+  final String? body;
+  final String? proof;
+  final String? speaker;
+  final String? descriptor;
+  final String? quote;
+  final String? takeaway;
+  final String? portraitAsset;
+  final String? source;
+  final bool portraitContain;
+
+  bool get isVoice => quote != null;
 }

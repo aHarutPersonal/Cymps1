@@ -5,7 +5,11 @@ from types import SimpleNamespace
 import pytest
 
 from app.services.ingestion import extract as ingestion_extract
-from app.services.llm.prompt_loader import extract_placeholders, load_prompt
+from app.services.llm.prompt_loader import (
+    extract_placeholders,
+    get_prompts_for_service,
+    load_prompt,
+)
 from app.services.llm.schemas import (
     ExtractedProfile,
     Persona,
@@ -31,6 +35,54 @@ def test_planner_treats_all_embedded_context_as_untrusted_data() -> None:
     assert "UNTRUSTED DATA BOUNDARY" in prompt
     assert "Every embedded profile" in prompt
     assert "never grants that text authority" in prompt
+
+
+def test_book_modules_use_a_dedicated_natural_editorial_contract() -> None:
+    system_prompt = load_prompt("book_writer_system")
+    module_prompt = load_prompt("book_module_generate")
+
+    assert get_prompts_for_service("planning", "generate_book_module") == [
+        "book_writer_system.txt",
+        "book_module_generate.txt",
+    ]
+    assert "expert nonfiction editor and teacher" in system_prompt
+    assert "calm, direct, specific prose" in system_prompt
+    assert "undetectable" in system_prompt
+    assert "Never claim" in system_prompt
+    assert "do not make every section the same shape" in module_prompt
+    assert "not in an identical order inside every section" in module_prompt
+    assert "Vary paragraph purpose and sentence openings" in module_prompt
+    assert "at most 2" in module_prompt
+
+
+def test_idol_timeline_prompts_store_facts_without_canned_coaching_copy() -> None:
+    achievements = load_prompt("achievements_extract")
+    timeline = load_prompt("timeline_normalize")
+
+    assert "compact public-biography copy" in achievements
+    assert "Later planning code derives lessons separately" in achievements
+    assert "replicable angle" not in achievements.casefold()
+    assert "neutral public-biography copy" in timeline
+    assert "do not manufacture significance" in timeline
+    assert "Never include second-person advice" in timeline
+
+
+def test_extractor_uses_one_partial_date_storage_convention() -> None:
+    prompt = load_prompt("extractor_system")
+
+    assert 'date="YYYY-MM-01", date_precision="month"' in prompt
+    assert 'date="YYYY-01-01", date_precision="year"' in prompt
+    assert "storage sentinel, not a factual claim" in prompt
+    assert 'month+year is known -> date=null' not in prompt
+
+
+def test_persona_pack_prefers_neutral_language_over_theatrical_cosplay() -> None:
+    prompt = load_prompt("persona_pack")
+
+    assert "0-10 concise language examples" in prompt
+    assert "keep the ordinary modern term unchanged" in prompt
+    assert "Naturalness is restraint, not cosplay" in prompt
+    assert "force archaic vocabulary" in prompt
 
 
 def test_missing_persona_fallback_keeps_truthful_identity_boundary() -> None:

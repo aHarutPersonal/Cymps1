@@ -67,12 +67,22 @@ def test_idol_catalog_rejects_confident_but_evidence_free_claims():
 
 def test_celery_beat_and_routes_include_catalog_workers():
     schedule = celery_app.conf.beat_schedule["catalog-tick"]
+    discovery_schedule = celery_app.conf.beat_schedule["idle-catalog-discovery"]
 
     assert schedule["task"] == "app.tasks.catalog.catalog_tick"
     assert schedule["options"]["queue"] == "catalog_control"
     assert (
         celery_app.conf.task_routes["app.tasks.catalog.process_catalog_job"]["queue"]
         == "catalog"
+    )
+    assert discovery_schedule["task"] == "app.tasks.catalog.catalog_discovery_tick"
+    assert discovery_schedule["options"]["queue"] == "catalog_control"
+    assert discovery_schedule["schedule"] >= 60
+    assert (
+        celery_app.conf.task_routes["app.tasks.catalog.catalog_discovery_tick"][
+            "queue"
+        ]
+        == "catalog_control"
     )
 
 
@@ -86,15 +96,18 @@ def test_catalog_task_entrypoints_reuse_the_worker_event_loop(monkeypatch):
 
     monkeypatch.setattr(catalog, "run_async", fake_run_async)
     monkeypatch.setattr(catalog.settings, "catalog_scheduler_enabled", True)
+    monkeypatch.setattr(catalog.settings, "catalog_idle_discovery_enabled", True)
 
     assert catalog.enqueue_catalog_book.run("A Book", None) == {
         "runner": "persistent"
     }
     assert catalog.catalog_tick.run() == {"runner": "persistent"}
+    assert catalog.catalog_discovery_tick.run() == {"runner": "persistent"}
     assert catalog.process_catalog_job.run("job-1") == {"runner": "persistent"}
     assert coroutine_names == [
         "_enqueue_catalog_book_async",
         "_catalog_tick_async",
+        "_catalog_discovery_tick_async",
         "_process_catalog_job_async",
     ]
 

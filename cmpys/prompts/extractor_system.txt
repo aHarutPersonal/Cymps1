@@ -34,8 +34,8 @@ EVIDENCE RULES (CRITICAL):
 
 DATE PRECISION RULES:
 - If a full date (day, month, year) is explicitly stated -> date="YYYY-MM-DD", date_precision="day"
-- If only month+year is known -> date=null, date_precision="month"
-- If only year is known -> date=null, date_precision="year"
+- If only month+year is known -> date="YYYY-MM-01", date_precision="month". Day 01 is a storage sentinel, not a factual claim.
+- If only year is known -> date="YYYY-01-01", date_precision="year". January 1 is a storage sentinel, not a factual claim.
 - If unknown or not stated -> date=null, date_precision="unknown"
 - Never guess month/day. Never infer dates from context.
 

@@ -53,9 +53,10 @@ Return JSON EXACTLY matching this schema:
 
 CANONICALIZATION RULES:
 - canonical_title: short, action-oriented, unique (e.g., “Founded X”, “Joined Y as Z”, “Acquired Z”, “Published A”).
-- canonical_description: 1–2 sentences:
-  (1) WHAT happened (concrete),
-  (2) WHY it mattered (trajectory/impact).
+- canonical_description: compact, neutral public-biography copy in 1 sentence, or 2 only when needed for clarity.
+- Lead with the concrete event. Include trajectory or impact only when the candidate evidence supports it; do not manufacture significance merely to complete a template.
+- Use active verbs and natural syntax. Vary sentence construction across events without becoming ornate.
+- Never include second-person advice, coaching lessons, celebratory hype, or labels such as “Key takeaway”, “Why it mattered”, “Replicable angle”, or “This teaches us”.
 - Do NOT add new details that are not supported by candidate descriptions/evidence.
 - Keep category consistent with the most appropriate candidate category.
 

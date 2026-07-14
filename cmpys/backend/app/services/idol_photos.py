@@ -3,16 +3,63 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from typing import Any
+from urllib.parse import urlparse
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.idol import Idol
+from app.providers.wikimedia import (
+    commons_filename_from_url,
+    fetch_verified_commons_image,
+    is_recognized_free_license,
+)
 
 PhotoResolver = Callable[..., Awaitable[dict[str, Any] | None]]
 
 
+def _is_https_host(url: str | None, host: str) -> bool:
+    if not url:
+        return False
+    parsed = urlparse(str(url))
+    return parsed.scheme == "https" and parsed.hostname == host
+
+
+def _is_verified_photo_metadata(
+    *,
+    image_url: str | None,
+    source_url: str | None,
+    license_status: str | None,
+    attribution: Any,
+) -> bool:
+    """Require a real Commons file page, usable license, and attribution."""
+    if not _is_https_host(image_url, "upload.wikimedia.org"):
+        return False
+    if not _is_https_host(source_url, "commons.wikimedia.org"):
+        return False
+    if "/wiki/file:" not in urlparse(str(source_url)).path.casefold():
+        return False
+    if not isinstance(attribution, dict) or not attribution:
+        return False
+    if not attribution.get("artist") and not attribution.get("credit"):
+        return False
+    license_url = attribution.get("license_url")
+    return is_recognized_free_license(license_status, license_url)
+
+
+def is_verified_idol_photo(idol: Idol) -> bool:
+    """Return whether an idol has a source- and license-verified Commons photo."""
+    return _is_verified_photo_metadata(
+        image_url=getattr(idol, "image_url", None),
+        source_url=getattr(idol, "image_source_url", None),
+        license_status=getattr(idol, "image_license", None),
+        attribution=getattr(idol, "image_attribution_json", None),
+    )
+
+
 def _cached_photo_payload(idol: Idol) -> dict[str, Any] | None:
-    if not idol.image_url:
+    # Historical rows often contain only a raw P18/Special:FilePath URL.  That
+    # is a useful resolution hint, but not proof of a license or attribution.
+    if not is_verified_idol_photo(idol):
         return None
     return {
         "image_url": idol.image_url,
@@ -32,30 +79,63 @@ async def resolve_wikimedia_photo(
     """
     Resolve a real public idol image from Wikimedia/Wikipedia.
 
-    Current strategy uses Wikipedia page summaries first because they expose a
-    stable thumbnail/source pair. The attribution payload marks the image as a
-    Wikimedia/Wikipedia-sourced candidate so the UI can display provenance and
-    future passes can enrich license details from Commons.
+    Candidate filenames come from an existing P18 URL, Wikidata P18, or the
+    Wikipedia lead thumbnail.  A candidate is returned only after Commons
+    ``imageinfo/extmetadata`` verifies its file page, dimensions, MIME type,
+    license, and attribution metadata.
     """
     from app.providers.wikipedia import fetch_page_summary, resolve_title_from_url
 
-    title = resolve_title_from_url(wikipedia_url) if wikipedia_url else name
-    summary = await fetch_page_summary(title)
-    if not summary or not summary.thumbnail_url:
-        return None
+    candidate_names: list[str] = []
+    for hint in hints or []:
+        file_name = commons_filename_from_url(hint)
+        if file_name and file_name not in candidate_names:
+            candidate_names.append(file_name)
 
-    return {
-        "image_url": summary.thumbnail_url,
-        "source_url": summary.url or wikipedia_url,
-        "license_status": "wikimedia",
-        "attribution": {
-            "provider": "wikipedia",
-            "title": summary.title,
+    resolved_wikipedia_url = wikipedia_url
+    if wikidata_qid:
+        try:
+            from app.providers.wikidata import fetch_entity_by_id
+
+            entity = await fetch_entity_by_id(wikidata_qid)
+            if entity:
+                file_name = str(entity.get("image_filename") or "").strip()
+                if file_name and file_name not in candidate_names:
+                    candidate_names.append(file_name)
+                resolved_wikipedia_url = (
+                    resolved_wikipedia_url or entity.get("wikipedia_url")
+                )
+        except Exception:
+            # Wikipedia remains a provenance-preserving fallback.
+            pass
+
+    title = (
+        resolve_title_from_url(resolved_wikipedia_url)
+        if resolved_wikipedia_url
+        else name
+    )
+    summary = None
+    if title:
+        summary = await fetch_page_summary(title)
+        if summary and summary.thumbnail_url:
+            file_name = commons_filename_from_url(summary.thumbnail_url)
+            if file_name and file_name not in candidate_names:
+                candidate_names.append(file_name)
+
+    for file_name in candidate_names:
+        verified = await fetch_verified_commons_image(file_name)
+        if verified is None:
+            continue
+        payload = verified.as_photo_payload()
+        payload["attribution"] = {
+            **payload["attribution"],
             "wikidata_qid": wikidata_qid,
-            "hints": hints or [],
-            "license_note": "Image sourced from Wikimedia/Wikipedia page summary; verify Commons page for exact license before commercial use.",
-        },
-    }
+            "wikipedia_url": (
+                summary.url if summary else resolved_wikipedia_url
+            ),
+        }
+        return payload
+    return None
 
 
 async def get_or_resolve_idol_photo(
@@ -79,7 +159,12 @@ async def get_or_resolve_idol_photo(
         wikipedia_url=wikipedia_url,
         hints=hints or [],
     )
-    if not photo or not photo.get("image_url"):
+    if not photo or not _is_verified_photo_metadata(
+        image_url=photo.get("image_url"),
+        source_url=photo.get("source_url"),
+        license_status=photo.get("license_status"),
+        attribution=photo.get("attribution"),
+    ):
         return None
 
     idol.image_url = str(photo["image_url"])
