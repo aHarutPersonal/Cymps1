@@ -80,6 +80,8 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
   int _theme = 0;
   double _fontSize = 18;
   bool _completing = false;
+  final Map<String, String> _resolvedBookGuideIds = {};
+  final Set<String> _preparingBookGuideKeys = {};
 
   Color get _background => switch (_theme) {
     1 => const Color(0xFFF7F0E3),
@@ -376,9 +378,12 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
 
   Widget _referenceCard(PlanMaterialDetail material) {
     final action = _materialAction(material);
+    final preparingBookGuide = _isPreparingBookGuide(material);
     return CmpysCardSurface(
       color: _chrome,
-      onTap: action == null ? null : () => _openMaterial(material),
+      onTap: action == null || preparingBookGuide
+          ? null
+          : () => _openMaterial(material),
       pad: const EdgeInsets.all(16),
       child: Row(
         children: [
@@ -453,11 +458,11 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
   }
 
   String? _materialAction(PlanMaterialDetail material) {
-    if (material.type == 'book' && material.contentResourceId != null) {
+    if (material.type == 'book' && _bookResourceId(material) != null) {
       return 'Read book';
     }
     if (material.type == 'book' && (material.canonicalKey ?? '').isNotEmpty) {
-      return 'Check guide';
+      return _isPreparingBookGuide(material) ? 'Preparing…' : 'Open guide';
     }
     if (material.youtubeVideoId != null) return 'Watch';
     if (material.prefersExternalLink) return 'Open';
@@ -468,16 +473,20 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
 
   Future<void> _openMaterial(PlanMaterialDetail material) async {
     final videoId = material.youtubeVideoId;
-    var bookResourceId = material.contentResourceId;
+    final canonicalKey = (material.canonicalKey ?? '').trim();
+    var bookResourceId = _bookResourceId(material);
     if (material.type == 'book' &&
         bookResourceId == null &&
-        (material.canonicalKey ?? '').isNotEmpty) {
+        canonicalKey.isNotEmpty) {
+      if (_preparingBookGuideKeys.contains(canonicalKey)) return;
+      setState(() => _preparingBookGuideKeys.add(canonicalKey));
       try {
         bookResourceId = await ref
             .read(planRepositoryProvider)
-            .resolveContentResourceId(material.canonicalKey!);
+            .waitForContentResourceId(canonicalKey);
       } catch (_) {
         if (!mounted) return;
+        setState(() => _preparingBookGuideKeys.remove(canonicalKey));
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Could not check the book guide. Try again.'),
@@ -487,10 +496,18 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
         return;
       }
       if (!mounted) return;
+      setState(() {
+        _preparingBookGuideKeys.remove(canonicalKey);
+        if (bookResourceId != null) {
+          _resolvedBookGuideIds[canonicalKey] = bookResourceId;
+        }
+      });
       if (bookResourceId == null) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('The full book guide is still being prepared.'),
+            content: Text(
+              'The guide is taking longer than expected. Try again in a moment.',
+            ),
             behavior: SnackBarBehavior.floating,
           ),
         );
@@ -517,6 +534,21 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
       context,
       rootNavigator: true,
     ).push(CmpysPageRoute<void>(builder: (_) => screen!));
+  }
+
+  String? _bookResourceId(PlanMaterialDetail material) {
+    final directId = material.contentResourceId?.trim();
+    if (directId != null && directId.isNotEmpty) return directId;
+    final canonicalKey = material.canonicalKey?.trim();
+    if (canonicalKey == null || canonicalKey.isEmpty) return null;
+    return _resolvedBookGuideIds[canonicalKey];
+  }
+
+  bool _isPreparingBookGuide(PlanMaterialDetail material) {
+    final canonicalKey = material.canonicalKey?.trim();
+    return canonicalKey != null &&
+        canonicalKey.isNotEmpty &&
+        _preparingBookGuideKeys.contains(canonicalKey);
   }
 
   Widget _bottomBar() {

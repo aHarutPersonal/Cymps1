@@ -10,6 +10,9 @@ cleanup() {
     if [ ! -z "$UVICORN_PID" ]; then 
         kill -TERM $UVICORN_PID 2>/dev/null || true
     fi
+    if [ ! -z "$CELERY_BEAT_PID" ]; then
+        kill -TERM $CELERY_BEAT_PID 2>/dev/null || true
+    fi
     if [ ! -z "$CELERY_PID" ]; then 
         kill -TERM $CELERY_PID 2>/dev/null || true
     fi
@@ -92,6 +95,19 @@ if [ "$WORKER_READY" != true ]; then
     echo "❌ Generation worker did not become ready. See cmpys/backend/celery.log"
     exit 1
 fi
+
+# Retry delayed catalog work (including deferred book guides) and recover jobs
+# left queued across worker restarts. Production already runs this process;
+# local development needs the same scheduler contract.
+echo "Starting Celery Beat..."
+celery -A app.core.celery beat --loglevel=info --schedule=/tmp/cmpys-celerybeat-schedule > celery-beat.log 2>&1 &
+CELERY_BEAT_PID=$!
+sleep 0.5
+if ! kill -0 "$CELERY_BEAT_PID" 2>/dev/null; then
+    echo "❌ Catalog scheduler did not become ready. See cmpys/backend/celery-beat.log"
+    exit 1
+fi
+echo "✅ Catalog scheduler running in background (PID: $CELERY_BEAT_PID)"
 
 echo "--------------------------------------------------------"
 echo "Starting Flutter Frontend on iOS Simulator..."

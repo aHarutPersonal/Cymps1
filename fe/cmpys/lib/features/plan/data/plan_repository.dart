@@ -15,7 +15,20 @@ final planRepositoryProvider = Provider<PlanRepository>((ref) {
 class PlanRepository {
   PlanRepository({required DioClient dioClient}) : _dioClient = dioClient;
 
+  static const _bookGuidePollDelays = <Duration>[
+    Duration.zero,
+    Duration(seconds: 5),
+    Duration(seconds: 8),
+    Duration(seconds: 12),
+    Duration(seconds: 18),
+    Duration(seconds: 25),
+    Duration(seconds: 32),
+  ];
+
   final DioClient _dioClient;
+  final Map<String, String> _resolvedContentResourceIds = {};
+  final Map<String, Future<String?>> _contentResourceResolveFlights = {};
+  final Map<String, Future<String?>> _contentResourceWaitFlights = {};
 
   /// The user's most recent plan, or null if none has been generated yet.
   Future<BackendPlan?> getCurrentPlan() async {
@@ -65,18 +78,77 @@ class PlanRepository {
 
   /// Resolve a deferred canonical resource after background generation.
   /// Returns null while its quality-gated module is still being prepared.
-  Future<String?> resolveContentResourceId(String canonicalKey) async {
+  Future<String?> resolveContentResourceId(String canonicalKey) {
+    final key = canonicalKey.trim();
+    if (key.isEmpty) return Future.value();
+    final cached = _resolvedContentResourceIds[key];
+    if (cached != null) return Future.value(cached);
+    final active = _contentResourceResolveFlights[key];
+    if (active != null) return active;
+
+    late final Future<String?> flight;
+    flight = _resolveContentResourceId(key).whenComplete(() {
+      if (identical(_contentResourceResolveFlights[key], flight)) {
+        _contentResourceResolveFlights.remove(key);
+      }
+    });
+    _contentResourceResolveFlights[key] = flight;
+    return flight;
+  }
+
+  Future<String?> _resolveContentResourceId(String canonicalKey) async {
     try {
       final response = await _dioClient.get(
         '/content-resources/resolve',
         queryParameters: {'canonicalKey': canonicalKey},
       );
       final data = response.data as Map<String, dynamic>;
-      return data['id']?.toString();
+      final id = data['id']?.toString().trim();
+      if (id != null && id.isNotEmpty) {
+        _resolvedContentResourceIds[canonicalKey] = id;
+        return id;
+      }
+      return null;
     } on ApiError catch (error) {
       if (error.statusCode == 404) return null;
       rethrow;
     }
+  }
+
+  /// Wait for an already-enqueued book guide using sparse, bounded polling.
+  /// Calls for the same book share one flight across the plan and lesson
+  /// screens, so impatient taps cannot fan out duplicate requests.
+  Future<String?> waitForContentResourceId(
+    String canonicalKey, {
+    List<Duration> pollDelays = _bookGuidePollDelays,
+  }) {
+    final key = canonicalKey.trim();
+    if (key.isEmpty) return Future.value();
+    final cached = _resolvedContentResourceIds[key];
+    if (cached != null) return Future.value(cached);
+    final active = _contentResourceWaitFlights[key];
+    if (active != null) return active;
+
+    late final Future<String?> flight;
+    flight = _waitForContentResourceId(key, pollDelays).whenComplete(() {
+      if (identical(_contentResourceWaitFlights[key], flight)) {
+        _contentResourceWaitFlights.remove(key);
+      }
+    });
+    _contentResourceWaitFlights[key] = flight;
+    return flight;
+  }
+
+  Future<String?> _waitForContentResourceId(
+    String canonicalKey,
+    List<Duration> pollDelays,
+  ) async {
+    for (final delay in pollDelays) {
+      if (delay > Duration.zero) await Future<void>.delayed(delay);
+      final id = await resolveContentResourceId(canonicalKey);
+      if (id != null) return id;
+    }
+    return null;
   }
 
   /// Complete or uncomplete one lesson step. The backend enforces sequential

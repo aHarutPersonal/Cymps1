@@ -54,6 +54,8 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
   DateTime? _pollStartedAt;
   int _pollAttempt = 0;
   Timer? _poll;
+  final Map<String, String> _resolvedBookGuideIds = {};
+  final Set<String> _preparingBookGuideKeys = {};
 
   @override
   void initState() {
@@ -1080,16 +1082,18 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
   /// or LLM module), markdown reader for lessons, web view for plain links.
   Future<void> _openMaterial(PlanMaterialDetail m) async {
     final videoId = m.youtubeVideoId;
-    var bookResourceId = m.contentResourceId;
-    if (m.type == 'book' &&
-        bookResourceId == null &&
-        (m.canonicalKey ?? '').isNotEmpty) {
+    final canonicalKey = (m.canonicalKey ?? '').trim();
+    var bookResourceId = _bookResourceId(m);
+    if (m.type == 'book' && bookResourceId == null && canonicalKey.isNotEmpty) {
+      if (_preparingBookGuideKeys.contains(canonicalKey)) return;
+      setState(() => _preparingBookGuideKeys.add(canonicalKey));
       try {
         bookResourceId = await ref
             .read(planRepositoryProvider)
-            .resolveContentResourceId(m.canonicalKey!);
+            .waitForContentResourceId(canonicalKey);
       } catch (_) {
         if (!mounted) return;
+        setState(() => _preparingBookGuideKeys.remove(canonicalKey));
         showCmpysToast(
           context,
           'Could not check the book guide. Try again.',
@@ -1099,10 +1103,16 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
         return;
       }
       if (!mounted) return;
+      setState(() {
+        _preparingBookGuideKeys.remove(canonicalKey);
+        if (bookResourceId != null) {
+          _resolvedBookGuideIds[canonicalKey] = bookResourceId;
+        }
+      });
       if (bookResourceId == null) {
         showCmpysToast(
           context,
-          'The full book guide is still being prepared.',
+          'The guide is taking longer than expected. Try again in a moment.',
           icon: PhosphorIconsRegular.hourglass,
           tone: AppColors.ochre2,
         );
@@ -1131,15 +1141,33 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
     Navigator.of(context, rootNavigator: true).push(route);
   }
 
+  String? _bookResourceId(PlanMaterialDetail material) {
+    final directId = material.contentResourceId?.trim();
+    if (directId != null && directId.isNotEmpty) return directId;
+    final canonicalKey = material.canonicalKey?.trim();
+    if (canonicalKey == null || canonicalKey.isEmpty) return null;
+    return _resolvedBookGuideIds[canonicalKey];
+  }
+
+  bool _isPreparingBookGuide(PlanMaterialDetail material) {
+    final canonicalKey = material.canonicalKey?.trim();
+    return canonicalKey != null &&
+        canonicalKey.isNotEmpty &&
+        _preparingBookGuideKeys.contains(canonicalKey);
+  }
+
   ({IconData icon, String label})? _materialAction(PlanMaterialDetail m) {
     if (m.youtubeVideoId != null) {
       return (icon: PhosphorIconsFill.playCircle, label: 'Watch');
     }
-    if (m.type == 'book' && (m.canonicalKey ?? '').isNotEmpty) {
-      return (
-        icon: PhosphorIconsRegular.bookOpen,
-        label: m.contentResourceId == null ? 'Check guide' : 'Read',
-      );
+    if (m.type == 'book' && _bookResourceId(m) != null) {
+      return (icon: PhosphorIconsRegular.bookOpen, label: 'Read');
+    }
+    if (m.type == 'book' && (m.canonicalKey ?? '').trim().isNotEmpty) {
+      if (_isPreparingBookGuide(m)) {
+        return (icon: PhosphorIconsRegular.hourglass, label: 'Preparing…');
+      }
+      return (icon: PhosphorIconsRegular.bookOpen, label: 'Open guide');
     }
     if (m.prefersExternalLink) {
       return (icon: PhosphorIconsRegular.globe, label: 'Open');
@@ -1155,8 +1183,11 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
 
   Widget _materialCard(PlanMaterialDetail m) {
     final action = _materialAction(m);
+    final preparingBookGuide = _isPreparingBookGuide(m);
     return CmpysCardSurface(
-      onTap: action != null ? () => _openMaterial(m) : null,
+      onTap: action != null && !preparingBookGuide
+          ? () => _openMaterial(m)
+          : null,
       pad: const EdgeInsets.all(16),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,

@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:cmpys/core/network/api_error.dart';
 import 'package:cmpys/core/network/dio_client.dart';
 import 'package:cmpys/core/storage/token_store.dart';
 import 'package:cmpys/features/plan/data/plan_repository.dart';
@@ -38,6 +41,40 @@ void main() {
     expect(client.requestedQuery, const {'canonicalKey': 'book:author:title'});
     expect(id, 'resource-123');
   });
+
+  test('content resource resolution is single-flight and cached', () async {
+    final client = _PendingResolveDioClient();
+    final repository = PlanRepository(dioClient: client);
+
+    final first = repository.resolveContentResourceId('book:author:title');
+    final second = repository.resolveContentResourceId('book:author:title');
+
+    expect(client.calls, 1);
+    client.gate.complete();
+    expect(await first, 'resource-123');
+    expect(await second, 'resource-123');
+    expect(
+      await repository.resolveContentResourceId('book:author:title'),
+      'resource-123',
+    );
+    expect(client.calls, 1);
+  });
+
+  test(
+    'book guide wait uses bounded polling until the guide is ready',
+    () async {
+      final client = _EventuallyReadyDioClient();
+      final repository = PlanRepository(dioClient: client);
+
+      final id = await repository.waitForContentResourceId(
+        'book:author:title',
+        pollDelays: const [Duration.zero, Duration.zero, Duration.zero],
+      );
+
+      expect(id, 'resource-123');
+      expect(client.calls, 3);
+    },
+  );
 
   test('regeneratePlanItemDetails uses the explicit retry endpoint', () async {
     final client = _RecordingDioClient();
@@ -101,6 +138,63 @@ class _RecordingDioClient extends DioClient {
     requestedQuery = queryParameters;
     return Response<T>(
       data: <String, dynamic>{'job_id': 'detail-job-123'} as T,
+      requestOptions: RequestOptions(path: path),
+    );
+  }
+}
+
+class _PendingResolveDioClient extends DioClient {
+  _PendingResolveDioClient() : super(tokenStore: TokenStore());
+
+  final gate = Completer<void>();
+  int calls = 0;
+
+  @override
+  Future<Response<T>> get<T>(
+    String path, {
+    Map<String, dynamic>? queryParameters,
+    Options? options,
+    bool skipAuth = false,
+    Duration? receiveTimeout,
+  }) async {
+    calls++;
+    await gate.future;
+    return Response<T>(
+      data:
+          <String, dynamic>{
+                'id': 'resource-123',
+                'canonicalKey': queryParameters?['canonicalKey'],
+              }
+              as T,
+      requestOptions: RequestOptions(path: path),
+    );
+  }
+}
+
+class _EventuallyReadyDioClient extends DioClient {
+  _EventuallyReadyDioClient() : super(tokenStore: TokenStore());
+
+  int calls = 0;
+
+  @override
+  Future<Response<T>> get<T>(
+    String path, {
+    Map<String, dynamic>? queryParameters,
+    Options? options,
+    bool skipAuth = false,
+    Duration? receiveTimeout,
+  }) async {
+    calls++;
+    if (calls < 3) {
+      throw const ApiError(message: 'Guide is pending', statusCode: 404);
+    }
+    return Response<T>(
+      data:
+          <String, dynamic>{
+                'id': 'resource-123',
+                'canonicalKey': queryParameters?['canonicalKey'],
+              }
+              as T,
       requestOptions: RequestOptions(path: path),
     );
   }

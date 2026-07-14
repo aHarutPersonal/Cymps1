@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -54,6 +56,46 @@ class _ScriptedRepo extends Fake implements PlanRepository {
   Future<bool> toggleDailyTask(String itemId) async {
     dailyToggles++;
     return true;
+  }
+}
+
+class _BookGuideRepo extends Fake implements PlanRepository {
+  final guide = Completer<String?>();
+  int guideWaits = 0;
+
+  @override
+  Future<PlanItemDetailed> getPlanItemDetailed(String itemId) async =>
+      const PlanItemDetailed(
+        item: BackendPlanItem(
+          id: 'mission-1',
+          title: 'Build the foundation',
+          type: 'project',
+          description: 'Build a sound foundation.',
+          weekStart: 1,
+          weekEnd: 1,
+          successMetric: 'A documented foundation exists.',
+          estimatedHours: 4,
+          status: 'not_started',
+          progressPercent: 0,
+        ),
+        detailsStatus: 'available',
+        materials: [
+          PlanMaterialDetail(
+            title: 'The Personal MBA',
+            type: 'book',
+            authorOrCreator: 'Josh Kaufman',
+            canonicalKey: 'book:josh_kaufman:the_personal_mba',
+          ),
+        ],
+      );
+
+  @override
+  Future<String?> waitForContentResourceId(
+    String canonicalKey, {
+    List<Duration> pollDelays = const [],
+  }) {
+    guideWaits++;
+    return guide.future;
   }
 }
 
@@ -347,5 +389,30 @@ void main() {
     expect(find.text('Mark as not done today'), findsOneWidget);
     await tester.pump(const Duration(seconds: 3));
     await tester.pumpAndSettle();
+  });
+
+  testWidgets('book guide action stays single-flight while preparation runs', (
+    tester,
+  ) async {
+    final repo = _BookGuideRepo();
+    await tester.pumpWidget(_app(repo));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Open guide'), findsOneWidget);
+    await tester.tap(find.text('Open guide'));
+    await tester.pump();
+
+    expect(find.text('Preparing…'), findsOneWidget);
+    expect(repo.guideWaits, 1);
+    await tester.tap(find.text('Preparing…'));
+    await tester.pump();
+    expect(repo.guideWaits, 1);
+
+    repo.guide.complete(null);
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('Open guide'), findsOneWidget);
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpWidget(const SizedBox());
   });
 }

@@ -6,7 +6,6 @@ network/LLM work runs in ``process_catalog_job`` on the dedicated catalog queue.
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
@@ -14,6 +13,7 @@ from uuid import uuid4
 from sqlalchemy import func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+from app.core.async_runtime import run_async
 from app.core.celery import celery_app
 from app.core.config import settings
 from app.core.db import async_session_maker
@@ -77,7 +77,7 @@ def enqueue_catalog_book(
     priority: int = 80,
 ) -> dict:
     """Idempotently add one user-demanded book to the tracked catalog queue."""
-    return asyncio.run(
+    return run_async(
         _enqueue_catalog_book_async(
             title=title,
             author=author,
@@ -126,7 +126,7 @@ async def _enqueue_catalog_book_async(
 def catalog_tick() -> dict:
     if not settings.catalog_scheduler_enabled:
         return {"status": "disabled"}
-    return asyncio.run(_catalog_tick_async())
+    return run_async(_catalog_tick_async())
 
 
 async def _catalog_tick_async() -> dict:
@@ -372,7 +372,7 @@ async def _catalog_tick_async() -> dict:
 
 @celery_app.task(name="app.tasks.catalog.process_catalog_job")
 def process_catalog_job(job_id: str) -> dict:
-    return asyncio.run(_process_catalog_job_async(job_id))
+    return run_async(_process_catalog_job_async(job_id))
 
 
 async def _process_catalog_job_async(job_id: str) -> dict:
@@ -755,6 +755,7 @@ async def _process_quote_verification_job(job_id: str, payload: dict) -> dict:
 
 async def _record_failure(job_id: str, error: str) -> dict:
     now = datetime.now(timezone.utc)
+    retry_in_seconds: int | None = None
     async with async_session_maker() as db:
         job = await db.get(IngestJob, job_id)
         if job is None:
@@ -766,11 +767,10 @@ async def _record_failure(job_id: str, error: str) -> dict:
             job.completed_at = now
         else:
             job.state = IngestState.QUEUED
-            job.next_attempt_at = now + timedelta(
-                seconds=retry_delay_seconds(job.attempts)
-            )
+            retry_in_seconds = retry_delay_seconds(job.attempts)
+            job.next_attempt_at = now + timedelta(seconds=retry_in_seconds)
         await db.commit()
-        return {
+        result = {
             "status": job.state.value,
             "job_id": job_id,
             "attempts": job.attempts,
@@ -779,3 +779,18 @@ async def _record_failure(job_id: str, error: str) -> dict:
             ),
             "error": job.last_error,
         }
+
+    # Celery Beat is the durable recovery mechanism in production. Schedule
+    # the matching wake-up as well so user-requested catalog work also retries
+    # in local/dev stacks that intentionally run only a worker.
+    if retry_in_seconds is not None:
+        try:
+            catalog_tick.apply_async(
+                queue="catalog_control",
+                countdown=retry_in_seconds,
+            )
+        except Exception:
+            # The DB due-time remains authoritative and Beat will recover it;
+            # a transient broker failure must not erase the recorded cause.
+            logger.exception("[CATALOG] Could not schedule retry wake-up")
+    return result

@@ -14,6 +14,7 @@ Provides two capabilities:
 Both return async generators that yield text chunks for SSE streaming.
 """
 
+import asyncio
 import inspect
 import logging
 import time
@@ -47,19 +48,26 @@ TUTOR_KEYWORDS = {
 }
 
 
-# Module-level singleton: each genai.Client owns its own httpx pool, so a
+# Module-level singleton: each genai.Client owns its own connection pool, so a
 # per-call client pays a fresh TCP+TLS handshake (~100-300ms) on every LLM
-# call. Reusing one client keeps connections warm; the async surface is safe
-# for concurrent use.
+# call. The SDK's aiohttp session is bound to the event loop that first uses
+# it, though, so a worker must never reuse the client after switching loops.
 _client_singleton: genai.Client | None = None
 _client_api_key: str | None = None
+_client_event_loop: asyncio.AbstractEventLoop | None = None
 
 
 def _gemini_client() -> genai.Client:
-    global _client_singleton, _client_api_key
-    if _client_singleton is None or _client_api_key != settings.gemini_api_key:
+    global _client_singleton, _client_api_key, _client_event_loop
+    loop = asyncio.get_running_loop()
+    if (
+        _client_singleton is None
+        or _client_api_key != settings.gemini_api_key
+        or _client_event_loop is not loop
+    ):
         _client_singleton = genai.Client(api_key=settings.gemini_api_key)
         _client_api_key = settings.gemini_api_key
+        _client_event_loop = loop
     return _client_singleton
 
 

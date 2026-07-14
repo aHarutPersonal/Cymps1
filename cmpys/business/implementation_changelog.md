@@ -1,6 +1,17 @@
 # CMPYS Implementation Changelog
 
-**Last Updated:** 2026-07-13
+**Last Updated:** 2026-07-14
+
+---
+
+## 2026-07-14: Deferred Book Guide Completion & Request Control
+
+- Fixed deferred book guides and prefetched lesson artifacts failing inside Celery with `Timeout context manager should be used inside a task`; all catalog entry points now reuse the worker-local event loop, and the shared Gemini client is recreated if the active loop changes.
+- Preserved the warm connection pool on stable workers while preventing an async HTTP session from leaking across event loops.
+- Made failed catalog work schedule its own bounded retry in addition to the durable Beat recovery path, and added Celery Beat to the local launcher so development matches production retry behavior.
+- Replaced repeatable “Check guide” requests with a shared, cached, single-flight resolver and sparse bounded polling across both the mission page and lesson reader; the action is disabled as “Preparing…” while one check is active.
+- Live recovery of the reported material rejected a thin 2,080-word first draft, completed the quality fallback, and published a 3,480-word guide with the full quality report passing.
+- Verification: all 398 backend tests and all 138 Flutter tests passed, together with Ruff, Python compilation, Flutter analysis, shell validation, diff validation, and a release web build.
 
 ---
 
