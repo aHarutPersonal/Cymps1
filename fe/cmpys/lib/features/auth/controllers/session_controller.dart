@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../../app/env.dart';
 import '../../../core/network/api_error.dart';
 import '../../../core/storage/token_store.dart';
+import '../../cmpys/state/cmpys_store.dart';
 import '../data/me_repository.dart';
 import '../models/me_models.dart';
 import 'auth_controller.dart';
@@ -51,6 +52,8 @@ final sessionControllerProvider =
         tokenStore: ref.watch(tokenStoreProvider),
         meRepository: ref.watch(meRepositoryProvider),
         authController: ref.watch(authControllerProvider.notifier),
+        resetLocalAccountData: () =>
+            ref.read(cmpysStoreProvider.notifier).reset(),
       );
     });
 
@@ -79,14 +82,17 @@ class SessionController extends StateNotifier<SessionState> {
     required TokenStore tokenStore,
     required MeRepository meRepository,
     required AuthController authController,
+    Future<void> Function()? resetLocalAccountData,
   }) : _tokenStore = tokenStore,
        _meRepository = meRepository,
        _authController = authController,
+       _resetLocalAccountData = resetLocalAccountData,
        super(const SessionInitializing());
 
   final TokenStore _tokenStore;
   final MeRepository _meRepository;
   final AuthController _authController;
+  final Future<void> Function()? _resetLocalAccountData;
 
   SharedPreferences? _prefs;
 
@@ -162,8 +168,7 @@ class SessionController extends StateNotifier<SessionState> {
     // so a missing locally-cached idol id must NOT bounce a returning user back
     // into onboarding — that was the defect that lost their session on relaunch.
     // currentIdolId is informational only (no consumers read it); default to ''.
-    final currentIdolId =
-        _prefs?.getString(SessionKeys.currentIdolId) ?? '';
+    final currentIdolId = _prefs?.getString(SessionKeys.currentIdolId) ?? '';
     debugPrint('🔑 currentIdolId: $currentIdolId');
     debugPrint('🔑 Setting SessionReady');
     state = SessionReady(user: user, currentIdolId: currentIdolId);
@@ -182,9 +187,20 @@ class SessionController extends StateNotifier<SessionState> {
 
   /// Called after successful login/register.
   /// Does NOT reset to SessionInitializing to avoid redirect to splash.
-  Future<void> onAuthenticated() async {
+  Future<void> onAuthenticated({bool isNewRegistration = false}) async {
     debugPrint('🔑 SessionController.onAuthenticated() called');
     _prefs ??= await SharedPreferences.getInstance();
+
+    // Registration always creates a distinct account. Device-local state is
+    // not user-scoped, so carrying it across would make the new user inherit
+    // the previous user's completed-onboarding flag, mentor, name, notes, and
+    // progress and would route them directly to Home. Clear it before /me is
+    // evaluated so the new account deterministically starts onboarding.
+    if (isNewRegistration) {
+      await _prefs?.remove(SessionKeys.currentIdolId);
+      await _prefs?.remove(SessionKeys.onboardingComplete);
+      await _resetLocalAccountData?.call();
+    }
 
     // Fetch user profile without resetting state to Initializing
     try {

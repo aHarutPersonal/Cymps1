@@ -65,7 +65,9 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     ref.listen(authControllerProvider, (prev, next) async {
       if (next is AuthAuthenticated) {
         _clearError();
-        await ref.read(sessionControllerProvider.notifier).onAuthenticated();
+        await ref
+            .read(sessionControllerProvider.notifier)
+            .onAuthenticated(isNewRegistration: next.isNewRegistration);
         if (!mounted) return;
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!mounted) return;

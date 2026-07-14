@@ -183,6 +183,7 @@ class IdolSuggestion with _$IdolSuggestion {
     required String era,
     required String relevanceSummary,
     String? wikidataId,
+    String? imageUrl,
     @Default([]) List<String> domains,
     @Default(0.8) double confidence,
   }) = _IdolSuggestion;
@@ -195,6 +196,7 @@ class IdolSuggestion with _$IdolSuggestion {
           (json['relevance_summary'] ?? json['relevanceSummary'] ?? '')
               .toString(),
       wikidataId: (json['wikidata_id'] ?? json['wikidataId'])?.toString(),
+      imageUrl: (json['image_url'] ?? json['imageUrl'])?.toString(),
       domains: Session._parseStringList(json['domains']),
       confidence: _parseDouble(json['confidence']) ?? 0.8,
     );
@@ -205,6 +207,7 @@ class IdolSuggestion with _$IdolSuggestion {
     'era': era,
     'relevance_summary': relevanceSummary,
     if (wikidataId != null) 'wikidata_id': wikidataId,
+    if (imageUrl != null) 'image_url': imageUrl,
     'domains': domains,
     'confidence': confidence,
   };

@@ -38,8 +38,7 @@ class CmpysDiscoveryStep extends ConsumerStatefulWidget {
   final ValueChanged<String>? onSessionCreated;
 
   @override
-  ConsumerState<CmpysDiscoveryStep> createState() =>
-      _CmpysDiscoveryStepState();
+  ConsumerState<CmpysDiscoveryStep> createState() => _CmpysDiscoveryStepState();
 }
 
 class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
@@ -116,6 +115,7 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
       summary: s.relevanceSummary,
       domains: s.domains,
       wikidataId: s.wikidataId,
+      imageUrl: s.imageUrl,
     );
     final score = (s.confidence * 100).clamp(0, 99).round();
     final reason = s.relevanceSummary.trim().isEmpty
@@ -149,10 +149,11 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
     if (_query.trim().isEmpty) return _suggestions;
     final q = _query.toLowerCase();
     return _suggestions
-        .where((s) =>
-            '${s.idol.name} ${s.idol.title} ${s.idol.field}'
-                .toLowerCase()
-                .contains(q))
+        .where(
+          (s) => '${s.idol.name} ${s.idol.title} ${s.idol.field}'
+              .toLowerCase()
+              .contains(q),
+        )
         .toList();
   }
 
@@ -179,17 +180,24 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
                   color: AppColors.claySoft,
                   borderRadius: BorderRadius.circular(18),
                 ),
-                child: const Icon(Icons.wifi_off_rounded,
-                    size: 28, color: AppColors.danger),
+                child: const Icon(
+                  Icons.wifi_off_rounded,
+                  size: 28,
+                  color: AppColors.danger,
+                ),
               ),
               const SizedBox(height: 18),
-              Text('Your mentor AI is unreachable',
-                  textAlign: TextAlign.center,
-                  style: AppTypography.h3.copyWith(fontSize: 21, height: 1.3)),
+              Text(
+                'Your mentor AI is unreachable',
+                textAlign: TextAlign.center,
+                style: AppTypography.h3.copyWith(fontSize: 21, height: 1.3),
+              ),
               const SizedBox(height: 8),
-              Text(_error!,
-                  textAlign: TextAlign.center,
-                  style: AppTypography.bodyDim.copyWith(fontSize: 14.5)),
+              Text(
+                _error!,
+                textAlign: TextAlign.center,
+                style: AppTypography.bodyDim.copyWith(fontSize: 14.5),
+              ),
               const SizedBox(height: 22),
               CmpysButton(
                 variant: CmpysBtnVariant.primary,
@@ -355,8 +363,11 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
       ),
       child: Row(
         children: [
-          const Icon(PhosphorIconsRegular.magnifyingGlass,
-              size: 19, color: AppColors.ink3),
+          const Icon(
+            PhosphorIconsRegular.magnifyingGlass,
+            size: 19,
+            color: AppColors.ink3,
+          ),
           const SizedBox(width: 10),
           Expanded(
             child: TextField(
@@ -376,8 +387,11 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
           if (_query.isNotEmpty)
             GestureDetector(
               onTap: () => setState(() => _query = ''),
-              child: const Icon(PhosphorIconsRegular.x,
-                  size: 17, color: AppColors.ink3),
+              child: const Icon(
+                PhosphorIconsRegular.x,
+                size: 17,
+                color: AppColors.ink3,
+              ),
             ),
         ],
       ),
@@ -425,7 +439,9 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
                 const Spacer(),
                 Container(
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 8, vertical: 4),
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.white.withValues(alpha: 0.2),
                     borderRadius: BorderRadius.circular(999),
@@ -499,8 +515,11 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
                 children: [
                   const Padding(
                     padding: EdgeInsets.only(top: 1),
-                    child: Icon(Icons.auto_awesome_rounded,
-                        size: 14, color: Colors.white),
+                    child: Icon(
+                      Icons.auto_awesome_rounded,
+                      size: 14,
+                      color: Colors.white,
+                    ),
                   ),
                   const SizedBox(width: 7),
                   Expanded(
@@ -529,8 +548,11 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
                   ),
                 ),
                 const SizedBox(width: 4),
-                const Icon(Icons.arrow_forward_rounded,
-                    size: 16, color: Colors.white),
+                const Icon(
+                  Icons.arrow_forward_rounded,
+                  size: 16,
+                  color: Colors.white,
+                ),
               ],
             ),
           ],
@@ -571,7 +593,9 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
                     const SizedBox(width: 8),
                     Container(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 7, vertical: 3),
+                        horizontal: 7,
+                        vertical: 3,
+                      ),
                       decoration: BoxDecoration(
                         color: idol.tint,
                         borderRadius: BorderRadius.circular(999),
@@ -600,8 +624,11 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
             ),
           ),
           const SizedBox(width: 8),
-          const Icon(Icons.chevron_right_rounded,
-              size: 19, color: AppColors.ink3),
+          const Icon(
+            Icons.chevron_right_rounded,
+            size: 19,
+            color: AppColors.ink3,
+          ),
         ],
       ),
     );
@@ -612,8 +639,11 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
       padding: const EdgeInsets.symmetric(vertical: 50, horizontal: 20),
       child: Column(
         children: [
-          const Icon(PhosphorIconsRegular.magnifyingGlass,
-              size: 34, color: AppColors.hair2),
+          const Icon(
+            PhosphorIconsRegular.magnifyingGlass,
+            size: 34,
+            color: AppColors.hair2,
+          ),
           const SizedBox(height: 12),
           Text(
             'No one by that name yet.',

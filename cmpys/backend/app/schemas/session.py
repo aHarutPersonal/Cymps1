@@ -116,6 +116,7 @@ class IdolSuggestionItem(BaseModel):
     era: str
     relevance_summary: str
     wikidata_id: str | None = None
+    image_url: str | None = None
     domains: list[str] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=1.0, default=0.8)
 

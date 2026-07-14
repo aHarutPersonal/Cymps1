@@ -86,8 +86,12 @@ async def test_suggest_idols_returns_fallback_suggestions_when_llm_fails(monkeyp
     async def failing_generate(*args, **kwargs):
         raise RuntimeError("Gemini unavailable")
 
+    async def fake_photo(*, name, **kwargs):
+        return {"image_url": f"https://upload.wikimedia.org/{name}.jpg"}
+
     monkeypatch.setattr(sessions_api, "_get_session", fake_get_session)
     monkeypatch.setattr(sessions_api, "generate_with_grounding", failing_generate)
+    monkeypatch.setattr(sessions_api, "resolve_wikimedia_photo", fake_photo)
 
     response = await sessions_api.suggest_idols(
         session_id=session.id,
@@ -98,6 +102,7 @@ async def test_suggest_idols_returns_fallback_suggestions_when_llm_fails(monkeyp
     assert len(response.suggestions) == 3
     assert response.suggestions[0].name
     assert all(s.relevance_summary for s in response.suggestions)
+    assert all(s.image_url for s in response.suggestions)
 
 
 @pytest.mark.asyncio
@@ -120,6 +125,15 @@ async def test_suggest_idols_prefers_age_grounded_published_catalog(monkeypatch)
             domain=domain,
             status="published",
             quality_score=0.9,
+            image_url=f"https://upload.wikimedia.org/mentor-{index}.jpg",
+            image_source_url=(
+                f"https://commons.wikimedia.org/wiki/File:Mentor-{index}.jpg"
+            ),
+            image_license="CC BY-SA 4.0",
+            image_attribution_json={
+                "artist": "Test photographer",
+                "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+            },
         )
         idol.profile = IdolProfile(
             idol_id=idol.id,
@@ -202,6 +216,7 @@ async def test_suggest_idols_prefers_age_grounded_published_catalog(monkeypatch)
         "Business Mentor",
     ]
     assert all("By age 28" in item.relevance_summary for item in response.suggestions)
+    assert all(item.image_url for item in response.suggestions)
     assert db.committed is True
     assert len(session.idol_suggestions_json) == 3
 

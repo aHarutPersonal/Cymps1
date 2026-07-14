@@ -72,11 +72,7 @@ class CmpysMonogram extends StatelessWidget {
         shape: BoxShape.circle,
         boxShadow: ring
             ? [
-                BoxShadow(
-                  color: color,
-                  blurRadius: 0,
-                  spreadRadius: 3.5,
-                ),
+                BoxShadow(color: color, blurRadius: 0, spreadRadius: 3.5),
                 const BoxShadow(
                   color: AppColors.card,
                   blurRadius: 0,
@@ -109,6 +105,7 @@ class CmpysMentorAvatar extends StatelessWidget {
     super.key,
     required this.slug,
     required this.initials,
+    this.imageUrl,
     this.color = AppColors.green,
     this.tint = AppColors.greenSoft,
     this.size = 48,
@@ -117,6 +114,7 @@ class CmpysMentorAvatar extends StatelessWidget {
 
   final String slug;
   final String initials;
+  final String? imageUrl;
   final Color color;
   final Color tint;
   final double size;
@@ -124,6 +122,22 @@ class CmpysMentorAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final fallback = Center(
+      child: Text(
+        initials,
+        style: TextStyle(
+          fontFamily: AppTypography.h3.fontFamily,
+          fontWeight: FontWeight.w700,
+          fontSize: size * 0.36,
+          color: color,
+          letterSpacing: 0.2,
+        ),
+      ),
+    );
+    final explicitUrl = imageUrl?.trim();
+    final remoteUrl = explicitUrl != null && explicitUrl.isNotEmpty
+        ? explicitUrl
+        : (slug.startsWith('https://') ? slug : null);
     return Container(
       width: size,
       height: size,
@@ -133,22 +147,17 @@ class CmpysMentorAvatar extends StatelessWidget {
         shape: BoxShape.circle,
         border: border,
       ),
-      child: Image.asset(
-        'assets/images/mentors/$slug.png',
-        fit: BoxFit.cover,
-        errorBuilder: (_, _, _) => Center(
-          child: Text(
-            initials,
-            style: TextStyle(
-              fontFamily: AppTypography.h3.fontFamily,
-              fontWeight: FontWeight.w700,
-              fontSize: size * 0.36,
-              color: color,
-              letterSpacing: 0.2,
+      child: remoteUrl != null && remoteUrl.isNotEmpty
+          ? Image.network(
+              remoteUrl,
+              fit: BoxFit.cover,
+              errorBuilder: (_, _, _) => fallback,
+            )
+          : Image.asset(
+              'assets/images/mentors/$slug.png',
+              fit: BoxFit.cover,
+              errorBuilder: (_, _, _) => fallback,
             ),
-          ),
-        ),
-      ),
     );
   }
 }
@@ -228,17 +237,9 @@ class _CmpysButtonState extends State<CmpysButton> {
           border: Border.all(color: AppColors.hair2, width: 1.5),
         );
       case CmpysBtnVariant.soft:
-        return (
-          bg: AppColors.greenSoft,
-          fg: AppColors.green2,
-          border: null,
-        );
+        return (bg: AppColors.greenSoft, fg: AppColors.green2, border: null);
       case CmpysBtnVariant.ghost:
-        return (
-          bg: Colors.transparent,
-          fg: AppColors.ink2,
-          border: null,
-        );
+        return (bg: Colors.transparent, fg: AppColors.ink2, border: null);
       case CmpysBtnVariant.danger:
         return (
           bg: Colors.transparent,
@@ -601,7 +602,11 @@ class CmpysSegBar extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 
 class CmpysTypingDots extends StatefulWidget {
-  const CmpysTypingDots({super.key, this.color = AppColors.ink3, this.size = 7});
+  const CmpysTypingDots({
+    super.key,
+    this.color = AppColors.ink3,
+    this.size = 7,
+  });
   final Color color;
   final double size;
 
@@ -736,7 +741,10 @@ class _CmpysThinkFeedState extends State<CmpysThinkFeed> {
             builder: (_, t, child) {
               return Opacity(
                 opacity: t,
-                child: Transform.translate(offset: Offset(0, 10 * (1 - t)), child: child),
+                child: Transform.translate(
+                  offset: Offset(0, 10 * (1 - t)),
+                  child: child,
+                ),
               );
             },
             child: Row(
@@ -757,8 +765,9 @@ class _CmpysThinkFeedState extends State<CmpysThinkFeed> {
                       fontSize: 13.5,
                       height: 1.5,
                       color: last ? widget.color : dim,
-                      fontStyle:
-                          widget.italic ? FontStyle.italic : FontStyle.normal,
+                      fontStyle: widget.italic
+                          ? FontStyle.italic
+                          : FontStyle.normal,
                     ),
                   ),
                 ),
@@ -859,8 +868,7 @@ class _ToastWidgetState extends State<_ToastWidget>
               ),
             ),
             child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 17, vertical: 11),
+              padding: const EdgeInsets.symmetric(horizontal: 17, vertical: 11),
               decoration: BoxDecoration(
                 color: AppColors.ink,
                 borderRadius: BorderRadius.circular(14),

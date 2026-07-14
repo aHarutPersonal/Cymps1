@@ -57,6 +57,26 @@ _client_api_key: str | None = None
 _client_event_loop: asyncio.AbstractEventLoop | None = None
 
 
+def _client_session_matches_loop(
+    client: genai.Client,
+    loop: asyncio.AbstractEventLoop,
+) -> bool:
+    """Return whether the SDK's live aiohttp session belongs to ``loop``.
+
+    google-genai lazily creates and caches an aiohttp session. Its own reuse
+    guard replaces sessions whose loop is closed, but not sessions attached to
+    a different loop that is still open. That produces aiohttp's misleading
+    ``Timeout context manager should be used inside a task`` error even though
+    the caller is inside a task. Inspecting the private transport is deliberate
+    containment for that upstream lifecycle gap; absent/lazy sessions are safe.
+    """
+    api_client = getattr(client, "_api_client", None)
+    session = getattr(api_client, "_aiohttp_session", None)
+    if session is None or getattr(session, "closed", False):
+        return True
+    return getattr(session, "_loop", loop) is loop
+
+
 def _gemini_client() -> genai.Client:
     global _client_singleton, _client_api_key, _client_event_loop
     loop = asyncio.get_running_loop()
@@ -64,6 +84,7 @@ def _gemini_client() -> genai.Client:
         _client_singleton is None
         or _client_api_key != settings.gemini_api_key
         or _client_event_loop is not loop
+        or not _client_session_matches_loop(_client_singleton, loop)
     ):
         _client_singleton = genai.Client(api_key=settings.gemini_api_key)
         _client_api_key = settings.gemini_api_key

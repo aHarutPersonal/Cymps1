@@ -289,8 +289,11 @@ void main() {
 
       expect(repo.jobCalls, 1);
       expect(repo.calls, 2);
+      expect(find.text(_failedJob.errorMessage!), findsNothing);
       expect(
-        find.text('This lesson failed its final quality check.'),
+        find.text(
+          'This lesson could not be prepared. Please generate it again.',
+        ),
         findsOneWidget,
       );
       expect(find.text('Generate again'), findsOneWidget);

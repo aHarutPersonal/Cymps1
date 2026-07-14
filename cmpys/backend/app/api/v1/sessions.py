@@ -57,6 +57,7 @@ from app.services.comparison.scoring import generate_comparison_scores
 from app.services.content_resources import attach_content_resources_to_materials
 from app.services.llm import get_llm_client
 from app.services.llm.prompt_loader import load_and_render, sanitize_untrusted_input
+from app.services.idol_photos import is_verified_idol_photo, resolve_wikimedia_photo
 from app.services.transcripts import build_chat_history_json
 
 logger = logging.getLogger("cmpys.api.sessions")
@@ -153,6 +154,43 @@ def _fallback_idol_suggestions(interests: list[str]) -> list["IdolSuggestionItem
         )
         for name, era, domains, summary in ranked[:3]
     ]
+
+
+async def _attach_suggestion_photos(
+    suggestions: list["IdolSuggestionItem"],
+) -> list["IdolSuggestionItem"]:
+    """Attach verified Commons portraits without serial lookup latency.
+
+    Published catalog suggestions already carry their verified image URL. LLM,
+    fallback, and legacy cached suggestions are resolved by stable Wikidata id
+    when available and by name otherwise. Resolution returns only
+    license-verified Wikimedia photos; a miss remains ``None`` so the client
+    can use its monogram fallback instead of an untrusted image.
+    """
+
+    async def attach(suggestion: IdolSuggestionItem) -> IdolSuggestionItem:
+        if suggestion.image_url:
+            return suggestion
+        try:
+            photo = await resolve_wikimedia_photo(
+                name=suggestion.name,
+                wikidata_qid=suggestion.wikidata_id,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[SESSION] Portrait resolution failed for %s: %s",
+                suggestion.name,
+                exc,
+            )
+            return suggestion
+        image_url = str((photo or {}).get("image_url") or "").strip()
+        return (
+            suggestion.model_copy(update={"image_url": image_url})
+            if image_url
+            else suggestion
+        )
+
+    return list(await asyncio.gather(*(attach(item) for item in suggestions)))
 
 
 def _match_terms(values: list[str]) -> tuple[set[str], set[str]]:
@@ -295,6 +333,7 @@ async def _catalog_idol_suggestions(
                     era=_idol_era(idol),
                     relevance_summary=relevance,
                     wikidata_id=wikidata_id,
+                    image_url=(idol.image_url if is_verified_idol_photo(idol) else None),
                     domains=primary_domains[:4],
                     confidence=round(confidence, 2),
                 ),
@@ -675,7 +714,16 @@ async def suggest_idols(
             [IdolSuggestionItem(**s) for s in session.idol_suggestions_json]
         )
         if len(cached) >= 3:
-            if len(cached) != len(session.idol_suggestions_json):
+            cached = await _attach_suggestion_photos(cached)
+            if (
+                len(cached) != len(session.idol_suggestions_json)
+                or any(
+                    cached_item.model_dump(mode="json") != stored_item
+                    for cached_item, stored_item in zip(
+                        cached, session.idol_suggestions_json, strict=False
+                    )
+                )
+            ):
                 session.idol_suggestions_json = [
                     suggestion.model_dump(mode="json") for suggestion in cached
                 ]
@@ -701,6 +749,7 @@ async def suggest_idols(
         user_age=session.user_age,
     )
     if len(catalog_suggestions) >= 3:
+        catalog_suggestions = await _attach_suggestion_photos(catalog_suggestions)
         session.idol_suggestions_json = [
             suggestion.model_dump(mode="json") for suggestion in catalog_suggestions
         ]
@@ -753,12 +802,14 @@ async def suggest_idols(
         logger.error(f"[SESSION] Idol suggestion generation failed ({e}); using fallback")
 
     if len(suggestions) >= 3:
+        suggestions = await _attach_suggestion_photos(suggestions)
         # Cache only real LLM output — the static fallback should not become
         # sticky; a failed generation gets retried on the next call.
         session.idol_suggestions_json = [s.model_dump(mode="json") for s in suggestions]
         await db.commit()
     else:
         suggestions = _fallback_idol_suggestions(session.user_interests or [])
+        suggestions = await _attach_suggestion_photos(suggestions)
 
     logger.info(f"[SESSION] Generated {len(suggestions)} idol suggestions for session {session_id}")
     return IdolSuggestionsResponse(suggestions=suggestions)

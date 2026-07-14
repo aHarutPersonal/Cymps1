@@ -39,6 +39,8 @@ class PlanItemDetailScreen extends ConsumerStatefulWidget {
 class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
   static const _foregroundPollBudget = Duration(minutes: 2);
   static const _maxForegroundPollAttempts = 20;
+  static const _detailFailureMessage =
+      'This lesson could not be prepared. Please generate it again.';
 
   PlanItemDetailed? _detailed;
   PlanJobStatus? _detailJob;
@@ -100,9 +102,7 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
           // failed response for an older id can be a brief post-retry race and
           // must not replace the active job returned by the POST.
           _activeDetailJobId = null;
-          _terminalDetailError =
-              detailed.detailsError ??
-              'This lesson could not be prepared. Please generate it again.';
+          _terminalDetailError = detailed.detailsError ?? _detailFailureMessage;
         }
       });
       if (_shouldPollDetails(detailed)) {
@@ -209,13 +209,13 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
       if (!mounted) return;
       setState(() => _detailJob = job);
       if (job.isFailed) {
-        final reportedError = job.errorMessage?.trim();
         setState(() {
           _activeDetailJobId = null;
-          _terminalDetailError =
-              reportedError != null && reportedError.isNotEmpty
-              ? reportedError
-              : 'This lesson could not be prepared. Please generate it again.';
+          // Job errors are operational diagnostics (provider names, exception
+          // text, database details) and must not be rendered to end users.
+          // The detailed endpoint supplies product copy when available; keep
+          // this safe fallback terminal if that refresh fails or races.
+          _terminalDetailError = _detailFailureMessage;
         });
         _poll?.cancel();
         // Prefer the detailed endpoint's user-facing error when it is

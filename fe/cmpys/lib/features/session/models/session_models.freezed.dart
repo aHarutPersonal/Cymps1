@@ -637,6 +637,7 @@ mixin _$IdolSuggestion {
   String get era => throw _privateConstructorUsedError;
   String get relevanceSummary => throw _privateConstructorUsedError;
   String? get wikidataId => throw _privateConstructorUsedError;
+  String? get imageUrl => throw _privateConstructorUsedError;
   List<String> get domains => throw _privateConstructorUsedError;
   double get confidence => throw _privateConstructorUsedError;
 
@@ -659,6 +660,7 @@ abstract class $IdolSuggestionCopyWith<$Res> {
     String era,
     String relevanceSummary,
     String? wikidataId,
+    String? imageUrl,
     List<String> domains,
     double confidence,
   });
@@ -683,6 +685,7 @@ class _$IdolSuggestionCopyWithImpl<$Res, $Val extends IdolSuggestion>
     Object? era = null,
     Object? relevanceSummary = null,
     Object? wikidataId = freezed,
+    Object? imageUrl = freezed,
     Object? domains = null,
     Object? confidence = null,
   }) {
@@ -703,6 +706,10 @@ class _$IdolSuggestionCopyWithImpl<$Res, $Val extends IdolSuggestion>
             wikidataId: freezed == wikidataId
                 ? _value.wikidataId
                 : wikidataId // ignore: cast_nullable_to_non_nullable
+                      as String?,
+            imageUrl: freezed == imageUrl
+                ? _value.imageUrl
+                : imageUrl // ignore: cast_nullable_to_non_nullable
                       as String?,
             domains: null == domains
                 ? _value.domains
@@ -732,6 +739,7 @@ abstract class _$$IdolSuggestionImplCopyWith<$Res>
     String era,
     String relevanceSummary,
     String? wikidataId,
+    String? imageUrl,
     List<String> domains,
     double confidence,
   });
@@ -755,6 +763,7 @@ class __$$IdolSuggestionImplCopyWithImpl<$Res>
     Object? era = null,
     Object? relevanceSummary = null,
     Object? wikidataId = freezed,
+    Object? imageUrl = freezed,
     Object? domains = null,
     Object? confidence = null,
   }) {
@@ -775,6 +784,10 @@ class __$$IdolSuggestionImplCopyWithImpl<$Res>
         wikidataId: freezed == wikidataId
             ? _value.wikidataId
             : wikidataId // ignore: cast_nullable_to_non_nullable
+                  as String?,
+        imageUrl: freezed == imageUrl
+            ? _value.imageUrl
+            : imageUrl // ignore: cast_nullable_to_non_nullable
                   as String?,
         domains: null == domains
             ? _value._domains
@@ -797,6 +810,7 @@ class _$IdolSuggestionImpl extends _IdolSuggestion {
     required this.era,
     required this.relevanceSummary,
     this.wikidataId,
+    this.imageUrl,
     final List<String> domains = const [],
     this.confidence = 0.8,
   }) : _domains = domains,
@@ -810,6 +824,8 @@ class _$IdolSuggestionImpl extends _IdolSuggestion {
   final String relevanceSummary;
   @override
   final String? wikidataId;
+  @override
+  final String? imageUrl;
   final List<String> _domains;
   @override
   @JsonKey()
@@ -825,7 +841,7 @@ class _$IdolSuggestionImpl extends _IdolSuggestion {
 
   @override
   String toString() {
-    return 'IdolSuggestion(name: $name, era: $era, relevanceSummary: $relevanceSummary, wikidataId: $wikidataId, domains: $domains, confidence: $confidence)';
+    return 'IdolSuggestion(name: $name, era: $era, relevanceSummary: $relevanceSummary, wikidataId: $wikidataId, imageUrl: $imageUrl, domains: $domains, confidence: $confidence)';
   }
 
   @override
@@ -839,6 +855,8 @@ class _$IdolSuggestionImpl extends _IdolSuggestion {
                 other.relevanceSummary == relevanceSummary) &&
             (identical(other.wikidataId, wikidataId) ||
                 other.wikidataId == wikidataId) &&
+            (identical(other.imageUrl, imageUrl) ||
+                other.imageUrl == imageUrl) &&
             const DeepCollectionEquality().equals(other._domains, _domains) &&
             (identical(other.confidence, confidence) ||
                 other.confidence == confidence));
@@ -851,6 +869,7 @@ class _$IdolSuggestionImpl extends _IdolSuggestion {
     era,
     relevanceSummary,
     wikidataId,
+    imageUrl,
     const DeepCollectionEquality().hash(_domains),
     confidence,
   );
@@ -873,6 +892,7 @@ abstract class _IdolSuggestion extends IdolSuggestion {
     required final String era,
     required final String relevanceSummary,
     final String? wikidataId,
+    final String? imageUrl,
     final List<String> domains,
     final double confidence,
   }) = _$IdolSuggestionImpl;
@@ -886,6 +906,8 @@ abstract class _IdolSuggestion extends IdolSuggestion {
   String get relevanceSummary;
   @override
   String? get wikidataId;
+  @override
+  String? get imageUrl;
   @override
   List<String> get domains;
   @override

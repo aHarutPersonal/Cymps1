@@ -19,8 +19,12 @@ class AuthLoading extends AuthState {
 }
 
 class AuthAuthenticated extends AuthState {
-  const AuthAuthenticated({required this.accessToken});
+  const AuthAuthenticated({
+    required this.accessToken,
+    this.isNewRegistration = false,
+  });
   final String accessToken;
+  final bool isNewRegistration;
 }
 
 class AuthUnauthenticated extends AuthState {
@@ -103,7 +107,10 @@ class AuthController extends StateNotifier<AuthState> {
         password: password,
         fullName: fullName,
       );
-      state = AuthAuthenticated(accessToken: response.accessToken);
+      state = AuthAuthenticated(
+        accessToken: response.accessToken,
+        isNewRegistration: true,
+      );
       return response;
     } on ApiError catch (e) {
       state = AuthError(message: e.message);

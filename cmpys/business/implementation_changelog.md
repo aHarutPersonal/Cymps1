@@ -8,6 +8,8 @@
 
 - Fixed deferred book guides and prefetched lesson artifacts failing inside Celery with `Timeout context manager should be used inside a task`; all catalog entry points now reuse the worker-local event loop, and the shared Gemini client is recreated if the active loop changes.
 - Preserved the warm connection pool on stable workers while preventing an async HTTP session from leaking across event loops.
+- Hardened interactive lesson regeneration against google-genai retaining an aiohttp session on a different still-live loop, and stopped rendering raw provider exceptions in the plan-detail UI.
+- Added verified Wikimedia portraits to catalog, grounded, fallback, and legacy cached mentor suggestions; Flutter now persists and renders those remote portraits with its existing monogram fallback.
 - Made failed catalog work schedule its own bounded retry in addition to the durable Beat recovery path, and added Celery Beat to the local launcher so development matches production retry behavior.
 - Replaced repeatable “Check guide” requests with a shared, cached, single-flight resolver and sparse bounded polling across both the mission page and lesson reader; the action is disabled as “Preparing…” while one check is active.
 - Live recovery of the reported material rejected a thin 2,080-word first draft, completed the quality fallback, and published a 3,480-word guide with the full quality report passing.

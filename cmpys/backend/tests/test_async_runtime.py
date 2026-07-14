@@ -49,3 +49,44 @@ def test_gemini_client_is_reused_only_on_its_own_event_loop(monkeypatch):
     assert second is second_again
     assert first is not second
     assert created == [first, second]
+
+
+def test_gemini_client_replaces_sdk_session_bound_to_wrong_live_loop(monkeypatch):
+    created = []
+
+    class FakeClient:
+        def __init__(self, *, api_key):
+            self.api_key = api_key
+            self._api_client = type("ApiClient", (), {"_aiohttp_session": None})()
+            created.append(self)
+
+    class FakeSession:
+        closed = False
+
+        def __init__(self, loop):
+            self._loop = loop
+
+    monkeypatch.setattr(gemini.genai, "Client", FakeClient)
+    monkeypatch.setattr(gemini, "_client_singleton", None)
+    monkeypatch.setattr(gemini, "_client_api_key", None)
+    monkeypatch.setattr(gemini, "_client_event_loop", None)
+
+    first_loop = asyncio.new_event_loop()
+    active_loop = asyncio.new_event_loop()
+    try:
+        # Reproduce the SDK state behind the production exception: our client
+        # marker says the active loop is correct, while its cached transport is
+        # still attached to another live loop.
+        first = active_loop.run_until_complete(_get_gemini_client())
+        first._api_client._aiohttp_session = FakeSession(first_loop)
+        replacement = active_loop.run_until_complete(_get_gemini_client())
+    finally:
+        first_loop.close()
+        active_loop.close()
+
+    assert replacement is not first
+    assert created == [first, replacement]
+
+
+async def _get_gemini_client():
+    return gemini._gemini_client()

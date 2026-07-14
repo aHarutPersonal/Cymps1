@@ -30,6 +30,7 @@ class CmpysIdol {
     this.pillars = const [],
     this.featured = false,
     this.wikidataId,
+    this.imageUrl,
   });
 
   final String id;
@@ -49,9 +50,18 @@ class CmpysIdol {
   final List<String> pillars;
   final bool featured;
   final String? wikidataId;
+  final String? imageUrl;
 
-  CmpysIdol withWikidataId(String? value) {
-    if (value == null || value.isEmpty || value == wikidataId) return this;
+  CmpysIdol withSuggestionIdentity({String? wikidataId, String? imageUrl}) {
+    final nextWikidataId = wikidataId == null || wikidataId.isEmpty
+        ? this.wikidataId
+        : wikidataId;
+    final nextImageUrl = imageUrl == null || imageUrl.isEmpty
+        ? this.imageUrl
+        : imageUrl;
+    if (nextWikidataId == this.wikidataId && nextImageUrl == this.imageUrl) {
+      return this;
+    }
     return CmpysIdol(
       id: id,
       slug: slug,
@@ -69,9 +79,13 @@ class CmpysIdol {
       atYourAge: atYourAge,
       pillars: pillars,
       featured: featured,
-      wikidataId: value,
+      wikidataId: nextWikidataId,
+      imageUrl: nextImageUrl,
     );
   }
+
+  CmpysIdol withWikidataId(String? value) =>
+      withSuggestionIdentity(wikidataId: value);
 }
 
 const cmpysIdols = <CmpysIdol>[
@@ -142,8 +156,7 @@ const cmpysIdols = <CmpysIdol>[
     tag: 'America’s first billionaire',
     blurb:
         'Built Standard Oil into an empire through ruthless discipline and methodical reinvestment.',
-    quote:
-        'I always tried to turn every disaster into an opportunity.',
+    quote: 'I always tried to turn every disaster into an opportunity.',
   ),
   CmpysIdol(
     id: 'rothschild',
@@ -159,8 +172,7 @@ const cmpysIdols = <CmpysIdol>[
     tag: 'Founded a financial dynasty',
     blurb:
         'Turned trust between five sons in five capitals into the most powerful private bank of his age.',
-    quote:
-        'Information is the source of all wealth.',
+    quote: 'Information is the source of all wealth.',
   ),
   CmpysIdol(
     id: 'musk',
@@ -176,7 +188,8 @@ const cmpysIdols = <CmpysIdol>[
     tag: 'First-principles operator',
     blurb:
         'Builds at the intersection of physics, code, and willpower, on timescales few others can sustain.',
-    quote: 'When something is important enough, you do it even if the odds are not in your favor.',
+    quote:
+        'When something is important enough, you do it even if the odds are not in your favor.',
   ),
 ];
 
@@ -283,7 +296,8 @@ const cmpysComparison = CmpysComparison(
       you: 22,
       idol: 70,
       youNote: 'Small savings, mostly idle in a checking account.',
-      idolNote: 'Had compounded early earnings into a meaningful personal stake.',
+      idolNote:
+          'Had compounded early earnings into a meaningful personal stake.',
     ),
     CmpysDimension(
       id: 'knowledge',
@@ -315,8 +329,7 @@ const cmpysComparison = CmpysComparison(
       you: 52,
       idol: 78,
       youNote: 'You know the direction, not yet the system.',
-      idolNote:
-          'Had a written philosophy he could state in one paragraph.',
+      idolNote: 'Had a written philosophy he could state in one paragraph.',
     ),
   ],
   milestones: [
@@ -327,9 +340,18 @@ const cmpysComparison = CmpysComparison(
     CmpysMilestone('m5', 'Built a daily reading & review habit'),
   ],
   strengths: [
-    CmpysStrength('s1', 'You started ten years earlier than most realize they should'),
-    CmpysStrength('s2', 'You have access to information Warren couldn’t dream of'),
-    CmpysStrength('s3', 'Your curiosity is already pointed in the right direction'),
+    CmpysStrength(
+      's1',
+      'You started ten years earlier than most realize they should',
+    ),
+    CmpysStrength(
+      's2',
+      'You have access to information Warren couldn’t dream of',
+    ),
+    CmpysStrength(
+      's3',
+      'Your curiosity is already pointed in the right direction',
+    ),
   ],
 );
 
@@ -438,7 +460,8 @@ const cmpysPlan = CmpysPlan(
           kind: CmpysItemKind.task,
           repeat: CmpysRepeat.once,
           minutes: 10,
-          desc: 'Capture the questions you want answered. Curiosity, organized.',
+          desc:
+              'Capture the questions you want answered. Curiosity, organized.',
         ),
       ],
     ),
@@ -456,7 +479,8 @@ const cmpysPlan = CmpysPlan(
           kind: CmpysItemKind.task,
           repeat: CmpysRepeat.once,
           minutes: 15,
-          desc: 'Pay yourself first — before you can spend it. Even \$20 builds the muscle.',
+          desc:
+              'Pay yourself first — before you can spend it. Even \$20 builds the muscle.',
         ),
         CmpysPlanItem(
           id: 'm2',
@@ -482,7 +506,8 @@ const cmpysPlan = CmpysPlan(
           repeat: CmpysRepeat.once,
           minutes: 5,
           tag: 'Article',
-          desc: 'Write the rules you’ll live by, so you don’t decide them in a panic.',
+          desc:
+              'Write the rules you’ll live by, so you don’t decide them in a panic.',
         ),
       ],
     ),
@@ -537,8 +562,7 @@ const cmpysPlan = CmpysPlan(
           kind: CmpysItemKind.task,
           repeat: CmpysRepeat.once,
           minutes: 10,
-          desc:
-              'These become your informal board. We’ll reach out next.',
+          desc: 'These become your informal board. We’ll reach out next.',
         ),
         CmpysPlanItem(
           id: 'n2',
@@ -605,7 +629,10 @@ const cmpysIdeas = <CmpysIdea>[
     tone: AppColors.green,
     likes: 1284,
     comments: [
-      (who: 'Dana K.', text: 'Read this the morning I almost panic-sold. Held instead.'),
+      (
+        who: 'Dana K.',
+        text: 'Read this the morning I almost panic-sold. Held instead.',
+      ),
       (who: 'Marcus', text: 'Patience is a position.'),
     ],
   ),
@@ -617,9 +644,7 @@ const cmpysIdeas = <CmpysIdea>[
     tag: 'Patience',
     tone: AppColors.lilac,
     likes: 980,
-    comments: [
-      (who: 'Priya', text: 'Planting my tree this week 🌱'),
-    ],
+    comments: [(who: 'Priya', text: 'Planting my tree this week 🌱')],
   ),
   CmpysIdea(
     id: 'i3',
@@ -636,9 +661,7 @@ const cmpysIdeas = <CmpysIdea>[
     tag: 'Learning',
     tone: AppColors.clay,
     likes: 1512,
-    comments: [
-      (who: 'Theo', text: '25 pages a day, day 14. It’s working.'),
-    ],
+    comments: [(who: 'Theo', text: '25 pages a day, day 14. It’s working.')],
   ),
   CmpysIdea(
     id: 'i5',
@@ -651,7 +674,8 @@ const cmpysIdeas = <CmpysIdea>[
   ),
   CmpysIdea(
     id: 'i6',
-    text: 'It takes 20 years to build a reputation and five minutes to ruin it.',
+    text:
+        'It takes 20 years to build a reputation and five minutes to ruin it.',
     author: 'Warren Buffett',
     tag: 'Character',
     tone: AppColors.blkInk,
@@ -691,23 +715,24 @@ const cmpysPlaceholderIdol = CmpysIdol(
 /// Serialize an idol for persistence (colors as ARGB ints). Used by the store
 /// so an LLM-suggested idol survives an app restart, not just catalog ones.
 Map<String, dynamic> cmpysIdolToJson(CmpysIdol i) => {
-      'id': i.id,
-      'slug': i.slug,
-      'name': i.name,
-      'short': i.short,
-      'initials': i.initials,
-      'title': i.title,
-      'era': i.era,
-      'field': i.field,
-      'color': i.color.toARGB32(),
-      'tint': i.tint.toARGB32(),
-      'tag': i.tag,
-      'blurb': i.blurb,
-      'quote': i.quote,
-      'atYourAge': i.atYourAge,
-      'pillars': i.pillars,
-      if (i.wikidataId != null) 'wikidataId': i.wikidataId,
-    };
+  'id': i.id,
+  'slug': i.slug,
+  'name': i.name,
+  'short': i.short,
+  'initials': i.initials,
+  'title': i.title,
+  'era': i.era,
+  'field': i.field,
+  'color': i.color.toARGB32(),
+  'tint': i.tint.toARGB32(),
+  'tag': i.tag,
+  'blurb': i.blurb,
+  'quote': i.quote,
+  'atYourAge': i.atYourAge,
+  'pillars': i.pillars,
+  if (i.wikidataId != null) 'wikidataId': i.wikidataId,
+  if (i.imageUrl != null) 'imageUrl': i.imageUrl,
+};
 
 CmpysIdol cmpysIdolFromJson(Map<String, dynamic> j) {
   // Prefer the rich catalog entry when the id matches (keeps portrait asset).
@@ -733,9 +758,10 @@ CmpysIdol cmpysIdolFromJson(Map<String, dynamic> j) {
     blurb: j['blurb'] as String? ?? '',
     quote: j['quote'] as String? ?? '',
     atYourAge: j['atYourAge'] as String?,
-    pillars: (j['pillars'] as List?)?.map((e) => e.toString()).toList() ??
-        const [],
+    pillars:
+        (j['pillars'] as List?)?.map((e) => e.toString()).toList() ?? const [],
     wikidataId: j['wikidataId'] as String?,
+    imageUrl: j['imageUrl'] as String?,
   );
 }
 
@@ -774,10 +800,17 @@ CmpysIdol cmpysIdolFromSuggestion({
   required String summary,
   required List<String> domains,
   String? wikidataId,
+  String? imageUrl,
 }) {
-  final match = cmpysIdols
-      .where((i) => i.name.toLowerCase().trim() == name.toLowerCase().trim());
-  if (match.isNotEmpty) return match.first.withWikidataId(wikidataId);
+  final match = cmpysIdols.where(
+    (i) => i.name.toLowerCase().trim() == name.toLowerCase().trim(),
+  );
+  if (match.isNotEmpty) {
+    return match.first.withSuggestionIdentity(
+      wikidataId: wikidataId,
+      imageUrl: imageUrl,
+    );
+  }
 
   const palette = <List<Color>>[
     [AppColors.green, AppColors.greenSoft],
@@ -788,8 +821,7 @@ CmpysIdol cmpysIdolFromSuggestion({
     [AppColors.mint, AppColors.mintSoft],
     [AppColors.pink, AppColors.pinkSoft],
   ];
-  final idx =
-      name.codeUnits.fold<int>(0, (a, b) => a + b) % palette.length;
+  final idx = name.codeUnits.fold<int>(0, (a, b) => a + b) % palette.length;
   final pair = palette[idx];
   final field = domains.isNotEmpty ? _cap(domains.first) : 'Mastery';
   final cleanSummary = summary.trim().isEmpty
@@ -798,7 +830,10 @@ CmpysIdol cmpysIdolFromSuggestion({
 
   return CmpysIdol(
     id: name.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '_'),
-    slug: '__llm__', // no asset → monogram fallback
+    // Remote suggestions keep the verified portrait URL in both the explicit
+    // field and slug for compatibility with avatar call sites that predate
+    // network portraits. CmpysMentorAvatar recognizes HTTPS slugs.
+    slug: imageUrl?.trim().isNotEmpty == true ? imageUrl!.trim() : '__llm__',
     name: name,
     short: name.split(' ').last,
     initials: _initialsFromName(name),
@@ -815,6 +850,7 @@ CmpysIdol cmpysIdolFromSuggestion({
     atYourAge: null,
     pillars: domains.map(_cap).take(3).toList(),
     wikidataId: wikidataId,
+    imageUrl: imageUrl,
   );
 }
 
@@ -826,8 +862,7 @@ String _initialsFromName(String name) {
       .toUpperCase();
 }
 
-String _cap(String s) =>
-    s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
+String _cap(String s) => s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
 
 /// Thoughts shown during the brief "LLM is thinking" overlay before discovery
 /// renders. Adapts to the user's interests when present.
@@ -893,29 +928,41 @@ const cmpysReadings = <String, CmpysReading>{
     author: 'CMPYS Editorial',
     body: [
       CmpysReadingBlock(
-          CmpysReadingBlockKind.heading, 'Reading for judgment, not for finishing'),
+        CmpysReadingBlockKind.heading,
+        'Reading for judgment, not for finishing',
+      ),
       CmpysReadingBlock(
-          CmpysReadingBlockKind.paragraph,
-          'Most people read to reach the last page. Warren Buffett reads to change how he thinks. The distinction sounds small. It is everything.'),
+        CmpysReadingBlockKind.paragraph,
+        'Most people read to reach the last page. Warren Buffett reads to change how he thinks. The distinction sounds small. It is everything.',
+      ),
       CmpysReadingBlock(
-          CmpysReadingBlockKind.paragraph,
-          'He estimates he spends 80% of his working day reading. Not skimming — reading. Annual reports, newspapers, biographies, and the same handful of investing books, returned to again and again until the ideas became reflexes.'),
+        CmpysReadingBlockKind.paragraph,
+        'He estimates he spends 80% of his working day reading. Not skimming — reading. Annual reports, newspapers, biographies, and the same handful of investing books, returned to again and again until the ideas became reflexes.',
+      ),
       CmpysReadingBlock(
-          CmpysReadingBlockKind.quote, 'I just sit in my office and read all day.'),
+        CmpysReadingBlockKind.quote,
+        'I just sit in my office and read all day.',
+      ),
       CmpysReadingBlock(
-          CmpysReadingBlockKind.heading, 'Three habits you can borrow today'),
+        CmpysReadingBlockKind.heading,
+        'Three habits you can borrow today',
+      ),
       CmpysReadingBlock(
-          CmpysReadingBlockKind.paragraph,
-          'First: read slowly enough to argue with the author. If you never disagree, you’re not reading — you’re absorbing.'),
+        CmpysReadingBlockKind.paragraph,
+        'First: read slowly enough to argue with the author. If you never disagree, you’re not reading — you’re absorbing.',
+      ),
       CmpysReadingBlock(
-          CmpysReadingBlockKind.paragraph,
-          'Second: re-read the few things that matter rather than chasing the many that don’t. Depth compounds; breadth distracts.'),
+        CmpysReadingBlockKind.paragraph,
+        'Second: re-read the few things that matter rather than chasing the many that don’t. Depth compounds; breadth distracts.',
+      ),
       CmpysReadingBlock(
-          CmpysReadingBlockKind.paragraph,
-          'Third: keep a notebook of what surprised you. Surprise is the sound of a model updating.'),
+        CmpysReadingBlockKind.paragraph,
+        'Third: keep a notebook of what surprised you. Surprise is the sound of a model updating.',
+      ),
       CmpysReadingBlock(
-          CmpysReadingBlockKind.paragraph,
-          'Start with 25 pages a day. In a year that’s roughly 30 books — more than most of the people you’ll ever compete with.'),
+        CmpysReadingBlockKind.paragraph,
+        'Start with 25 pages a day. In a year that’s roughly 30 books — more than most of the people you’ll ever compete with.',
+      ),
     ],
   ),
   'm4': CmpysReading(
@@ -925,16 +972,26 @@ const cmpysReadings = <String, CmpysReading>{
     minutes: 5,
     author: 'CMPYS Editorial',
     body: [
-      CmpysReadingBlock(CmpysReadingBlockKind.heading,
-          'Decide the rules before you need them'),
-      CmpysReadingBlock(CmpysReadingBlockKind.paragraph,
-          'In a calm moment, money decisions are easy. In a panic, they’re nearly impossible. The solution is to decide your rules now, in writing, while you’re thinking clearly.'),
-      CmpysReadingBlock(CmpysReadingBlockKind.paragraph,
-          'Warren can state his entire philosophy in a sentence or two. That clarity is what lets him act when everyone else freezes.'),
-      CmpysReadingBlock(CmpysReadingBlockKind.quote,
-          'Rule No. 1: Never lose money. Rule No. 2: Never forget Rule No. 1.'),
-      CmpysReadingBlock(CmpysReadingBlockKind.paragraph,
-          'Write your own paragraph. What will you always do? What will you never do? How much can you lose without losing sleep? Keep it where you’ll see it.'),
+      CmpysReadingBlock(
+        CmpysReadingBlockKind.heading,
+        'Decide the rules before you need them',
+      ),
+      CmpysReadingBlock(
+        CmpysReadingBlockKind.paragraph,
+        'In a calm moment, money decisions are easy. In a panic, they’re nearly impossible. The solution is to decide your rules now, in writing, while you’re thinking clearly.',
+      ),
+      CmpysReadingBlock(
+        CmpysReadingBlockKind.paragraph,
+        'Warren can state his entire philosophy in a sentence or two. That clarity is what lets him act when everyone else freezes.',
+      ),
+      CmpysReadingBlock(
+        CmpysReadingBlockKind.quote,
+        'Rule No. 1: Never lose money. Rule No. 2: Never forget Rule No. 1.',
+      ),
+      CmpysReadingBlock(
+        CmpysReadingBlockKind.paragraph,
+        'Write your own paragraph. What will you always do? What will you never do? How much can you lose without losing sleep? Keep it where you’ll see it.',
+      ),
     ],
   ),
   'n2': CmpysReading(
@@ -945,16 +1002,26 @@ const cmpysReadings = <String, CmpysReading>{
     author: 'CMPYS Editorial',
     body: [
       CmpysReadingBlock(CmpysReadingBlockKind.heading, 'Give before you ask'),
-      CmpysReadingBlock(CmpysReadingBlockKind.paragraph,
-          'The fastest way to lose a potential mentor is to open with a demand on their time. The fastest way to earn one is to be useful first, and specific second.'),
-      CmpysReadingBlock(CmpysReadingBlockKind.paragraph,
-          'Buffett wrote to Benjamin Graham, took his class, worked for him for free when offered nothing else. He made himself worth mentoring.'),
-      CmpysReadingBlock(CmpysReadingBlockKind.heading,
-          'A message that actually works'),
-      CmpysReadingBlock(CmpysReadingBlockKind.paragraph,
-          'Be brief. Reference something specific they made or said. Ask one precise question they can answer in two minutes. Make it effortless to say yes.'),
-      CmpysReadingBlock(CmpysReadingBlockKind.paragraph,
-          'Then — this is the part people skip — report back what you did with their advice. Nothing earns a second conversation like evidence the first one mattered.'),
+      CmpysReadingBlock(
+        CmpysReadingBlockKind.paragraph,
+        'The fastest way to lose a potential mentor is to open with a demand on their time. The fastest way to earn one is to be useful first, and specific second.',
+      ),
+      CmpysReadingBlock(
+        CmpysReadingBlockKind.paragraph,
+        'Buffett wrote to Benjamin Graham, took his class, worked for him for free when offered nothing else. He made himself worth mentoring.',
+      ),
+      CmpysReadingBlock(
+        CmpysReadingBlockKind.heading,
+        'A message that actually works',
+      ),
+      CmpysReadingBlock(
+        CmpysReadingBlockKind.paragraph,
+        'Be brief. Reference something specific they made or said. Ask one precise question they can answer in two minutes. Make it effortless to say yes.',
+      ),
+      CmpysReadingBlock(
+        CmpysReadingBlockKind.paragraph,
+        'Then — this is the part people skip — report back what you did with their advice. Nothing earns a second conversation like evidence the first one mattered.',
+      ),
     ],
   ),
 };
@@ -1062,8 +1129,8 @@ class CmpysOnboardingDraft {
     Set<String>? interests,
     this.goalId,
     Map<String, String>? intakeAnswers,
-  })  : interests = interests ?? <String>{},
-        intakeAnswers = intakeAnswers ?? <String, String>{};
+  }) : interests = interests ?? <String>{},
+       intakeAnswers = intakeAnswers ?? <String, String>{};
 
   String name;
   int age;
