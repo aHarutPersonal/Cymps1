@@ -438,7 +438,7 @@ class OpenAILLMClient(BaseLLMClient):
     
     # Singleton client instance for connection reuse
     _client_instances: dict[
-        tuple[str, str, float, asyncio.AbstractEventLoop],
+        tuple[str, str, float, int, asyncio.AbstractEventLoop],
         "openai.AsyncOpenAI",
     ] = {}
     
@@ -466,10 +466,14 @@ class OpenAILLMClient(BaseLLMClient):
         import httpx
         
         loop = asyncio.get_running_loop()
+        # Yunwu already has an independent Gemini fallback. Retrying the same
+        # timed-out gateway first can multiply a 60-second user-facing wait.
+        max_retries = 0 if self.provider_name == "yunwu" else 2
         cache_key = (
             self.base_url or "https://api.openai.com/v1",
             api_key,
             self.timeout,
+            max_retries,
             loop,
         )
         cached = OpenAILLMClient._client_instances.get(cache_key)
@@ -480,7 +484,7 @@ class OpenAILLMClient(BaseLLMClient):
         kwargs: dict[str, Any] = {
             "api_key": api_key,
             "timeout": httpx.Timeout(self.timeout, connect=10.0),
-            "max_retries": 2,
+            "max_retries": max_retries,
         }
         if self.base_url:
             kwargs["base_url"] = self.base_url

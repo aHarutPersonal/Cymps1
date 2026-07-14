@@ -92,6 +92,22 @@ def test_openai_compatible_pool_is_scoped_to_event_loop():
     second = asyncio.run(get_client())
 
     assert first is not second
+    assert first.max_retries == 0
+
+
+def test_direct_openai_client_retains_transport_retries():
+    wrapper = OpenAILLMClient(
+        model="test",
+        api_key="openai-test-key",
+        provider_name="openai",
+    )
+
+    async def get_client():
+        return wrapper._get_client("openai-test-key")
+
+    client = asyncio.run(get_client())
+
+    assert client.max_retries == 2
 
 
 def test_yunwu_factory_builds_independent_gemini_fallback(monkeypatch):
