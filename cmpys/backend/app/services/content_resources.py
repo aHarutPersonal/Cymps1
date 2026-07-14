@@ -385,6 +385,7 @@ async def generate_book_module(
                 "routing_reason": routing_reason,
                 "model": getattr(call_response, "model", None)
                 or getattr(call_client, "model", None),
+                "provider": getattr(call_response, "provider", None),
                 "prompt_tokens": getattr(call_response, "prompt_tokens", None),
                 "completion_tokens": getattr(call_response, "completion_tokens", None),
                 "total_tokens": getattr(call_response, "total_tokens", None),
@@ -405,7 +406,7 @@ async def generate_book_module(
             UsageRecord(
                 operation="book_module_generation",
                 model=str(call.get("model") or "unknown"),
-                provider=infer_provider(call.get("model")),
+                provider=str(call.get("provider") or infer_provider(call.get("model"))),
                 prompt_tokens=call.get("prompt_tokens"),
                 completion_tokens=call.get("completion_tokens"),
                 total_tokens=call.get("total_tokens"),

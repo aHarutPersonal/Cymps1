@@ -149,6 +149,10 @@ class LLMResponse(BaseModel):
     completion_tokens: int | None = None
     total_tokens: int | None = None
     duration_ms: float | None = None
+    provider: str | None = None
+    fallback_from_model: str | None = None
+    fallback_from_provider: str | None = None
+    fallback_error: str | None = None
 
 
 class BaseLLMClient(ABC):
@@ -310,6 +314,7 @@ class DummyLLMClient(BaseLLMClient):
             return LLMResponse(
                 data={},
                 error=f"Fixture not found: {fixture_type}.json",
+                provider="dummy",
             )
         
         try:
@@ -319,17 +324,19 @@ class DummyLLMClient(BaseLLMClient):
             return LLMResponse(
                 data=data,
                 raw_response=json.dumps(data),
+                provider="dummy",
             )
         except json.JSONDecodeError as e:
             return LLMResponse(
                 data={},
                 error=f"Invalid JSON in fixture {fixture_type}.json: {e}",
+                provider="dummy",
             )
-    
+
     def _determine_fixture_type(self, user_prompt: str) -> str:
         """Determine which fixture to use based on prompt content."""
         prompt_lower = user_prompt.lower()
-        
+
         if "canonical profile" in prompt_lower or "profile_extract" in prompt_lower:
             return "profile_extract"
         elif "achievements" in prompt_lower or "milestones" in prompt_lower:
@@ -344,22 +351,96 @@ class DummyLLMClient(BaseLLMClient):
             return "persona_pack"
         elif "plan" in prompt_lower or "12-week" in prompt_lower:
             return "plan_generate"
-        
+
         # Default to profile
         return "profile_extract"
+
+
+class FallbackLLMClient(BaseLLMClient):
+    """Retry failed structured generation through an independent provider."""
+
+    def __init__(self, primary: BaseLLMClient, fallback: BaseLLMClient):
+        self.primary = primary
+        self.fallback = fallback
+        self.model = getattr(primary, "model", None)
+
+    async def generate_json(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        json_schema: dict[str, Any] | None = None,
+        output_model: type[BaseModel] | None = None,
+    ) -> LLMResponse:
+        try:
+            primary_response = await self.primary.generate_json(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                json_schema=json_schema,
+                output_model=output_model,
+            )
+        except Exception as exc:
+            logger.exception("[LLM] Primary provider raised before returning a response")
+            primary_response = LLMResponse(
+                data={},
+                error=f"Primary provider error: {exc}",
+                model=getattr(self.primary, "model", None),
+                provider=getattr(self.primary, "provider_name", None),
+            )
+        if not primary_response.error:
+            return primary_response
+
+        logger.warning(
+            "[LLM] Primary provider failed for model=%s; using model=%s: %s",
+            getattr(self.primary, "model", "unknown"),
+            getattr(self.fallback, "model", "unknown"),
+            primary_response.error,
+        )
+        try:
+            fallback_response = await self.fallback.generate_json(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                json_schema=json_schema,
+                output_model=output_model,
+            )
+        except Exception as exc:
+            logger.exception("[LLM] Fallback provider raised before returning a response")
+            fallback_response = LLMResponse(
+                data={},
+                error=f"Fallback provider error: {exc}",
+                model=getattr(self.fallback, "model", None),
+                provider=getattr(self.fallback, "provider_name", None),
+            )
+        fallback_response.provider = fallback_response.provider or getattr(
+            self.fallback, "provider_name", None
+        )
+        fallback_response.retried = True
+        fallback_response.fallback_from_model = (
+            primary_response.model or getattr(self.primary, "model", None)
+        )
+        fallback_response.fallback_from_provider = (
+            primary_response.provider
+            or getattr(self.primary, "provider_name", None)
+        )
+        fallback_response.fallback_error = primary_response.error
+        fallback_response.duration_ms = float(primary_response.duration_ms or 0.0) + float(
+            fallback_response.duration_ms or 0.0
+        )
+        return fallback_response
 
 
 class OpenAILLMClient(BaseLLMClient):
     """
     OpenAI LLM client for production use.
     
-    Requires OPENAI_API_KEY environment variable.
-    Uses connection pooling and optimized timeout settings.
+    Supports OpenAI and OpenAI-compatible gateways.
+    Uses connection pooling isolated by endpoint, credential, and timeout.
     """
     
     # Singleton client instance for connection reuse
-    _client_instance: "openai.AsyncOpenAI | None" = None
-    _client_api_key: str | None = None
+    _client_instances: dict[
+        tuple[str, str, float, asyncio.AbstractEventLoop],
+        "openai.AsyncOpenAI",
+    ] = {}
     
     def __init__(
         self,
@@ -367,29 +448,47 @@ class OpenAILLMClient(BaseLLMClient):
         api_key: str | None = None,
         timeout: float = 60.0,
         max_tokens: int | None = None,
+        base_url: str | None = None,
+        provider_name: str = "openai",
+        temperature: float = 0.1,
     ):
         self.model = model
         self.api_key = api_key
         self.timeout = timeout
         self.max_tokens = max_tokens
+        self.base_url = base_url.rstrip("/") if base_url else None
+        self.provider_name = provider_name
+        self.temperature = temperature
     
     def _get_client(self, api_key: str) -> "openai.AsyncOpenAI":
         """Get or create a singleton OpenAI client for connection reuse."""
         import openai
         import httpx
         
-        # Reuse client if API key matches
-        if OpenAILLMClient._client_instance is not None and OpenAILLMClient._client_api_key == api_key:
-            return OpenAILLMClient._client_instance
+        loop = asyncio.get_running_loop()
+        cache_key = (
+            self.base_url or "https://api.openai.com/v1",
+            api_key,
+            self.timeout,
+            loop,
+        )
+        cached = OpenAILLMClient._client_instances.get(cache_key)
+        if cached is not None:
+            return cached
         
         # Create new client with optimized settings
-        OpenAILLMClient._client_instance = openai.AsyncOpenAI(
-            api_key=api_key,
-            timeout=httpx.Timeout(self.timeout, connect=10.0),
-            max_retries=2,
+        kwargs: dict[str, Any] = {
+            "api_key": api_key,
+            "timeout": httpx.Timeout(self.timeout, connect=10.0),
+            "max_retries": 2,
+        }
+        if self.base_url:
+            kwargs["base_url"] = self.base_url
+        client = openai.AsyncOpenAI(
+            **kwargs,
         )
-        OpenAILLMClient._client_api_key = api_key
-        return OpenAILLMClient._client_instance
+        OpenAILLMClient._client_instances[cache_key] = client
+        return client
     
     async def generate_json(
         self,
@@ -408,19 +507,27 @@ class OpenAILLMClient(BaseLLMClient):
             return LLMResponse(
                 data={},
                 error="openai package not installed. Run: pip install openai",
+                model=self.model,
+                provider=self.provider_name,
             )
         
         from app.core.config import settings
         
-        api_key = self.api_key or settings.openai_api_key
+        api_key = self.api_key or (
+            settings.openai_api_key if self.provider_name == "openai" else None
+        )
         if not api_key:
-            logger.error("[LLM] OPENAI_API_KEY not configured")
+            credential = f"{self.provider_name.upper()}_API_KEY"
+            logger.error("[LLM] %s not configured", credential)
             return LLMResponse(
                 data={},
-                error="OPENAI_API_KEY not configured",
+                error=f"{credential} not configured",
+                model=self.model,
+                provider=self.provider_name,
             )
         
         client = self._get_client(api_key)
+        provider_label = self.provider_name.upper()
         
         # Log request details
         model_name = output_model.__name__ if output_model else "generic"
@@ -439,7 +546,7 @@ class OpenAILLMClient(BaseLLMClient):
                     {"role": "user", "content": user_prompt},
                 ],
                 "response_format": {"type": "json_object"},
-                "temperature": 0.1,
+                "temperature": self.temperature,
             }
             
             # Add max_tokens if specified (helps speed up response)
@@ -449,17 +556,27 @@ class OpenAILLMClient(BaseLLMClient):
             response = await client.chat.completions.create(**request_kwargs)
             
             duration_ms = (time.perf_counter() - start_time) * 1000
-            
+
             raw_content = response.choices[0].message.content
+            usage = response.usage
             if not raw_content:
-                logger.warning(f"[LLM] Empty response from OpenAI after {duration_ms:.0f}ms")
+                logger.warning(
+                    "[LLM] Empty response from %s after %.0fms",
+                    provider_label,
+                    duration_ms,
+                )
                 return LLMResponse(
                     data={},
-                    error="Empty response from OpenAI",
+                    error=f"Empty response from {provider_label}",
+                    model=self.model,
+                    prompt_tokens=usage.prompt_tokens if usage else None,
+                    completion_tokens=usage.completion_tokens if usage else None,
+                    total_tokens=usage.total_tokens if usage else None,
+                    duration_ms=duration_ms,
+                    provider=self.provider_name,
                 )
             
             # Log usage stats
-            usage = response.usage
             if usage:
                 logger.info(
                     f"[LLM] Response received: {duration_ms:.0f}ms, "
@@ -481,6 +598,7 @@ class OpenAILLMClient(BaseLLMClient):
                     completion_tokens=usage.completion_tokens if usage else None,
                     total_tokens=usage.total_tokens if usage else None,
                     duration_ms=duration_ms,
+                    provider=self.provider_name,
                 )
             except json.JSONDecodeError as e:
                 logger.warning(f"[LLM] Invalid JSON in response: {e}, attempting repair...")
@@ -488,7 +606,7 @@ class OpenAILLMClient(BaseLLMClient):
                 # Attempt repair
                 repaired = _repair_json(raw_content)
                 if repaired is not None:
-                    logger.info("[LLM] JSON repair succeeded (OpenAI)")
+                    logger.info("[LLM] JSON repair succeeded (%s)", provider_label)
                     return LLMResponse(
                         data=repaired,
                         raw_response=raw_content,
@@ -498,9 +616,12 @@ class OpenAILLMClient(BaseLLMClient):
                         completion_tokens=usage.completion_tokens if usage else None,
                         total_tokens=usage.total_tokens if usage else None,
                         duration_ms=duration_ms,
+                        provider=self.provider_name,
                     )
                 
-                logger.error("[LLM] JSON repair failed for OpenAI response")
+                logger.error(
+                    "[LLM] JSON repair failed for %s response", provider_label
+                )
                 logger.debug(f"[LLM] Raw content: {raw_content[:500]}...")
                 return LLMResponse(
                     data={},
@@ -511,6 +632,7 @@ class OpenAILLMClient(BaseLLMClient):
                     completion_tokens=usage.completion_tokens if usage else None,
                     total_tokens=usage.total_tokens if usage else None,
                     duration_ms=duration_ms,
+                    provider=self.provider_name,
                 )
                 
         except openai.APITimeoutError:
@@ -518,20 +640,30 @@ class OpenAILLMClient(BaseLLMClient):
             logger.error(f"[LLM] API timeout after {duration_ms:.0f}ms (limit: {self.timeout}s)")
             return LLMResponse(
                 data={},
-                error=f"OpenAI API timeout after {self.timeout}s",
+                error=f"{provider_label} API timeout after {self.timeout}s",
+                model=self.model,
+                duration_ms=duration_ms,
+                provider=self.provider_name,
             )
         except openai.RateLimitError as e:
+            duration_ms = (time.perf_counter() - start_time) * 1000
             logger.error(f"[LLM] Rate limit exceeded: {e}")
             return LLMResponse(
                 data={},
-                error=f"OpenAI rate limit exceeded: {e}",
+                error=f"{provider_label} rate limit exceeded: {e}",
+                model=self.model,
+                duration_ms=duration_ms,
+                provider=self.provider_name,
             )
         except Exception as e:
             duration_ms = (time.perf_counter() - start_time) * 1000
             logger.exception(f"[LLM] API error after {duration_ms:.0f}ms: {e}")
             return LLMResponse(
                 data={},
-                error=f"OpenAI API error: {e}",
+                error=f"{provider_label} API error: {e}",
+                model=self.model,
+                duration_ms=duration_ms,
+                provider=self.provider_name,
             )
     
     async def generate_json_streaming(
@@ -562,19 +694,27 @@ class OpenAILLMClient(BaseLLMClient):
             return LLMResponse(
                 data={},
                 error="openai package not installed. Run: pip install openai",
+                model=self.model,
+                provider=self.provider_name,
             )
         
         from app.core.config import settings
         
-        api_key = self.api_key or settings.openai_api_key
+        api_key = self.api_key or (
+            settings.openai_api_key if self.provider_name == "openai" else None
+        )
         if not api_key:
-            logger.error("[LLM] OPENAI_API_KEY not configured")
+            credential = f"{self.provider_name.upper()}_API_KEY"
+            logger.error("[LLM] %s not configured", credential)
             return LLMResponse(
                 data={},
-                error="OPENAI_API_KEY not configured",
+                error=f"{credential} not configured",
+                model=self.model,
+                provider=self.provider_name,
             )
         
         client = self._get_client(api_key)
+        provider_label = self.provider_name.upper()
         
         model_name = output_model.__name__ if output_model else "generic"
         logger.info(f"[LLM] Streaming request: model={self.model}, output={model_name}")
@@ -592,7 +732,7 @@ class OpenAILLMClient(BaseLLMClient):
                     {"role": "user", "content": user_prompt},
                 ],
                 "response_format": {"type": "json_object"},
-                "temperature": 0.1,
+                "temperature": self.temperature,
                 "stream": True,
             }
             
@@ -631,7 +771,10 @@ class OpenAILLMClient(BaseLLMClient):
             if not accumulated_text:
                 return LLMResponse(
                     data={},
-                    error="Empty streaming response from OpenAI",
+                    error=f"Empty streaming response from {provider_label}",
+                    model=self.model,
+                    duration_ms=duration_ms,
+                    provider=self.provider_name,
                 )
             
             try:
@@ -639,6 +782,9 @@ class OpenAILLMClient(BaseLLMClient):
                 return LLMResponse(
                     data=data,
                     raw_response=accumulated_text,
+                    model=self.model,
+                    duration_ms=duration_ms,
+                    provider=self.provider_name,
                 )
             except json.JSONDecodeError as e:
                 logger.error(f"[LLM] Invalid JSON in streamed response: {e}")
@@ -646,6 +792,9 @@ class OpenAILLMClient(BaseLLMClient):
                     data={},
                     raw_response=accumulated_text,
                     error=f"Invalid JSON in response: {e}",
+                    model=self.model,
+                    duration_ms=duration_ms,
+                    provider=self.provider_name,
                 )
                 
         except openai.APITimeoutError:
@@ -653,14 +802,20 @@ class OpenAILLMClient(BaseLLMClient):
             logger.error(f"[LLM] Streaming timeout after {duration_ms:.0f}ms")
             return LLMResponse(
                 data={},
-                error=f"OpenAI API timeout after {self.timeout}s",
+                error=f"{provider_label} API timeout after {self.timeout}s",
+                model=self.model,
+                duration_ms=duration_ms,
+                provider=self.provider_name,
             )
         except Exception as e:
             duration_ms = (time.perf_counter() - start_time) * 1000
             logger.exception(f"[LLM] Streaming error after {duration_ms:.0f}ms: {e}")
             return LLMResponse(
                 data={},
-                error=f"OpenAI API error: {e}",
+                error=f"{provider_label} API error: {e}",
+                model=self.model,
+                duration_ms=duration_ms,
+                provider=self.provider_name,
             )
 
 
@@ -686,6 +841,7 @@ class GeminiLLMClient(BaseLLMClient):
         self.max_tokens = max_tokens
         self.thinking_budget = thinking_budget
         self.temperature = temperature
+        self.provider_name = "gemini"
     
     async def generate_json(
         self,
@@ -705,6 +861,8 @@ class GeminiLLMClient(BaseLLMClient):
             return LLMResponse(
                 data={},
                 error="google-genai package not installed. Run: pip install google-genai",
+                model=self.model,
+                provider="gemini",
             )
         
         from app.core.config import settings
@@ -715,6 +873,8 @@ class GeminiLLMClient(BaseLLMClient):
             return LLMResponse(
                 data={},
                 error="GEMINI_API_KEY not configured",
+                model=self.model,
+                provider="gemini",
             )
         
         model_name = output_model.__name__ if output_model else "generic"
@@ -767,6 +927,9 @@ class GeminiLLMClient(BaseLLMClient):
                 return LLMResponse(
                     data={},
                     error="Empty response from Gemini",
+                    model=self.model,
+                    duration_ms=duration_ms,
+                    provider="gemini",
                 )
 
             finish_reason = "unknown"
@@ -811,6 +974,7 @@ class GeminiLLMClient(BaseLLMClient):
                         else None
                     ),
                     duration_ms=duration_ms,
+                    provider="gemini",
                 )
             except json.JSONDecodeError as e:
                 logger.warning(f"[LLM] Invalid JSON in Gemini response: {e}, attempting repair...")
@@ -840,6 +1004,7 @@ class GeminiLLMClient(BaseLLMClient):
                             else None
                         ),
                         duration_ms=duration_ms,
+                        provider="gemini",
                     )
                 
                 logger.error("[LLM] JSON repair failed for Gemini response")
@@ -865,6 +1030,7 @@ class GeminiLLMClient(BaseLLMClient):
                         else None
                     ),
                     duration_ms=duration_ms,
+                    provider="gemini",
                 )
         
         except Exception as e:
@@ -873,6 +1039,9 @@ class GeminiLLMClient(BaseLLMClient):
             return LLMResponse(
                 data={},
                 error=f"Gemini API error: {e}",
+                model=self.model,
+                duration_ms=duration_ms,
+                provider="gemini",
             )
 
 
@@ -887,7 +1056,7 @@ def get_llm_client(
     """
     Factory function to get the configured LLM client.
     
-    Uses LLM_PROVIDER env var: 'dummy', 'openai', or 'gemini'
+    Uses LLM_PROVIDER env var: 'dummy', 'openai', 'gemini', or 'yunwu'
     
     Args:
         timeout: Request timeout in seconds (default: 60s)
@@ -943,6 +1112,52 @@ def get_llm_client(
             model=model,
             timeout=timeout,
             max_tokens=max_tokens,
+            temperature=temperature,
         )
+    elif provider == "yunwu":
+        fallback_client = None
+        if settings.yunwu_fallback_enabled and settings.gemini_api_key:
+            fallback_model = {
+                "fast": settings.gemini_fast_model,
+                "balanced": settings.gemini_model,
+                "quality": settings.gemini_quality_model,
+            }[resolved_tier]
+            fallback_thinking_budget = thinking_budget
+            if fallback_thinking_budget is None and resolved_tier == "fast":
+                fallback_thinking_budget = 0
+            fallback_client = GeminiLLMClient(
+                model=fallback_model,
+                timeout=timeout,
+                max_tokens=max_tokens,
+                thinking_budget=fallback_thinking_budget,
+                temperature=temperature,
+            )
+
+        if not settings.yunwu_api_key:
+            if fallback_client is not None:
+                logger.warning(
+                    "LLM_PROVIDER=yunwu but YUNWU_API_KEY not set; using Gemini."
+                )
+                return fallback_client
+            logger.warning("Neither YUNWU_API_KEY nor Gemini fallback is configured.")
+            return DummyLLMClient()
+
+        model = {
+            "fast": settings.yunwu_fast_model,
+            "balanced": settings.yunwu_model,
+            "quality": settings.yunwu_quality_model,
+        }[resolved_tier]
+        primary_client = OpenAILLMClient(
+            model=model,
+            api_key=settings.yunwu_api_key,
+            base_url=settings.yunwu_base_url,
+            provider_name="yunwu",
+            timeout=timeout,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        if fallback_client is not None:
+            return FallbackLLMClient(primary_client, fallback_client)
+        return primary_client
     else:
         return DummyLLMClient()

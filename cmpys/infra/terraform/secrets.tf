@@ -8,6 +8,7 @@ resource "aws_secretsmanager_secret_version" "app" {
   secret_string = jsonencode({
     GEMINI_API_KEY = var.gemini_api_key
     OPENAI_API_KEY = var.openai_api_key
+    YUNWU_API_KEY  = var.yunwu_api_key
     TAVILY_API_KEY = var.tavily_api_key
   })
 }

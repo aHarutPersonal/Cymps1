@@ -34,6 +34,8 @@ class UsageRecord:
 
 def infer_provider(model: str | None) -> str:
     lowered = (model or "").casefold()
+    if settings.llm_provider == "yunwu":
+        return "yunwu"
     if "gemini" in lowered:
         return "gemini"
     if lowered.startswith(("gpt-", "o1", "o3", "o4")):
@@ -62,7 +64,7 @@ def usage_record_from_response(
     return UsageRecord(
         operation=operation,
         model=resolved_model,
-        provider=infer_provider(resolved_model),
+        provider=str(getattr(response, "provider", None) or infer_provider(resolved_model)),
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         total_tokens=total_tokens,
@@ -73,7 +75,19 @@ def usage_record_from_response(
         error_code="llm_error" if error else None,
         result_status=result_status,
         quality_score=quality_score,
-        metadata={**(metadata or {}), **({"error": str(error)[:500]} if error else {})},
+        metadata={
+            **(metadata or {}),
+            **({"error": str(error)[:500]} if error else {}),
+            **(
+                {
+                    "fallback_from_model": response.fallback_from_model,
+                    "fallback_from_provider": response.fallback_from_provider,
+                    "fallback_error": str(response.fallback_error)[:500],
+                }
+                if getattr(response, "fallback_from_model", None)
+                else {}
+            ),
+        },
     )
 
 
@@ -84,6 +98,7 @@ def _event(record: UsageRecord) -> LLMUsageEvent:
     if estimated_cost is None:
         estimated_cost = estimate_cost_usd(
             model=record.model,
+            provider=record.provider,
             prompt_tokens=record.prompt_tokens,
             completion_tokens=record.completion_tokens,
             total_tokens=record.total_tokens,

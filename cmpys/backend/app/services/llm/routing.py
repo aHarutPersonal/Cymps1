@@ -49,6 +49,11 @@ def _model_for_tier(tier: str) -> str | None:
             "fast": settings.openai_fast_model,
             "balanced": settings.openai_model,
         }.get(tier)
+    if settings.llm_provider == "yunwu":
+        return {
+            "fast": settings.yunwu_fast_model,
+            "balanced": settings.yunwu_model,
+        }.get(tier)
     return None
 
 

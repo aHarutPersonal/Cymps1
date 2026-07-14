@@ -50,6 +50,34 @@ def test_usage_record_falls_back_to_visible_token_sum():
     assert infer_provider(record.model) == "openai"
 
 
+def test_yunwu_provider_is_preserved_for_gateway_models(monkeypatch):
+    monkeypatch.setattr(settings, "llm_provider", "yunwu")
+    response = LLMResponse(data={}, model="gpt-5.6-luna")
+
+    record = usage_record_from_response(operation="extraction", response=response)
+
+    assert record.provider == "yunwu"
+
+
+def test_fallback_response_records_actual_provider_and_reason(monkeypatch):
+    monkeypatch.setattr(settings, "llm_provider", "yunwu")
+    response = LLMResponse(
+        data={"ok": True},
+        model="gemini-2.5-flash",
+        provider="gemini",
+        fallback_from_model="grok-4.5",
+        fallback_from_provider="yunwu",
+        fallback_error="timeout",
+    )
+
+    record = usage_record_from_response(operation="generation", response=response)
+
+    assert record.provider == "gemini"
+    assert record.metadata["fallback_from_model"] == "grok-4.5"
+    assert record.metadata["fallback_from_provider"] == "yunwu"
+    assert record.metadata["fallback_error"] == "timeout"
+
+
 @pytest.mark.asyncio
 async def test_record_usage_adds_events_to_existing_transaction(monkeypatch):
     monkeypatch.setattr(settings, "llm_usage_telemetry_enabled", True)
@@ -74,7 +102,7 @@ async def test_record_usage_adds_events_to_existing_transaction(monkeypatch):
     assert event.quality_score == 0.9
     assert event.estimated_cost_usd is not None
     assert event.estimated_cost_usd > 0
-    assert event.metadata_json["pricing_version"].startswith("google-ai-")
+    assert event.metadata_json["pricing_version"].startswith("multi-provider-")
     db.flush.assert_awaited_once()
 
 

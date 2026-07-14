@@ -37,6 +37,10 @@ Health check: `curl http://localhost:8000/health`
 | `DATABASE_URL` | Async Postgres (`postgresql+psycopg://...`) |
 | `REDIS_URL` | Redis for Celery |
 | `GEMINI_API_KEY` | Google Gemini API key |
+| `YUNWU_API_KEY` | Yunwu gateway API key when `LLM_PROVIDER=yunwu` |
+| `YUNWU_BASE_URL` | Yunwu OpenAI-compatible endpoint (default `https://yunwu.ai/v1`) |
+| `YUNWU_GROUP_RATIO` | Billing multiplier for the API token's assigned Yunwu route; defaults conservatively to `6` |
+| `YUNWU_FALLBACK_ENABLED` | Retry failed Yunwu generations through the matching Gemini tier |
 | `TAVILY_API_KEY` | Web search grounding |
 | `JWT_SECRET_KEY` | JWT signing; required in production |
 | `CATALOG_SCHEDULER_ENABLED` | Enable continuous catalog ingestion |

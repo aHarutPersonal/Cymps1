@@ -44,7 +44,35 @@ def test_current_gemini_price_cards_cover_all_configured_tiers():
         2.0,
         12.0,
     )
-    assert PRICING_VERSION.startswith("google-ai-")
+    assert PRICING_VERSION.startswith("multi-provider-")
+
+
+def test_yunwu_default_route_price_cards_use_effective_cash_cost(monkeypatch):
+    monkeypatch.setattr(settings, "yunwu_group_ratio", 1.0)
+    monkeypatch.setattr(settings, "yunwu_quota_price_cny", 0.5)
+    monkeypatch.setattr(settings, "yunwu_usd_exchange_rate", 7.3)
+    fast = price_card_for_model("gpt-5.6-luna", provider="yunwu")
+    balanced = price_card_for_model("grok-4.5", provider="yunwu")
+    quality = price_card_for_model("claude-fable-5", provider="yunwu")
+
+    assert fast.input_usd_per_million == pytest.approx(1 / 14.6)
+    assert fast.output_usd_per_million == pytest.approx(6 / 14.6)
+    assert balanced.input_usd_per_million == pytest.approx(2 / 14.6)
+    assert balanced.output_usd_per_million == pytest.approx(6 / 14.6)
+    assert quality.input_usd_per_million == pytest.approx(10 / 14.6)
+    assert quality.output_usd_per_million == pytest.approx(50 / 14.6)
+    assert balanced.token_rates(200_001) == pytest.approx((4 / 14.6, 12 / 14.6))
+
+
+def test_yunwu_price_card_respects_assigned_route_multiplier(monkeypatch):
+    monkeypatch.setattr(settings, "yunwu_group_ratio", 6.0)
+    monkeypatch.setattr(settings, "yunwu_quota_price_cny", 0.5)
+    monkeypatch.setattr(settings, "yunwu_usd_exchange_rate", 7.3)
+
+    balanced = price_card_for_model("grok-4.5", provider="yunwu")
+
+    assert balanced.input_usd_per_million == pytest.approx(12 / 14.6)
+    assert balanced.output_usd_per_million == pytest.approx(36 / 14.6)
 
 
 def test_search_overage_is_opt_in_and_25_is_billed_per_grounded_prompt(monkeypatch):

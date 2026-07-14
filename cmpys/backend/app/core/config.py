@@ -31,11 +31,25 @@ class Settings(BaseSettings):
     extractor_mode: str = "deterministic"  # "deterministic" or "llm"
     
     # LLM Configuration
-    llm_provider: str = "dummy"  # "dummy", "openai", or "gemini"
+    llm_provider: str = "dummy"  # "dummy", "openai", "gemini", or "yunwu"
     openai_api_key: str | None = None
     openai_model: str = "gpt-4.1-mini"  # Balanced model for user-visible generation
     openai_fast_model: str = "gpt-4o-mini"  # Lightweight model for thinking/discovery
     openai_quality_model: str = "gpt-4.1"  # Selective fallback for failed quality gates
+
+    # Yunwu's OpenAI-compatible gateway. Quality is prioritized for visible
+    # writing, while the fast tier handles bounded extraction and metadata work.
+    yunwu_api_key: str | None = None
+    yunwu_base_url: str = "https://yunwu.ai/v1"
+    yunwu_fast_model: str = "gpt-5.6-luna"
+    yunwu_model: str = "grok-4.5"
+    yunwu_quality_model: str = "claude-fable-5"
+    yunwu_fallback_enabled: bool = True
+    # Pricing depends on the API token's assigned route. Six is the most
+    # expensive Grok-capable public group and is therefore the safe default.
+    yunwu_group_ratio: float = 6.0
+    yunwu_quota_price_cny: float = 0.5
+    yunwu_usd_exchange_rate: float = 7.3
     
     # Tavily (real-time web search for material URL resolution)
     tavily_api_key: str | None = None
@@ -115,6 +129,10 @@ class Settings(BaseSettings):
             return bool(self.openai_api_key)
         if self.llm_provider == "gemini":
             return bool(self.gemini_api_key)
+        if self.llm_provider == "yunwu":
+            # Several grounded and streaming product paths remain native
+            # Gemini capabilities, and Gemini is also the gateway fallback.
+            return bool(self.yunwu_api_key and self.gemini_api_key)
         return True  # Dummy is always configured
 
 

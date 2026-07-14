@@ -29,6 +29,12 @@ variable "openai_api_key" {
   default   = ""
 }
 
+variable "yunwu_api_key" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
+
 variable "tavily_api_key" {
   type      = string
   sensitive = true

@@ -1,4 +1,4 @@
-"""Deterministic Gemini cost estimates for usage telemetry.
+"""Deterministic provider cost estimates for usage telemetry.
 
 Prices are standard paid-tier USD rates per one million tokens. Gemini bills
 thinking tokens as output, so the estimator conservatively treats every token
@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from app.core.config import settings
 
 
-PRICING_VERSION = "google-ai-2026-07-10"
+PRICING_VERSION = "multi-provider-2026-07-15"
 
 
 @dataclass(frozen=True)
@@ -37,9 +37,33 @@ class PriceCard:
         return self.input_usd_per_million, self.output_usd_per_million
 
 
-def price_card_for_model(model: str) -> PriceCard:
+def price_card_for_model(model: str, provider: str | None = None) -> PriceCard:
     """Return the closest official card, or a conservative configurable card."""
     normalized = model.casefold().removeprefix("models/")
+    resolved_provider = (provider or settings.llm_provider).casefold()
+
+    # Effective Yunwu cash rates. Recharge conversion and the token's assigned
+    # route are configurable because either can change independently.
+    # Grok 4.5 doubles token rates above a 200k prompt context.
+    if resolved_provider == "yunwu":
+        exchange_rate = max(settings.yunwu_usd_exchange_rate, 0.000001)
+        cash_multiplier = (
+            max(settings.yunwu_quota_price_cny, 0.0)
+            / exchange_rate
+            * max(settings.yunwu_group_ratio, 0.0)
+        )
+        if normalized == "gpt-5.6-luna":
+            return PriceCard(1.0 * cash_multiplier, 6.0 * cash_multiplier)
+        if normalized == "grok-4.5":
+            return PriceCard(
+                2.0 * cash_multiplier,
+                6.0 * cash_multiplier,
+                long_context_threshold=200_000,
+                long_input_usd_per_million=4.0 * cash_multiplier,
+                long_output_usd_per_million=12.0 * cash_multiplier,
+            )
+        if normalized == "claude-fable-5":
+            return PriceCard(10.0 * cash_multiplier, 50.0 * cash_multiplier)
 
     # Order matters: Flash-Lite names also contain "flash".
     if normalized.startswith("gemini-2.5-flash-lite"):
@@ -102,6 +126,7 @@ def billed_output_tokens(
 def estimate_cost_usd(
     *,
     model: str,
+    provider: str | None = None,
     prompt_tokens: int | None,
     completion_tokens: int | None,
     total_tokens: int | None,
@@ -119,7 +144,7 @@ def estimate_cost_usd(
         completion_tokens=completion_tokens,
         total_tokens=total_tokens,
     )
-    card = price_card_for_model(model)
+    card = price_card_for_model(model, provider=provider)
     input_rate, output_rate = card.token_rates(prompt_count)
     cost = (
         prompt_count * input_rate / 1_000_000
