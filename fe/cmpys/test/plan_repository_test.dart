@@ -8,6 +8,14 @@ import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('default book-guide polling covers long quality generation', () {
+    expect(
+      PlanRepository.bookGuidePollWindow,
+      greaterThanOrEqualTo(const Duration(minutes: 6)),
+    );
+    expect(PlanRepository.bookGuidePollAttempts, greaterThanOrEqualTo(10));
+  });
+
   test('getJobStatus narrows polling to plan jobs', () async {
     final client = _RecordingDioClient();
     final repository = PlanRepository(dioClient: client);

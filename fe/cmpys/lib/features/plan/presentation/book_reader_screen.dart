@@ -185,143 +185,48 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
       );
   }
 
-  Future<void> _openNoteComposer() async {
-    final quote = _selectedQuote?.trim();
-    if (quote == null || quote.isEmpty || _chapters.isEmpty) {
+  Future<void> _openNoteComposer(String selectedQuote) async {
+    final quote = selectedQuote.trim();
+    if (quote.isEmpty || _chapters.isEmpty) {
       _toast('Select a passage first');
       return;
     }
-    final noteController = TextEditingController();
-    var saving = false;
-    await showModalBottomSheet<void>(
+
+    // The selection toolbar is an overlay owned by SelectableRegion. Wait for
+    // the frame that removes it before pushing another overlay route.
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+
+    final chapterIndex = _chapterIndex;
+    final chapterTitle = _chapters[chapterIndex].title;
+    final created = await showModalBottomSheet<ContentHighlight>(
       context: context,
       isScrollControlled: true,
       backgroundColor: _chrome,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
-      builder: (sheetContext) => StatefulBuilder(
-        builder: (context, setSheetState) => Padding(
-          padding: EdgeInsets.fromLTRB(
-            22,
-            14,
-            22,
-            22 + MediaQuery.viewInsetsOf(context).bottom,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 38,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: _muted.withValues(alpha: 0.35),
-                    borderRadius: BorderRadius.circular(99),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 22),
-              Text(
-                'Add a note',
-                style: AppTypography.h2.copyWith(color: _ink, fontSize: 23),
-              ),
-              const SizedBox(height: 12),
-              Container(
-                width: double.infinity,
-                constraints: const BoxConstraints(maxHeight: 130),
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: AppColors.ochreSoft.withValues(
-                    alpha: _readingTheme == 2 ? 0.12 : 0.65,
-                  ),
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: SingleChildScrollView(
-                  child: Text(
-                    '“$quote”',
-                    style: AppTypography.readingQuote.copyWith(
-                      color: _ink,
-                      fontSize: 15.5,
-                      height: 1.45,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 14),
-              TextField(
-                controller: noteController,
-                autofocus: true,
-                minLines: 3,
-                maxLines: 6,
-                style: AppTypography.body.copyWith(color: _ink),
-                decoration: InputDecoration(
-                  hintText: 'What do you want to remember?',
-                  hintStyle: AppTypography.body.copyWith(color: _muted),
-                  filled: true,
-                  fillColor: _background,
-                  border: OutlineInputBorder(
-                    borderSide: BorderSide.none,
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 14),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton.icon(
-                  onPressed: saving
-                      ? null
-                      : () async {
-                          setSheetState(() => saving = true);
-                          try {
-                            final created = await _repository.createHighlight(
-                              widget.resourceId,
-                              locatorJson: {
-                                'chapter': _chapterIndex,
-                                'chapterTitle': _chapters[_chapterIndex].title,
-                              },
-                              quoteText: _limited(quote, 5000),
-                              noteText: noteController.text,
-                            );
-                            if (!mounted) return;
-                            setState(() {
-                              _notes = [created, ..._notes];
-                              _selectedQuote = null;
-                            });
-                            if (sheetContext.mounted) {
-                              Navigator.of(sheetContext).pop();
-                            }
-                            _toast('Note saved');
-                          } catch (_) {
-                            setSheetState(() => saving = false);
-                          }
-                        },
-                  icon: saving
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.note_add_outlined),
-                  label: Text(saving ? 'Saving…' : 'Save note'),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: AppColors.green,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 15),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(99),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
+      builder: (sheetContext) => BookNoteComposerSheet(
+        quote: quote,
+        background: _background,
+        chrome: _chrome,
+        ink: _ink,
+        muted: _muted,
+        dark: _readingTheme == 2,
+        onSave: (noteText) => _repository.createHighlight(
+          widget.resourceId,
+          locatorJson: {'chapter': chapterIndex, 'chapterTitle': chapterTitle},
+          quoteText: _limited(quote, 5000),
+          noteText: noteText,
         ),
       ),
     );
-    noteController.dispose();
+    if (!mounted || created == null) return;
+    setState(() {
+      _notes = [created, ..._notes];
+      _selectedQuote = null;
+    });
+    _toast('Note saved');
   }
 
   String _limited(String value, int max) =>
@@ -338,8 +243,10 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
         ContextMenuButtonItem(
           label: 'Add note',
           onPressed: () {
-            selectionState.hideToolbar(false);
-            unawaited(_openNoteComposer());
+            final quote = _selectedQuote?.trim() ?? '';
+            selectionState.hideToolbar();
+            selectionState.clearSelection();
+            unawaited(_openNoteComposer(quote));
           },
         ),
       ],
@@ -1022,6 +929,185 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
               child: const Text('Try again'),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+@visibleForTesting
+class BookNoteComposerSheet extends StatefulWidget {
+  const BookNoteComposerSheet({
+    super.key,
+    required this.quote,
+    required this.background,
+    required this.chrome,
+    required this.ink,
+    required this.muted,
+    required this.dark,
+    required this.onSave,
+  });
+
+  final String quote;
+  final Color background;
+  final Color chrome;
+  final Color ink;
+  final Color muted;
+  final bool dark;
+  final Future<ContentHighlight> Function(String noteText) onSave;
+
+  @override
+  State<BookNoteComposerSheet> createState() => _BookNoteComposerSheetState();
+}
+
+class _BookNoteComposerSheetState extends State<BookNoteComposerSheet> {
+  late final TextEditingController _noteController;
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _noteController = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _noteController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (_saving) return;
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final created = await widget.onSave(_noteController.text);
+      if (!mounted) return;
+      Navigator.of(context).pop(created);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = 'Couldn’t save this note. Please try again.';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
+    return PopScope(
+      canPop: !_saving,
+      child: AnimatedPadding(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+        padding: EdgeInsets.only(bottom: keyboardInset),
+        child: SafeArea(
+          top: false,
+          child: SingleChildScrollView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            padding: const EdgeInsets.fromLTRB(22, 14, 22, 22),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 38,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: widget.muted.withValues(alpha: 0.35),
+                      borderRadius: BorderRadius.circular(99),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 22),
+                Text(
+                  'Add a note',
+                  style: AppTypography.h2.copyWith(
+                    color: widget.ink,
+                    fontSize: 23,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  width: double.infinity,
+                  constraints: const BoxConstraints(maxHeight: 130),
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: AppColors.ochreSoft.withValues(
+                      alpha: widget.dark ? 0.12 : 0.65,
+                    ),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: SingleChildScrollView(
+                    child: Text(
+                      '“${widget.quote}”',
+                      style: AppTypography.readingQuote.copyWith(
+                        color: widget.ink,
+                        fontSize: 15.5,
+                        height: 1.45,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: _noteController,
+                  autofocus: true,
+                  minLines: 3,
+                  maxLines: 6,
+                  enabled: !_saving,
+                  style: AppTypography.body.copyWith(color: widget.ink),
+                  decoration: InputDecoration(
+                    hintText: 'What do you want to remember?',
+                    hintStyle: AppTypography.body.copyWith(color: widget.muted),
+                    filled: true,
+                    fillColor: widget.background,
+                    border: OutlineInputBorder(
+                      borderSide: BorderSide.none,
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                  ),
+                ),
+                if (_error != null) ...[
+                  const SizedBox(height: 10),
+                  Text(
+                    _error!,
+                    style: AppTypography.captionMedium.copyWith(
+                      color: AppColors.danger,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 14),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: _saving ? null : _save,
+                    icon: _saving
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.note_add_outlined),
+                    label: Text(_saving ? 'Saving…' : 'Save note'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.green,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 15),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(99),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );

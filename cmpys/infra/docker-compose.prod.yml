@@ -105,8 +105,9 @@ services:
         condition: service_completed_successfully
 
   # Keep autonomous catalog generation out of the user-facing worker pool.
-  # One long-running catalog task is enough; the separate control worker keeps
-  # Beat ticks and user-requested catalog wake-ups responsive while it runs.
+  # Match the default two-job dispatcher so one long book generation cannot
+  # leave the next requested guide sitting behind it in the worker process.
+  # The separate control worker keeps Beat ticks and wake-ups responsive.
   catalog-worker:
     image: ${ECR_URL}:${IMAGE_TAG:-latest}
     command: catalog-worker
@@ -123,6 +124,7 @@ services:
       LLM_BACKGROUND_BUDGET_SOFT_RATIO: ${LLM_BACKGROUND_BUDGET_SOFT_RATIO:-0.85}
       LLM_BUDGET_INCLUDE_SEARCH_OVERAGE: ${LLM_BUDGET_INCLUDE_SEARCH_OVERAGE:-false}
       ADAPTIVE_ROUTING_ENABLED: ${ADAPTIVE_ROUTING_ENABLED:-true}
+      CATALOG_WORKER_CONCURRENCY: ${CATALOG_WORKER_CONCURRENCY:-2}
       CATALOG_SCHEDULER_ENABLED: ${CATALOG_SCHEDULER_ENABLED:-true}
       CATALOG_DAILY_JOB_LIMIT: ${CATALOG_DAILY_JOB_LIMIT:-50}
       CATALOG_DISPATCH_PER_TICK: ${CATALOG_DISPATCH_PER_TICK:-2}

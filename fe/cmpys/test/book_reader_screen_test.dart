@@ -44,7 +44,6 @@ Combine the decision label and return point in one daily review.
     isSaved: true,
     progressPercent: 0,
   );
-
   @override
   Future<ContentResource> getResource(String resourceId) async => resource;
 
@@ -161,4 +160,86 @@ void main() {
     expect(find.text('GLOBAL SHELL NAV'), findsNothing);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'saving a book note closes without lifecycle or overflow errors',
+    (tester) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      ContentHighlight? returnedNote;
+      String? submittedText;
+      var saveCalls = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => FilledButton(
+                onPressed: () async {
+                  returnedNote = await showModalBottomSheet<ContentHighlight>(
+                    context: context,
+                    isScrollControlled: true,
+                    builder: (sheetContext) {
+                      final media = MediaQuery.of(sheetContext);
+                      return MediaQuery(
+                        data: media.copyWith(
+                          viewInsets: const EdgeInsets.only(bottom: 300),
+                        ),
+                        child: BookNoteComposerSheet(
+                          quote: 'A reversible choice rewards speed.',
+                          background: Colors.white,
+                          chrome: Colors.white,
+                          ink: Colors.black,
+                          muted: Colors.grey,
+                          dark: false,
+                          onSave: (noteText) async {
+                            saveCalls++;
+                            submittedText = noteText;
+                            await Future<void>.delayed(
+                              const Duration(milliseconds: 10),
+                            );
+                            final now = DateTime.utc(2026, 7, 14);
+                            return ContentHighlight(
+                              id: 'note-1',
+                              contentResourceId: 'book-1',
+                              quoteText: 'A reversible choice rewards speed.',
+                              noteText: noteText,
+                              createdAt: now,
+                              updatedAt: now,
+                            );
+                          },
+                        ),
+                      );
+                    },
+                  );
+                },
+                child: const Text('Open composer'),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('Open composer'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byType(TextField),
+        'Compare reversibility first.',
+      );
+      await tester.tap(find.text('Save note'));
+      await tester.pumpAndSettle();
+
+      expect(saveCalls, 1);
+      expect(submittedText, 'Compare reversibility first.');
+      expect(returnedNote?.id, 'note-1');
+      expect(find.text('Open composer'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    },
+  );
 }

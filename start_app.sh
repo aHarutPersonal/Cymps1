@@ -89,9 +89,15 @@ echo "   (Logs: tail -f cmpys/backend/celery.log)"
 # onboarding, plans, or lessons. Long catalog work and its lightweight control
 # plane therefore have their own bounded workers.
 echo "Starting Catalog Worker..."
-celery -A app.core.celery worker -n catalog@%h -Q catalog --concurrency=1 --loglevel=info > celery-catalog.log 2>&1 &
+CATALOG_WORKER_CONCURRENCY="${CATALOG_WORKER_CONCURRENCY:-2}"
+celery -A app.core.celery worker \
+    -n catalog@%h \
+    -Q catalog \
+    --concurrency="$CATALOG_WORKER_CONCURRENCY" \
+    --loglevel=info > celery-catalog.log 2>&1 &
 CATALOG_WORKER_PID=$!
-echo "✅ Catalog worker running in background (PID: $CATALOG_WORKER_PID)"
+echo "✅ Catalog worker running in background"
+echo "   (PID: $CATALOG_WORKER_PID, concurrency: $CATALOG_WORKER_CONCURRENCY)"
 
 echo "Starting Catalog Control Worker..."
 celery -A app.core.celery worker -n catalog-control@%h -Q catalog_control --concurrency=1 --loglevel=info > celery-catalog-control.log 2>&1 &

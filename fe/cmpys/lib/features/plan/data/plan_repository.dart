@@ -23,7 +23,22 @@ class PlanRepository {
     Duration(seconds: 18),
     Duration(seconds: 25),
     Duration(seconds: 32),
+    // A grounded 3,200+ word guide can legitimately use the balanced retry
+    // and quality fallback. Keep polling sparsely through that bounded window
+    // so a queued second book opens automatically instead of appearing stuck.
+    Duration(seconds: 40),
+    Duration(seconds: 50),
+    Duration(seconds: 60),
+    Duration(seconds: 75),
+    Duration(seconds: 90),
   ];
+
+  @visibleForTesting
+  static Duration get bookGuidePollWindow =>
+      _bookGuidePollDelays.fold(Duration.zero, (total, delay) => total + delay);
+
+  @visibleForTesting
+  static int get bookGuidePollAttempts => _bookGuidePollDelays.length;
 
   final DioClient _dioClient;
   final Map<String, String> _resolvedContentResourceIds = {};

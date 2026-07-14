@@ -23,7 +23,7 @@ cp .env.example .env        # fill in keys
 .venv/bin/alembic upgrade heads
 .venv/bin/uvicorn app.main:app --port 8000 --reload
 .venv/bin/celery -A app.core.celery.celery_app worker -n interactive@%h -Q default,high_priority,low_priority
-.venv/bin/celery -A app.core.celery.celery_app worker -n catalog@%h --concurrency=1 -Q catalog
+.venv/bin/celery -A app.core.celery.celery_app worker -n catalog@%h --concurrency=2 -Q catalog
 .venv/bin/celery -A app.core.celery.celery_app worker -n catalog-control@%h --concurrency=1 -Q catalog_control
 .venv/bin/celery -A app.core.celery.celery_app beat
 ```
@@ -42,6 +42,7 @@ Health check: `curl http://localhost:8000/health`
 | `CATALOG_SCHEDULER_ENABLED` | Enable continuous catalog ingestion |
 | `CATALOG_DAILY_JOB_LIMIT` | Maximum catalog jobs started per UTC day |
 | `CATALOG_DISPATCH_PER_TICK` | Maximum jobs leased each scheduler tick |
+| `CATALOG_WORKER_CONCURRENCY` | Parallel catalog execution slots; keep at least as high as the dispatch batch (default 2) |
 | `CATALOG_QUOTES_PER_IDOL_LIMIT` | Maximum sourced quotes retained per idol/import |
 | `CATALOG_QUOTE_MIN_CONFIDENCE` | Deterministic quote provenance threshold |
 | `CATALOG_QUOTE_VERIFICATION_ENABLED` | Enable independent Gemini Search cross-checks |
