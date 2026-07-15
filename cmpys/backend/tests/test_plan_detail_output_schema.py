@@ -38,7 +38,7 @@ def _valid_payload() -> dict:
         "## References",
     ]
     heading_text = "\n\n".join(f"{heading}\n" for heading in headings)
-    lesson = heading_text + ("deliberate practice evidence mechanism example " * 240)
+    lesson = heading_text + ("deliberate practice evidence mechanism example " * 520)
     substep = (
         "Set a twenty minute timer, apply the supplied framework to one real "
         "artifact, record the output, and verify it against the stated success criterion."
@@ -49,9 +49,9 @@ def _valid_payload() -> dict:
                 "id": f"step_{index}",
                 "title": f"Learn technique {index}",
                 "description": "A focused skill-building lesson.",
-                "estimate_minutes": 45,
-                "reading_minutes": 8,
-                "practice_minutes": 37,
+                "estimate_minutes": 80,
+                "reading_minutes": 13,
+                "practice_minutes": 67,
                 "lesson_content": lesson,
                 "resources": ["Resource 1"],
                 "substeps": [substep, substep],
@@ -142,7 +142,7 @@ def test_semantic_validation_failure_gets_quality_specific_retry() -> None:
     )
 
     assert stage == "quality_recovery"
-    assert "1,200-1,800" in retry
+    assert "2,200-3,400" in retry
     assert "lesson has 20 words" in retry
 
 
@@ -226,7 +226,7 @@ def test_targeted_repair_prompt_includes_draft_materials_and_safe_target() -> No
     assert "PREVIOUS STEP DRAFT TO IMPROVE" in prompt
     assert "Learn technique 1" in prompt
     assert "Resource 1" in prompt
-    assert "1,400-1,600" in prompt
+    assert "2,500-2,900" in prompt
     assert "25-40 words" in prompt
 
 
@@ -236,18 +236,18 @@ def test_single_step_repair_schema_keeps_the_full_quality_floor() -> None:
 
     invalid_step = dict(valid_step)
     invalid_step["lesson_content"] = "short"
-    with pytest.raises(ValueError, match="required range is 1200-1800"):
+    with pytest.raises(ValueError, match="required range is 2200-3400"):
         PlanDetailStepRepairOutput.model_validate(invalid_step)
 
 
 @pytest.mark.parametrize(
     ("word_count", "accepted"),
     [
-        (1186, False),
-        (1199, False),
-        (1200, True),
-        (1800, True),
-        (1801, False),
+        (2186, False),
+        (2199, False),
+        (2200, True),
+        (3400, True),
+        (3401, False),
     ],
 )
 def test_single_step_repair_enforces_exact_lesson_boundaries(
@@ -267,7 +267,7 @@ def test_single_step_repair_enforces_exact_lesson_boundaries(
 
 def test_near_threshold_repair_preserves_every_valid_shared_component() -> None:
     payload = _valid_payload()
-    payload["steps"][0]["lesson_content"] = _lesson_with_word_count(1186)
+    payload["steps"][0]["lesson_content"] = _lesson_with_word_count(2186)
     original = copy.deepcopy(payload)
 
     repair_plan = _plan_detail_repair_plan(payload)
@@ -275,10 +275,10 @@ def test_near_threshold_repair_preserves_every_valid_shared_component() -> None:
     assert repair_plan is not None
     draft, issues_by_step = repair_plan
     assert set(issues_by_step) == {"step_1"}
-    assert any("has 1186 words" in issue for issue in issues_by_step["step_1"])
+    assert any("has 2186 words" in issue for issue in issues_by_step["step_1"])
 
     repaired_step = copy.deepcopy(draft["steps"][0])
-    repaired_step["lesson_content"] = _lesson_with_word_count(1400)
+    repaired_step["lesson_content"] = _lesson_with_word_count(2700)
     response = SimpleNamespace(data=repaired_step, error=None)
     _validate_plan_detail_step_response(
         response,
@@ -289,32 +289,32 @@ def test_near_threshold_repair_preserves_every_valid_shared_component() -> None:
 
     merged = _merge_plan_detail_repairs(draft, {"step_1": response.data})
 
-    assert len(merged["steps"][0]["lesson_content"].split()) == 1400
+    assert len(merged["steps"][0]["lesson_content"].split()) == 2700
     assert merged["steps"][1:] == original["steps"][1:]
     # The structural draft normalizes optional material keys to null. The merge
     # must preserve that normalized shared payload byte-for-byte.
     assert merged["materials"] == draft["materials"]
     assert merged["definition_of_done"] == draft["definition_of_done"]
     assert merged["mental_model"] == draft["mental_model"]
-    assert len(payload["steps"][0]["lesson_content"].split()) == 1186
+    assert len(payload["steps"][0]["lesson_content"].split()) == 2186
 
 
 def test_failed_near_threshold_repair_feeds_error_into_escalation_prompt() -> None:
     payload = _valid_payload()
-    payload["steps"][0]["lesson_content"] = _lesson_with_word_count(1186)
+    payload["steps"][0]["lesson_content"] = _lesson_with_word_count(2186)
     repair_plan = _plan_detail_repair_plan(payload)
     assert repair_plan is not None
     draft, issues_by_step = repair_plan
 
     still_short = copy.deepcopy(draft["steps"][0])
-    still_short["lesson_content"] = _lesson_with_word_count(1199)
+    still_short["lesson_content"] = _lesson_with_word_count(2199)
     first_response = SimpleNamespace(data=still_short, error=None)
     _validate_plan_detail_step_response(
         first_response,
         expected_step_id="step_1",
         material_titles={material["title"] for material in draft["materials"]},
     )
-    assert "has 1199 words" in first_response.error
+    assert "has 2199 words" in first_response.error
 
     escalation_prompt = _plan_detail_step_repair_prompt(
         task_title="Build a proof",
@@ -329,9 +329,9 @@ def test_failed_near_threshold_repair_feeds_error_into_escalation_prompt() -> No
     )
 
     assert "THE PREVIOUS REPAIR ALSO FAILED" in escalation_prompt
-    assert "has 1199 words" in escalation_prompt
+    assert "has 2199 words" in escalation_prompt
     assert '"id": "step_1"' in escalation_prompt
-    assert "1,400-1,600" in escalation_prompt
+    assert "2,500-2,900" in escalation_prompt
 
 
 def test_substep_only_repair_preserves_the_entire_valid_lesson() -> None:
@@ -432,7 +432,7 @@ def test_substep_only_repair_contract_is_small_and_actionable() -> None:
 def test_plan_detail_prompt_examples_obey_their_own_constraints() -> None:
     prompt = load_prompt("plan_item_details")
     assert "(60-90 min)" not in prompt
-    assert "TARGET 1,400-1,600" in prompt
+    assert "TARGET 2,500-2,900" in prompt
 
     example = prompt.split('"substeps": [', 1)[1].split("]", 1)[0]
     substeps = re.findall(r'^\s*"([^"]+)"', example, flags=re.MULTILINE)
@@ -458,13 +458,13 @@ def _outline_payload() -> dict:
 
 def _lesson_sections_payload() -> dict:
     return {
-        "why_this_matters": "substance " * 160,
-        "core_framework": "substance " * 310,
-        "worked_example": "substance " * 230,
-        "failure_modes": "substance " * 190,
-        "guided_practice": "substance " * 280,
-        "check_your_understanding": "substance " * 160,
-        "references": "substance " * 55,
+        "why_this_matters": "substance " * 240,
+        "core_framework": "substance " * 700,
+        "worked_example": "substance " * 460,
+        "failure_modes": "substance " * 330,
+        "guided_practice": "substance " * 500,
+        "check_your_understanding": "substance " * 250,
+        "references": "substance " * 100,
         "substeps": _valid_payload()["steps"][0]["substeps"],
     }
 
@@ -554,7 +554,7 @@ async def test_long_lessons_are_requested_concurrently_after_outline() -> None:
     assert result is not None
     assert started == {"step_1", "step_2", "step_3"}
     assert all(
-        1200 <= len(step["lesson_content"].split()) <= 1800
+        2200 <= len(step["lesson_content"].split()) <= 3400
         for step in result["steps"]
     )
     assert all(

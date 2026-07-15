@@ -1,0 +1,79 @@
+You are designing the strategic backbone for a twelve-week learning cycle.
+This is not the place to write lessons or long task descriptions. Build one
+coherent progression that the server will expand one week at a time.
+
+USER GOAL: {user_goal}
+WEEKLY CAPACITY: {hours_per_week} hours
+USER AGE: {target_age}
+USER CONTEXT:
+{user_context}
+
+MENTOR: {idol_name}
+MENTOR PROFILE:
+{idol_profile_json}
+MENTOR PERSONA:
+{idol_persona_json}
+MENTOR MILESTONES:
+{idol_milestones_json}
+
+GAP ANALYSIS:
+{gaps_json}
+READINESS:
+{readiness_by_gap_json}
+
+DIAGNOSTIC INTERVIEW:
+{interview_transcript_json}
+COMPARISON VERDICT:
+{comparison_summary}
+STRATEGIC BLUEPRINT:
+{blueprint_markdown}
+
+{previous_cycle_block}
+
+BACKBONE CONTRACT:
+- Return exactly weeks 1 through 12 in ascending order.
+- Weeks 1-3 are foundation, 4-6 core_skills, 7-9 applied_practice,
+  and 10-12 integration.
+- Every week advances one clear domain-specific outcome and must build on the
+  prior week. Avoid repeating task titles, resources, or outcomes.
+- Under 6 hours/week, use exactly one mission task and one daily rhythm task.
+- At 6 hours/week or more, use 2-3 mission tasks and 1-2 daily rhythm tasks.
+- Mission types are project, course, or reading. Daily types are habit or
+  practice. Every week must contain both categories.
+- Every mission task receives 2-8 estimated hours. This is the complete weekly
+  mission block, including its three guided lessons and deliberate practice.
+- The sum of estimated_hours must equal exactly {hours_per_week}. Use the
+  learner's full declared capacity rather than returning a thin week. For daily
+  work, estimated_hours is the entire week's repeated practice time.
+- Titles name the exact domain skill, artifact, book, course, or practice.
+  Do not use generic self-help language.
+- success_metric is binary and names the artifact, quantity, or demonstrated
+  standard. Never write "task completed".
+- The blueprint and diagnostic context are binding when present. Start at the
+  learner's actual level and preserve one visible line of progression through
+  all twelve weeks.
+- Never invent quotations, chapter numbers, biographical facts, or resources.
+
+Return strict JSON only:
+{
+  "roadmap_thesis": "One concise strategy connecting the learner's gap to the mentor's methods.",
+  "anti_goals": ["Specific distraction or premature path to avoid, with rationale."],
+  "weeks": [
+    {
+      "week_number": 1,
+      "phase": "foundation|core_skills|applied_practice|integration",
+      "primary_mission": "One precise weekly objective.",
+      "outcome": "The observable capability or artifact the learner will have by week's end.",
+      "tasks": [
+        {
+          "title": "Specific task title",
+          "type": "project|course|reading|habit|practice",
+          "estimated_hours": 2,
+          "success_metric": "Binary evidence of completion."
+        }
+      ],
+      "predicted_friction": "The likely domain-specific obstacle.",
+      "friction_solution": "A concrete response to that obstacle."
+    }
+  ]
+}

@@ -1523,7 +1523,7 @@ async def generate_results(
 
     # Weekly hours the user actually committed to during the interview;
     # falls back to the historical default when they never gave a number.
-    weekly_hours = _extract_weekly_hours(thread.messages) or 10
+    weekly_hours = max(3, _extract_weekly_hours(thread.messages) or 10)
 
     # Persona system prompt (reusable for both phases). comparison_generate.txt
     # and blueprint_generate.txt both defer voice, intensity, and era language

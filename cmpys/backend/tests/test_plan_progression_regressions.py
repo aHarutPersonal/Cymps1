@@ -415,7 +415,7 @@ async def test_detail_retry_does_not_enqueue_when_lesson_is_already_ready() -> N
         "steps": [
             {
                 "id": f"step-{index}",
-                "lesson_content": "word " * 1200,
+                "lesson_content": "word " * 2200,
             }
             for index in range(3)
         ]

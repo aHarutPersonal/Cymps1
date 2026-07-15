@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import re
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
 
@@ -38,6 +39,8 @@ from app.services.llm.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+WEEK_PREPARATION_STALE_AFTER = timedelta(minutes=10)
 
 
 def _writing_thinking_budget(tier: str) -> int | None:
@@ -189,6 +192,7 @@ def _assemble_parallel_lesson_response(
     *,
     step: dict[str, Any],
     material_titles: set[str],
+    target_minutes: int,
 ) -> None:
     """Join required provider sections into the canonical lesson contract."""
     if getattr(response, "error", None):
@@ -213,7 +217,7 @@ def _assemble_parallel_lesson_response(
         + [f"{heading}\n{content.strip()}" for heading, content in section_rows]
     )
     reading_minutes = max(1, round(len(lesson_content.split()) / 200))
-    practice_minutes = 40
+    practice_minutes = max(20, target_minutes - reading_minutes)
     response.data = {
         "id": step.get("id"),
         "title": step.get("title"),
@@ -334,16 +338,17 @@ DETERMINISTIC DEFECTS TO CORRECT:
 {json.dumps(issues, ensure_ascii=False)}{retry_note}
 
 Return ONLY the corrected step JSON object. Preserve the exact step id.
-The lesson_content hard range remains 1,200-1,800 substantive words; target
-1,400-1,600 words to leave a safe counting margin. Use each heading exactly:
+The lesson_content hard range remains 2,200-3,400 substantive words; target
+2,500-2,900 words to leave a safe counting margin. Use each heading exactly:
 ## Why This Matters, ## Core Framework, ## Worked Example, ## Failure Modes,
 ## Guided Practice, ## Check Your Understanding, ## References.
 
 Teach one coherent skill without filler or repeated paragraphs. The worked
 example must be factual or explicitly labeled **Practical scenario**. Guided
 Practice must contain timed phases with a tool, output, and success criterion.
-Return 2-3 substeps of 25-40 words each. Set estimate_minutes to 40-60 and make
-it equal reading_minutes + practice_minutes. Use only exact available material
+Return 2-3 substeps of 25-40 words each. Preserve the draft's approved workload,
+keep estimate_minutes between 40 and 180, and make it equal reading_minutes +
+practice_minutes. Use only exact available material
 titles in resources. Do not add commentary or markdown fences around the JSON.
 """
 
@@ -380,8 +385,8 @@ def _plan_detail_recovery_prompt(prompt: str, error: str) -> tuple[str, str]:
             + error[:4000]
             + "\nRewrite the complete JSON artifact and correct every reported "
             "issue. Preserve exactly three lessons and three materials. Each "
-            "lesson must target 1,400-1,600 substantive words within the hard "
-            "1,200-1,800 range under every required heading, with 25-40 word "
+            "lesson must target 2,500-2,900 substantive words within the hard "
+            "2,200-3,400 range under every required heading, with 25-40 word "
             "actionable substeps and exact "
             "references to top-level material titles. Include exactly one book, "
             "one video, and one allowed third material. Do not pad or repeat.",
@@ -429,6 +434,7 @@ async def _generate_plan_item_details_parallel(
 
     factory = client_factory or get_llm_client
     calls: list[tuple[str, Any, str, str, str | None]] = []
+    target_step_minutes = max(40, min(180, round(mission_hours * 60 / 3)))
 
     outline_prompt = load_and_render(
         "plan_item_details_outline.txt",
@@ -536,6 +542,8 @@ async def _generate_plan_item_details_parallel(
                     "step_json": step,
                     "materials_json": materials,
                     "prior_error": prior_error,
+                    "target_lesson_minutes": target_step_minutes,
+                    "target_practice_minutes": max(20, target_step_minutes - 14),
                 },
                 strict=True,
             )
@@ -548,6 +556,7 @@ async def _generate_plan_item_details_parallel(
                 response,
                 step=step,
                 material_titles=material_titles,
+                target_minutes=target_step_minutes,
             )
 
             step_calls.append(
@@ -692,31 +701,49 @@ def _blueprint_phase_for_week(week: int | None) -> str:
     return "Weeks 10-12: Integration"
 
 
-def normalize_lesson_durations(details: dict[str, Any]) -> dict[str, Any]:
+def normalize_lesson_durations(
+    details: dict[str, Any],
+    *,
+    mission_hours: int | float | None = None,
+) -> dict[str, Any]:
     """Make every lesson's time claim auditable from reading + practice.
 
-    The LLM supplies the practice design, while the backend derives reading
-    time from the actual lesson length and constrains total lesson time to the
-    product's 40-60 minute contract.
+    Reading time is derived from actual words. When the mission has a stored
+    hour budget, divide it across the three lessons so the generated module is
+    sufficient for the work promised on the weekly plan.
     """
-    for step in details.get("steps", []):
+    steps = details.get("steps", [])
+    target_totals: list[int] = []
+    if steps and mission_hours:
+        total_budget = max(40 * len(steps), round(float(mission_hours) * 60))
+        base, remainder = divmod(total_budget, len(steps))
+        target_totals = [
+            min(180, base + (1 if index < remainder else 0))
+            for index in range(len(steps))
+        ]
+
+    for index, step in enumerate(steps):
         lesson = str(step.get("lesson_content") or "")
         word_count = len(lesson.split())
         reading_minutes = max(1, round(word_count / 200))
 
-        requested_total = int(
-            step.get("estimate_minutes") or step.get("estimateMinutes") or 45
+        requested_total = (
+            target_totals[index]
+            if target_totals
+            else int(step.get("estimate_minutes") or step.get("estimateMinutes") or 60)
         )
-        requested_total = max(40, min(60, requested_total))
+        requested_total = max(40, min(180, requested_total))
         requested_practice = int(
             step.get("practice_minutes") or requested_total - reading_minutes
         )
-        practice_minutes = max(30, requested_practice)
+        practice_minutes = max(20, requested_practice)
+        if target_totals:
+            practice_minutes = max(20, requested_total - reading_minutes)
         total_minutes = reading_minutes + practice_minutes
         if total_minutes < 40:
             practice_minutes += 40 - total_minutes
-        elif total_minutes > 60:
-            practice_minutes = max(20, 60 - reading_minutes)
+        elif total_minutes > 180:
+            practice_minutes = max(20, 180 - reading_minutes)
 
         step["reading_minutes"] = reading_minutes
         step["practice_minutes"] = practice_minutes
@@ -779,7 +806,7 @@ async def _load_session_context(
     Returns an empty dict for legacy ``/plans`` jobs (no session resolvable), so
     the plan path degrades gracefully to profile+gap analysis alone.
 
-    Keys returned (all optional) match the plan_generate.txt placeholders:
+    Keys returned (all optional) match the progressive planning prompts:
     ``interview_transcript_json``, ``comparison_summary``, ``blueprint_markdown``.
     """
     if db is None:
@@ -867,6 +894,18 @@ async def _run_plan_generation_async(job_id: str) -> dict:
         if not idol:
             await _update_job(db, job, status="failed", step="error", error_message="Idol not found")
             return {"error": "Idol not found"}
+
+        # Legacy rows could contain a two-hour commitment, which cannot hold
+        # both the required deep mission and daily rhythm without understating
+        # the workload. Keep newly executed jobs on the honest minimum.
+        if job.weekly_hours < 3:
+            logger.warning(
+                "[PLANNING] Raising legacy weekly capacity job_id=%s from %s to 3",
+                job.id,
+                job.weekly_hours,
+            )
+            job.weekly_hours = 3
+            await db.commit()
 
         try:
             # Step 1: Analyzing gaps (0-30%)
@@ -1057,6 +1096,7 @@ async def _run_plan_generation_async(job_id: str) -> dict:
                 roadmap_json={
                     "roadmap_thesis": roadmap.roadmap_thesis,
                     "anti_goals": roadmap.anti_goals,
+                    "backbone_weeks": roadmap.backbone_weeks,
                 },
                 cycle_number=job.cycle_number or 1,
                 previous_plan_id=job.previous_plan_id,
@@ -1102,6 +1142,22 @@ async def _run_plan_generation_async(job_id: str) -> dict:
                 step="done",
                 progress=100,
             )
+
+            # Prepare exactly one locked week ahead at low priority. This call
+            # enriches Week 2's stable placeholder rows before writing its
+            # lessons and is idempotent with the completion-triggered prefetch.
+            if plan.duration_weeks >= 2:
+                try:
+                    prefetch_plan_week_details.apply_async(
+                        args=[str(plan.id), str(job.user_id), 2],
+                        kwargs={"priority": "low"},
+                        queue="default",
+                    )
+                except Exception:
+                    logger.exception(
+                        "[PLANNING] Could not schedule Week 2 look-ahead plan_id=%s",
+                        plan.id,
+                    )
             
             return {"status": "completed", "plan_id": str(plan.id)}
 
@@ -1344,6 +1400,7 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
             "plan_item_details.txt",
             {
                 "task_title": item.title,
+                "mission_hours": item.estimated_hours,
                 "user_goal": user_goal,
                 "learning_preferences": user_learning_pref,
                 "idol_name": idol_name,
@@ -1446,7 +1503,7 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                 last_error: str | None = None
 
                 # A frequent failure is one 10-15 word substep attached to an
-                # otherwise complete 1,400-word lesson. Repair those tiny
+                # otherwise complete long-form lesson. Repair those tiny
                 # strings with a small call and preserve the entire lesson.
                 if issues and all(" substep " in issue for issue in issues):
                     substep_tier = (
@@ -1754,7 +1811,10 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
             # and book/video resources can be deduplicated reliably.
             from app.tasks.ingestion import _normalize_plan_item_details
             details = _normalize_plan_item_details(details)
-            details = normalize_lesson_durations(details)
+            details = normalize_lesson_durations(
+                details,
+                mission_hours=item.estimated_hours,
+            )
             call_quality[id(llm_response)] = _score_detail_payload(details)
 
             detail_quality_score = _score_detail_payload(details)
@@ -1959,15 +2019,199 @@ async def _enqueue_all_details_generation_async(db, plan, user_id):
     )
 
 
-@celery_app.task
+async def _prepare_plan_week_items_async(
+    db,
+    *,
+    plan: Plan,
+    user_id: str,
+    week: int,
+) -> str:
+    """Expand stable future-week placeholders once, preserving their IDs."""
+    roadmap = plan.roadmap_json or {}
+    backbone_weeks = roadmap.get("backbone_weeks") or []
+    backbone_week = next(
+        (
+            row
+            for row in backbone_weeks
+            if int(row.get("week_number") or 0) == week
+        ),
+        None,
+    )
+    if backbone_week is None:
+        return "legacy_ready"
+
+    items_result = await db.execute(
+        select(PlanItem)
+        .where(
+            PlanItem.plan_id == plan.id,
+            PlanItem.week_start <= week,
+            PlanItem.week_end >= week,
+        )
+        .order_by(PlanItem.id.asc())
+        .with_for_update(of=PlanItem)
+    )
+    items = list(items_result.scalars().all())
+    if not items:
+        await db.commit()
+        return "missing"
+
+    statuses = {
+        str((item.meta_json or {}).get("week_content_status") or "backbone")
+        for item in items
+    }
+    if statuses == {"ready"}:
+        await db.commit()
+        return "already_ready"
+
+    now = datetime.now(timezone.utc)
+    active_started_at: datetime | None = None
+    for item in items:
+        metadata = item.meta_json or {}
+        if metadata.get("week_content_status") != "preparing":
+            continue
+        raw_started_at = metadata.get("week_content_started_at")
+        try:
+            parsed = datetime.fromisoformat(str(raw_started_at))
+            active_started_at = (
+                parsed.replace(tzinfo=timezone.utc)
+                if parsed.tzinfo is None
+                else parsed
+            )
+        except (TypeError, ValueError):
+            active_started_at = now
+        break
+    if (
+        active_started_at is not None
+        and now - active_started_at < WEEK_PREPARATION_STALE_AFTER
+    ):
+        await db.commit()
+        return "in_progress"
+
+    for item in items:
+        item.meta_json = {
+            **(item.meta_json or {}),
+            "week_content_status": "preparing",
+            "week_content_started_at": now.isoformat(),
+        }
+    await db.commit()
+
+    try:
+        profile = (
+            await db.execute(
+                select(UserProfile).where(UserProfile.user_id == user_id)
+            )
+        ).scalar_one_or_none()
+        user_goal = (
+            ", ".join((profile.goals or [])[:3])
+            if profile and profile.goals
+            else "personal and professional growth"
+        )
+        context_parts: list[str] = []
+        if profile:
+            if profile.interests:
+                context_parts.append("Interests: " + ", ".join(profile.interests[:5]))
+            if profile.learning_preferences:
+                context_parts.append(
+                    "Learning preferences: "
+                    + ", ".join(profile.learning_preferences[:5])
+                )
+        session_context_data = await _load_session_context(
+            db,
+            user_id=user_id,
+            idol_id=str(plan.idol_id) if plan.idol_id else None,
+        )
+        session_context = "\n\n".join(
+            value for value in session_context_data.values() if value
+        )
+        from app.services.planning.generator import generate_plan_week_from_backbone
+
+        expanded_week = await generate_plan_week_from_backbone(
+            backbone_week=backbone_week,
+            roadmap_thesis=str(roadmap.get("roadmap_thesis") or ""),
+            idol_name=plan.idol.name if plan.idol else "the selected mentor",
+            idol_domain=(plan.idol.domain or "general") if plan.idol else "general",
+            user_goal=user_goal,
+            hours_per_week=plan.weekly_hours,
+            user_context="\n".join(context_parts),
+            session_context=session_context,
+        )
+
+        refreshed_result = await db.execute(
+            select(PlanItem)
+            .where(
+                PlanItem.plan_id == plan.id,
+                PlanItem.week_start <= week,
+                PlanItem.week_end >= week,
+            )
+            .with_for_update(of=PlanItem)
+        )
+        refreshed_items = list(refreshed_result.scalars().all())
+        by_index = {
+            int((item.meta_json or {}).get("backbone_task_index", index)): item
+            for index, item in enumerate(refreshed_items)
+        }
+        if len(by_index) != len(expanded_week.binary_tasks):
+            raise ValueError(
+                f"week {week} placeholder count changed during preparation"
+            )
+        for index, task in enumerate(expanded_week.binary_tasks):
+            item = by_index[index]
+            item.title = task.title[:200]
+            item.description = task.description
+            item.type = PlanItemType(task.type)
+            item.success_metric = (task.success_metric or item.success_metric)[:300]
+            item.meta_json = {
+                **(item.meta_json or {}),
+                "primary_mission": expanded_week.primary_mission,
+                "predicted_friction": expanded_week.predicted_friction,
+                "friction_solution": expanded_week.friction_solution,
+                "daily_instructions": task.daily_instructions,
+                "week_content_status": "ready",
+                "week_content_generated_at": datetime.now(timezone.utc).isoformat(),
+                "week_content_started_at": None,
+            }
+        await db.commit()
+        logger.info(
+            "[PLANNING] Prepared execution-ready Week %s plan_id=%s",
+            week,
+            plan.id,
+        )
+        return "ready"
+    except Exception:
+        logger.exception(
+            "[PLANNING] Could not prepare Week %s plan_id=%s",
+            week,
+            plan.id,
+        )
+        reset_result = await db.execute(
+            select(PlanItem)
+            .where(
+                PlanItem.plan_id == plan.id,
+                PlanItem.week_start <= week,
+                PlanItem.week_end >= week,
+            )
+            .with_for_update(of=PlanItem)
+        )
+        for item in reset_result.scalars().all():
+            item.meta_json = {
+                **(item.meta_json or {}),
+                "week_content_status": "backbone",
+                "week_content_started_at": None,
+            }
+        await db.commit()
+        return "failed"
+
+
+@celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
 def prefetch_plan_week_details(
+    self,
     plan_id: str,
     user_id: str,
     week: int,
     priority: str = "low",
 ) -> dict:
-    """Background organizer used to prepare the next week ahead of unlock."""
-    return run_async(
+    """Prepare the next week ahead of unlock, retrying transient failures."""
+    result = run_async(
         _prefetch_plan_week_details_async(
             plan_id=plan_id,
             user_id=user_id,
@@ -1975,6 +2219,25 @@ def prefetch_plan_week_details(
             priority=priority,
         )
     )
+    if result.get("status") in {"failed", "missing"}:
+        retries = int(getattr(self.request, "retries", 0))
+        countdown = min(60 * (2**retries), 600)
+        logger.warning(
+            "[PLANNING] Retrying Week %s preparation plan_id=%s "
+            "status=%s attempt=%s countdown=%ss",
+            week,
+            plan_id,
+            result["status"],
+            retries + 1,
+            countdown,
+        )
+        raise self.retry(
+            exc=RuntimeError(
+                f"Week {week} preparation returned {result['status']}"
+            ),
+            countdown=countdown,
+        )
+    return result
 
 
 async def _prefetch_plan_week_details_async(
@@ -1987,7 +2250,9 @@ async def _prefetch_plan_week_details_async(
     async with async_session_maker() as db:
         plan = (
             await db.execute(
-                select(Plan).where(
+                select(Plan)
+                .options(selectinload(Plan.idol))
+                .where(
                     Plan.id == plan_id,
                     Plan.user_id == user_id,
                 )
@@ -1995,6 +2260,14 @@ async def _prefetch_plan_week_details_async(
         ).scalar_one_or_none()
         if plan is None or week < 1 or week > plan.duration_weeks:
             return {"status": "skipped", "jobs": []}
+        preparation = await _prepare_plan_week_items_async(
+            db,
+            plan=plan,
+            user_id=user_id,
+            week=week,
+        )
+        if preparation in {"in_progress", "failed", "missing"}:
+            return {"status": preparation, "jobs": []}
         jobs = await _enqueue_plan_week_details_generation_async(
             db,
             plan_id=plan_id,
@@ -2002,4 +2275,4 @@ async def _prefetch_plan_week_details_async(
             week=week,
             priority=priority,
         )
-        return {"status": "queued", "jobs": jobs}
+        return {"status": "queued", "preparation": preparation, "jobs": jobs}

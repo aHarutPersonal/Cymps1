@@ -232,6 +232,7 @@ class TestPlanPromptSessionContext:
     def test_plan_item_details_renders_session_context(self):
         rendered = load_and_render("plan_item_details", {
             "task_title": "Read Security Analysis Ch 1-3",
+            "mission_hours": 4,
             "user_goal": "master value investing",
             "learning_preferences": "reading",
             "idol_name": "Warren Buffett",

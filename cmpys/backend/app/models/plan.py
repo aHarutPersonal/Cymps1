@@ -62,7 +62,7 @@ class Plan(Base, UUIDMixin, TimestampMixin):
         nullable=True,
     )
 
-    # New: stores roadmap_thesis and anti_goals from plan_generate.txt
+    # Stores the progressive roadmap thesis, anti-goals, and compact backbone.
     # Structure: { "roadmap_thesis": "...", "anti_goals": ["..."] }
     roadmap_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     

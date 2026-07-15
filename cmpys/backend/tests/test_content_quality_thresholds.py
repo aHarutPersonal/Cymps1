@@ -49,7 +49,7 @@ def _quality_ready_book_module(*, templated: bool = False) -> dict:
 
 def test_content_quality_thresholds_match_prd_minimums():
     assert MIN_BOOK_MODULE_WORDS == 3200
-    assert MIN_PLAN_DETAIL_LESSON_WORDS == 1200
+    assert MIN_PLAN_DETAIL_LESSON_WORDS == 2200
     assert MIN_PLAN_DETAIL_MATERIAL_WORDS == 350
 
 
@@ -72,18 +72,38 @@ def test_lesson_duration_is_derived_from_reading_and_practice():
     assert step["estimate_minutes"] == 43
 
 
+def test_weekly_lesson_bundle_fills_the_mission_hour_budget():
+    details = {
+        "steps": [
+            {
+                "lesson_content": "word " * 2600,
+                "estimate_minutes": 60,
+                "practice_minutes": 47,
+            }
+            for _ in range(3)
+        ]
+    }
+
+    normalized = normalize_lesson_durations(details, mission_hours=5)
+
+    assert [step["reading_minutes"] for step in normalized["steps"]] == [13, 13, 13]
+    assert [step["estimate_minutes"] for step in normalized["steps"]] == [100, 100, 100]
+    assert [step["practice_minutes"] for step in normalized["steps"]] == [87, 87, 87]
+    assert sum(step["estimate_minutes"] for step in normalized["steps"]) == 5 * 60
+
+
 def test_legacy_short_lesson_is_upgraded_when_opened():
     assert not _lesson_details_meet_quality(
         {"steps": [{"lesson_content": "word " * 500}]}
     )
     assert not _lesson_details_meet_quality(
-        {"steps": [{"lesson_content": "word " * 1200}]}
+        {"steps": [{"lesson_content": "word " * 2200}]}
     )
     assert _lesson_details_meet_quality({
         "steps": [
-            {"lesson_content": "word " * 1200},
-            {"lesson_content": "word " * 1200},
-            {"lesson_content": "word " * 1200},
+            {"lesson_content": "word " * 2200},
+            {"lesson_content": "word " * 2200},
+            {"lesson_content": "word " * 2200},
         ]
     })
 

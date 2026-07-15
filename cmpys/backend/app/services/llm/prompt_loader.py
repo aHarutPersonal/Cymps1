@@ -27,7 +27,8 @@ User prompts and their consumers (placeholders per PROMPT_PLACEHOLDERS below):
 - profile_extract.txt / achievements_extract.txt / timeline_normalize.txt /
   milestones_by_age.txt — ingestion + extraction services.
 - persona_pack.txt — persona generation in ingestion (profile/sources via f-string).
-- plan_generate.txt — generate_plan() in planning.
+- plan_backbone_generate.txt — compact full-cycle strategy in planning.
+- plan_week_generate.txt — execution-ready expansion of one approved week.
 - plan_item_details_outline.txt + plan_item_detail_lesson.txt — the fast,
   parallel lesson-detail path in tasks/plans.py. plan_item_details.txt remains
   the complete-artifact recovery path.
@@ -159,6 +160,7 @@ PROMPT_PLACEHOLDERS = {
     
     "plan_item_details.txt": [
         "task_title",
+        "mission_hours",
         "user_goal",
         "learning_preferences",
         "idol_name",
@@ -189,6 +191,36 @@ PROMPT_PLACEHOLDERS = {
         "step_json",
         "materials_json",
         "prior_error",
+        "target_lesson_minutes",
+        "target_practice_minutes",
+    ],
+
+    "plan_backbone_generate.txt": [
+        "user_goal",
+        "hours_per_week",
+        "target_age",
+        "user_context",
+        "idol_name",
+        "idol_profile_json",
+        "idol_persona_json",
+        "idol_milestones_json",
+        "gaps_json",
+        "readiness_by_gap_json",
+        "interview_transcript_json",
+        "comparison_summary",
+        "blueprint_markdown",
+        "previous_cycle_block",
+    ],
+
+    "plan_week_generate.txt": [
+        "user_goal",
+        "hours_per_week",
+        "user_context",
+        "idol_name",
+        "idol_domain",
+        "roadmap_thesis",
+        "backbone_week_json",
+        "session_context",
     ],
 
     "book_module_generate.txt": [
@@ -570,7 +602,11 @@ PROMPT_REGISTRY = {
     },
     # Plan generation
     "planning": {
-        "generate_plan": ["planner_system.txt", "plan_generate.txt"],
+        "generate_plan": [
+            "planner_system.txt",
+            "plan_backbone_generate.txt",
+            "plan_week_generate.txt",
+        ],
         "generate_item_details": [
             "planner_system.txt",
             "plan_item_details_outline.txt",

@@ -30,9 +30,10 @@ class PlanGenerateRequest(BaseModel):
     # calendar planner. Keeping the API contract exact prevents prompt/runtime
     # disagreement and incomplete plans.
     durationWeeks: int = Field(default=12, ge=12, le=12)
-    # The execution contract always includes one mission and one daily rhythm;
-    # stored estimates are whole hours, so two is the smallest honest cap.
-    weeklyHours: int = Field(default=10, ge=2, le=168)
+    # A mission needs at least two hours for three substantial lessons, and the
+    # required daily rhythm needs one more. Anything lower would mislabel the
+    # actual workload.
+    weeklyHours: int = Field(default=10, ge=3, le=168)
     focus: str | None = Field(default=None, max_length=200)
     # Optional: the agentic session this plan continues. When provided, the
     # interview transcript / comparison / blueprint from that exact session are
@@ -99,7 +100,7 @@ class PlanResponse(BaseModel):
     items: list[PlanItemResponse] = []
     createdAt: datetime
     
-    # Roadmap-level data from plan_generate.txt
+    # Roadmap-level data from the progressive planning prompts
     roadmapThesis: str | None = None
     antiGoals: list[str] = []
     

@@ -22,21 +22,24 @@ APPROVED MATERIALS:
 PREVIOUS ATTEMPT ERROR (empty on the first attempt):
 {prior_error}
 
-Write one standalone skill-building lesson of 1,200-1,800 substantive words;
-target 1,400-1,600 words across the seven required section fields below. The
-backend attaches the approved id, title, description, resources, and auditable
-time split. Do not redesign neighboring lessons. Never abbreviate or return an
-outline.
+Write one standalone skill-building lesson of 2,200-3,400 substantive words;
+target 2,500-2,900 words across the seven required section fields below. This
+is one third of a week-sized mission, not a short article. The complete lesson
+must support approximately {target_lesson_minutes} minutes of study and
+application, including about {target_practice_minutes} minutes of deliberate
+practice. The backend attaches the approved id, title, description, resources,
+and final auditable time split. Do not redesign neighboring lessons. Never
+abbreviate or return an outline.
 
 Every section field is required. Write approximately this many substantive
 words in each value so the completed lesson stays safely inside the total:
-- why_this_matters: 150-180
-- core_framework: 300-350
-- worked_example: 220-260
-- failure_modes: 180-220
-- guided_practice: 260-320
-- check_your_understanding: 140-180
-- references: 40-70
+- why_this_matters: 220-280
+- core_framework: 650-750
+- worked_example: 420-500
+- failure_modes: 300-360
+- guided_practice: 450-550
+- check_your_understanding: 220-280
+- references: 80-120
 
 CONTENT CONTRACT:
 - Explain one coherent mechanism with components, trade-offs, and two concepts
@@ -44,8 +47,11 @@ CONTENT CONTRACT:
 - The worked example must show complete reasoning. Use documented mentor
   evidence only when supplied; otherwise label it **Practical scenario**.
 - Cover at least three failure modes with symptoms and corrections.
-- Guided Practice contains 3-5 numbered phases totaling 30-45 minutes. Every
-  phase names a timer, tool/template, expected output, and success criterion.
+- Guided Practice contains 4-7 numbered phases totaling approximately
+  {target_practice_minutes} minutes. Every phase names a timer, tool/template,
+  expected output, and success criterion. Include independent application,
+  feedback or self-checking, and one revision pass; reading alone is never the
+  practice workload.
 - Check Your Understanding contains three diagnostic questions and an answer
   or checking rubric.
 - References name only the approved resource titles and explain what to use.
@@ -62,13 +68,13 @@ ACTION CONTRACT:
 
 Return strict JSON with no markdown fence or commentary:
 {
-  "why_this_matters": "150-180 words without the heading...",
-  "core_framework": "300-350 words without the heading...",
-  "worked_example": "220-260 words without the heading...",
-  "failure_modes": "180-220 words without the heading...",
-  "guided_practice": "260-320 words without the heading...",
-  "check_your_understanding": "140-180 words without the heading...",
-  "references": "40-70 words without the heading...",
+  "why_this_matters": "220-280 words without the heading...",
+  "core_framework": "650-750 words without the heading...",
+  "worked_example": "420-500 words without the heading...",
+  "failure_modes": "300-360 words without the heading...",
+  "guided_practice": "450-550 words without the heading...",
+  "check_your_understanding": "220-280 words without the heading...",
+  "references": "80-120 words without the heading...",
   "substeps": [
     "A specific measurable action of twenty-eight to forty words.",
     "A second specific measurable action of twenty-eight to forty words."

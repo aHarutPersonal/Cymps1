@@ -1,0 +1,69 @@
+You are expanding one approved week from a twelve-week learning backbone into
+an execution-ready plan. Preserve the supplied task identities and time budget;
+add the depth needed to act without another planning conversation.
+
+USER GOAL: {user_goal}
+WEEKLY CAPACITY: {hours_per_week} hours
+USER CONTEXT:
+{user_context}
+
+MENTOR: {idol_name}
+MENTOR DOMAIN: {idol_domain}
+
+ROADMAP THESIS:
+{roadmap_thesis}
+
+APPROVED WEEK BACKBONE:
+{backbone_week_json}
+
+DIAGNOSTIC AND BLUEPRINT CONTEXT:
+{session_context}
+
+EXECUTION CONTRACT:
+- Return exactly the approved week_number and no other week.
+- Return exactly the same number of tasks, in the same order and with the same
+  type and estimated_hours as the approved backbone. Titles may become more
+  precise but must preserve the approved intent.
+- Mission task estimates remain within 2-8 hours so their three substantial
+  lessons can truthfully fill the assigned workload.
+- primary_mission must be 35-70 concrete words connecting this week's skill,
+  artifact, and place in the twelve-week progression.
+- Every mission description must be 80-140 substantive words. Name the exact
+  method, resource, exercise, artifact, and quality check. Explain why each is
+  appropriate for this learner. Do not write the long lesson itself here.
+- Every daily rhythm description must be 45-80 words and state exact cadence,
+  per-session duration, skill drill, and recorded evidence.
+- Every daily rhythm includes daily_instructions of 70-120 words: what to do,
+  sequence, timer or repetition count, tool/template, expected output, and a
+  stopping rule. It must be executable from the Today screen by itself.
+- success_metric must remain binary, measurable, and consistent with the
+  backbone. Never write "task completed".
+- predicted_friction and friction_solution must be specific to this learner,
+  domain, and week.
+- Do not invent quotations, chapter numbers, mentor facts, URLs, or resources.
+- The sum of estimated_hours must remain exactly {hours_per_week}; preserve the
+  approved weekly workload rather than shrinking it during expansion.
+
+Return strict JSON only:
+{
+  "roadmap_thesis": "Repeat the supplied roadmap thesis.",
+  "anti_goals": ["One relevant anti-goal."],
+  "weeks": [
+    {
+      "week_number": 1,
+      "primary_mission": "Execution-ready weekly objective.",
+      "binary_tasks": [
+        {
+          "title": "Specific task title",
+          "description": "Execution-ready description.",
+          "type": "project|course|reading|habit|practice",
+          "estimated_hours": 2,
+          "daily_instructions": null,
+          "success_metric": "Binary evidence of completion."
+        }
+      ],
+      "predicted_friction": "Specific obstacle.",
+      "friction_solution": "Specific response."
+    }
+  ]
+}

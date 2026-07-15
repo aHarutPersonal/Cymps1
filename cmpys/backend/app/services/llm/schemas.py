@@ -197,7 +197,7 @@ class BinaryTask(BaseModel):
     title: str = Field(max_length=300)
     description: str = Field(min_length=10, max_length=1000)
     type: str = Field(default="project", max_length=50)  # project|course|habit|practice|reading|reflection
-    estimated_hours: float = Field(default=1.0, ge=0.1, le=40.0)
+    estimated_hours: float = Field(default=1.0, ge=0.1, le=168.0)
     daily_instructions: str | None = Field(default=None, max_length=2000)
     success_metric: str | None = Field(default=None, max_length=300)
 
@@ -232,11 +232,49 @@ class PlanWeek(BaseModel):
 
 
 class PlanGenerationResponse(BaseModel):
-    """Response from the new plan_generate.txt prompt."""
+    """Execution-ready week response from the progressive planning prompts."""
 
     roadmap_thesis: str = Field(default="", max_length=1000)
     anti_goals: list[str] = Field(default_factory=list)
     weeks: list[PlanWeek] = Field(default_factory=list)
+
+
+class PlanBackboneTask(BaseModel):
+    """Compact task identity used before its execution week is prepared."""
+
+    title: str = Field(max_length=200)
+    type: Literal["project", "course", "reading", "habit", "practice"]
+    estimated_hours: float = Field(ge=0.1, le=168.0)
+    success_metric: str = Field(max_length=300)
+
+
+class PlanBackboneWeek(BaseModel):
+    """A concise week-level contract that keeps the full cycle coherent."""
+
+    week_number: int = Field(ge=1, le=52)
+    phase: Literal["foundation", "core_skills", "applied_practice", "integration"]
+    primary_mission: str = Field(max_length=500)
+    outcome: str = Field(max_length=500)
+    tasks: list[PlanBackboneTask] = Field(min_length=2, max_length=5)
+    predicted_friction: str = Field(max_length=500)
+    friction_solution: str = Field(max_length=500)
+
+    @model_validator(mode="after")
+    def require_mission_and_daily_rhythm(self) -> "PlanBackboneWeek":
+        task_types = {task.type for task in self.tasks}
+        if not task_types.intersection({"project", "course", "reading"}):
+            raise ValueError("backbone week requires a mission task")
+        if not task_types.intersection({"habit", "practice"}):
+            raise ValueError("backbone week requires a daily rhythm task")
+        return self
+
+
+class PlanBackboneResponse(BaseModel):
+    """Small complete-cycle map expanded one execution week at a time."""
+
+    roadmap_thesis: str = Field(min_length=20, max_length=1000)
+    anti_goals: list[str] = Field(min_length=1, max_length=6)
+    weeks: list[PlanBackboneWeek] = Field(min_length=1, max_length=52)
 
 
 class PlanDetailIdeaOutput(BaseModel):
@@ -321,9 +359,9 @@ class PlanDetailStepOutput(BaseModel):
     id: str = Field(pattern=r"^step_[1-3]$")
     title: str = Field(max_length=60)
     description: str
-    estimate_minutes: int = Field(ge=40, le=60)
-    reading_minutes: int = Field(ge=1, le=30)
-    practice_minutes: int = Field(ge=20, le=59)
+    estimate_minutes: int = Field(ge=40, le=180)
+    reading_minutes: int = Field(ge=8, le=30)
+    practice_minutes: int = Field(ge=20, le=170)
     lesson_content: str
     resources: list[str] = Field(min_length=1, max_length=2)
     substeps: list[str] = Field(min_length=2, max_length=3)
@@ -348,10 +386,10 @@ def plan_detail_step_quality_issues(
     """Return every semantic defect so recovery never chases one at a time."""
     issues: list[str] = []
     lesson_words = len(step.lesson_content.split())
-    if not 1200 <= lesson_words <= 1800:
+    if not 2200 <= lesson_words <= 3400:
         issues.append(
             f"{step.id} lesson_content has {lesson_words} words; "
-            "required range is 1200-1800"
+            "required range is 2200-3400"
         )
     missing = [
         heading
@@ -442,48 +480,48 @@ class PlanDetailLessonSectionsOutput(BaseModel):
     """
 
     why_this_matters: str = Field(
-        min_length=650,
-        description="150-180 substantive words explaining relevance and stakes.",
+        min_length=900,
+        description="220-280 substantive words explaining relevance and stakes.",
     )
     core_framework: str = Field(
-        min_length=1300,
+        min_length=2600,
         description=(
-            "300-350 substantive words teaching the mechanism, components, "
+            "650-750 substantive words teaching the mechanism, components, "
             "trade-offs, and commonly confused concepts."
         ),
     )
     worked_example: str = Field(
-        min_length=950,
+        min_length=1700,
         description=(
-            "220-260 substantive words showing complete reasoning in a factual "
+            "420-500 substantive words showing complete reasoning in a factual "
             "example or an explicitly labeled Practical scenario."
         ),
     )
     failure_modes: str = Field(
-        min_length=750,
+        min_length=1200,
         description=(
-            "180-220 substantive words covering at least three symptoms and "
+            "300-360 substantive words covering at least three symptoms and "
             "their corrections."
         ),
     )
     guided_practice: str = Field(
-        min_length=1100,
+        min_length=1900,
         description=(
-            "260-320 substantive words with 3-5 numbered timed phases, tools, "
+            "450-550 substantive words with 4-7 numbered timed phases, tools, "
             "outputs, and success criteria."
         ),
     )
     check_your_understanding: str = Field(
-        min_length=600,
+        min_length=900,
         description=(
-            "140-180 substantive words containing three diagnostic questions "
+            "220-280 substantive words containing three diagnostic questions "
             "and an answer or checking rubric."
         ),
     )
     references: str = Field(
-        min_length=180,
+        min_length=320,
         description=(
-            "40-70 substantive words naming only approved resource titles and "
+            "80-120 substantive words naming only approved resource titles and "
             "explaining what to use from each."
         ),
     )

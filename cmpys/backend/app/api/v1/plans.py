@@ -4,7 +4,8 @@ Development plans endpoints.
 PROMPT MAPPING:
 - POST /plans/generate
   - Service: app.services.planning.generator.generate_plan()
-  - Prompts (when LLM mode): planner_system.txt, plan_generate.txt
+  - Prompts (when LLM mode): planner_system.txt, plan_backbone_generate.txt,
+    plan_week_generate.txt
   - LLM: OPTIONAL (controlled by PLAN_GENERATOR_MODE env var)
   
 - All other endpoints: NO LLM (database operations only)

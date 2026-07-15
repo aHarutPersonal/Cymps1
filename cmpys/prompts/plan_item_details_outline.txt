@@ -34,8 +34,10 @@ CURRICULUM RULES:
   check. The mental_model names one specific model used across the sequence.
 - Use documented mentor evidence when available. Never invent mentor quotes,
   chapter numbers, dates, anecdotes, or results.
-- Depth beats filler. The mission-hour value describes the complete mission,
-  while this scaffold defines its three guided teaching sessions.
+- The three guided lessons and their practice assignments must collectively
+  consume the mission-hour budget. Design a real weekly curriculum, not three
+  short readings: concept acquisition, coached application, independent work,
+  feedback or self-checking, and revision must all appear across the sequence.
 
 Return strict JSON with exactly this shape and no commentary:
 {
