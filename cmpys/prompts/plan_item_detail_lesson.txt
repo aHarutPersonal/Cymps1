@@ -61,10 +61,14 @@ CONTENT CONTRACT:
 - Avoid filler and repeated paragraphs.
 
 ACTION CONTRACT:
-- Include 2-3 distinct substeps of 20-50 words; target 28-40 words so minor
-  counting differences stay safely inside the hard range. Each names a timer
-  or concrete scope, tool/template or behavior, expected output, and success
+- Include one substep per distinct executable action. Use as many substeps as
+  the lesson genuinely needs; never merge, omit, or invent actions to hit a
+  fixed count. Each is 20-50 words, targeting 28-40, and names a timer or
+  concrete scope, tool/template or behavior, expected output, and success
   criterion.
+- substeps is an array of JSON strings, never objects. Guided-practice phases
+  may map one-to-one to substeps when each phase is a meaningful user-visible
+  action.
 - When PREVIOUS ATTEMPT ERROR is non-empty, explicitly correct every reported
   defect while preserving all valid requirements. Do not shorten other sections.
 
@@ -73,4 +77,4 @@ keys: why_this_matters, core_framework, worked_example, failure_modes,
 guided_practice, check_your_understanding, references, and substeps. The first
 seven values must contain the completed prose itself, never a word-count label,
 template phrase, ellipsis, or description of what should be written. substeps
-must be an array containing the completed actions.
+must contain every necessary completed action string without a fixed count.

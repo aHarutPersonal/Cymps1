@@ -204,6 +204,115 @@ def _validate_plan_detail_step_response(
         response.error = f"Plan lesson repair validation failed: {exc}"
 
 
+def _normalize_plan_detail_section_substeps(payload: Any) -> Any:
+    """Canonicalize provider-authored checklist objects without dropping actions."""
+    if not isinstance(payload, dict):
+        return payload
+    raw_substeps = payload.get("substeps")
+    if not isinstance(raw_substeps, list):
+        return payload
+
+    normalized: list[Any] = []
+
+    def compact(value: Any, limit: int) -> str:
+        words = str(value).strip().split()
+        return " ".join(words[:limit]).rstrip(".,;: ")
+
+    for value in raw_substeps:
+        if isinstance(value, str):
+            normalized.append(value.strip())
+            continue
+        if not isinstance(value, dict):
+            normalized.append(value)
+            continue
+
+        raw_action = next(
+            (
+                str(value[key]).strip()
+                for key in ("instruction", "action", "task", "description")
+                if value.get(key)
+            ),
+            "",
+        )
+        duration = next(
+            (
+                value[key]
+                for key in (
+                    "time_minutes",
+                    "duration_minutes",
+                    "minutes",
+                    "duration",
+                )
+                if value.get(key) is not None
+            ),
+            None,
+        )
+        tool = next(
+            (
+                str(value[key]).strip()
+                for key in ("tool", "template", "method")
+                if value.get(key)
+            ),
+            "",
+        )
+        output = next(
+            (
+                str(value[key]).strip()
+                for key in ("expected_output", "output", "deliverable")
+                if value.get(key)
+            ),
+            "",
+        )
+        criterion = next(
+            (
+                str(value[key]).strip()
+                for key in (
+                    "success_criterion",
+                    "success_criteria",
+                    "criterion",
+                    "check",
+                    "verification",
+                )
+                if value.get(key)
+            ),
+            "",
+        )
+
+        detail_clauses: list[str] = []
+        if duration is not None:
+            detail_clauses.append(f"Use a {duration}-minute timer.")
+        if tool:
+            detail_clauses.append(f"Use {compact(tool, 6)}.")
+        if output:
+            detail_clauses.append(f"Produce {compact(output, 8)}.")
+        if criterion:
+            detail_clauses.append(f"Success means {compact(criterion, 8)}.")
+        if duration is not None and not output and not criterion:
+            detail_clauses.append(
+                "Save the resulting output and verify it against the lesson's "
+                "stated success criterion."
+            )
+
+        detail_words = len(" ".join(detail_clauses).split())
+        action_limit = min(30, max(12, 50 - detail_words))
+        action = compact(raw_action, action_limit)
+        if not action:
+            normalized.append("")
+            continue
+
+        text = " ".join([action + ".", *detail_clauses]).strip()
+        if len(text.split()) < 20:
+            text += (
+                " Save the resulting output and verify it against the lesson's "
+                "stated success criterion."
+            )
+        if len(text.split()) > 50:
+            text = " ".join(text.split()[:50]).rstrip(".,;: ") + "."
+        normalized.append(text)
+
+    return {**payload, "substeps": normalized}
+
+
 def _assemble_parallel_lesson_response(
     response: Any,
     *,
@@ -215,7 +324,8 @@ def _assemble_parallel_lesson_response(
     if getattr(response, "error", None):
         return
     try:
-        sections = PlanDetailLessonSectionsOutput.model_validate(response.data)
+        normalized_payload = _normalize_plan_detail_section_substeps(response.data)
+        sections = PlanDetailLessonSectionsOutput.model_validate(normalized_payload)
     except ValidationError as exc:
         response.error = f"Plan lesson sections validation failed: {exc}"
         return
@@ -371,10 +481,12 @@ heading exactly:
 Teach one coherent skill without filler or repeated paragraphs. The worked
 example must be factual or explicitly labeled **Practical scenario**. Guided
 Practice must contain timed phases with a tool, output, and success criterion.
-Return 2-3 substeps of 25-40 words each. Preserve the draft's approved workload,
-keep estimate_minutes between 40 and 180, and make it equal reading_minutes +
-practice_minutes. Use only exact available material
-titles in resources. Do not add commentary or markdown fences around the JSON.
+Return one substep per necessary executable action, using 25-40 words each.
+Preserve every meaningful action and the draft's approved workload. Do not pad,
+merge, or drop actions to hit a fixed count. Keep estimate_minutes between 40
+and 180, and make it equal reading_minutes + practice_minutes. Use only exact
+available material titles in resources. Do not add commentary or markdown
+fences around the JSON.
 """
 
 
@@ -393,10 +505,12 @@ Lesson description: {step.get("description", "")}
 Current substeps: {json.dumps(step.get("substeps", []), ensure_ascii=False)}
 Defects: {json.dumps(issues, ensure_ascii=False)}
 
-Return ONLY a JSON object with one key named substeps. Supply 2-3 distinct,
-measurable actions of 25-40 words each. Every action must name a timer or
+Return ONLY a JSON object with one key named substeps. Supply one distinct,
+measurable 25-40 word string per necessary action, with no fixed item count.
+Every action must name a timer or
 concrete scope, the tool/template or behavior, the expected output, and a
-success criterion. Preserve the lesson's skill and do not return the lesson.
+success criterion. Preserve every meaningful existing action, the lesson's
+skill, and do not return the lesson.
 """
 
 
@@ -541,10 +655,11 @@ async def _generate_plan_item_details_parallel(
         for attempt in range(2):
             lesson_tier = "quality"
             lesson_client = factory(
-                timeout=120,
+                timeout=150,
                 max_tokens=7000,
                 tier=lesson_tier,
                 thinking_budget=_writing_thinking_budget(lesson_tier),
+                allow_fallback=False,
             )
             lesson_prompt = load_and_render(
                 "plan_item_detail_lesson.txt",

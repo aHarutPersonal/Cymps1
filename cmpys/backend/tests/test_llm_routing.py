@@ -127,6 +127,21 @@ def test_yunwu_factory_builds_independent_gemini_fallback(monkeypatch):
     assert client.fallback.model == "gemini-test-model"
 
 
+def test_yunwu_factory_can_disable_fallback_for_latency_sensitive_calls(
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "llm_provider", "yunwu")
+    monkeypatch.setattr(settings, "yunwu_api_key", "yunwu-test")
+    monkeypatch.setattr(settings, "gemini_api_key", "gemini-test")
+    monkeypatch.setattr(settings, "yunwu_fallback_enabled", True)
+    monkeypatch.setattr(settings, "yunwu_quality_model", "quality-test")
+
+    client = get_llm_client(tier="quality", allow_fallback=False)
+
+    assert isinstance(client, OpenAILLMClient)
+    assert client.model == "quality-test"
+
+
 class _ResponseClient(BaseLLMClient):
     def __init__(self, response: LLMResponse, model: str):
         self.response = response

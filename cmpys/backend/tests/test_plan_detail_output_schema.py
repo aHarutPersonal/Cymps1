@@ -415,7 +415,8 @@ def test_substep_only_repair_contract_is_small_and_actionable() -> None:
         issues=["step_1 substep 1 has 10 words"],
     )
     assert "do not return the lesson" in prompt
-    assert "25-40 words" in prompt
+    assert "25-40 word" in prompt
+    assert "no fixed item count" in prompt
 
     valid_substep = (
         "Set a twenty minute timer, apply the framework to one real artifact, "
@@ -425,6 +426,11 @@ def test_substep_only_repair_contract_is_small_and_actionable() -> None:
         {"substeps": [valid_substep, valid_substep]}
     )
     assert len(result.substeps) == 2
+
+    expanded = PlanDetailSubstepsRepairOutput.model_validate(
+        {"substeps": [valid_substep] * 6}
+    )
+    assert len(expanded.substeps) == 6
 
     with pytest.raises(ValueError, match="required range is 20-50"):
         PlanDetailSubstepsRepairOutput.model_validate(
@@ -580,7 +586,8 @@ async def test_long_lessons_are_requested_concurrently_after_outline(
     ]
     assert client_options[0]["tier"] == "balanced"
     assert all(options["tier"] == "quality" for options in client_options[1:])
-    assert all(options["timeout"] == 120 for options in client_options[1:])
+    assert all(options["timeout"] == 150 for options in client_options[1:])
+    assert all(options["allow_fallback"] is False for options in client_options[1:])
 
 
 def test_parallel_lesson_rejects_prompt_example_placeholders() -> None:
@@ -617,6 +624,69 @@ def test_section_quality_uses_words_instead_of_brittle_character_counts() -> Non
     )
 
     assert plan_detail_lesson_section_quality_issues(sections) == []
+
+
+def test_parallel_lesson_preserves_all_object_phases_as_substeps() -> None:
+    payload = _lesson_sections_payload()
+    payload["substeps"] = [
+        {
+            "instruction": (
+                f"Apply phase {index} to one real artifact and record the key "
+                "decision before proceeding to the next phase."
+            ),
+            "time_minutes": 10 + index,
+            "expected_output": f"an annotated phase {index} decision",
+            "success_criterion": "the decision is specific and evidence-backed",
+        }
+        for index in range(1, 7)
+    ]
+    response = SimpleNamespace(data=payload, error=None)
+
+    _assemble_parallel_lesson_response(
+        response,
+        step=_outline_payload()["steps"][0],
+        material_titles={"Resource 1", "Resource 2", "Resource 3"},
+        target_minutes=80,
+    )
+
+    assert response.error is None
+    assert len(response.data["substeps"]) == 6
+    assert all(isinstance(substep, str) for substep in response.data["substeps"])
+    assert all(
+        20 <= len(substep.split()) <= 50
+        for substep in response.data["substeps"]
+    )
+    assert "phase 1" in response.data["substeps"][0]
+    assert "phase 6" in response.data["substeps"][5]
+
+
+def test_parallel_lesson_compacts_verbose_substep_objects_without_retry() -> None:
+    payload = _lesson_sections_payload()
+    payload["substeps"] = [
+        {
+            "action": " ".join([f"action{index}"] * 45),
+            "duration_minutes": 12,
+            "tool": "structured evidence review worksheet with decision notes",
+            "output": "one annotated decision artifact ready for peer review",
+            "success_criterion": "every conclusion cites concrete evidence and a next action",
+        }
+        for index in range(1, 4)
+    ]
+    response = SimpleNamespace(data=payload, error=None)
+
+    _assemble_parallel_lesson_response(
+        response,
+        step=_outline_payload()["steps"][0],
+        material_titles={"Resource 1", "Resource 2", "Resource 3"},
+        target_minutes=80,
+    )
+
+    assert response.error is None
+    assert all(
+        20 <= len(substep.split()) <= 50
+        for substep in response.data["substeps"]
+    )
+    assert all("Success means" in substep for substep in response.data["substeps"])
 
 
 def test_targeted_lesson_validation_canonicalizes_model_authored_timing() -> None:

@@ -364,7 +364,7 @@ class PlanDetailStepOutput(BaseModel):
     practice_minutes: int = Field(ge=20, le=172)
     lesson_content: str
     resources: list[str] = Field(min_length=1, max_length=2)
-    substeps: list[str] = Field(min_length=2, max_length=3)
+    substeps: list[str] = Field(min_length=1)
 
 
 PLAN_DETAIL_REQUIRED_HEADINGS = (
@@ -526,13 +526,13 @@ class PlanDetailLessonSectionsOutput(BaseModel):
         ),
     )
     substeps: list[
-        Annotated[str, Field(min_length=120, max_length=400)]
+        Annotated[str, Field(min_length=1, max_length=500)]
     ] = Field(
-        min_length=2,
-        max_length=3,
+        min_length=1,
         description=(
-            "Two or three distinct 28-40-word actions; each includes scope or "
-            "timer, tool or behavior, output, and success criterion."
+            "One string per necessary executable action; each targets 28-40 "
+            "words and includes scope or timer, tool or behavior, output, and "
+            "success criterion."
         ),
     )
 
@@ -565,7 +565,7 @@ def plan_detail_lesson_section_quality_issues(
 class PlanDetailSubstepsRepairOutput(BaseModel):
     """Small repair payload for an otherwise-valid lesson."""
 
-    substeps: list[str] = Field(min_length=2, max_length=3)
+    substeps: list[str] = Field(min_length=1)
 
     @model_validator(mode="after")
     def require_actionable_substeps(self) -> "PlanDetailSubstepsRepairOutput":

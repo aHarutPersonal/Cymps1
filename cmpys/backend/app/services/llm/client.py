@@ -1056,6 +1056,7 @@ def get_llm_client(
     tier: str | None = None,
     thinking_budget: int | None = None,
     temperature: float = 0.1,
+    allow_fallback: bool = True,
 ) -> BaseLLMClient:
     """
     Factory function to get the configured LLM client.
@@ -1069,6 +1070,8 @@ def get_llm_client(
         tier: ``fast`` (Flash-Lite), ``balanced`` (Flash), or ``quality`` (Pro)
         thinking_budget: Gemini thinking-token budget. Use 0 for extraction or
             long-form writing where the prompt already supplies the structure.
+        allow_fallback: Whether Yunwu failures may retry through Gemini. Disable
+            for latency-sensitive calls that already have focused retries.
     """
     from app.core.config import settings
     
@@ -1120,7 +1123,11 @@ def get_llm_client(
         )
     elif provider == "yunwu":
         fallback_client = None
-        if settings.yunwu_fallback_enabled and settings.gemini_api_key:
+        if (
+            allow_fallback
+            and settings.yunwu_fallback_enabled
+            and settings.gemini_api_key
+        ):
             fallback_model = {
                 "fast": settings.gemini_fast_model,
                 "balanced": settings.gemini_model,
