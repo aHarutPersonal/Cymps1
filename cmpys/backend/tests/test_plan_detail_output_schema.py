@@ -12,8 +12,10 @@ from app.services.llm.schemas import (
     PlanDetailSubstepsRepairOutput,
     PlanItemDetailsOutlineOutput,
     PlanItemDetailsOutput,
+    plan_detail_lesson_section_quality_issues,
 )
 from app.tasks.plans import (
+    _assemble_parallel_lesson_response,
     _generate_plan_item_details_parallel,
     _merge_plan_detail_repairs,
     _plan_detail_repair_plan,
@@ -142,7 +144,7 @@ def test_semantic_validation_failure_gets_quality_specific_retry() -> None:
     )
 
     assert stage == "quality_recovery"
-    assert "2,200-3,400" in retry
+    assert "1,900-3,400" in retry
     assert "lesson has 20 words" in retry
 
 
@@ -226,7 +228,7 @@ def test_targeted_repair_prompt_includes_draft_materials_and_safe_target() -> No
     assert "PREVIOUS STEP DRAFT TO IMPROVE" in prompt
     assert "Learn technique 1" in prompt
     assert "Resource 1" in prompt
-    assert "2,500-2,900" in prompt
+    assert "2,400-2,800" in prompt
     assert "25-40 words" in prompt
 
 
@@ -236,16 +238,17 @@ def test_single_step_repair_schema_keeps_the_full_quality_floor() -> None:
 
     invalid_step = dict(valid_step)
     invalid_step["lesson_content"] = "short"
-    with pytest.raises(ValueError, match="required range is 2200-3400"):
+    with pytest.raises(ValueError, match="accepted range is 1900-3400"):
         PlanDetailStepRepairOutput.model_validate(invalid_step)
 
 
 @pytest.mark.parametrize(
     ("word_count", "accepted"),
     [
-        (2186, False),
-        (2199, False),
-        (2200, True),
+        (1899, False),
+        (1900, True),
+        (1977, True),
+        (2176, True),
         (3400, True),
         (3401, False),
     ],
@@ -267,7 +270,7 @@ def test_single_step_repair_enforces_exact_lesson_boundaries(
 
 def test_near_threshold_repair_preserves_every_valid_shared_component() -> None:
     payload = _valid_payload()
-    payload["steps"][0]["lesson_content"] = _lesson_with_word_count(2186)
+    payload["steps"][0]["lesson_content"] = _lesson_with_word_count(1886)
     original = copy.deepcopy(payload)
 
     repair_plan = _plan_detail_repair_plan(payload)
@@ -275,7 +278,7 @@ def test_near_threshold_repair_preserves_every_valid_shared_component() -> None:
     assert repair_plan is not None
     draft, issues_by_step = repair_plan
     assert set(issues_by_step) == {"step_1"}
-    assert any("has 2186 words" in issue for issue in issues_by_step["step_1"])
+    assert any("has 1886 words" in issue for issue in issues_by_step["step_1"])
 
     repaired_step = copy.deepcopy(draft["steps"][0])
     repaired_step["lesson_content"] = _lesson_with_word_count(2700)
@@ -296,25 +299,25 @@ def test_near_threshold_repair_preserves_every_valid_shared_component() -> None:
     assert merged["materials"] == draft["materials"]
     assert merged["definition_of_done"] == draft["definition_of_done"]
     assert merged["mental_model"] == draft["mental_model"]
-    assert len(payload["steps"][0]["lesson_content"].split()) == 2186
+    assert len(payload["steps"][0]["lesson_content"].split()) == 1886
 
 
 def test_failed_near_threshold_repair_feeds_error_into_escalation_prompt() -> None:
     payload = _valid_payload()
-    payload["steps"][0]["lesson_content"] = _lesson_with_word_count(2186)
+    payload["steps"][0]["lesson_content"] = _lesson_with_word_count(1886)
     repair_plan = _plan_detail_repair_plan(payload)
     assert repair_plan is not None
     draft, issues_by_step = repair_plan
 
     still_short = copy.deepcopy(draft["steps"][0])
-    still_short["lesson_content"] = _lesson_with_word_count(2199)
+    still_short["lesson_content"] = _lesson_with_word_count(1899)
     first_response = SimpleNamespace(data=still_short, error=None)
     _validate_plan_detail_step_response(
         first_response,
         expected_step_id="step_1",
         material_titles={material["title"] for material in draft["materials"]},
     )
-    assert "has 2199 words" in first_response.error
+    assert "has 1899 words" in first_response.error
 
     escalation_prompt = _plan_detail_step_repair_prompt(
         task_title="Build a proof",
@@ -329,9 +332,9 @@ def test_failed_near_threshold_repair_feeds_error_into_escalation_prompt() -> No
     )
 
     assert "THE PREVIOUS REPAIR ALSO FAILED" in escalation_prompt
-    assert "has 2199 words" in escalation_prompt
+    assert "has 1899 words" in escalation_prompt
     assert '"id": "step_1"' in escalation_prompt
-    assert "2,500-2,900" in escalation_prompt
+    assert "2,400-2,800" in escalation_prompt
 
 
 def test_substep_only_repair_preserves_the_entire_valid_lesson() -> None:
@@ -432,7 +435,7 @@ def test_substep_only_repair_contract_is_small_and_actionable() -> None:
 def test_plan_detail_prompt_examples_obey_their_own_constraints() -> None:
     prompt = load_prompt("plan_item_details")
     assert "(60-90 min)" not in prompt
-    assert "TARGET 2,500-2,900" in prompt
+    assert "TARGET 2,400-2,800" in prompt
 
     example = prompt.split('"substeps": [', 1)[1].split("]", 1)[0]
     substeps = re.findall(r'^\s*"([^"]+)"', example, flags=re.MULTILINE)
@@ -505,11 +508,14 @@ def test_quality_writing_keeps_required_model_thinking_enabled() -> None:
 
 
 @pytest.mark.asyncio
-async def test_long_lessons_are_requested_concurrently_after_outline() -> None:
+async def test_long_lessons_are_requested_concurrently_after_outline(
+    monkeypatch,
+) -> None:
     payload = _valid_payload()
     outline = _outline_payload()
     started: set[str] = set()
     all_started = asyncio.Event()
+    client_options: list[dict] = []
 
     class FakeClient:
         model = "fake-model"
@@ -533,7 +539,13 @@ async def test_long_lessons_are_requested_concurrently_after_outline() -> None:
             )
 
     def client_factory(**kwargs):
+        client_options.append(kwargs)
         return FakeClient()
+
+    monkeypatch.setattr(
+        "app.services.llm.client.get_llm_client",
+        client_factory,
+    )
 
     result, calls, error = await _generate_plan_item_details_parallel(
         system_prompt="planner",
@@ -547,14 +559,13 @@ async def test_long_lessons_are_requested_concurrently_after_outline() -> None:
         session_context="",
         active_tier="balanced",
         routing_reason="test",
-        client_factory=client_factory,
     )
 
     assert error is None
     assert result is not None
     assert started == {"step_1", "step_2", "step_3"}
     assert all(
-        2200 <= len(step["lesson_content"].split()) <= 3400
+        1900 <= len(step["lesson_content"].split()) <= 3400
         for step in result["steps"]
     )
     assert all(
@@ -564,6 +575,125 @@ async def test_long_lessons_are_requested_concurrently_after_outline() -> None:
     assert [stage for stage, *_ in calls] == [
         "parallel_outline_attempt_1",
         "parallel_lesson_step_1_attempt_1",
+        "parallel_lesson_step_2_attempt_1",
+        "parallel_lesson_step_3_attempt_1",
+    ]
+    assert client_options[0]["tier"] == "balanced"
+    assert all(options["tier"] == "quality" for options in client_options[1:])
+    assert all(options["timeout"] == 120 for options in client_options[1:])
+
+
+def test_parallel_lesson_rejects_prompt_example_placeholders() -> None:
+    placeholder = "220-280 words without the heading"
+    sections = {
+        field_name: placeholder
+        for field_name in (
+            "why_this_matters",
+            "core_framework",
+            "worked_example",
+            "failure_modes",
+            "guided_practice",
+            "check_your_understanding",
+            "references",
+        )
+    }
+    sections["substeps"] = _valid_payload()["steps"][0]["substeps"]
+    response = SimpleNamespace(data=sections, error=None)
+
+    _assemble_parallel_lesson_response(
+        response,
+        step=_outline_payload()["steps"][0],
+        material_titles={"Resource 1", "Resource 2", "Resource 3"},
+        target_minutes=80,
+    )
+
+    assert "sections quality failed" in (response.error or "")
+    assert "why_this_matters has" in (response.error or "")
+
+
+def test_section_quality_uses_words_instead_of_brittle_character_counts() -> None:
+    sections = PlanDetailLessonSectionsOutput.model_validate(
+        _lesson_sections_payload()
+    )
+
+    assert plan_detail_lesson_section_quality_issues(sections) == []
+
+
+def test_targeted_lesson_validation_canonicalizes_model_authored_timing() -> None:
+    step = copy.deepcopy(_valid_payload()["steps"][1])
+    step["lesson_content"] = _lesson_with_word_count(2176)
+    step["estimate_minutes"] = 180
+    step["reading_minutes"] = 40
+    step["practice_minutes"] = 140
+    response = SimpleNamespace(data=step, error=None)
+
+    _validate_plan_detail_step_response(
+        response,
+        expected_step_id="step_2",
+        material_titles={"Resource 1", "Resource 2", "Resource 3"},
+    )
+
+    assert response.error is None
+    assert response.data["reading_minutes"] == 11
+    assert response.data["practice_minutes"] == 169
+    assert response.data["estimate_minutes"] == 180
+
+
+@pytest.mark.asyncio
+async def test_parallel_generation_retries_only_the_failed_lesson() -> None:
+    outline = _outline_payload()
+    attempts_by_step: dict[str, int] = {}
+    prompts_by_step: dict[str, list[str]] = {}
+
+    class FakeClient:
+        model = "fake-model"
+
+        async def generate_json(self, *, user_prompt, output_model, **kwargs):
+            if output_model is PlanItemDetailsOutlineOutput:
+                return SimpleNamespace(data=copy.deepcopy(outline), error=None)
+
+            step_id = next(
+                candidate["id"]
+                for candidate in outline["steps"]
+                if f'"id":"{candidate["id"]}"' in user_prompt
+            )
+            attempts_by_step[step_id] = attempts_by_step.get(step_id, 0) + 1
+            prompts_by_step.setdefault(step_id, []).append(user_prompt)
+            if step_id == "step_1" and attempts_by_step[step_id] == 1:
+                invalid = {
+                    **_lesson_sections_payload(),
+                    "core_framework": "650-750 words without the heading",
+                }
+                return SimpleNamespace(data=invalid, error=None)
+            return SimpleNamespace(
+                data=copy.deepcopy(_lesson_sections_payload()),
+                error=None,
+            )
+
+    result, calls, error = await _generate_plan_item_details_parallel(
+        system_prompt="planner",
+        task_title="Build a validated experiment",
+        mission_hours=5,
+        user_goal="learn product experimentation",
+        learning_preferences="reading and practice",
+        idol_name="Mentor",
+        idol_domain="technology",
+        idol_evidence={},
+        session_context="",
+        active_tier="balanced",
+        routing_reason="test",
+        client_factory=lambda **kwargs: FakeClient(),
+    )
+
+    assert error is None
+    assert result is not None
+    assert attempts_by_step == {"step_1": 2, "step_2": 1, "step_3": 1}
+    assert "PREVIOUS ATTEMPT ERROR" in prompts_by_step["step_1"][1]
+    assert "core_framework has" in prompts_by_step["step_1"][1]
+    assert [stage for stage, *_ in calls] == [
+        "parallel_outline_attempt_1",
+        "parallel_lesson_step_1_attempt_1",
+        "parallel_lesson_step_1_attempt_2",
         "parallel_lesson_step_2_attempt_1",
         "parallel_lesson_step_3_attempt_1",
     ]

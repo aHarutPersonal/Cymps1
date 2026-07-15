@@ -22,9 +22,11 @@ APPROVED MATERIALS:
 PREVIOUS ATTEMPT ERROR (empty on the first attempt):
 {prior_error}
 
-Write one standalone skill-building lesson of 2,200-3,400 substantive words;
-target 2,500-2,900 words across the seven required section fields below. This
-is one third of a week-sized mission, not a short article. The complete lesson
+Write one standalone skill-building lesson targeting 2,400-2,800 substantive
+words across the seven required section fields below. The backend accepts a
+complete, well-structured near miss down to 1,900 words; never aim for that
+safety floor. This is one third of a week-sized mission, not a short article.
+The complete lesson
 must support approximately {target_lesson_minutes} minutes of study and
 application, including about {target_practice_minutes} minutes of deliberate
 practice. The backend attaches the approved id, title, description, resources,
@@ -66,17 +68,9 @@ ACTION CONTRACT:
 - When PREVIOUS ATTEMPT ERROR is non-empty, explicitly correct every reported
   defect while preserving all valid requirements. Do not shorten other sections.
 
-Return strict JSON with no markdown fence or commentary:
-{
-  "why_this_matters": "220-280 words without the heading...",
-  "core_framework": "650-750 words without the heading...",
-  "worked_example": "420-500 words without the heading...",
-  "failure_modes": "300-360 words without the heading...",
-  "guided_practice": "450-550 words without the heading...",
-  "check_your_understanding": "220-280 words without the heading...",
-  "references": "80-120 words without the heading...",
-  "substeps": [
-    "A specific measurable action of twenty-eight to forty words.",
-    "A second specific measurable action of twenty-eight to forty words."
-  ]
-}
+Return strict JSON with no markdown fence or commentary. Use exactly these
+keys: why_this_matters, core_framework, worked_example, failure_modes,
+guided_practice, check_your_understanding, references, and substeps. The first
+seven values must contain the completed prose itself, never a word-count label,
+template phrase, ellipsis, or description of what should be written. substeps
+must be an array containing the completed actions.

@@ -29,9 +29,9 @@ User prompts and their consumers (placeholders per PROMPT_PLACEHOLDERS below):
 - persona_pack.txt — persona generation in ingestion (profile/sources via f-string).
 - plan_backbone_generate.txt — compact full-cycle strategy in planning.
 - plan_week_generate.txt — execution-ready expansion of one approved week.
-- plan_item_details_outline.txt + plan_item_detail_lesson.txt — the fast,
-  parallel lesson-detail path in tasks/plans.py. plan_item_details.txt remains
-  the complete-artifact recovery path.
+- plan_item_details_outline.txt + plan_item_detail_lesson.txt — the parallel
+  lesson-detail path in tasks/plans.py. plan_item_details.txt is retained as a
+  legacy full-artifact reference but is not used by the runtime generation path.
 - book_module_generate.txt — generate_book_module() in content_resources.py.
 - interview_question.txt / comparison_generate.txt / comparison_scores.txt /
   blueprint_generate.txt — agentic session flow in api/v1/sessions.py.

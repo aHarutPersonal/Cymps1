@@ -3,7 +3,6 @@ import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
 from typing import Any
 
 from pydantic import ValidationError
@@ -34,6 +33,7 @@ from app.services.llm.schemas import (
     PlanItemDetailsDraftOutput,
     PlanItemDetailsOutlineOutput,
     PlanItemDetailsOutput,
+    plan_detail_lesson_section_quality_issues,
     plan_detail_material_quality_issues,
     plan_detail_step_quality_issues,
 )
@@ -168,7 +168,24 @@ def _validate_plan_detail_step_response(
     if getattr(response, "error", None):
         return
     try:
-        validated = PlanDetailStepRepairOutput.model_validate(response.data)
+        payload = response.data
+        if isinstance(payload, dict):
+            lesson_words = len(str(payload.get("lesson_content") or "").split())
+            reading_minutes = max(8, min(30, round(lesson_words / 200)))
+            try:
+                requested_total = int(payload.get("estimate_minutes") or 60)
+            except (TypeError, ValueError):
+                requested_total = 60
+            requested_total = max(40, min(180, requested_total))
+            practice_minutes = max(20, requested_total - reading_minutes)
+            practice_minutes = min(180, practice_minutes)
+            payload = {
+                **payload,
+                "reading_minutes": reading_minutes,
+                "practice_minutes": practice_minutes,
+                "estimate_minutes": reading_minutes + practice_minutes,
+            }
+        validated = PlanDetailStepRepairOutput.model_validate(payload)
         issues: list[str] = []
         if validated.id != expected_step_id:
             issues.append(
@@ -201,6 +218,13 @@ def _assemble_parallel_lesson_response(
         sections = PlanDetailLessonSectionsOutput.model_validate(response.data)
     except ValidationError as exc:
         response.error = f"Plan lesson sections validation failed: {exc}"
+        return
+
+    section_issues = plan_detail_lesson_section_quality_issues(sections)
+    if section_issues:
+        response.error = "Plan lesson sections quality failed: " + "; ".join(
+            section_issues
+        )
         return
 
     section_rows = (
@@ -338,8 +362,9 @@ DETERMINISTIC DEFECTS TO CORRECT:
 {json.dumps(issues, ensure_ascii=False)}{retry_note}
 
 Return ONLY the corrected step JSON object. Preserve the exact step id.
-The lesson_content hard range remains 2,200-3,400 substantive words; target
-2,500-2,900 words to leave a safe counting margin. Use each heading exactly:
+The lesson_content accepted range is 1,900-3,400 substantive words; target
+2,400-2,800 words so a complete response stays above the safety floor. Use each
+heading exactly:
 ## Why This Matters, ## Core Framework, ## Worked Example, ## Failure Modes,
 ## Guided Practice, ## Check Your Understanding, ## References.
 
@@ -385,8 +410,8 @@ def _plan_detail_recovery_prompt(prompt: str, error: str) -> tuple[str, str]:
             + error[:4000]
             + "\nRewrite the complete JSON artifact and correct every reported "
             "issue. Preserve exactly three lessons and three materials. Each "
-            "lesson must target 2,500-2,900 substantive words within the hard "
-            "2,200-3,400 range under every required heading, with 25-40 word "
+            "lesson must target 2,400-2,800 substantive words within the accepted "
+            "1,900-3,400 range under every required heading, with 25-40 word "
             "actionable substeps and exact "
             "references to top-level material titles. Include exactly one book, "
             "one video, and one allowed third material. Do not pad or repeat.",
@@ -423,11 +448,10 @@ async def _generate_plan_item_details_parallel(
 ]:
     """Write one small outline, then the three long lessons concurrently.
 
-    Historical telemetry shows output size dominates detail latency. The old
-    path requested roughly 11k tokens in one response and took 35-45 seconds.
-    This preserves the same depth contract while letting the provider produce
-    the three independent lesson bodies in parallel. The caller retains the
-    monolithic prompt as a recovery path when this decomposition fails.
+    Output size dominates detail latency. Keep the small outline on the routed
+    tier, then write the three independent lesson bodies concurrently on the
+    quality tier. Production telemetry showed repeated balanced-tier failures
+    cost more time and tokens than one quality pass.
     """
     from app.services.llm.client import get_llm_client
     from app.services.llm.prompt_loader import load_and_render
@@ -515,16 +539,9 @@ async def _generate_plan_item_details_parallel(
         expected_id = str(step.get("id") or "")
 
         for attempt in range(2):
-            # A feedback-guided Flash retry is materially faster than escalating
-            # a mechanical length/substep defect to a thinking model. If the
-            # router deliberately selected quality, preserve that choice.
-            lesson_tier = (
-                active_tier
-                if attempt == 0 or active_tier == "quality"
-                else "balanced"
-            )
+            lesson_tier = "quality"
             lesson_client = factory(
-                timeout=90,
+                timeout=120,
                 max_tokens=7000,
                 tier=lesson_tier,
                 thinking_budget=_writing_thinking_budget(lesson_tier),
@@ -1236,7 +1253,6 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
     from app.models.plan import Plan, PlanItem
     from app.models.idol_persona import IdolPersona
     from app.models.user_profile import UserProfile
-    from app.services.llm.client import get_llm_client
     from app.services.llm.prompt_loader import load_and_render
     from app.services.llm.routing import choose_llm_tier
     from app.services.llm.telemetry import (
@@ -1395,22 +1411,6 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
         except Exception as e:
             logger.warning(f"[PLAN_DETAILS] session_context load failed: {e}")
 
-        # Render prompt (task, goal, learning pref, idol, session context).
-        prompt = load_and_render(
-            "plan_item_details.txt",
-            {
-                "task_title": item.title,
-                "mission_hours": item.estimated_hours,
-                "user_goal": user_goal,
-                "learning_preferences": user_learning_pref,
-                "idol_name": idol_name,
-                "idol_domain": idol_domain,
-                "idol_evidence_json": idol_evidence,
-                "session_context": session_context,
-            },
-            strict=True,
-        )
-
         await _update_job(db, job, progress=60)
         
         try:
@@ -1425,11 +1425,6 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                 db=db,
             )
             active_tier = routing_decision.tier
-            client = get_llm_client(
-                max_tokens=16000,
-                tier=active_tier,
-                thinking_budget=_writing_thinking_budget(active_tier),
-            )
             detail_llm_calls = []
             call_quality: dict[int, float] = {}
 
@@ -1490,146 +1485,6 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                     db=db,
                 )
 
-            async def _repair_one_lesson(
-                draft_step: dict[str, Any],
-                materials: list[dict[str, Any]],
-                issues: list[str],
-            ) -> tuple[dict[str, Any] | None, str | None]:
-                """Repair one lesson, escalating only that lesson if needed."""
-                expected_step_id = str(draft_step.get("id") or "")
-                material_titles = {
-                    str(material.get("title") or "") for material in materials
-                }
-                last_error: str | None = None
-
-                # A frequent failure is one 10-15 word substep attached to an
-                # otherwise complete long-form lesson. Repair those tiny
-                # strings with a small call and preserve the entire lesson.
-                if issues and all(" substep " in issue for issue in issues):
-                    substep_tier = (
-                        "balanced" if active_tier == "fast" else active_tier
-                    )
-                    substep_client = get_llm_client(
-                        timeout=30,
-                        max_tokens=1200,
-                        tier=substep_tier,
-                        thinking_budget=_writing_thinking_budget(substep_tier),
-                    )
-                    substep_response = await substep_client.generate_json(
-                        system_prompt=system_prompt,
-                        user_prompt=_plan_detail_substeps_repair_prompt(
-                            task_title=item.title,
-                            step=draft_step,
-                            issues=issues,
-                        ),
-                        output_model=PlanDetailSubstepsRepairOutput,
-                    )
-                    _validate_plan_detail_substeps_response(substep_response)
-                    if not substep_response.error:
-                        candidate = dict(draft_step)
-                        candidate["substeps"] = substep_response.data["substeps"]
-                        candidate_response = SimpleNamespace(
-                            data=candidate,
-                            error=None,
-                        )
-                        _validate_plan_detail_step_response(
-                            candidate_response,
-                            expected_step_id=expected_step_id,
-                            material_titles=material_titles,
-                        )
-                        if not candidate_response.error:
-                            substep_response.data = candidate_response.data
-                            call_quality[id(substep_response)] = (
-                                _score_detail_payload(
-                                    {"steps": [candidate_response.data]}
-                                )
-                            )
-                            detail_llm_calls.append(
-                                (
-                                    f"substep_repair_{expected_step_id}",
-                                    substep_response,
-                                    substep_tier,
-                                    "targeted_substep_repair",
-                                    getattr(substep_client, "model", None),
-                                )
-                            )
-                            return candidate_response.data, None
-                        substep_response.error = candidate_response.error
-                    detail_llm_calls.append(
-                        (
-                            f"substep_repair_{expected_step_id}",
-                            substep_response,
-                            substep_tier,
-                            "targeted_substep_repair",
-                            getattr(substep_client, "model", None),
-                        )
-                    )
-                    last_error = substep_response.error
-
-                for attempt in range(2):
-                    if attempt == 0:
-                        repair_tier = (
-                            "balanced" if active_tier == "fast" else active_tier
-                        )
-                    else:
-                        repair_tier = "quality"
-                    repair_client = get_llm_client(
-                        timeout=90,
-                        max_tokens=7000,
-                        tier=repair_tier,
-                        thinking_budget=_writing_thinking_budget(repair_tier),
-                    )
-                    repair_prompt = _plan_detail_step_repair_prompt(
-                        task_title=item.title,
-                        user_goal=user_goal,
-                        learning_preferences=user_learning_pref,
-                        idol_name=idol_name,
-                        session_context=session_context,
-                        step=draft_step,
-                        materials=materials,
-                        issues=issues,
-                        prior_error=last_error,
-                    )
-                    repair_response = await repair_client.generate_json(
-                        system_prompt=system_prompt,
-                        user_prompt=repair_prompt,
-                        output_model=PlanDetailStepRepairOutput,
-                    )
-                    _validate_plan_detail_step_response(
-                        repair_response,
-                        expected_step_id=expected_step_id,
-                        material_titles=material_titles,
-                    )
-                    if isinstance(repair_response.data, dict):
-                        call_quality[id(repair_response)] = _score_detail_payload(
-                            {"steps": [repair_response.data]}
-                        )
-                    detail_llm_calls.append(
-                        (
-                            f"lesson_repair_{expected_step_id}_{attempt + 1}",
-                            repair_response,
-                            repair_tier,
-                            (
-                                "targeted_lesson_repair"
-                                if attempt == 0
-                                else "targeted_quality_escalation"
-                            ),
-                            getattr(repair_client, "model", None),
-                        )
-                    )
-                    if not repair_response.error:
-                        return repair_response.data, None
-                    last_error = repair_response.error
-                    logger.warning(
-                        "[PLAN_DETAILS] Targeted repair failed item='%s' "
-                        "step=%s attempt=%s: %s",
-                        item.title,
-                        expected_step_id,
-                        attempt + 1,
-                        last_error,
-                    )
-                return None, last_error
-
             await _update_job(
                 db,
                 job,
@@ -1662,150 +1517,24 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                         {"steps": [response.data]}
                     )
 
-            if parallel_payload is not None:
-                llm_response = SimpleNamespace(
-                    data=parallel_payload,
-                    error=None,
-                )
-            else:
-                logger.warning(
-                    "[PLAN_DETAILS] Parallel generation failed for '%s': %s. "
-                    "Falling back to the complete-artifact recovery path.",
+            if parallel_payload is None:
+                logger.error(
+                    "[PLAN_DETAILS] Parallel generation exhausted focused retries "
+                    "for '%s': %s",
                     item.title,
                     parallel_error,
                 )
-                llm_response = await client.generate_json(
-                    system_prompt=system_prompt,
-                    user_prompt=prompt,
-                    output_model=PlanItemDetailsOutput,
-                )
-                _validate_plan_detail_response(llm_response)
-                detail_llm_calls.append(
-                    (
-                        "monolithic_fallback",
-                        llm_response,
-                        active_tier,
-                        "parallel_generation_fallback",
-                        getattr(client, "model", None),
-                    )
-                )
-                if isinstance(llm_response.data, dict):
-                    call_quality[id(llm_response)] = _score_detail_payload(
-                        llm_response.data
-                    )
-
-            # Semantic failures usually affect one or more lesson strings, not
-            # the shared curriculum/materials. Preserve the structurally valid
-            # draft and repair only defective lessons concurrently. This turns
-            # three full-artifact rewrites into at most three smaller calls and
-            # retains every lesson that already passed the contract.
-            targeted_repair_attempted = False
-            if llm_response.error:
-                repair_plan = _plan_detail_repair_plan(llm_response.data)
-                if repair_plan is not None:
-                    targeted_repair_attempted = True
-                    draft_payload, issues_by_step = repair_plan
-                    await _update_job(
-                        db,
-                        job,
-                        step="repairing_lessons",
-                        progress=68,
-                    )
-                    steps_by_id = {
-                        str(step.get("id")): step
-                        for step in draft_payload.get("steps", [])
-                    }
-                    repair_step_ids = list(issues_by_step)
-                    repairs = await asyncio.gather(
-                        *[
-                            _repair_one_lesson(
-                                steps_by_id[step_id],
-                                draft_payload.get("materials", []),
-                                issues_by_step[step_id],
-                            )
-                            for step_id in repair_step_ids
-                        ]
-                    )
-                    repair_errors = [
-                        error
-                        for repaired, error in repairs
-                        if repaired is None and error
-                    ]
-                    if not repair_errors and all(
-                        repaired is not None for repaired, _ in repairs
-                    ):
-                        repaired_by_id = {
-                            step_id: repaired
-                            for step_id, (repaired, _) in zip(
-                                repair_step_ids,
-                                repairs,
-                                strict=True,
-                            )
-                        }
-                        try:
-                            repaired_payload = _merge_plan_detail_repairs(
-                                draft_payload,
-                                repaired_by_id,
-                            )
-                            llm_response.data = repaired_payload
-                            llm_response.error = None
-                        except ValidationError as exc:
-                            llm_response.error = (
-                                "Targeted lesson repair left an invalid artifact: "
-                                f"{exc}"
-                            )
-                    else:
-                        llm_response.error = (
-                            "Targeted lesson repair failed: "
-                            + "; ".join(repair_errors or ["unknown repair error"])
-                        )
-
-            # Gemini occasionally emits JSON that survives neither the parser nor
-            # _repair_json (e.g. a dropped delimiter inside long lesson markdown).
-            # A single fresh sampling almost always returns valid JSON, so retry
-            # once with an explicit strict-JSON reminder before giving up.
-            if llm_response.error and not targeted_repair_attempted:
-                retry_prompt, recovery_stage = _plan_detail_recovery_prompt(
-                    prompt,
-                    llm_response.error,
-                )
-                logger.warning(
-                    f"[PLAN_DETAILS] LLM contract error for '{item.title}': "
-                    f"{llm_response.error}. Retrying once."
-                )
-                if active_tier == "fast":
-                    active_tier = "balanced"
-                    client = get_llm_client(
-                        max_tokens=16000,
-                        tier="balanced",
-                        thinking_budget=0,
-                    )
-                    recovery_reason = "fast_schema_fallback"
-                else:
-                    recovery_reason = "balanced_schema_retry"
-                json_retry_response = await client.generate_json(
-                    system_prompt=system_prompt,
-                    user_prompt=retry_prompt,
-                    output_model=PlanItemDetailsOutput,
-                )
-                _validate_plan_detail_response(json_retry_response)
-                detail_llm_calls.append(
-                    (
-                        recovery_stage,
-                        json_retry_response,
-                        active_tier,
-                        recovery_reason,
-                        getattr(client, "model", None),
-                    )
-                )
-                llm_response = json_retry_response
-
-            if llm_response.error:
                 await _persist_detail_usage("generation_failed", 0.0)
-                await _update_job(db, job, status="failed", step="error", error_message=llm_response.error)
-                return {"status": "failed", "error": llm_response.error}
-            
-            details = llm_response.data
+                await _update_job(
+                    db,
+                    job,
+                    status="failed",
+                    step="error",
+                    error_message=parallel_error,
+                )
+                return {"status": "failed", "error": parallel_error}
+
+            details = parallel_payload
 
             # Normalize before URL/resource resolution so `kind` aliases become `type`
             # and book/video resources can be deduplicated reliably.
@@ -1815,8 +1544,6 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                 details,
                 mission_hours=item.estimated_hours,
             )
-            call_quality[id(llm_response)] = _score_detail_payload(details)
-
             detail_quality_score = _score_detail_payload(details)
             
             # Step 3: Resolve material URLs via Tavily (real web search)

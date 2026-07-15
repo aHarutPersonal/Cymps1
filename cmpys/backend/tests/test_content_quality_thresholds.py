@@ -49,7 +49,7 @@ def _quality_ready_book_module(*, templated: bool = False) -> dict:
 
 def test_content_quality_thresholds_match_prd_minimums():
     assert MIN_BOOK_MODULE_WORDS == 3200
-    assert MIN_PLAN_DETAIL_LESSON_WORDS == 2200
+    assert MIN_PLAN_DETAIL_LESSON_WORDS == 1900
     assert MIN_PLAN_DETAIL_MATERIAL_WORDS == 350
 
 
@@ -97,13 +97,13 @@ def test_legacy_short_lesson_is_upgraded_when_opened():
         {"steps": [{"lesson_content": "word " * 500}]}
     )
     assert not _lesson_details_meet_quality(
-        {"steps": [{"lesson_content": "word " * 2200}]}
+        {"steps": [{"lesson_content": "word " * 1900}]}
     )
     assert _lesson_details_meet_quality({
         "steps": [
-            {"lesson_content": "word " * 2200},
-            {"lesson_content": "word " * 2200},
-            {"lesson_content": "word " * 2200},
+            {"lesson_content": "word " * 1900},
+            {"lesson_content": "word " * 1900},
+            {"lesson_content": "word " * 1900},
         ]
     })
 

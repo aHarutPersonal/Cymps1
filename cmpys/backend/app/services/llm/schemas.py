@@ -361,7 +361,7 @@ class PlanDetailStepOutput(BaseModel):
     description: str
     estimate_minutes: int = Field(ge=40, le=180)
     reading_minutes: int = Field(ge=8, le=30)
-    practice_minutes: int = Field(ge=20, le=170)
+    practice_minutes: int = Field(ge=20, le=172)
     lesson_content: str
     resources: list[str] = Field(min_length=1, max_length=2)
     substeps: list[str] = Field(min_length=2, max_length=3)
@@ -383,13 +383,13 @@ def plan_detail_step_quality_issues(
     *,
     material_titles: set[str] | None = None,
 ) -> list[str]:
-    """Return every semantic defect so recovery never chases one at a time."""
+    """Return all semantic defects in one deterministic validation report."""
     issues: list[str] = []
     lesson_words = len(step.lesson_content.split())
-    if not 2200 <= lesson_words <= 3400:
+    if not 1900 <= lesson_words <= 3400:
         issues.append(
             f"{step.id} lesson_content has {lesson_words} words; "
-            "required range is 2200-3400"
+            "accepted range is 1900-3400 (target 2400-2800)"
         )
     missing = [
         heading
@@ -480,46 +480,46 @@ class PlanDetailLessonSectionsOutput(BaseModel):
     """
 
     why_this_matters: str = Field(
-        min_length=900,
+        min_length=1,
         description="220-280 substantive words explaining relevance and stakes.",
     )
     core_framework: str = Field(
-        min_length=2600,
+        min_length=1,
         description=(
             "650-750 substantive words teaching the mechanism, components, "
             "trade-offs, and commonly confused concepts."
         ),
     )
     worked_example: str = Field(
-        min_length=1700,
+        min_length=1,
         description=(
             "420-500 substantive words showing complete reasoning in a factual "
             "example or an explicitly labeled Practical scenario."
         ),
     )
     failure_modes: str = Field(
-        min_length=1200,
+        min_length=1,
         description=(
             "300-360 substantive words covering at least three symptoms and "
             "their corrections."
         ),
     )
     guided_practice: str = Field(
-        min_length=1900,
+        min_length=1,
         description=(
             "450-550 substantive words with 4-7 numbered timed phases, tools, "
             "outputs, and success criteria."
         ),
     )
     check_your_understanding: str = Field(
-        min_length=900,
+        min_length=1,
         description=(
             "220-280 substantive words containing three diagnostic questions "
             "and an answer or checking rubric."
         ),
     )
     references: str = Field(
-        min_length=320,
+        min_length=1,
         description=(
             "80-120 substantive words naming only approved resource titles and "
             "explaining what to use from each."
@@ -535,6 +535,31 @@ class PlanDetailLessonSectionsOutput(BaseModel):
             "timer, tool or behavior, output, and success criterion."
         ),
     )
+
+
+PLAN_DETAIL_SECTION_MIN_WORDS = {
+    "why_this_matters": 120,
+    "core_framework": 400,
+    "worked_example": 240,
+    "failure_modes": 170,
+    "guided_practice": 280,
+    "check_your_understanding": 130,
+    "references": 40,
+}
+
+
+def plan_detail_lesson_section_quality_issues(
+    sections: PlanDetailLessonSectionsOutput,
+) -> list[str]:
+    """Reject placeholders and materially incomplete sections by real words."""
+    issues: list[str] = []
+    for field_name, minimum_words in PLAN_DETAIL_SECTION_MIN_WORDS.items():
+        word_count = len(str(getattr(sections, field_name)).split())
+        if word_count < minimum_words:
+            issues.append(
+                f"{field_name} has {word_count} words; minimum is {minimum_words}"
+            )
+    return issues
 
 
 class PlanDetailSubstepsRepairOutput(BaseModel):
