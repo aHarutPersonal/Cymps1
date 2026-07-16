@@ -386,10 +386,10 @@ def plan_detail_step_quality_issues(
     """Return all semantic defects in one deterministic validation report."""
     issues: list[str] = []
     lesson_words = len(step.lesson_content.split())
-    if not 1900 <= lesson_words <= 3400:
+    if not 1900 <= lesson_words <= 4200:
         issues.append(
             f"{step.id} lesson_content has {lesson_words} words; "
-            "accepted range is 1900-3400 (target 2400-2800)"
+            "accepted range is 1900-4200 (target 2400-2800)"
         )
     missing = [
         heading
@@ -409,10 +409,10 @@ def plan_detail_step_quality_issues(
             )
     for index, substep in enumerate(step.substeps, start=1):
         words = len(substep.split())
-        if not 20 <= words <= 50:
+        if words < 12:
             issues.append(
                 f"{step.id} substep {index} has {words} words; "
-                "required range is 20-50"
+                "minimum is 12"
             )
     return issues
 
@@ -526,13 +526,13 @@ class PlanDetailLessonSectionsOutput(BaseModel):
         ),
     )
     substeps: list[
-        Annotated[str, Field(min_length=1, max_length=500)]
+        Annotated[str, Field(min_length=1)]
     ] = Field(
         min_length=1,
         description=(
-            "One string per necessary executable action; each targets 28-40 "
+            "One string per necessary executable action; each targets 20-60 "
             "words and includes scope or timer, tool or behavior, output, and "
-            "success criterion."
+            "success criterion. Longer actions are allowed when needed."
         ),
     )
 
@@ -572,9 +572,9 @@ class PlanDetailSubstepsRepairOutput(BaseModel):
         issues = []
         for index, substep in enumerate(self.substeps, start=1):
             words = len(substep.split())
-            if not 20 <= words <= 50:
+            if words < 12:
                 issues.append(
-                    f"substep {index} has {words} words; required range is 20-50"
+                    f"substep {index} has {words} words; minimum is 12"
                 )
         if issues:
             raise ValueError("; ".join(issues))

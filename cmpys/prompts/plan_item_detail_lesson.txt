@@ -24,8 +24,8 @@ PREVIOUS ATTEMPT ERROR (empty on the first attempt):
 
 Write one standalone skill-building lesson targeting 2,400-2,800 substantive
 words across the seven required section fields below. The backend accepts a
-complete, well-structured near miss down to 1,900 words; never aim for that
-safety floor. This is one third of a week-sized mission, not a short article.
+complete, well-structured near miss from 1,900 through 4,200 words; never aim
+for either safety boundary. This is one third of a week-sized mission, not a short article.
 The complete lesson
 must support approximately {target_lesson_minutes} minutes of study and
 application, including about {target_practice_minutes} minutes of deliberate
@@ -63,9 +63,10 @@ CONTENT CONTRACT:
 ACTION CONTRACT:
 - Include one substep per distinct executable action. Use as many substeps as
   the lesson genuinely needs; never merge, omit, or invent actions to hit a
-  fixed count. Each is 20-50 words, targeting 28-40, and names a timer or
-  concrete scope, tool/template or behavior, expected output, and success
-  criterion.
+  fixed count. Each contains at least 12 substantive words and targets 20-60.
+  Longer actions are allowed when genuinely needed; never truncate useful
+  detail merely to satisfy a word count. Each names a timer or concrete scope,
+  tool/template or behavior, expected output, and success criterion.
 - substeps is an array of JSON strings, never objects. Guided-practice phases
   may map one-to-one to substeps when each phase is a meaningful user-visible
   action.

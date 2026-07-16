@@ -32,7 +32,7 @@ CRITICAL RULES:
    - GOOD: "Practice [specific technique] with these exercises — start with the guided example, then solve 5 problems independently" (45-60 min)
    - GOOD: "Build [specific artifact] using [specific tool/method] — follow the template below, customize it for your context" (45-60 min)
 
-2. **EACH STEP HAS A COMPLETE LESSON (ACCEPTED 1,900-3,400 WORDS; TARGET 2,400-2,800).** Every step MUST include a `lesson_content` field that can stand alone in the lesson reader. This is a full curriculum module, not an article. Aim for the target band; 1,900 words is only a safety floor for otherwise complete work. Structure every lesson with these exact second-level headings:
+2. **EACH STEP HAS A COMPLETE LESSON (ACCEPTED 1,900-4,200 WORDS; TARGET 2,400-2,800).** Every step MUST include a `lesson_content` field that can stand alone in the lesson reader. This is a full curriculum module, not an article. Aim for the target band; the wider accepted range prevents complete work from being discarded over harmless length variation. Structure every lesson with these exact second-level headings:
    - `## Why This Matters` — about 220-280 words connecting the skill to the mission and the user's context.
    - `## Core Framework` — about 650-750 words explaining the mechanism, components, trade-offs, and two concepts learners commonly confuse.
    - `## Worked Example` — about 420-500 words showing the complete reasoning or execution. Use DOCUMENTED MENTOR EVIDENCE when available; otherwise label it **Practical scenario**. Never invent an anecdote, quotation, date, or result and attribute it to {idol_name}.
@@ -67,7 +67,7 @@ CRITICAL RULES:
 
 11. **NO FILLER LANGUAGE.** Do not write "In this section we'll explore...", "Let's dive in...", "It's important to note...", "As we've seen...". Write directly and specifically.
 
-12. **SUBSTEPS MUST BE ACTIONABLE.** Each substep should be 20-50 words describing a specific, measurable action. BAD: "Practice regularly". GOOD: "Set a 20-minute timer and write 3 application scenarios for this concept to your current project".
+12. **SUBSTEPS MUST BE ACTIONABLE.** Use one substep per necessary action with no fixed count or maximum length. Each must contain at least 12 substantive words and should target 20-60 words while retaining any detail genuinely needed for execution. BAD: "Practice regularly". GOOD: "Set a 20-minute timer and write 3 application scenarios for this concept to your current project".
 
 13. **DURATION MUST BE AUDITABLE.** Set `reading_minutes` from the amount of teaching material and `practice_minutes` from the numbered timed practice phases. `estimate_minutes` MUST equal their sum and remain between 40 and 180. Across all three steps, estimate_minutes must total approximately {mission_hours} hours. A duration label without enough timed practice is a hard failure.
 
@@ -116,4 +116,4 @@ OUTPUT FORMAT (strict JSON, no extra keys, no markdown):
   "mental_model": "Name of 1 specific mental model that unlocks efficiency for this task."
 }
 
-Provide exactly 3 sequential, focused steps whose combined duration fills the {mission_hours}-hour mission budget. Each step MUST be a complete skill-building lesson targeting 2,400-2,800 words of lesson_content, with an accepted safety range of 1,900-3,400 words, an auditable reading/practice time split, one 20-50 word practice substep per necessary executable action without a fixed count, and references to 1-2 exact titles from the materials array. Steps must TEACH, not advise. Provide exactly 3 elite materials: exactly 1 book with exact title/author and no generated content, exactly 1 video, and 1 article/course/tool/in_app_lesson. Never pad or repeat to fill the range.
+Provide exactly 3 sequential, focused steps whose combined duration fills the {mission_hours}-hour mission budget. Each step MUST be a complete skill-building lesson targeting 2,400-2,800 words of lesson_content, with an accepted safety range of 1,900-4,200 words, an auditable reading/practice time split, one substantive practice substep per necessary executable action without a fixed count or maximum length, and references to 1-2 exact titles from the materials array. Steps must TEACH, not advise. Provide exactly 3 elite materials: exactly 1 book with exact title/author and no generated content, exactly 1 video, and 1 article/course/tool/in_app_lesson. Never pad or repeat to fill the range.

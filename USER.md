@@ -16,6 +16,7 @@ _Learn about the person you're helping. Update this as you go._
 - **Notes:** Wants the post-intake plan-generation cards to include sourced quotations about learning from role models, paired with portraits of the quoted people.
 - **Notes:** Prefers the CMPYS iOS simulator app to use the deployed remote backend by default, with localhost available only as an explicit development override.
 - **Notes:** Authorizes autonomous LLM model selection and upgrades for CMPYS when they better match product requirements, prioritizing material quality first and user-visible speed second.
+- **Notes:** Prefers lesson substeps to use however many actions and words execution genuinely requires, without arbitrary count or length caps.
 
 ## Context
 

@@ -214,9 +214,8 @@ def _normalize_plan_detail_section_substeps(payload: Any) -> Any:
 
     normalized: list[Any] = []
 
-    def compact(value: Any, limit: int) -> str:
-        words = str(value).strip().split()
-        return " ".join(words[:limit]).rstrip(".,;: ")
+    def clean(value: Any) -> str:
+        return " ".join(str(value).strip().split()).rstrip(".,;: ")
 
     for value in raw_substeps:
         if isinstance(value, str):
@@ -282,32 +281,28 @@ def _normalize_plan_detail_section_substeps(payload: Any) -> Any:
         if duration is not None:
             detail_clauses.append(f"Use a {duration}-minute timer.")
         if tool:
-            detail_clauses.append(f"Use {compact(tool, 6)}.")
+            detail_clauses.append(f"Use {clean(tool)}.")
         if output:
-            detail_clauses.append(f"Produce {compact(output, 8)}.")
+            detail_clauses.append(f"Produce {clean(output)}.")
         if criterion:
-            detail_clauses.append(f"Success means {compact(criterion, 8)}.")
+            detail_clauses.append(f"Success means {clean(criterion)}.")
         if duration is not None and not output and not criterion:
             detail_clauses.append(
                 "Save the resulting output and verify it against the lesson's "
                 "stated success criterion."
             )
 
-        detail_words = len(" ".join(detail_clauses).split())
-        action_limit = min(30, max(12, 50 - detail_words))
-        action = compact(raw_action, action_limit)
+        action = clean(raw_action)
         if not action:
             normalized.append("")
             continue
 
         text = " ".join([action + ".", *detail_clauses]).strip()
-        if len(text.split()) < 20:
+        if len(text.split()) < 12:
             text += (
                 " Save the resulting output and verify it against the lesson's "
                 "stated success criterion."
             )
-        if len(text.split()) > 50:
-            text = " ".join(text.split()[:50]).rstrip(".,;: ") + "."
         normalized.append(text)
 
     return {**payload, "substeps": normalized}
@@ -472,7 +467,7 @@ DETERMINISTIC DEFECTS TO CORRECT:
 {json.dumps(issues, ensure_ascii=False)}{retry_note}
 
 Return ONLY the corrected step JSON object. Preserve the exact step id.
-The lesson_content accepted range is 1,900-3,400 substantive words; target
+The lesson_content accepted range is 1,900-4,200 substantive words; target
 2,400-2,800 words so a complete response stays above the safety floor. Use each
 heading exactly:
 ## Why This Matters, ## Core Framework, ## Worked Example, ## Failure Modes,
@@ -481,12 +476,12 @@ heading exactly:
 Teach one coherent skill without filler or repeated paragraphs. The worked
 example must be factual or explicitly labeled **Practical scenario**. Guided
 Practice must contain timed phases with a tool, output, and success criterion.
-Return one substep per necessary executable action, using 25-40 words each.
+Return one substep per necessary executable action, targeting 20-60 words each.
 Preserve every meaningful action and the draft's approved workload. Do not pad,
-merge, or drop actions to hit a fixed count. Keep estimate_minutes between 40
-and 180, and make it equal reading_minutes + practice_minutes. Use only exact
-available material titles in resources. Do not add commentary or markdown
-fences around the JSON.
+merge, drop, or truncate actions to hit a fixed count or maximum length. Every
+action must contain at least 12 substantive words. Keep estimate_minutes between
+40 and 180, and make it equal reading_minutes + practice_minutes. Use only exact
+available material titles in resources. Do not add commentary or markdown fences.
 """
 
 
@@ -506,8 +501,9 @@ Current substeps: {json.dumps(step.get("substeps", []), ensure_ascii=False)}
 Defects: {json.dumps(issues, ensure_ascii=False)}
 
 Return ONLY a JSON object with one key named substeps. Supply one distinct,
-measurable 25-40 word string per necessary action, with no fixed item count.
-Every action must name a timer or
+measurable string per necessary action, targeting 20-60 words with no fixed item
+count or maximum length. Every action must contain at least 12 substantive words
+and name a timer or
 concrete scope, the tool/template or behavior, the expected output, and a
 success criterion. Preserve every meaningful existing action, the lesson's
 skill, and do not return the lesson.
@@ -525,7 +521,7 @@ def _plan_detail_recovery_prompt(prompt: str, error: str) -> tuple[str, str]:
             + "\nRewrite the complete JSON artifact and correct every reported "
             "issue. Preserve exactly three lessons and three materials. Each "
             "lesson must target 2,400-2,800 substantive words within the accepted "
-            "1,900-3,400 range under every required heading, with 25-40 word "
+            "1,900-4,200 range under every required heading, with substantive "
             "actionable substeps and exact "
             "references to top-level material titles. Include exactly one book, "
             "one video, and one allowed third material. Do not pad or repeat.",
@@ -655,7 +651,7 @@ async def _generate_plan_item_details_parallel(
         for attempt in range(2):
             lesson_tier = "quality"
             lesson_client = factory(
-                timeout=150,
+                timeout=180,
                 max_tokens=7000,
                 tier=lesson_tier,
                 thinking_budget=_writing_thinking_budget(lesson_tier),

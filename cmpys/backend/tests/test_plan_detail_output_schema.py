@@ -144,7 +144,7 @@ def test_semantic_validation_failure_gets_quality_specific_retry() -> None:
     )
 
     assert stage == "quality_recovery"
-    assert "1,900-3,400" in retry
+    assert "1,900-4,200" in retry
     assert "lesson has 20 words" in retry
 
 
@@ -229,7 +229,7 @@ def test_targeted_repair_prompt_includes_draft_materials_and_safe_target() -> No
     assert "Learn technique 1" in prompt
     assert "Resource 1" in prompt
     assert "2,400-2,800" in prompt
-    assert "25-40 words" in prompt
+    assert "targeting 20-60 words" in prompt
 
 
 def test_single_step_repair_schema_keeps_the_full_quality_floor() -> None:
@@ -238,7 +238,7 @@ def test_single_step_repair_schema_keeps_the_full_quality_floor() -> None:
 
     invalid_step = dict(valid_step)
     invalid_step["lesson_content"] = "short"
-    with pytest.raises(ValueError, match="accepted range is 1900-3400"):
+    with pytest.raises(ValueError, match="accepted range is 1900-4200"):
         PlanDetailStepRepairOutput.model_validate(invalid_step)
 
 
@@ -250,7 +250,9 @@ def test_single_step_repair_schema_keeps_the_full_quality_floor() -> None:
         (1977, True),
         (2176, True),
         (3400, True),
-        (3401, False),
+        (3727, True),
+        (4200, True),
+        (4201, False),
     ],
 )
 def test_single_step_repair_enforces_exact_lesson_boundaries(
@@ -415,8 +417,8 @@ def test_substep_only_repair_contract_is_small_and_actionable() -> None:
         issues=["step_1 substep 1 has 10 words"],
     )
     assert "do not return the lesson" in prompt
-    assert "25-40 word" in prompt
-    assert "no fixed item count" in prompt
+    assert "targeting 20-60 words" in prompt
+    assert "no fixed item count" in " ".join(prompt.split())
 
     valid_substep = (
         "Set a twenty minute timer, apply the framework to one real artifact, "
@@ -432,7 +434,7 @@ def test_substep_only_repair_contract_is_small_and_actionable() -> None:
     )
     assert len(expanded.substeps) == 6
 
-    with pytest.raises(ValueError, match="required range is 20-50"):
+    with pytest.raises(ValueError, match="minimum is 12"):
         PlanDetailSubstepsRepairOutput.model_validate(
             {"substeps": ["Too short.", valid_substep]}
         )
@@ -446,7 +448,7 @@ def test_plan_detail_prompt_examples_obey_their_own_constraints() -> None:
     example = prompt.split('"substeps": [', 1)[1].split("]", 1)[0]
     substeps = re.findall(r'^\s*"([^"]+)"', example, flags=re.MULTILINE)
     assert len(substeps) == 3
-    assert all(20 <= len(substep.split()) <= 50 for substep in substeps)
+    assert all(12 <= len(substep.split()) <= 60 for substep in substeps)
 
 
 def _outline_payload() -> dict:
@@ -571,7 +573,7 @@ async def test_long_lessons_are_requested_concurrently_after_outline(
     assert result is not None
     assert started == {"step_1", "step_2", "step_3"}
     assert all(
-        1900 <= len(step["lesson_content"].split()) <= 3400
+        1900 <= len(step["lesson_content"].split()) <= 4200
         for step in result["steps"]
     )
     assert all(
@@ -586,7 +588,7 @@ async def test_long_lessons_are_requested_concurrently_after_outline(
     ]
     assert client_options[0]["tier"] == "balanced"
     assert all(options["tier"] == "quality" for options in client_options[1:])
-    assert all(options["timeout"] == 150 for options in client_options[1:])
+    assert all(options["timeout"] == 180 for options in client_options[1:])
     assert all(options["allow_fallback"] is False for options in client_options[1:])
 
 
@@ -652,15 +654,12 @@ def test_parallel_lesson_preserves_all_object_phases_as_substeps() -> None:
     assert response.error is None
     assert len(response.data["substeps"]) == 6
     assert all(isinstance(substep, str) for substep in response.data["substeps"])
-    assert all(
-        20 <= len(substep.split()) <= 50
-        for substep in response.data["substeps"]
-    )
+    assert all(len(substep.split()) >= 12 for substep in response.data["substeps"])
     assert "phase 1" in response.data["substeps"][0]
     assert "phase 6" in response.data["substeps"][5]
 
 
-def test_parallel_lesson_compacts_verbose_substep_objects_without_retry() -> None:
+def test_parallel_lesson_preserves_verbose_substep_objects_without_retry() -> None:
     payload = _lesson_sections_payload()
     payload["substeps"] = [
         {
@@ -682,11 +681,29 @@ def test_parallel_lesson_compacts_verbose_substep_objects_without_retry() -> Non
     )
 
     assert response.error is None
-    assert all(
-        20 <= len(substep.split()) <= 50
-        for substep in response.data["substeps"]
-    )
+    assert all(len(substep.split()) > 50 for substep in response.data["substeps"])
     assert all("Success means" in substep for substep in response.data["substeps"])
+
+
+def test_parallel_lesson_accepts_long_plain_string_substeps() -> None:
+    payload = _lesson_sections_payload()
+    payload["substeps"] = [
+        " ".join([f"action{index}"] * word_count)
+        for index, word_count in enumerate(range(51, 67), start=1)
+    ]
+    response = SimpleNamespace(data=payload, error=None)
+
+    _assemble_parallel_lesson_response(
+        response,
+        step=_outline_payload()["steps"][0],
+        material_titles={"Resource 1", "Resource 2", "Resource 3"},
+        target_minutes=80,
+    )
+
+    assert response.error is None
+    assert [len(value.split()) for value in response.data["substeps"]] == list(
+        range(51, 67)
+    )
 
 
 def test_targeted_lesson_validation_canonicalizes_model_authored_timing() -> None:
