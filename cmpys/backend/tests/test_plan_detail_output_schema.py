@@ -516,14 +516,15 @@ def test_quality_writing_keeps_required_model_thinking_enabled() -> None:
 
 
 @pytest.mark.asyncio
-async def test_long_lessons_are_requested_concurrently_after_outline(
+async def test_first_lesson_is_prioritized_then_remaining_lessons_are_concurrent(
     monkeypatch,
 ) -> None:
     payload = _valid_payload()
     outline = _outline_payload()
     started: set[str] = set()
-    all_started = asyncio.Event()
+    remaining_started = asyncio.Event()
     client_options: list[dict] = []
+    checkpoints: list[tuple[str, list[str]]] = []
 
     class FakeClient:
         model = "fake-model"
@@ -538,9 +539,10 @@ async def test_long_lessons_are_requested_concurrently_after_outline(
                 if f'"id":"{candidate["id"]}"' in user_prompt
             )
             started.add(step["id"])
-            if len(started) == 3:
-                all_started.set()
-            await asyncio.wait_for(all_started.wait(), timeout=1)
+            if step["id"] != "step_1":
+                if {"step_2", "step_3"}.issubset(started):
+                    remaining_started.set()
+                await asyncio.wait_for(remaining_started.wait(), timeout=1)
             return SimpleNamespace(
                 data=copy.deepcopy(_lesson_sections_payload()),
                 error=None,
@@ -555,6 +557,14 @@ async def test_long_lessons_are_requested_concurrently_after_outline(
         client_factory,
     )
 
+    async def checkpoint(payload, stage):
+        checkpoints.append(
+            (
+                stage,
+                [step["id"] for step in payload["steps"] if step.get("lesson_content")],
+            )
+        )
+
     result, calls, error = await _generate_plan_item_details_parallel(
         system_prompt="planner",
         task_title="Build a validated experiment",
@@ -567,25 +577,27 @@ async def test_long_lessons_are_requested_concurrently_after_outline(
         session_context="",
         active_tier="balanced",
         routing_reason="test",
+        on_checkpoint=checkpoint,
     )
 
     assert error is None
     assert result is not None
     assert started == {"step_1", "step_2", "step_3"}
     assert all(
-        1900 <= len(step["lesson_content"].split()) <= 4200
-        for step in result["steps"]
+        1900 <= len(step["lesson_content"].split()) <= 4200 for step in result["steps"]
     )
-    assert all(
-        "## References" in step["lesson_content"]
-        for step in result["steps"]
-    )
-    assert [stage for stage, *_ in calls] == [
+    assert all("## References" in step["lesson_content"] for step in result["steps"])
+    assert [stage for stage, *_ in calls[:2]] == [
         "parallel_outline_attempt_1",
         "parallel_lesson_step_1_attempt_1",
+    ]
+    assert {stage for stage, *_ in calls[2:]} == {
         "parallel_lesson_step_2_attempt_1",
         "parallel_lesson_step_3_attempt_1",
-    ]
+    }
+    assert checkpoints[0] == ("outline_ready", [])
+    assert checkpoints[1] == ("step_1_ready", ["step_1"])
+    assert set(checkpoints[-1][1]) == {"step_1", "step_2", "step_3"}
     assert client_options[0]["tier"] == "balanced"
     assert all(options["tier"] == "quality" for options in client_options[1:])
     assert all(options["timeout"] == 180 for options in client_options[1:])
@@ -621,9 +633,7 @@ def test_parallel_lesson_rejects_prompt_example_placeholders() -> None:
 
 
 def test_section_quality_uses_words_instead_of_brittle_character_counts() -> None:
-    sections = PlanDetailLessonSectionsOutput.model_validate(
-        _lesson_sections_payload()
-    )
+    sections = PlanDetailLessonSectionsOutput.model_validate(_lesson_sections_payload())
 
     assert plan_detail_lesson_section_quality_issues(sections) == []
 
@@ -777,13 +787,119 @@ async def test_parallel_generation_retries_only_the_failed_lesson() -> None:
     assert attempts_by_step == {"step_1": 2, "step_2": 1, "step_3": 1}
     assert "PREVIOUS ATTEMPT ERROR" in prompts_by_step["step_1"][1]
     assert "core_framework has" in prompts_by_step["step_1"][1]
-    assert [stage for stage, *_ in calls] == [
+    assert [stage for stage, *_ in calls[:3]] == [
         "parallel_outline_attempt_1",
         "parallel_lesson_step_1_attempt_1",
         "parallel_lesson_step_1_attempt_2",
+    ]
+    assert {stage for stage, *_ in calls[3:]} == {
         "parallel_lesson_step_2_attempt_1",
         "parallel_lesson_step_3_attempt_1",
-    ]
+    }
+
+
+@pytest.mark.asyncio
+async def test_substep_only_failure_preserves_long_lesson_and_repairs_small_field() -> (
+    None
+):
+    outline = _outline_payload()
+    lesson_attempts: dict[str, int] = {}
+    repair_attempts = 0
+
+    class FakeClient:
+        model = "fake-model"
+
+        async def generate_json(self, *, user_prompt, output_model, **kwargs):
+            nonlocal repair_attempts
+            if output_model is PlanItemDetailsOutlineOutput:
+                return SimpleNamespace(data=copy.deepcopy(outline), error=None)
+            if output_model is PlanDetailSubstepsRepairOutput:
+                repair_attempts += 1
+                return SimpleNamespace(
+                    data={"substeps": _valid_payload()["steps"][0]["substeps"]},
+                    error=None,
+                )
+
+            step_id = next(
+                candidate["id"]
+                for candidate in outline["steps"]
+                if f'"id":"{candidate["id"]}"' in user_prompt
+            )
+            lesson_attempts[step_id] = lesson_attempts.get(step_id, 0) + 1
+            sections = copy.deepcopy(_lesson_sections_payload())
+            if step_id == "step_1":
+                sections["substeps"] = ["Too short."]
+            return SimpleNamespace(data=sections, error=None)
+
+    result, calls, error = await _generate_plan_item_details_parallel(
+        system_prompt="planner",
+        task_title="Build a validated experiment",
+        mission_hours=5,
+        user_goal="learn product experimentation",
+        learning_preferences="reading and practice",
+        idol_name="Mentor",
+        idol_domain="technology",
+        idol_evidence={},
+        session_context="",
+        active_tier="balanced",
+        routing_reason="test",
+        client_factory=lambda **kwargs: FakeClient(),
+    )
+
+    assert error is None
+    assert result is not None
+    assert lesson_attempts == {"step_1": 1, "step_2": 1, "step_3": 1}
+    assert repair_attempts == 1
+    assert any("substeps_repair" in stage for stage, *_ in calls)
+
+
+@pytest.mark.asyncio
+async def test_valid_checkpoint_skips_outline_and_completed_first_lesson() -> None:
+    outline = _outline_payload()
+    saved_step = copy.deepcopy(_valid_payload()["steps"][0])
+    requested_steps: set[str] = set()
+
+    class FakeClient:
+        model = "fake-model"
+
+        async def generate_json(self, *, user_prompt, output_model, **kwargs):
+            assert output_model is PlanDetailLessonSectionsOutput
+            step_id = next(
+                candidate["id"]
+                for candidate in outline["steps"]
+                if f'"id":"{candidate["id"]}"' in user_prompt
+            )
+            requested_steps.add(step_id)
+            return SimpleNamespace(
+                data=copy.deepcopy(_lesson_sections_payload()),
+                error=None,
+            )
+
+    result, calls, error = await _generate_plan_item_details_parallel(
+        system_prompt="planner",
+        task_title="Build a validated experiment",
+        mission_hours=5,
+        user_goal="learn product experimentation",
+        learning_preferences="reading and practice",
+        idol_name="Mentor",
+        idol_domain="technology",
+        idol_evidence={},
+        session_context="",
+        active_tier="balanced",
+        routing_reason="test",
+        client_factory=lambda **kwargs: FakeClient(),
+        existing_checkpoint={
+            **outline,
+            "steps": [saved_step, *outline["steps"][1:]],
+            "_generation": {"outline": outline},
+        },
+    )
+
+    assert error is None
+    assert result is not None
+    assert requested_steps == {"step_2", "step_3"}
+    assert result["steps"][0]["lesson_content"] == saved_step["lesson_content"]
+    assert all("outline" not in stage for stage, *_ in calls)
 
 
 @pytest.mark.asyncio

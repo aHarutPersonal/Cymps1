@@ -23,6 +23,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../app/design_tokens.dart';
+import '../motion/motion_config.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Kicker
@@ -166,6 +167,86 @@ class CmpysMentorAvatar extends StatelessWidget {
 // Buttons
 // ─────────────────────────────────────────────────────────────────────────────
 
+enum CmpysHaptic { none, selection, light }
+
+/// Shared press feedback for cards, chips, and compact icon actions.
+///
+/// It gives touch and pointer interactions the same quick response while
+/// respecting the platform's reduced-motion preference.
+class CmpysPressable extends StatefulWidget {
+  const CmpysPressable({
+    super.key,
+    required this.child,
+    required this.onTap,
+    this.pressedScale = 0.975,
+    this.haptic = CmpysHaptic.none,
+    this.semanticLabel,
+  });
+
+  final Widget child;
+  final VoidCallback? onTap;
+  final double pressedScale;
+  final CmpysHaptic haptic;
+  final String? semanticLabel;
+
+  @override
+  State<CmpysPressable> createState() => _CmpysPressableState();
+}
+
+class _CmpysPressableState extends State<CmpysPressable> {
+  bool _pressed = false;
+
+  void _setPressed(bool value) {
+    if (_pressed == value) return;
+    setState(() => _pressed = value);
+  }
+
+  void _handleTap() {
+    switch (widget.haptic) {
+      case CmpysHaptic.none:
+        break;
+      case CmpysHaptic.selection:
+        HapticFeedback.selectionClick();
+        break;
+      case CmpysHaptic.light:
+        HapticFeedback.lightImpact();
+        break;
+    }
+    widget.onTap?.call();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = widget.onTap != null;
+    final motionEnabled = MotionConfig.enabled(context);
+    final gesture = GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTapDown: enabled ? (_) => _setPressed(true) : null,
+      onTapUp: enabled ? (_) => _setPressed(false) : null,
+      onTapCancel: enabled ? () => _setPressed(false) : null,
+      onTap: enabled ? _handleTap : null,
+      child: AnimatedScale(
+        duration: motionEnabled
+            ? const Duration(milliseconds: 110)
+            : Duration.zero,
+        curve: AppCurves.easeOut,
+        scale: motionEnabled && _pressed ? widget.pressedScale : 1,
+        child: widget.child,
+      ),
+    );
+
+    return Semantics(
+      button: true,
+      enabled: enabled,
+      label: widget.semanticLabel,
+      child: MouseRegion(
+        cursor: enabled ? SystemMouseCursors.click : MouseCursor.defer,
+        child: gesture,
+      ),
+    );
+  }
+}
+
 enum CmpysBtnVariant { primary, ochre, dark, outline, soft, ghost, danger }
 
 enum CmpysBtnSize { sm, md, lg }
@@ -254,6 +335,7 @@ class _CmpysButtonState extends State<CmpysButton> {
     final d = _dims;
     final p = _palette;
     final enabled = !widget.disabled && widget.onTap != null;
+    final motionEnabled = MotionConfig.enabled(context);
 
     return Opacity(
       opacity: enabled ? 1.0 : 0.4,
@@ -268,8 +350,11 @@ class _CmpysButtonState extends State<CmpysButton> {
               }
             : null,
         child: AnimatedScale(
-          duration: const Duration(milliseconds: 110),
-          scale: _pressed ? 0.975 : 1.0,
+          duration: motionEnabled
+              ? const Duration(milliseconds: 110)
+              : Duration.zero,
+          curve: AppCurves.easeOut,
+          scale: motionEnabled && _pressed ? 0.975 : 1.0,
           child: Container(
             height: d.height,
             padding: EdgeInsets.symmetric(horizontal: d.padH),
@@ -332,13 +417,16 @@ class CmpysChipPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () {
-        HapticFeedback.selectionClick();
-        onTap();
-      },
+    final motionEnabled = MotionConfig.enabled(context);
+    return CmpysPressable(
+      onTap: onTap,
+      haptic: CmpysHaptic.selection,
+      semanticLabel: label,
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 140),
+        duration: motionEnabled
+            ? const Duration(milliseconds: 140)
+            : Duration.zero,
+        curve: AppCurves.easeOut,
         padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 9),
         decoration: BoxDecoration(
           color: active ? tint : Colors.transparent,
@@ -398,11 +486,9 @@ class CmpysCardSurface extends StatelessWidget {
       child: child,
     );
     if (onTap == null) return card;
-    return GestureDetector(
-      onTap: () {
-        HapticFeedback.selectionClick();
-        onTap!();
-      },
+    return CmpysPressable(
+      onTap: onTap,
+      haptic: CmpysHaptic.selection,
       child: card,
     );
   }

@@ -505,9 +505,13 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
           _dailyRhythmCard(d)
         else if (d.completed && d.steps.isEmpty)
           _completedWithoutLessonCard()
-        else if (!d.detailsReady)
+        else if (!d.detailsReady && !d.hasReadyLesson)
           _generatingCard(d)
         else ...[
+          if (!d.detailsReady) ...[
+            _generatingCard(d),
+            const SizedBox(height: 18),
+          ],
           if (d.steps.isNotEmpty) ...[
             Row(
               children: [
@@ -834,7 +838,12 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
       'loading_context' => 'Preparing the mentor context for your lesson…',
       'generating_curriculum' =>
         'Writing your three focused lessons and guided practice…',
-      'generating_lessons' => 'Writing your focused lessons in parallel…',
+      'generating_lessons' => 'Writing your first focused lesson…',
+      'outline_ready' => 'The lesson sequence is ready. Writing lesson one…',
+      'first_lesson_ready' =>
+        'Lesson one is ready. Writing the remaining lessons…',
+      '2_lessons_ready' => 'Two lessons are ready. Finishing the last one…',
+      '3_lessons_ready' => 'All lessons are ready. Checking materials…',
       'repairing_lessons' =>
         'Strengthening the lessons that missed a quality check…',
       'resolving_materials' => 'Checking and organizing your materials…',
@@ -854,6 +863,8 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
     final active = unlocked && !completed;
     final hasLesson =
         step.lessonContent != null && step.lessonContent!.trim().isNotEmpty;
+    final preparing =
+        !detailed.detailsReady && unlocked && !completed && !hasLesson;
 
     return CmpysCardSurface(
       key: Key(
@@ -863,7 +874,9 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
             ? 'active'
             : 'locked'}',
       ),
-      color: active
+      color: preparing
+          ? AppColors.paper2
+          : active
           ? AppColors.greenSoft
           : unlocked
           ? AppColors.card
@@ -912,13 +925,17 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  active
+                  preparing
+                      ? 'PREPARING'
+                      : active
                       ? 'CURRENT LESSON'
                       : completed
                       ? 'COMPLETED · TAP TO REVIEW'
                       : 'LOCKED',
                   style: AppTypography.kicker.copyWith(
-                    color: active
+                    color: preparing
+                        ? AppColors.ochre2
+                        : active
                         ? AppColors.green2
                         : completed
                         ? AppColors.green
@@ -936,35 +953,56 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
                   ),
                 ),
                 const SizedBox(height: 6),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 5,
-                  children: [
-                    _lessonMeta(
-                      PhosphorIconsRegular.bookOpenText,
-                      '${step.readingMinutes ?? _lessonReadMinutes(step)} min read',
+                if (preparing)
+                  Text(
+                    'The outline is ready. Full lesson content is still being written.',
+                    style: AppTypography.caption.copyWith(
+                      color: AppColors.ink3,
+                      fontSize: 11.5,
+                      height: 1.4,
                     ),
-                    _lessonMeta(
-                      PhosphorIconsRegular.timer,
-                      '${step.practiceMinutes ?? _lessonPracticeMinutes(step)} min practice',
-                    ),
-                    if (step.resources.isNotEmpty)
+                  )
+                else
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 5,
+                    children: [
                       _lessonMeta(
-                        PhosphorIconsRegular.books,
-                        '${step.resources.length} reference${step.resources.length == 1 ? '' : 's'}',
+                        PhosphorIconsRegular.bookOpenText,
+                        '${step.readingMinutes ?? _lessonReadMinutes(step)} min read',
                       ),
-                  ],
-                ),
+                      _lessonMeta(
+                        PhosphorIconsRegular.timer,
+                        '${step.practiceMinutes ?? _lessonPracticeMinutes(step)} min practice',
+                      ),
+                      if (step.resources.isNotEmpty)
+                        _lessonMeta(
+                          PhosphorIconsRegular.books,
+                          '${step.resources.length} reference${step.resources.length == 1 ? '' : 's'}',
+                        ),
+                    ],
+                  ),
               ],
             ),
           ),
           Padding(
             padding: const EdgeInsets.only(top: 8),
-            child: Icon(
-              unlocked ? Icons.chevron_right_rounded : Icons.lock_outline,
-              color: active ? AppColors.green2 : AppColors.ink3,
-              size: 20,
-            ),
+            child: preparing
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        AppColors.ochre2,
+                      ),
+                    ),
+                  )
+                : Icon(
+                    unlocked ? Icons.chevron_right_rounded : Icons.lock_outline,
+                    color: active ? AppColors.green2 : AppColors.ink3,
+                    size: 20,
+                  ),
           ),
         ],
       ),

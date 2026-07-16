@@ -50,21 +50,33 @@ INCOMING_COMPOSE="/tmp/cmpys-compose-${TAG}.yml"
 ARCHIVE="/tmp/cmpys-backend-${TAG}.tar.gz"
 ROLLBACK_ARMED=false
 COMPOSE_REPLACED=false
-RELEASE_SERVICES=(web worker catalog-worker catalog-control beat)
+RELEASE_SERVICES=(web worker worker-high worker-low catalog-worker catalog-control beat)
 
 compose() {
   docker compose -p cmpys --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" "$@"
 }
 
+configured_release_services() {
+  local configured service
+  configured="$(compose config --services 2>/dev/null || true)"
+  for service in "${RELEASE_SERVICES[@]}"; do
+    if grep -Fxq "${service}" <<<"${configured}"; then
+      printf '%s\n' "${service}"
+    fi
+  done
+}
+
 rollback_release() {
+  local rollback_services=()
   trap - ERR
   echo "  Rolling back release..."
   if [[ -f "${COMPOSE_BACKUP}" ]]; then
     cp "${COMPOSE_BACKUP}" "${COMPOSE_FILE}"
   fi
   if [[ "${ROLLBACK_ARMED}" == "true" ]]; then
+    mapfile -t rollback_services < <(configured_release_services)
     IMAGE_TAG="${PREVIOUS_TAG}" compose up -d --force-recreate \
-      "${RELEASE_SERVICES[@]}" || true
+      "${rollback_services[@]}" || true
   fi
 }
 
@@ -185,6 +197,8 @@ done
 
 echo "  Checking Celery workers and queue bindings..."
 wait_for_celery_worker "worker" "default"
+wait_for_celery_worker "worker-high" "high_priority"
+wait_for_celery_worker "worker-low" "low_priority"
 wait_for_celery_worker "catalog-worker" "catalog"
 wait_for_celery_worker "catalog-control" "catalog_control"
 

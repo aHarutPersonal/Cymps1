@@ -1,7 +1,7 @@
 # Content Quality Specification
 
-**Version:** 2.1
-**Last Updated:** 2026-07-11
+**Version:** 2.2
+**Last Updated:** 2026-07-16
 **Owner:** CMPYS Engineering
 
 ---
@@ -15,7 +15,7 @@ CMPYS claims to provide 15-90 minute learning experiences, but the actual conten
 | Prompt | Claims | Actually Produces | Gap |
 |--------|--------|-------------------|-----|
 | `book_module_generate.txt` | "15-minute module" | 200-800 words (1-4 min) | No minimum word count on `content_markdown` |
-| `plan_item_details.txt` | "40-60 minute lessons" | 200-400 word `lesson_content` per step | Floor too low; time claim is not auditable |
+| `plan_item_details.txt` | "40-180 minute lessons" | 200-400 word `lesson_content` per step | Floor too low; time claim is not auditable |
 | `plan_generate.txt` | "2-8 hour missions" | No min on `description`; backend drops `estimated_hours` and `daily_instructions` | Duration claim is unenforceable |
 | `duration_minutes` | Calculated from content | Hardcoded to 15 for all book modules | UI shows "15 min" for 200 words |
 
@@ -46,10 +46,10 @@ CMPYS claims to provide 15-90 minute learning experiences, but the actual conten
 
 | Field | Minimum | Target | Rationale |
 |-------|---------|--------|-----------|
-| `lesson_content` per step | 1,200 words | 1,200-1,800 words | 6-9 minutes of teaching at 200 wpm |
-| Timed guided practice | 30 minutes | 30-45 minutes | Makes the total session honestly 40-60 minutes |
+| `lesson_content` per step | 1,900 words | 2,400-2,800 words (4,200 maximum) | 12-14 minutes of targeted teaching at 200 wpm |
+| Timed guided practice | 20 minutes | Mission-hour share minus reading time | Makes the stored 40-180-minute session auditable |
 | `content_markdown` for materials | 350 words | 400-600 words | Supporting in-app lessons need useful depth |
-| Each `substep` | 20 words | 35 words | Specific practice exercise with tool/time/criteria |
+| Each `substep` | 12 words | 20-60 words | Specific practice exercise with tool/time/criteria |
 | Each `material.idea.content` | 40 words | 60 words | Specific example + actionable takeaway |
 
 **Quality Rules:**
@@ -59,7 +59,7 @@ CMPYS claims to provide 15-90 minute learning experiences, but the actual conten
 - Lessons progress sequentially: completing the active lesson unlocks the next
 - Filler phrases like "Let's dive in" or "It's important to note" are forbidden
 
-**Validation:** Backend checks each step's `lesson_content` >= 1,200 words and each material's `content_markdown` >= 350 words. If any fail, it retries once with a stronger prompt. Existing short lessons are queued for regeneration when opened.
+**Validation:** Backend requires each step to contain 1,900-4,200 words, all seven headings, exact material references, and actionable substeps. The outline and each valid lesson are checkpointed independently. A substep-only defect uses a small targeted repair; other defects retry only that lesson. Existing short lessons are queued for regeneration when opened.
 
 ### 2.3 Plan Generation (`plan_generate.txt`)
 
@@ -121,14 +121,13 @@ generate_book_module()
 
 ```
 regenerate_plan_item_details()
-  -> LLM generates steps + materials
-  -> _normalize_plan_item_details()
-  -> Derive reading_minutes from word count
-  -> Validate: any step lesson_content < 1,200 words or material content_markdown < 350 words?
-     -> YES: Retry once with stronger prompt
-        -> Validate again
-        -> Use retry if all pass
-     -> NO: Proceed with original
+  -> Generate and persist the shared outline
+  -> Generate lesson 1 first; validate and persist it immediately
+  -> Generate lessons 2 and 3 concurrently; persist each valid result
+  -> If only substeps fail: repair only substeps
+  -> Otherwise retry only the failed lesson
+  -> Reuse valid checkpoints when a job is retried with the same input hash
+  -> Derive reading/practice duration and resolve material references
 ```
 
 ### 4.3 Plan Generation
@@ -192,9 +191,9 @@ class PlanItemCreate(BaseModel):
 
 ## 6. Verification Checklist
 
-- [ ] Generate a plan for a test user. Open a plan item's details. Verify each `lesson_content` is 1,200-1,800 words with the required sections and timed practice.
+- [ ] Generate a plan for a test user. Open a plan item's details. Verify each `lesson_content` is 1,900-4,200 words (target 2,400-2,800) with the required sections and timed practice.
 - [ ] Open a book module in the dedicated reader. Verify `content_markdown` is >= 3,200 words with multiple sections, examples, boundaries, and exercises.
 - [ ] Verify `duration_minutes` reflects actual word count (words / 200), not a hardcoded value.
 - [ ] Send a deliberately shallow prompt output through the pipeline. Verify the backend retries with a stronger prompt.
 - [ ] Verify a 3,200-word book module shows `duration_minutes=16`.
-- [ ] Verify each lesson shows separate reading/practice time and a 40-60 minute total.
+- [ ] Verify each lesson shows separate reading/practice time and a 40-180 minute total.

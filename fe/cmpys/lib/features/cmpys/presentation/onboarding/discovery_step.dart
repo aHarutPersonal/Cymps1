@@ -372,6 +372,9 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
           Expanded(
             child: TextField(
               onChanged: (v) => setState(() => _query = v),
+              textAlignVertical: TextAlignVertical.center,
+              onTapOutside: (_) =>
+                  FocusManager.instance.primaryFocus?.unfocus(),
               style: AppTypography.body.copyWith(fontSize: 15.5),
               cursorColor: AppColors.green,
               decoration: const InputDecoration(

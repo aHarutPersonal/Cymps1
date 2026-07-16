@@ -3,6 +3,12 @@
 **Date:** 2026-07-12  
 **Scope:** prompt library, LLM orchestration, FastAPI hot paths, Flutter startup/stream rendering, and quality enforcement
 
+> Historical snapshot: the latency measurements remain useful, but the active
+> lesson contract and orchestration were superseded on 2026-07-16. Current
+> lessons accept 1,900-4,200 words (target 2,400-2,800), and generation now
+> checkpoints lesson one before concurrently producing lessons two and three.
+> See ADR-005 and `content_quality_spec.md` for the current contract.
+
 ## Executive verdict
 
 CMPYS's correct product spine is:

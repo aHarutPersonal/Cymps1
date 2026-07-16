@@ -394,6 +394,9 @@ class _CmpysReelsScreenState extends ConsumerState<CmpysReelsScreen> {
                       child: Center(
                         child: TextField(
                           controller: controller,
+                          textAlignVertical: TextAlignVertical.center,
+                          onTapOutside: (_) =>
+                              FocusManager.instance.primaryFocus?.unfocus(),
                           style: AppTypography.body.copyWith(fontSize: 14),
                           cursorColor: AppColors.green,
                           decoration: const InputDecoration(

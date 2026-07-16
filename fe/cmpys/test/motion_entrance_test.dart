@@ -239,6 +239,59 @@ void main() {
     expect(find.text('no scope'), findsOneWidget);
   });
 
+  testWidgets('FeedbackReveal animates late interaction content once', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: FeedbackReveal(child: Text('new message')),
+      ),
+    );
+
+    final reveal = find.byType(FeedbackReveal);
+    expect(
+      find.descendant(of: reveal, matching: find.byType(FadeTransition)),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: reveal, matching: find.byType(Transform)),
+      findsOneWidget,
+    );
+
+    await tester.pumpAndSettle();
+    expect(find.text('new message'), findsOneWidget);
+    expect(
+      find.descendant(of: reveal, matching: find.byType(FadeTransition)),
+      findsNothing,
+    );
+    expect(
+      find.descendant(of: reveal, matching: find.byType(Transform)),
+      findsNothing,
+    );
+  });
+
+  testWidgets('FeedbackReveal is static under reduced motion', (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: MediaQuery(
+          data: MediaQueryData(disableAnimations: true),
+          child: FeedbackReveal(child: Text('immediate message')),
+        ),
+      ),
+    );
+
+    expect(find.text('immediate message'), findsOneWidget);
+    final reveal = find.byType(FeedbackReveal);
+    expect(
+      find.descendant(of: reveal, matching: find.byType(FadeTransition)),
+      findsNothing,
+    );
+    expect(
+      find.descendant(of: reveal, matching: find.byType(Transform)),
+      findsNothing,
+    );
+  });
+
   testWidgets('reduced motion applies zero stagger delay (no wait before fade)',
       (tester) async {
     await tester.pumpWidget(

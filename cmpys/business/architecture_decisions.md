@@ -1,7 +1,7 @@
 # Architecture Decision Records
 
 **Project:** CMPYS  
-**Last Updated:** 2026-05-13
+**Last Updated:** 2026-07-16
 
 ---
 
@@ -45,7 +45,7 @@ LLM-generated content was frequently too thin (200-800 word "15-minute modules")
 Add post-generation validation with a single retry:
 
 1. **Book modules**: Require 3,200-4,500 words plus structure, practice, anti-filler, and grounding checks; retry once with the exact failed checks
-2. **Plan item details**: If any `lesson_content` < 1,200 words or `content_markdown` < 350 words, retry once; regenerate legacy short lessons when opened
+2. **Plan item details**: Require each lesson to remain within the accepted 1,900-4,200-word range (target 2,400-2,800), all required sections, valid material references, and actionable substeps. Repair substeps alone when they are the only defect; otherwise retry only the failed lesson while preserving valid checkpoints.
 3. **Plan generation**: `BinaryTask` schema enforces `description` min_length=10
 
 Use the retry result only if it's deeper than the original.
@@ -104,21 +104,40 @@ Use `canonical_key` (e.g., `book:benjamin_graham:intelligent_investor`) to dedup
 
 ---
 
-## ADR-005: All Plan Items Pre-Generated in Background
+## ADR-005: Progressive Semantic Plan Generation
 
-**Date:** 2026-05-11  
-**Status:** Accepted (pre-existing)
+**Date:** 2026-07-16
+**Status:** Accepted (supersedes the 2026-05-11 all-items policy)
 
 ### Context
 
-Originally, only Week 1 plan items had their details (steps, materials) pre-generated. Opening Week 4 items required waiting for LLM generation.
+Generating all lessons for all twelve weeks up front spends heavily on work a
+user may never reach and delays the first usable lesson behind unrelated long
+outputs. Generating a whole mission as one all-or-nothing artifact also loses
+completed work when one lesson is slow or fails validation.
 
 ### Decision
 
-After plan creation, all plan item details are enqueued for background generation via Celery. Ordered by `week_start` so earlier weeks are ready first.
+- Generate the compact twelve-week backbone in one bulk call, then expand only
+  the current week into execution-ready task copy.
+- Start current-week detail work immediately. Reserve high-priority capacity
+  for the first mission and send remaining current-week missions to the normal
+  queue.
+- Within a mission, persist the shared outline, generate and persist lesson one
+  first, then generate lessons two and three concurrently. Each complete lesson
+  is a resumable semantic checkpoint; arbitrary token chunks are not persisted.
+- Expose a validated partial checkpoint to the client so lesson one can be read
+  while later lessons continue. Placeholder steps cannot be completed.
+- Start the next week's low-priority preparation only after the learner
+  completes the first current lesson.
+- Isolate high-, default-, and low-priority Celery consumers so speculative
+  work cannot consume every interactive slot.
 
 ### Consequences
 
-- Users can open any plan item without waiting
-- Celery worker processes up to 36 items (12 weeks x 3 tasks) per plan
-- Rate limiting via Celery queue (`low_priority`) prevents blocking interactive features
+- Time to first usable lesson no longer includes the slowest of three lessons.
+- Valid lessons survive retries and worker failures, reducing duplicate tokens.
+- Future-week provider spend follows demonstrated progress rather than plan
+  creation.
+- The checkpoint is stored in the existing `details_json`/job `result_json`
+  fields, so this decision requires no schema migration.

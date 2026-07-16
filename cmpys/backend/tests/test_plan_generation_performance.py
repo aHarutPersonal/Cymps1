@@ -92,12 +92,15 @@ def _expanded_week_one() -> PlanGenerationResponse:
 async def test_initial_plan_generates_backbone_then_only_week_one(monkeypatch) -> None:
     requested_models: list[type] = []
     factory_kwargs: list[dict] = []
+    rendered_prompts: dict[type, str] = {}
+    telemetry_metadata: list[dict] = []
 
     class Client:
         model = "grok-test"
 
-        async def generate_and_validate(self, *, output_model, **_kwargs):
+        async def generate_and_validate(self, *, output_model, user_prompt, **_kwargs):
             requested_models.append(output_model)
+            rendered_prompts[output_model] = user_prompt
             value = (
                 _backbone()
                 if output_model is PlanBackboneResponse
@@ -121,11 +124,11 @@ async def test_initial_plan_generates_backbone_then_only_week_one(monkeypatch) -
         factory_kwargs.append(kwargs)
         return Client()
 
-    async def ignore_telemetry(**_kwargs) -> None:
-        return None
+    async def capture_telemetry(**kwargs) -> None:
+        telemetry_metadata.append(kwargs["metadata"])
 
     monkeypatch.setattr(generator, "get_llm_client", get_client)
-    monkeypatch.setattr(generator, "record_llm_response", ignore_telemetry)
+    monkeypatch.setattr(generator, "record_llm_response", capture_telemetry)
 
     roadmap = await generator._generate_llm_items(
         idol_name="Ada Lovelace",
@@ -133,6 +136,10 @@ async def test_initial_plan_generates_backbone_then_only_week_one(monkeypatch) -
         hours_per_week=5,
         duration_weeks=12,
         idol_profile={"domains": ["computing"]},
+        interview_transcript_json="RAW INTERVIEW TRANSCRIPT",
+        comparison_summary="DISTILLED COMPARISON",
+        blueprint_markdown="DISTILLED BLUEPRINT",
+        telemetry_context={"plan_job_id": "job-1", "queue_wait_ms": 123},
     )
 
     assert requested_models == [PlanBackboneResponse, PlanGenerationResponse]
@@ -149,6 +156,12 @@ async def test_initial_plan_generates_backbone_then_only_week_one(monkeypatch) -
         if item.week_start > 1
     )
     assert len(roadmap.backbone_weeks) == 12
+    assert "RAW INTERVIEW TRANSCRIPT" in rendered_prompts[PlanBackboneResponse]
+    assert "RAW INTERVIEW TRANSCRIPT" not in rendered_prompts[PlanGenerationResponse]
+    assert "DISTILLED COMPARISON" in rendered_prompts[PlanGenerationResponse]
+    assert "DISTILLED BLUEPRINT" in rendered_prompts[PlanGenerationResponse]
+    assert all(row["plan_job_id"] == "job-1" for row in telemetry_metadata)
+    assert all(row["queue_wait_ms"] == 123 for row in telemetry_metadata)
     assert factory_kwargs == [
         {
             "timeout": generator.PLAN_BACKBONE_TIMEOUT_SECONDS,

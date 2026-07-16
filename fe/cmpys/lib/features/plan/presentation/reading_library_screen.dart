@@ -199,6 +199,8 @@ class _ReadingLibraryScreenState extends ConsumerState<ReadingLibraryScreen> {
         TextField(
           controller: _searchController,
           onChanged: (_) => setState(() {}),
+          textAlignVertical: TextAlignVertical.center,
+          onTapOutside: (_) => FocusManager.instance.primaryFocus?.unfocus(),
           decoration: InputDecoration(
             hintText: 'Search books or authors',
             hintStyle: AppTypography.body.copyWith(color: AppColors.ink3),
@@ -226,7 +228,7 @@ class _ReadingLibraryScreenState extends ConsumerState<ReadingLibraryScreen> {
               borderRadius: BorderRadius.circular(18),
             ),
             focusedBorder: OutlineInputBorder(
-              borderSide: const BorderSide(color: AppColors.green),
+              borderSide: const BorderSide(color: AppColors.hair2, width: 1.5),
               borderRadius: BorderRadius.circular(18),
             ),
           ),

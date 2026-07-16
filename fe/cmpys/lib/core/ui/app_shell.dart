@@ -79,42 +79,148 @@ class AppShell extends ConsumerWidget {
 
     final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
 
-    return Scaffold(
-      backgroundColor: AppColors.paper,
-      body: Stack(
-        children: [
-          Positioned.fill(
-            child: _TabFade(
-              index: navigationShell.currentIndex,
-              child: navigationShell,
-            ),
-          ),
-          if (!keyboardOpen)
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 0,
-              child: _FloatingPillNav(
-                currentIndex: navigationShell.currentIndex,
-                onTap: (index) {
-                  HapticFeedback.selectionClick();
-                  navigationShell.goBranch(
-                    index,
-                    initialLocation: index == navigationShell.currentIndex,
-                  );
-                },
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: const SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarBrightness: Brightness.light,
+        statusBarIconBrightness: Brightness.dark,
+        systemNavigationBarColor: AppColors.paper,
+        systemNavigationBarIconBrightness: Brightness.dark,
+        systemNavigationBarDividerColor: AppColors.paper,
+      ),
+      child: Scaffold(
+        // Each branch owns its keyboard inset. Resizing this outer scaffold as
+        // well would apply the same inset twice to nested branch Scaffolds and
+        // create a large blank band above the keyboard.
+        resizeToAvoidBottomInset: false,
+        backgroundColor: AppColors.paper,
+        body: Stack(
+          children: [
+            Positioned.fill(
+              child: _TabFade(
+                index: navigationShell.currentIndex,
+                child: navigationShell,
               ),
             ),
-        ],
+            if (!keyboardOpen)
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: _FloatingPillNav(
+                  currentIndex: navigationShell.currentIndex,
+                  onTap: (index) {
+                    HapticFeedback.selectionClick();
+                    navigationShell.goBranch(
+                      index,
+                      initialLocation: index == navigationShell.currentIndex,
+                    );
+                  },
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
 }
 
-class _FloatingPillNav extends StatelessWidget {
+class _FloatingPillNav extends StatefulWidget {
   const _FloatingPillNav({required this.currentIndex, required this.onTap});
   final int currentIndex;
   final ValueChanged<int> onTap;
+
+  @override
+  State<_FloatingPillNav> createState() => _FloatingPillNavState();
+}
+
+class _FloatingPillNavState extends State<_FloatingPillNav>
+    with SingleTickerProviderStateMixin {
+  static const _itemGap = 3.0;
+  static const _labelStyle = TextStyle(
+    fontFamily: 'Plus Jakarta Sans',
+    fontSize: 14,
+    fontWeight: FontWeight.w600,
+    letterSpacing: -0.1,
+  );
+
+  late final AnimationController _selectorController = AnimationController(
+    vsync: this,
+    duration: AppDurations.normal,
+    value: 1,
+  );
+  late double _selectorFrom;
+  late double _selectorTo;
+  bool _motionEnabled = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectorFrom = widget.currentIndex.toDouble();
+    _selectorTo = _selectorFrom;
+  }
+
+  double get _selectorPosition {
+    final eased = AppCurves.easeOut.transform(_selectorController.value);
+    return _selectorFrom + (_selectorTo - _selectorFrom) * eased;
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final enabled = MotionConfig.enabled(context);
+    if (_motionEnabled && !enabled) {
+      final target = widget.currentIndex.toDouble();
+      _selectorController.stop();
+      _selectorFrom = target;
+      _selectorTo = target;
+      _selectorController.value = 1;
+    }
+    _motionEnabled = enabled;
+  }
+
+  @override
+  void didUpdateWidget(_FloatingPillNav oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.currentIndex == widget.currentIndex) return;
+
+    final target = widget.currentIndex.toDouble();
+    if (!_motionEnabled) {
+      _selectorController.stop();
+      _selectorFrom = target;
+      _selectorTo = target;
+      _selectorController.value = 1;
+      return;
+    }
+
+    final current = _selectorPosition;
+    final distance = (target - current).abs();
+    final extraDistance = (distance - 1).clamp(0, 3);
+    _selectorFrom = current;
+    _selectorTo = target;
+    _selectorController.duration = Duration(
+      milliseconds:
+          AppDurations.normal.inMilliseconds + (extraDistance * 45).round(),
+    );
+    _selectorController.forward(from: 0);
+  }
+
+  @override
+  void dispose() {
+    _selectorController.dispose();
+    super.dispose();
+  }
+
+  double _activeItemWidth(BuildContext context, String label) {
+    final painter = TextPainter(
+      text: TextSpan(text: label, style: _labelStyle),
+      maxLines: 1,
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+    )..layout();
+    // 15 left + 22 icon + 8 gap + label + 18 right.
+    return 63 + painter.width;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -122,6 +228,10 @@ class _FloatingPillNav extends StatelessWidget {
     final width = MediaQuery.sizeOf(context).width;
     final scaledLabelSize = MediaQuery.textScalerOf(context).scale(14);
     final iconOnly = AppShell.useIconOnlyNavigation(width, scaledLabelSize);
+    final activeWidths = [
+      for (final destination in appShellDestinations)
+        iconOnly ? 44.0 : _activeItemWidth(context, destination.label),
+    ];
 
     return Padding(
       padding: EdgeInsets.only(
@@ -130,131 +240,188 @@ class _FloatingPillNav extends StatelessWidget {
         right: iconOnly ? 10 : 16,
       ),
       child: Center(
-        child: Container(
-          padding: const EdgeInsets.all(6),
-          decoration: BoxDecoration(
-            color: const Color(0xFAFFFFFF),
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: AppColors.hair),
-            boxShadow: AppShadows.tabPill,
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: List.generate(appShellDestinations.length, (i) {
-              final dest = appShellDestinations[i];
-              final active = currentIndex == i;
-              return Padding(
-                padding: EdgeInsets.only(
-                  right: i == appShellDestinations.length - 1 ? 0 : 3,
+        child: AnimatedBuilder(
+          animation: _selectorController,
+          builder: (context, _) {
+            final geometry = _FloatingNavGeometry.calculate(
+              position: _selectorPosition,
+              activeWidths: activeWidths,
+              iconOnly: iconOnly,
+              itemGap: _itemGap,
+            );
+
+            return Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: const Color(0xFAFFFFFF),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: AppColors.hair),
+                boxShadow: AppShadows.tabPill,
+              ),
+              child: SizedBox(
+                width: geometry.totalWidth,
+                height: 48,
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Positioned(
+                      left: geometry.selectorLeft,
+                      top: 0,
+                      width: geometry.selectorWidth,
+                      height: 48,
+                      child: DecoratedBox(
+                        key: const ValueKey('floating-nav-selector'),
+                        decoration: BoxDecoration(
+                          color: AppColors.green,
+                          borderRadius: BorderRadius.circular(999),
+                          boxShadow: [
+                            BoxShadow(
+                              color: AppColors.green2.withValues(alpha: 0.34),
+                              blurRadius: 12,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    Row(
+                      children: [
+                        for (
+                          var i = 0;
+                          i < appShellDestinations.length;
+                          i++
+                        ) ...[
+                          if (i > 0) const SizedBox(width: _itemGap),
+                          SizedBox(
+                            key: ValueKey('floating-nav-item-$i'),
+                            width: geometry.itemWidths[i],
+                            height: 48,
+                            child: _NavChip(
+                              glyph: appShellDestinations[i].glyph,
+                              label: appShellDestinations[i].label,
+                              selected: widget.currentIndex == i,
+                              selectionProgress: geometry.selectionProgress[i],
+                              iconOnly: iconOnly,
+                              onTap: () => widget.onTap(i),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ],
                 ),
-                child: _NavChip(
-                  glyph: dest.glyph,
-                  label: dest.label,
-                  active: active,
-                  iconOnly: iconOnly,
-                  onTap: () => onTap(i),
-                ),
-              );
-            }),
-          ),
+              ),
+            );
+          },
         ),
       ),
     );
   }
 }
 
+class _FloatingNavGeometry {
+  const _FloatingNavGeometry({
+    required this.itemWidths,
+    required this.selectionProgress,
+    required this.selectorLeft,
+    required this.selectorWidth,
+    required this.totalWidth,
+  });
+
+  final List<double> itemWidths;
+  final List<double> selectionProgress;
+  final double selectorLeft;
+  final double selectorWidth;
+  final double totalWidth;
+
+  static _FloatingNavGeometry calculate({
+    required double position,
+    required List<double> activeWidths,
+    required bool iconOnly,
+    required double itemGap,
+  }) {
+    final lastIndex = activeWidths.length - 1;
+    final clampedPosition = position.clamp(0, lastIndex.toDouble()).toDouble();
+    final baseWidth = iconOnly ? 44.0 : 48.0;
+    final selectionProgress = [
+      for (var i = 0; i < activeWidths.length; i++)
+        (1 - (clampedPosition - i).abs()).clamp(0, 1).toDouble(),
+    ];
+    final itemWidths = [
+      for (var i = 0; i < activeWidths.length; i++)
+        _lerp(baseWidth, activeWidths[i], selectionProgress[i]),
+    ];
+    final lower = clampedPosition.floor().clamp(0, lastIndex).toInt();
+    final upper = clampedPosition.ceil().clamp(0, lastIndex).toInt();
+    final fraction = clampedPosition - lower;
+    final totalWidth =
+        itemWidths.fold<double>(0, (sum, value) => sum + value) +
+        itemGap * lastIndex;
+    // Interpolate the selector in the dock's *global* coordinate space, then
+    // translate it back into the currently morphing dock. Deriving its left
+    // edge from the temporary item widths can introduce a tiny end-of-travel
+    // overshoot as the centered dock changes width.
+    double endpointLeftFromCenter(int index) {
+      final endpointTotalWidth =
+          baseWidth * activeWidths.length +
+          (activeWidths[index] - baseWidth) +
+          itemGap * lastIndex;
+      final endpointLocalLeft = index * (baseWidth + itemGap);
+      return endpointLocalLeft - endpointTotalWidth / 2;
+    }
+
+    final selectorLeftFromCenter = _lerp(
+      endpointLeftFromCenter(lower),
+      endpointLeftFromCenter(upper),
+      fraction,
+    );
+    final selectorLeft = selectorLeftFromCenter + totalWidth / 2;
+    final selectorWidth = _lerp(
+      activeWidths[lower],
+      activeWidths[upper],
+      fraction,
+    );
+
+    return _FloatingNavGeometry(
+      itemWidths: itemWidths,
+      selectionProgress: selectionProgress,
+      selectorLeft: selectorLeft,
+      selectorWidth: selectorWidth,
+      totalWidth: totalWidth,
+    );
+  }
+
+  static double _lerp(double begin, double end, double t) =>
+      begin + (end - begin) * t;
+}
+
 class _NavChip extends StatelessWidget {
   const _NavChip({
     required this.glyph,
     required this.label,
-    required this.active,
+    required this.selected,
+    required this.selectionProgress,
     required this.iconOnly,
     required this.onTap,
   });
 
   final CmpysNavGlyph glyph;
   final String label;
-  final bool active;
+  final bool selected;
+  final double selectionProgress;
   final bool iconOnly;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final iconOnlyChip = AnimatedContainer(
-      duration: const Duration(milliseconds: 220),
-      curve: Curves.easeOutCubic,
-      width: 44,
-      height: 48,
-      decoration: BoxDecoration(
-        color: active ? AppColors.green : Colors.transparent,
-        borderRadius: BorderRadius.circular(999),
-        boxShadow: active
-            ? [
-                BoxShadow(
-                  color: AppColors.green2.withValues(alpha: 0.28),
-                  blurRadius: 10,
-                  offset: const Offset(0, 3),
-                ),
-              ]
-            : null,
-      ),
-      alignment: Alignment.center,
-      child: CmpysNavIcon(
-        glyph,
-        size: 22,
-        color: active ? Colors.white : AppColors.ink3,
-        strokeWidth: active ? 2.0 : 1.7,
-      ),
-    );
-
-    final activeChip = AnimatedContainer(
-      duration: const Duration(milliseconds: 220),
-      curve: Curves.easeOutCubic,
-      height: 48,
-      padding: const EdgeInsets.fromLTRB(15, 0, 18, 0),
-      decoration: BoxDecoration(
-        color: AppColors.green,
-        borderRadius: BorderRadius.circular(999),
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.green2.withValues(alpha: 0.36),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          CmpysNavIcon(glyph, size: 22, color: Colors.white, strokeWidth: 2.0),
-          const SizedBox(width: 8),
-          Text(
-            label,
-            style: const TextStyle(
-              fontFamily: 'Plus Jakarta Sans',
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-              letterSpacing: -0.1,
-              color: Colors.white,
-            ),
-          ),
-        ],
-      ),
-    );
-
-    final inactiveChip = SizedBox(
-      width: 48,
-      height: 48,
-      child: Center(
-        child: CmpysNavIcon(glyph,
-            size: 23, color: AppColors.ink3, strokeWidth: 1.7),
-      ),
-    );
+    final progress = selectionProgress.clamp(0.0, 1.0).toDouble();
+    final foreground = Color.lerp(AppColors.ink3, Colors.white, progress)!;
+    final labelProgress = iconOnly ? 0.0 : progress;
 
     return Semantics(
       label: label,
       button: true,
-      selected: active,
+      selected: selected,
       child: Tooltip(
         message: iconOnly ? label : '',
         child: Material(
@@ -262,11 +429,39 @@ class _NavChip extends StatelessWidget {
           child: InkWell(
             onTap: onTap,
             borderRadius: BorderRadius.circular(999),
-            child: iconOnly
-                ? iconOnlyChip
-                : active
-                    ? activeChip
-                    : inactiveChip,
+            child: ExcludeSemantics(
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CmpysNavIcon(
+                    glyph,
+                    size: 23 - progress,
+                    color: foreground,
+                    strokeWidth: 1.7 + 0.3 * progress,
+                  ),
+                  if (!iconOnly)
+                    ClipRect(
+                      child: Align(
+                        widthFactor: labelProgress,
+                        child: Opacity(
+                          opacity: labelProgress,
+                          child: Padding(
+                            padding: const EdgeInsets.only(left: 8),
+                            child: Text(
+                              label,
+                              maxLines: 1,
+                              style: _FloatingPillNavState._labelStyle.copyWith(
+                                color: foreground,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
           ),
         ),
       ),

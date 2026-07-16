@@ -36,6 +36,7 @@ class CmpysTextField extends StatefulWidget {
     this.autocorrect,
     this.enableSuggestions,
     this.autofillHints,
+    this.onTapOutside,
   });
 
   final TextEditingController? controller;
@@ -66,6 +67,7 @@ class CmpysTextField extends StatefulWidget {
   final bool? autocorrect;
   final bool? enableSuggestions;
   final Iterable<String>? autofillHints;
+  final TapRegionCallback? onTapOutside;
 
   @override
   State<CmpysTextField> createState() => _CmpysTextFieldState();
@@ -83,6 +85,8 @@ class _CmpysTextFieldState extends State<CmpysTextField> {
   @override
   Widget build(BuildContext context) {
     final hasError = widget.errorText != null;
+    final isSingleLine =
+        (widget.maxLines ?? 1) == 1 && (widget.minLines ?? 1) == 1;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -119,6 +123,12 @@ class _CmpysTextFieldState extends State<CmpysTextField> {
           autovalidateMode: widget.autovalidateMode,
           style: AppTypography.body,
           cursorColor: AppColors.accent,
+          textAlignVertical: isSingleLine
+              ? TextAlignVertical.center
+              : TextAlignVertical.top,
+          onTapOutside:
+              widget.onTapOutside ??
+              (_) => FocusManager.instance.primaryFocus?.unfocus(),
           decoration: InputDecoration(
             hintText: widget.hint,
             counterText: '',
@@ -147,7 +157,7 @@ class _CmpysTextFieldState extends State<CmpysTextField> {
             focusedBorder: OutlineInputBorder(
               borderRadius: AppRadii.br12,
               borderSide: BorderSide(
-                color: hasError ? AppColors.error : AppColors.accent,
+                color: hasError ? AppColors.error : AppColors.borderFocus,
                 width: 1.5,
               ),
             ),

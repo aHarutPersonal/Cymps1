@@ -133,7 +133,7 @@ class _Result:
 
 
 @pytest.mark.asyncio
-async def test_current_week_details_publish_in_background_at_high_priority() -> None:
+async def test_current_week_reserves_high_priority_for_first_mission() -> None:
     missions = [
         _item("mission-1", PlanItemType.PROJECT, 1),
         _item("mission-2", PlanItemType.READING, 1),
@@ -151,9 +151,7 @@ async def test_current_week_details_publish_in_background_at_high_priority() -> 
 
     db.flush.side_effect = assign_job_ids
 
-    with patch(
-        "app.tasks.plans.regenerate_plan_item_details.apply_async"
-    ) as enqueue:
+    with patch("app.tasks.plans.regenerate_plan_item_details.apply_async") as enqueue:
         job_ids = await plan_tasks._enqueue_plan_week_details_generation_async(
             db,
             plan_id="plan-1",
@@ -172,11 +170,43 @@ async def test_current_week_details_publish_in_background_at_high_priority() -> 
         "background_queued",
     ]
     assert enqueue.call_count == 2
-    assert all(
-        call.kwargs["queue"] == "high_priority"
-        for call in enqueue.call_args_list
-    )
+    assert [call.kwargs["queue"] for call in enqueue.call_args_list] == [
+        "high_priority",
+        "default",
+    ]
     db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_plan_delivery_is_skipped_before_context_loading() -> None:
+    db = AsyncMock()
+    db.execute.return_value = SimpleNamespace(rowcount=0)
+    db.get.return_value = SimpleNamespace(
+        status="running",
+        step="structuring_curriculum",
+        plan_id=None,
+    )
+
+    class SessionContext:
+        async def __aenter__(self):
+            return db
+
+        async def __aexit__(self, *args):
+            return None
+
+    with patch(
+        "app.tasks.plans.async_session_maker",
+        return_value=SessionContext(),
+    ):
+        result = await plan_tasks._run_plan_generation_async("job-1")
+
+    assert result == {
+        "status": "skipped",
+        "job_status": "running",
+        "plan_id": None,
+    }
+    db.commit.assert_awaited_once()
+    db.execute.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -192,9 +222,7 @@ async def test_week_prefetch_reuses_active_jobs_instead_of_duplicating() -> None
         _Result(scalars=["mission-1", "mission-2"]),
     ]
 
-    with patch(
-        "app.tasks.plans.regenerate_plan_item_details.apply_async"
-    ) as enqueue:
+    with patch("app.tasks.plans.regenerate_plan_item_details.apply_async") as enqueue:
         job_ids = await plan_tasks._enqueue_plan_week_details_generation_async(
             db,
             plan_id="plan-1",
@@ -231,16 +259,12 @@ async def test_opening_prefetched_detail_promotes_it_once(
     db = AsyncMock()
     db.execute.return_value = SimpleNamespace(rowcount=1)
 
-    with patch(
-        "app.tasks.plans.regenerate_plan_item_details.apply_async"
-    ) as enqueue:
+    with patch("app.tasks.plans.regenerate_plan_item_details.apply_async") as enqueue:
         result = await plans._promote_prefetched_detail_job(db, job)
 
     assert result == "promoted"
     assert job.status == "queued"
-    enqueue.assert_called_once_with(
-        args=["job-prefetch"], queue="high_priority"
-    )
+    enqueue.assert_called_once_with(args=["job-prefetch"], queue="high_priority")
     db.commit.assert_awaited_once()
 
 
@@ -305,6 +329,107 @@ async def test_failed_detail_job_is_returned_instead_of_requeued_forever() -> No
     assert response.job_id == "job-1"
     assert response.details_error
     assert db.add.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_active_detail_job_exposes_first_checkpointed_lesson() -> None:
+    item = _item("mission-1", PlanItemType.PROJECT, 1)
+    item.details_json = {
+        "steps": [
+            {
+                "id": "step_1",
+                "title": "Ready lesson",
+                "description": "Ready to read.",
+                "lesson_content": "substance " * 2000,
+                "resources": ["Reference"],
+                "substeps": [
+                    "Complete one specific timed action and verify the saved output against the stated success criterion."
+                ],
+            },
+            {
+                "id": "step_2",
+                "title": "Next lesson",
+                "description": "Still being written.",
+                "resources": ["Reference"],
+            },
+            {
+                "id": "step_3",
+                "title": "Final lesson",
+                "description": "Still being written.",
+                "resources": ["Reference"],
+            },
+        ],
+        "materials": [{"title": "Reference", "type": "book"}],
+        "_generation": {
+            "status": "partial",
+            "ready_step_ids": ["step_1"],
+        },
+    }
+    now = datetime.now(timezone.utc)
+    active_job = SimpleNamespace(
+        id="job-1",
+        status="running",
+        step="first_lesson_ready",
+        progress_percent=70,
+        error_message=None,
+        created_at=now,
+        updated_at=now,
+    )
+    db = AsyncMock()
+    db.execute.side_effect = [
+        _Result(scalars=[]),
+        _Result(scalar_one=active_job),
+    ]
+    original_get = plans._get_item_for_user
+    original_progress = plans._compute_item_progress
+    plans._get_item_for_user = AsyncMock(return_value=item)
+    plans._compute_item_progress = AsyncMock(return_value=(ItemProgress(), False))
+    try:
+        response = await plans.get_plan_item_detailed(
+            "mission-1",
+            db,
+            SimpleNamespace(id="user-1"),
+        )
+    finally:
+        plans._get_item_for_user = original_get
+        plans._compute_item_progress = original_progress
+
+    assert response.details_status == DetailsStatus.PARTIAL
+    assert response.job_id == "job-1"
+    assert response.details is not None
+    assert response.details.steps[0].lesson_content
+    assert response.details.steps[1].lesson_content is None
+
+
+@pytest.mark.asyncio
+async def test_unready_checkpoint_step_cannot_be_completed() -> None:
+    item = _item("mission-1", PlanItemType.PROJECT, 1)
+    item.details_json = {
+        "steps": [
+            {
+                "id": "step_1",
+                "title": "Still writing",
+                "lesson_content": None,
+            }
+        ]
+    }
+    db = AsyncMock()
+    db.execute.return_value = _Result(scalar_one=None)
+    original_get = plans._get_item_for_user
+    plans._get_item_for_user = AsyncMock(return_value=item)
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await plans.toggle_step_complete(
+                "mission-1",
+                "step_1",
+                db,
+                SimpleNamespace(id="user-1"),
+            )
+    finally:
+        plans._get_item_for_user = original_get
+
+    assert exc_info.value.status_code == 409
+    assert "still being prepared" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
@@ -442,7 +567,9 @@ async def test_detail_retry_does_not_enqueue_when_lesson_is_already_ready() -> N
 
 
 @pytest.mark.asyncio
-async def test_detail_retry_does_not_enqueue_an_authoritatively_completed_item() -> None:
+async def test_detail_retry_does_not_enqueue_an_authoritatively_completed_item() -> (
+    None
+):
     item = _item("mission-completed", PlanItemType.PROJECT, 1)
     completion = SimpleNamespace(id="completion-1")
     db = AsyncMock()

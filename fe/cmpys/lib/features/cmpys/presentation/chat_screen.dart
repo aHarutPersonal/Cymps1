@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:phosphor_flutter/phosphor_flutter.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -11,6 +10,7 @@ import '../../../core/network/coalesced_text.dart';
 import '../../../core/ui/app_shell.dart';
 import '../../../core/ui/cmpys/cmpys_primitives.dart';
 import '../../../core/ui/motion/entrance.dart';
+import '../../../core/ui/motion/motion_config.dart';
 import '../../../core/ui/motion/page_transition.dart';
 import '../../session/data/session_repository.dart';
 import '../../session/models/session_models.dart';
@@ -38,6 +38,7 @@ class CmpysChatScreen extends ConsumerStatefulWidget {
 class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
   final TextEditingController _input = TextEditingController();
   final ScrollController _scroll = ScrollController();
+  final FocusNode _composerFocus = FocusNode(debugLabel: 'chat composer');
   bool _scrollFrameScheduled = false;
   bool _scrollShouldAnimate = false;
 
@@ -62,7 +63,26 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
   bool get _busy => _waiting || _streaming;
 
   @override
+  void initState() {
+    super.initState();
+    _composerFocus.addListener(_handleComposerFocusChanged);
+  }
+
+  void _handleComposerFocusChanged() {
+    if (!mounted) return;
+    setState(() {});
+    if (_composerFocus.hasFocus) _scrollToBottom();
+  }
+
+  void _dismissKeyboard() {
+    _composerFocus.unfocus();
+    FocusManager.instance.primaryFocus?.unfocus();
+  }
+
+  @override
   void dispose() {
+    _composerFocus.removeListener(_handleComposerFocusChanged);
+    _composerFocus.dispose();
     _input.dispose();
     _scroll.dispose();
     _streamingText.dispose();
@@ -293,6 +313,9 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
   Widget build(BuildContext context) {
     final idol = ref.watch(cmpysStoreProvider.select((s) => s.idol));
     return Scaffold(
+      // The shell does not consume keyboard insets; the active branch owns
+      // the single resize so the composer never gets inset twice.
+      resizeToAvoidBottomInset: true,
       backgroundColor: AppColors.paper,
       body: SafeArea(
         bottom: false,
@@ -316,14 +339,21 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
       ),
       child: Row(
         children: [
-          GestureDetector(
+          CmpysPressable(
+            semanticLabel: 'Open ${idol.name} profile',
+            haptic: CmpysHaptic.selection,
             onTap: () => openIdolDetail(context, idol),
-            child: CmpysMentorAvatar(
-              slug: idol.slug,
-              initials: idol.initials,
-              color: idol.color,
-              tint: idol.tint,
-              size: 40,
+            child: SizedBox.square(
+              dimension: 44,
+              child: Center(
+                child: CmpysMentorAvatar(
+                  slug: idol.slug,
+                  initials: idol.initials,
+                  color: idol.color,
+                  tint: idol.tint,
+                  size: 40,
+                ),
+              ),
             ),
           ),
           const SizedBox(width: 11),
@@ -359,7 +389,9 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
               ],
             ),
           ),
-          GestureDetector(
+          CmpysPressable(
+            semanticLabel: 'Open notes',
+            haptic: CmpysHaptic.selection,
             onTap: () => Navigator.of(
               context,
             ).push(CmpysPageRoute(builder: (_) => const CmpysNotesScreen())),
@@ -387,6 +419,7 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
     return EntranceScope(
       child: ListView(
         controller: _scroll,
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
         padding: const EdgeInsets.fromLTRB(16, 18, 16, 8),
         children: [
           Entrance(
@@ -426,10 +459,20 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
             ),
           ),
           const SizedBox(height: 18),
-          for (final m in _msgs) _bubble(idol, m),
-          if (_streaming) _streamingBubble(idol),
-          if (_waiting) _waitingBubble(idol),
-          if (_error != null) _errorCard(),
+          for (final m in _msgs)
+            FeedbackReveal(key: ObjectKey(m), child: _bubble(idol, m)),
+          if (_streaming)
+            FeedbackReveal(
+              key: const ValueKey('streaming-reply'),
+              child: _streamingBubble(idol),
+            ),
+          if (_waiting)
+            FeedbackReveal(
+              key: const ValueKey('waiting-reply'),
+              child: _waitingBubble(idol),
+            ),
+          if (_error != null)
+            FeedbackReveal(key: ValueKey(_error), child: _errorCard()),
         ],
       ),
     );
@@ -577,8 +620,10 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
     Color color,
     VoidCallback onTap,
   ) {
-    return GestureDetector(
+    return CmpysPressable(
       onTap: onTap,
+      haptic: CmpysHaptic.selection,
+      semanticLabel: label,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
         decoration: BoxDecoration(
@@ -682,8 +727,16 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
   }
 
   Widget _composer(CmpysIdol idol) {
-    final showSuggestions = _msgs.isEmpty && !_busy && !_winMode;
-    return Container(
+    final motionDuration = MotionConfig.enabled(context)
+        ? AppDurations.fast
+        : Duration.zero;
+    final keyboardActive = _composerFocus.hasFocus;
+    final showSuggestions =
+        _msgs.isEmpty && !_busy && !_winMode && !keyboardActive;
+
+    return AnimatedContainer(
+      duration: motionDuration,
+      curve: AppCurves.easeOut,
       padding: EdgeInsets.fromLTRB(
         14,
         10,
@@ -697,115 +750,197 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (showSuggestions)
-            SizedBox(
-              height: 44,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                children: [
-                  for (var i = 0; i < _suggestions.length; i++) ...[
-                    _suggestionChip(_suggestions[i], i),
-                    const SizedBox(width: 8),
-                  ],
-                ],
-              ),
-            ),
-          if (showSuggestions) const SizedBox(height: 10),
-          if (_winMode)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8, left: 4),
-              child: Text(
-                'Reporting a win — ${idol.short} will file it in your record.',
-                style: AppTypography.caption.copyWith(
-                  color: AppColors.ochre2,
-                  fontSize: 12.5,
+          _composerContext(idol, showSuggestions),
+          TextFieldTapRegion(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                CmpysPressable(
+                  haptic: CmpysHaptic.selection,
+                  semanticLabel: keyboardActive
+                      ? 'Hide keyboard'
+                      : _winMode
+                      ? 'Stop reporting a win'
+                      : 'Report a win',
+                  onTap: keyboardActive ? _dismissKeyboard : _startWinReport,
+                  child: AnimatedContainer(
+                    duration: motionDuration,
+                    curve: AppCurves.easeOut,
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: keyboardActive
+                          ? AppColors.paper2
+                          : _winMode
+                          ? AppColors.ochre
+                          : AppColors.ochreSoft,
+                      shape: BoxShape.circle,
+                    ),
+                    child: AnimatedSwitcher(
+                      duration: motionDuration,
+                      switchInCurve: AppCurves.easeOut,
+                      switchOutCurve: Curves.easeIn,
+                      transitionBuilder: (child, animation) => ScaleTransition(
+                        scale: animation,
+                        child: FadeTransition(opacity: animation, child: child),
+                      ),
+                      child: Icon(
+                        keyboardActive
+                            ? Icons.keyboard_hide_rounded
+                            : PhosphorIconsFill.sparkle,
+                        key: ValueKey(keyboardActive),
+                        size: 20,
+                        color: keyboardActive
+                            ? AppColors.ink2
+                            : _winMode
+                            ? Colors.white
+                            : AppColors.ochre2,
+                      ),
+                    ),
+                  ),
                 ),
-              ),
-            ),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              GestureDetector(
-                onTap: _startWinReport,
-                child: Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: _winMode ? AppColors.ochre : AppColors.ochreSoft,
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(
-                    PhosphorIconsFill.sparkle,
-                    size: 20,
-                    color: _winMode ? Colors.white : AppColors.ochre2,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 9),
-              Expanded(
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: AppColors.paper,
-                    borderRadius: BorderRadius.circular(22),
-                    border: Border.all(color: AppColors.hair2, width: 1.5),
-                  ),
-                  padding: const EdgeInsets.fromLTRB(16, 4, 6, 4),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _input,
-                          minLines: 1,
-                          maxLines: 5,
-                          style: AppTypography.body.copyWith(fontSize: 15.5),
-                          cursorColor: AppColors.green,
-                          decoration: InputDecoration(
-                            hintText: _winMode
-                                ? 'Tell ${idol.short} what you did…'
-                                : 'Message ${idol.short}…',
-                            border: InputBorder.none,
-                            isDense: true,
-                            filled: false,
-                            contentPadding: const EdgeInsets.symmetric(
-                              vertical: 11,
+                const SizedBox(width: 9),
+                Expanded(
+                  child: AnimatedContainer(
+                    duration: motionDuration,
+                    curve: AppCurves.easeOut,
+                    decoration: BoxDecoration(
+                      color: AppColors.paper,
+                      borderRadius: BorderRadius.circular(22),
+                      border: Border.all(color: AppColors.hair2, width: 1.5),
+                      boxShadow: keyboardActive
+                          ? [
+                              BoxShadow(
+                                color: AppColors.ink.withValues(alpha: 0.07),
+                                blurRadius: 14,
+                                offset: const Offset(0, 4),
+                              ),
+                            ]
+                          : null,
+                    ),
+                    padding: const EdgeInsets.fromLTRB(16, 4, 6, 4),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _input,
+                            focusNode: _composerFocus,
+                            minLines: 1,
+                            maxLines: 5,
+                            keyboardType: TextInputType.multiline,
+                            textInputAction: TextInputAction.newline,
+                            textAlignVertical: TextAlignVertical.center,
+                            onTapOutside: (_) => _dismissKeyboard(),
+                            style: AppTypography.body.copyWith(fontSize: 15.5),
+                            cursorColor: AppColors.green,
+                            decoration: InputDecoration(
+                              hintText: _winMode
+                                  ? 'Tell ${idol.short} what you did…'
+                                  : 'Message ${idol.short}…',
+                              border: InputBorder.none,
+                              isDense: true,
+                              filled: false,
+                              contentPadding: const EdgeInsets.symmetric(
+                                vertical: 11,
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                      GestureDetector(
-                        onTap: () {
-                          HapticFeedback.lightImpact();
-                          _send(_input.text);
-                        },
-                        child: ValueListenableBuilder<TextEditingValue>(
+                        ValueListenableBuilder<TextEditingValue>(
                           valueListenable: _input,
-                          builder: (_, value, _) => Container(
-                            width: 44,
-                            height: 44,
-                            margin: const EdgeInsets.only(bottom: 1),
-                            decoration: BoxDecoration(
-                              color: value.text.trim().isEmpty
-                                  ? AppColors.hair2
-                                  : AppColors.green,
-                              shape: BoxShape.circle,
-                            ),
-                            child: const Icon(
-                              Icons.arrow_upward_rounded,
-                              color: Colors.white,
-                              size: 18,
-                            ),
-                          ),
+                          builder: (_, value, _) {
+                            final canSend =
+                                value.text.trim().isNotEmpty && !_busy;
+                            return CmpysPressable(
+                              onTap: canSend ? () => _send(_input.text) : null,
+                              haptic: CmpysHaptic.light,
+                              semanticLabel: 'Send message',
+                              child: AnimatedContainer(
+                                duration: motionDuration,
+                                curve: AppCurves.easeOut,
+                                width: 44,
+                                height: 44,
+                                margin: const EdgeInsets.only(bottom: 1),
+                                decoration: BoxDecoration(
+                                  color: canSend
+                                      ? AppColors.green
+                                      : AppColors.hair2,
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(
+                                  Icons.arrow_upward_rounded,
+                                  color: Colors.white,
+                                  size: 18,
+                                ),
+                              ),
+                            );
+                          },
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _composerContext(CmpysIdol idol, bool showSuggestions) {
+    final duration = MotionConfig.enabled(context)
+        ? AppDurations.fast
+        : Duration.zero;
+    final Widget child;
+
+    if (showSuggestions) {
+      child = Padding(
+        key: const ValueKey('chat-suggestions'),
+        padding: const EdgeInsets.only(bottom: 10),
+        child: SizedBox(
+          height: 44,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            children: [
+              for (var i = 0; i < _suggestions.length; i++) ...[
+                _suggestionChip(_suggestions[i], i),
+                const SizedBox(width: 8),
+              ],
+            ],
+          ),
+        ),
+      );
+    } else if (_winMode) {
+      child = Padding(
+        key: const ValueKey('chat-win-hint'),
+        padding: const EdgeInsets.only(bottom: 8, left: 4),
+        child: Text(
+          'Reporting a win — ${idol.short} will file it in your record.',
+          style: AppTypography.caption.copyWith(
+            color: AppColors.ochre2,
+            fontSize: 12.5,
+          ),
+        ),
+      );
+    } else {
+      child = const SizedBox.shrink(key: ValueKey('chat-context-empty'));
+    }
+
+    return AnimatedSwitcher(
+      duration: duration,
+      switchInCurve: AppCurves.easeOut,
+      switchOutCurve: Curves.easeIn,
+      transitionBuilder: (child, animation) => FadeTransition(
+        opacity: animation,
+        child: SizeTransition(
+          sizeFactor: animation,
+          axisAlignment: -1,
+          child: child,
+        ),
+      ),
+      child: child,
     );
   }
 
@@ -816,8 +951,10 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
       (bg: AppColors.claySoft, fg: Color(0xFFC2402F)),
     ];
     final p = palette[i % palette.length];
-    return GestureDetector(
+    return CmpysPressable(
       onTap: () => _send(s),
+      haptic: CmpysHaptic.selection,
+      semanticLabel: s,
       child: Container(
         alignment: Alignment.center,
         padding: const EdgeInsets.symmetric(horizontal: 14),

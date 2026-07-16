@@ -1,6 +1,19 @@
 # CMPYS Implementation Changelog
 
-**Last Updated:** 2026-07-14
+**Last Updated:** 2026-07-16
+
+---
+
+## 2026-07-16: Progressive Plan & Lesson Generation
+
+- Atomically claimed plan jobs before any model work and released implicit read transactions before long provider calls, preventing duplicate plans and pooled-connection starvation.
+- Kept the compact twelve-week backbone as the bulk artifact, removed speculative Week 2 preparation at plan completion, and retained the progress-triggered look-ahead after lesson one is completed.
+- Reserved high-priority queue capacity for the first current-week mission, routed remaining current work normally, and split high/default/low consumers so background work cannot occupy every interactive slot.
+- Changed each mission to persist its outline, generate and expose lesson one first, then generate lessons two and three concurrently. Valid semantic checkpoints are reused by retries with the same input hash.
+- Repaired substeps separately when the long lesson is otherwise valid, avoiding an unnecessary 2,500-word rewrite.
+- Added the `partial` detail API/client state, safe placeholder rendering and polling, and a server-side guard that prevents an unfinished placeholder step from being completed.
+- Added queue-wait, pipeline, first-lesson-ready, per-checkpoint, and provider-stage telemetry to plan metadata, detail-job results, and LLM usage events.
+- Verification: all 481 backend tests and all 156 Flutter tests passed, together with Ruff, Python compilation, Flutter analysis, Compose parsing, shell syntax validation, and diff validation.
 
 ---
 

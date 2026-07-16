@@ -226,8 +226,7 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
     } catch (e) {
       if (!mounted) return;
       debugPrint('💥 interview send failed: $e');
-      final setupConflict =
-          isKickoff && e is ApiError && e.statusCode == 409;
+      final setupConflict = isKickoff && e is ApiError && e.statusCode == 409;
       setState(() {
         _typing = false;
         _streaming = false;
@@ -612,6 +611,9 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
                 minLines: 1,
                 maxLines: 5,
                 autofocus: true,
+                textAlignVertical: TextAlignVertical.center,
+                onTapOutside: (_) =>
+                    FocusManager.instance.primaryFocus?.unfocus(),
                 style: AppTypography.body.copyWith(fontSize: 15.5),
                 cursorColor: AppColors.green,
                 decoration: const InputDecoration(

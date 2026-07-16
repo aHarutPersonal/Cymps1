@@ -113,7 +113,28 @@ void main() {
     expect(plan.allMissionWorkComplete, isFalse);
   });
 
-  test('PlanItemDetailed parses failed and daily states', () {
+  test('PlanItemDetailed parses partial, failed, and daily states', () {
+    final partial = PlanItemDetailed.fromJson({
+      'item': {'id': 'mission-0', 'title': 'Start now'},
+      'details_status': 'partial',
+      'job_id': 'detail-job',
+      'details': {
+        'steps': [
+          {
+            'id': 'step_1',
+            'title': 'Ready lesson',
+            'lesson_content': 'Ready to read',
+          },
+          {'id': 'step_2', 'title': 'Still writing'},
+        ],
+      },
+      'progress': const <String, dynamic>{},
+    });
+    expect(partial.detailsPartial, isTrue);
+    expect(partial.hasReadyLesson, isTrue);
+    expect(partial.detailsLoading, isTrue);
+    expect(partial.detailsFailed, isFalse);
+
     final failed = PlanItemDetailed.fromJson({
       'item': {'id': 'mission-1', 'title': 'Build the prototype'},
       'details_status': 'failed',

@@ -1,4 +1,5 @@
 """Schemas for development plans."""
+
 from datetime import datetime
 from enum import Enum
 
@@ -44,7 +45,7 @@ class PlanGenerateRequest(BaseModel):
 
 class PlanItemUpdate(BaseModel):
     """Update a plan item."""
-    
+
     status: PlanItemStatus | None = None
     progressPercent: int | None = Field(None, ge=0, le=100)
     notes: str | None = Field(None, max_length=5000)
@@ -65,7 +66,7 @@ class PlanItemCreate(BaseModel):
 
 class PlanItemResponse(BaseModel):
     """Plan item response."""
-    
+
     id: str
     planId: str
     title: str
@@ -88,7 +89,7 @@ class PlanItemResponse(BaseModel):
 
 class PlanResponse(BaseModel):
     """Plan response with items."""
-    
+
     id: str
     userId: str
     idolId: str | None = None
@@ -99,11 +100,11 @@ class PlanResponse(BaseModel):
     cycleNumber: int = 1
     items: list[PlanItemResponse] = []
     createdAt: datetime
-    
+
     # Roadmap-level data from the progressive planning prompts
     roadmapThesis: str | None = None
     antiGoals: list[str] = []
-    
+
     # Computed fields
     totalItems: int = 0
     completedItems: int = 0
@@ -116,8 +117,10 @@ class PlanResponse(BaseModel):
 # Plan Item Details & Progress
 # =============================================================================
 
+
 class StepDetail(BaseModel):
     """A single step within a plan item."""
+
     id: str
     title: str
     description: str | None = None
@@ -134,6 +137,7 @@ class StepDetail(BaseModel):
 
 class BookIdeaDetail(BaseModel):
     """A single Deepstash-style idea card from a book."""
+
     title: str
     content: str
     category: str = "Mindset"
@@ -141,6 +145,7 @@ class BookIdeaDetail(BaseModel):
 
 class MaterialDetail(BaseModel):
     """A material/resource for a plan item."""
+
     title: str
     url: str | None = None
     type: str | None = None  # e.g., "book", "article", "video", "in_app_lesson"
@@ -159,6 +164,7 @@ class MaterialDetail(BaseModel):
 
 class ItemDetails(BaseModel):
     """Detailed steps and materials for a plan item."""
+
     steps: list[StepDetail] = []
     materials: list[MaterialDetail] = []
     generated_from_prompt_version: str | None = None
@@ -167,6 +173,7 @@ class ItemDetails(BaseModel):
 
 class ItemProgress(BaseModel):
     """Progress tracking for a plan item."""
+
     completed_steps: int = 0
     total_steps: int = 0
     percent: float = 0.0
@@ -174,7 +181,9 @@ class ItemProgress(BaseModel):
 
 class DetailsStatus(str, Enum):
     """Status of plan item details generation."""
+
     AVAILABLE = "available"
+    PARTIAL = "partial"
     PENDING = "pending"
     GENERATING = "generating"
     FAILED = "failed"
@@ -182,6 +191,7 @@ class DetailsStatus(str, Enum):
 
 class PlanItemDetailedResponse(BaseModel):
     """Extended plan item response with details and progress."""
+
     item: PlanItemResponse
     details: ItemDetails | None = None
     progress: ItemProgress
@@ -202,6 +212,7 @@ class PlanItemDetailedResponse(BaseModel):
 
 class ToggleCompleteResponse(BaseModel):
     """Response for toggling item completion."""
+
     completed: bool
     progress: ItemProgress
     planComplete: bool = False
@@ -210,6 +221,7 @@ class ToggleCompleteResponse(BaseModel):
 
 class ToggleStepResponse(BaseModel):
     """Response for toggling step completion."""
+
     step_id: str
     completed: bool
     progress: ItemProgress
@@ -218,11 +230,13 @@ class ToggleStepResponse(BaseModel):
 
 class RegenerateDetailsResponse(BaseModel):
     """Response for regenerate details request."""
+
     job_id: str
 
 
 class WeekSummaryResponse(BaseModel):
     """Summary of a plan week."""
+
     week: int
     completed_items: int
     total_items: int

@@ -91,6 +91,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
             _ErrorBanner(message: _errorMessage, onDismiss: _clearError),
             Expanded(
               child: SingleChildScrollView(
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
                 padding: const EdgeInsets.fromLTRB(28, 8, 28, 20),
                 child: ConstrainedBox(
                   constraints: BoxConstraints(
@@ -784,6 +786,9 @@ class _PaperInputField extends StatelessWidget {
                   enabled: enabled,
                   onChanged: onChanged,
                   textCapitalization: textCapitalization,
+                  textAlignVertical: TextAlignVertical.center,
+                  onTapOutside: (_) =>
+                      FocusManager.instance.primaryFocus?.unfocus(),
                   style: AppTypography.body.copyWith(color: AppColors.ink),
                   cursorColor: AppColors.accent,
                   decoration: InputDecoration(

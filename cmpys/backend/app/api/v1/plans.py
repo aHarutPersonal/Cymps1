@@ -7,9 +7,10 @@ PROMPT MAPPING:
   - Prompts (when LLM mode): planner_system.txt, plan_backbone_generate.txt,
     plan_week_generate.txt
   - LLM: OPTIONAL (controlled by PLAN_GENERATOR_MODE env var)
-  
+
 - All other endpoints: NO LLM (database operations only)
 """
+
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
@@ -147,9 +148,7 @@ async def _promote_prefetched_detail_job(
     try:
         from app.tasks.plans import regenerate_plan_item_details
 
-        regenerate_plan_item_details.apply_async(
-            args=[job.id], queue="high_priority"
-        )
+        regenerate_plan_item_details.apply_async(args=[job.id], queue="high_priority")
         logger.info(
             "[PLAN_ITEM] Promoted prefetched detail job item_id=%s job_id=%s",
             job.plan_item_id,
@@ -249,15 +248,14 @@ def _plan_to_response(
 ) -> PlanResponse:
     """Convert plan model to response."""
     items = [
-        _item_to_response(i, completed_item_ids=completed_item_ids)
-        for i in plan.items
+        _item_to_response(i, completed_item_ids=completed_item_ids) for i in plan.items
     ]
     completed = sum(1 for item in items if item.status == PlanItemStatus.COMPLETED)
     total = len(plan.items)
-    
+
     # Extract roadmap data from JSONB
     roadmap = plan.roadmap_json or {}
-    
+
     return PlanResponse(
         id=plan.id,
         userId=plan.user_id,
@@ -285,27 +283,28 @@ async def _enqueue_week1_details_generation(plan: Plan, user_id: str) -> None:
     """
     Pre-generate details for Week 1 items (or first N items) so they're
     instantly available when the user opens them.
-    
+
     Enqueues Celery tasks asynchronously - doesn't block the response.
     """
     from app.tasks.ingestion import regenerate_plan_item_details
-    
+
     # Get Week 1 items, sorted by week_start then by creation order
     week1_items = [
-        item for item in plan.items
+        item
+        for item in plan.items
         if item.week_start == 1 and item.type in MISSION_TYPES
     ]
-    
+
     # If no week 1 items, take the first N items regardless of week
     if not week1_items:
         week1_items = sorted(
             (item for item in plan.items if item.type in MISSION_TYPES),
             key=lambda x: (x.week_start, x.id),
         )
-    
+
     # Limit to MAX_PREGENERATE_ITEMS
     items_to_generate = week1_items[:MAX_PREGENERATE_ITEMS]
-    
+
     # Enqueue detail generation for each item
     for item in items_to_generate:
         task = regenerate_plan_item_details.delay(item.id, user_id)
@@ -315,7 +314,9 @@ async def _enqueue_week1_details_generation(plan: Plan, user_id: str) -> None:
         )
 
 
-@router.post("/generate", response_model=IdolImportResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/generate", response_model=IdolImportResponse, status_code=status.HTTP_201_CREATED
+)
 async def generate_plan_endpoint(
     data: PlanGenerateRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -398,6 +399,7 @@ async def generate_plan_endpoint(
 
     # Import and trigger the task
     from app.tasks.plans import run_plan_generation
+
     run_plan_generation.delay(str(job.id))
 
     return IdolImportResponse(
@@ -444,6 +446,7 @@ async def get_current_plan(
     # includes item details — defer the multi-KB-per-item JSONB columns so a
     # 30-item plan doesn't drag hundreds of KB out of the DB per poll.
     from sqlalchemy.orm import defer
+
     stmt = (
         select(Plan)
         .options(
@@ -461,7 +464,7 @@ async def get_current_plan(
 
     result = await db.execute(stmt)
     plan = result.scalar_one_or_none()
-    
+
     if not plan:
         return None
 
@@ -486,7 +489,12 @@ async def get_current_plan(
         completed_item_ids=completed_item_ids,
     )
 
-@router.post("/{plan_id}/items", response_model=PlanItemResponse, status_code=status.HTTP_201_CREATED)
+
+@router.post(
+    "/{plan_id}/items",
+    response_model=PlanItemResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def create_plan_item(
     plan_id: str,
     data: PlanItemCreate,
@@ -505,13 +513,13 @@ async def create_plan_item(
     )
     result = await db.execute(plan_stmt)
     plan = result.scalar_one_or_none()
-    
+
     if not plan:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Plan not found",
         )
-    
+
     # If weekStart not provided, default to current plan week
     week_start = data.weekStart
     if week_start is None:
@@ -520,9 +528,9 @@ async def create_plan_item(
             week_start = max(1, (days_diff // 7) + 1)
         else:
             week_start = 1
-            
+
     week_end = data.weekEnd or week_start
-    
+
     item = PlanItem(
         plan_id=plan_id,
         title=data.title,
@@ -538,21 +546,19 @@ async def create_plan_item(
     db.add(item)
     await db.commit()
     await db.refresh(item)
-    
+
     # Trigger detail generation immediately for usability
     from app.tasks.plans import regenerate_plan_item_details
     from app.models.item_detail_job import PlanItemDetailJob
-    
+
     job = PlanItemDetailJob(
-        plan_item_id=item.id,
-        user_id=current_user.id,
-        status="queued"
+        plan_item_id=item.id, user_id=current_user.id, status="queued"
     )
     db.add(job)
     await db.commit()
-    
+
     regenerate_plan_item_details.delay(job.id)
-    
+
     return _item_to_response(item)
 
 
@@ -568,7 +574,7 @@ async def get_plan_item(
 ) -> PlanItemResponse:
     """
     Get a specific plan item.
-    
+
     LLM USAGE: NONE (database query only)
     """
     stmt = (
@@ -583,13 +589,13 @@ async def get_plan_item(
     )
     result = await db.execute(stmt)
     item = result.scalar_one_or_none()
-    
+
     if not item:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Plan item not found",
         )
-    
+
     return _item_to_response(item)
 
 
@@ -602,7 +608,7 @@ async def update_plan_item(
 ) -> PlanItemResponse:
     """
     Update a plan item's status, progress, or notes.
-    
+
     LLM USAGE: NONE (database update only)
     """
     stmt = (
@@ -617,23 +623,23 @@ async def update_plan_item(
     )
     result = await db.execute(stmt)
     item = result.scalar_one_or_none()
-    
+
     if not item:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Plan item not found",
         )
-    
+
     if data.status is not None:
         item.status = PlanItemStatus(data.status.value)
     if data.progressPercent is not None:
         item.progress_percent = data.progressPercent
     if data.notes is not None:
         item.notes = data.notes
-    
+
     await db.commit()
     await db.refresh(item)
-    
+
     return _item_to_response(item)
 
 
@@ -641,9 +647,10 @@ async def update_plan_item(
 # Plan Item Details & Completion Endpoints
 # =============================================================================
 
+
 async def _get_item_for_user(
-    db: AsyncSession, 
-    item_id: str, 
+    db: AsyncSession,
+    item_id: str,
     user_id: str,
     *,
     for_update: bool = False,
@@ -669,7 +676,7 @@ async def _get_item_for_user(
         )
     result = await db.execute(stmt)
     item = result.scalar_one_or_none()
-    
+
     if not item:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -688,7 +695,7 @@ async def _compute_item_progress(
     total_steps = 0
     if item.details_json and "steps" in item.details_json:
         total_steps = len(item.details_json["steps"])
-    
+
     # Count completed steps
     completed_stmt = (
         select(func.count())
@@ -701,19 +708,16 @@ async def _compute_item_progress(
     )
     completed_result = await db.execute(completed_stmt)
     completed_steps = completed_result.scalar() or 0
-    
+
     # Check item-level completion
-    item_completion_stmt = (
-        select(PlanItemCompletion)
-        .where(
-            PlanItemCompletion.user_id == user_id,
-            PlanItemCompletion.plan_item_id == item.id,
-            PlanItemCompletion.completed_at.isnot(None),
-        )
+    item_completion_stmt = select(PlanItemCompletion).where(
+        PlanItemCompletion.user_id == user_id,
+        PlanItemCompletion.plan_item_id == item.id,
+        PlanItemCompletion.completed_at.isnot(None),
     )
     item_completion_result = await db.execute(item_completion_stmt)
     is_completed = item_completion_result.scalar_one_or_none() is not None
-    
+
     # Calculate percent
     if total_steps > 0:
         percent = round((completed_steps / total_steps) * 100, 1)
@@ -721,7 +725,7 @@ async def _compute_item_progress(
         percent = 100.0
     else:
         percent = 0.0
-    
+
     progress = ItemProgress(
         completed_steps=completed_steps,
         total_steps=total_steps,
@@ -734,7 +738,7 @@ def _parse_item_details(details_json: dict | None) -> ItemDetails | None:
     """Parse details_json into ItemDetails schema."""
     if not details_json:
         return None
-    
+
     steps = [
         StepDetail(
             id=s.get("id", str(i)),
@@ -751,13 +755,14 @@ def _parse_item_details(details_json: dict | None) -> ItemDetails | None:
         )
         for i, s in enumerate(details_json.get("steps", []))
     ]
-    
+
     materials = [
         MaterialDetail(
             title=m.get("title", ""),
             url=m.get("url"),
             type=m.get("type"),
-            content_resource_id=m.get("content_resource_id") or m.get("contentResourceId"),
+            content_resource_id=m.get("content_resource_id")
+            or m.get("contentResourceId"),
             canonical_key=m.get("canonical_key") or m.get("canonicalKey"),
             author_or_creator=m.get("author_or_creator") or m.get("authorOrCreator"),
             thumbnail_url=m.get("thumbnail_url") or m.get("thumbnailUrl"),
@@ -773,11 +778,13 @@ def _parse_item_details(details_json: dict | None) -> ItemDetails | None:
                     category=idea.get("category", "Mindset"),
                 )
                 for idea in m.get("ideas", [])
-            ] if m.get("ideas") else None,
+            ]
+            if m.get("ideas")
+            else None,
         )
         for m in details_json.get("materials", [])
     ]
-    
+
     return ItemDetails(
         steps=steps,
         materials=materials,
@@ -800,6 +807,26 @@ def _lesson_details_meet_quality(details_json: dict | None) -> bool:
     )
 
 
+def _partial_lesson_details_available(details_json: dict | None) -> bool:
+    """Expose only explicit checkpoints containing a validated long lesson."""
+    if not isinstance(details_json, dict):
+        return False
+    generation = details_json.get("_generation")
+    if not isinstance(generation, dict) or generation.get("status") not in {
+        "partial",
+        "generating",
+    }:
+        return False
+    ready_ids = {str(step_id) for step_id in generation.get("ready_step_ids", [])}
+    return any(
+        str(step.get("id")) in ready_ids
+        and len(str(step.get("lesson_content") or "").split())
+        >= MIN_PLAN_DETAIL_LESSON_WORDS
+        for step in details_json.get("steps", [])
+        if isinstance(step, dict)
+    )
+
+
 def _daily_instructions_for_plan_item(item: PlanItem) -> str | None:
     """Read the generated daily script without requiring lesson generation."""
     for payload in (item.meta_json, item.details_json):
@@ -818,9 +845,9 @@ async def get_plan_item_detailed(
 ) -> PlanItemDetailedResponse:
     """
     Get a plan item with details, steps, materials, and progress.
-    
+
     If details don't exist yet, automatically enqueues a generation job.
-    
+
     LLM USAGE: INDIRECT (may enqueue Celery task if details missing)
     """
     item = await _get_item_for_user(db, item_id, current_user.id)
@@ -919,7 +946,7 @@ async def get_plan_item_detailed(
             details_status=DetailsStatus.AVAILABLE,
             job_id=None,
         )
-    
+
     # No details (or legacy thin details) - inspect the latest generation job.
     # Failed/invalid jobs are surfaced to the client so it can offer one
     # explicit retry; silently creating a new job on every poll caused an
@@ -937,10 +964,15 @@ async def get_plan_item_detailed(
     )
     result = await db.execute(latest_job_stmt)
     existing_job = result.scalar_one_or_none()
+    partial_details = (
+        _parse_item_details(item.details_json)
+        if _partial_lesson_details_available(item.details_json)
+        else None
+    )
 
     if existing_job and existing_job.status in {"pending", "queued"}:
         await _promote_prefetched_detail_job(db, existing_job)
-    
+
     if existing_job and existing_job.status in {"queued", "running", "pending"}:
         if _detail_job_is_stale(existing_job):
             existing_job.status = "failed"
@@ -954,11 +986,15 @@ async def get_plan_item_detailed(
             )
             return PlanItemDetailedResponse(
                 item=_item_to_response(item),
-                details=None,
+                details=partial_details,
                 progress=progress,
                 completed=is_completed,
                 completed_step_ids=completed_step_ids,
-                details_status=DetailsStatus.FAILED,
+                details_status=(
+                    DetailsStatus.PARTIAL
+                    if partial_details is not None
+                    else DetailsStatus.FAILED
+                ),
                 job_id=existing_job.id,
                 details_progress=existing_job.progress_percent,
                 details_step=existing_job.step,
@@ -966,15 +1002,19 @@ async def get_plan_item_detailed(
                     "Lesson preparation stopped before it finished. Generate it again to retry."
                 ),
             )
-        logger.info(f"[PLAN_ITEM] Active job already exists for item_id={item_id}, job_id={existing_job.id}")
+        logger.info(
+            f"[PLAN_ITEM] Active job already exists for item_id={item_id}, job_id={existing_job.id}"
+        )
         return PlanItemDetailedResponse(
             item=_item_to_response(item),
-            details=None,
+            details=partial_details,
             progress=progress,
             completed=is_completed,
             completed_step_ids=completed_step_ids,
             details_status=(
-                DetailsStatus.GENERATING
+                DetailsStatus.PARTIAL
+                if partial_details is not None
+                else DetailsStatus.GENERATING
                 if existing_job.status == "running"
                 else DetailsStatus.PENDING
             ),
@@ -992,11 +1032,15 @@ async def get_plan_item_detailed(
         )
         return PlanItemDetailedResponse(
             item=_item_to_response(item),
-            details=None,
+            details=partial_details,
             progress=progress,
             completed=is_completed,
             completed_step_ids=completed_step_ids,
-            details_status=DetailsStatus.FAILED,
+            details_status=(
+                DetailsStatus.PARTIAL
+                if partial_details is not None
+                else DetailsStatus.FAILED
+            ),
             job_id=existing_job.id,
             details_progress=existing_job.progress_percent,
             details_step=existing_job.step,
@@ -1007,7 +1051,7 @@ async def get_plan_item_detailed(
 
     # No details and no active job - enqueue generation job
     from app.tasks.plans import regenerate_plan_item_details
-    
+
     # Create job
     job = PlanItemDetailJob(
         plan_item_id=item_id,
@@ -1022,9 +1066,7 @@ async def get_plan_item_detailed(
 
     # Queue the regeneration task on high priority since user is waiting
     try:
-        regenerate_plan_item_details.apply_async(
-            args=[job.id], queue="high_priority"
-        )
+        regenerate_plan_item_details.apply_async(args=[job.id], queue="high_priority")
     except Exception as exc:
         logger.exception(
             "[PLAN_ITEM] Could not publish details job item_id=%s job_id=%s",
@@ -1037,11 +1079,15 @@ async def get_plan_item_detailed(
         await db.commit()
         return PlanItemDetailedResponse(
             item=_item_to_response(item),
-            details=None,
+            details=partial_details,
             progress=progress,
             completed=is_completed,
             completed_step_ids=completed_step_ids,
-            details_status=DetailsStatus.FAILED,
+            details_status=(
+                DetailsStatus.PARTIAL
+                if partial_details is not None
+                else DetailsStatus.FAILED
+            ),
             job_id=job.id,
             details_progress=0,
             details_step="error",
@@ -1049,15 +1095,21 @@ async def get_plan_item_detailed(
                 "Lesson preparation could not start. Generate it again to retry."
             ),
         )
-    logger.info(f"[PLAN_ITEM] Enqueued high_priority details generation for item_id={item_id}, job_id={job.id}")
-    
+    logger.info(
+        f"[PLAN_ITEM] Enqueued high_priority details generation for item_id={item_id}, job_id={job.id}"
+    )
+
     return PlanItemDetailedResponse(
         item=_item_to_response(item),
-        details=None,
+        details=partial_details,
         progress=progress,
         completed=is_completed,
         completed_step_ids=completed_step_ids,
-        details_status=DetailsStatus.PENDING,
+        details_status=(
+            DetailsStatus.PARTIAL
+            if partial_details is not None
+            else DetailsStatus.PENDING
+        ),
         job_id=job.id,
         details_progress=0,
         details_step=job.step,
@@ -1072,27 +1124,24 @@ async def toggle_item_complete(
 ) -> ToggleCompleteResponse:
     """
     Toggle completion status for a plan item.
-    
+
     If marking complete, also marks all steps as complete.
     If uncompleting, does NOT automatically uncheck steps.
-    
+
     LLM USAGE: NONE (database update only)
     """
     item = await _get_item_for_user(db, item_id, current_user.id)
-    
+
     # Check current completion status
-    completion_stmt = (
-        select(PlanItemCompletion)
-        .where(
-            PlanItemCompletion.user_id == current_user.id,
-            PlanItemCompletion.plan_item_id == item_id,
-        )
+    completion_stmt = select(PlanItemCompletion).where(
+        PlanItemCompletion.user_id == current_user.id,
+        PlanItemCompletion.plan_item_id == item_id,
     )
     result = await db.execute(completion_stmt)
     completion = result.scalar_one_or_none()
-    
+
     now = datetime.now(timezone.utc)
-    
+
     if completion and completion.completed_at:
         # Currently complete -> uncomplete
         completion.completed_at = None
@@ -1115,27 +1164,22 @@ async def toggle_item_complete(
                 completed_at=now,
             )
             db.add(completion)
-        
+
         new_completed = True
         item.status = PlanItemStatus.COMPLETED
         item.progress_percent = 100
-        
+
         # If marking complete AND details exist, also mark all steps complete
         if item.details_json and "steps" in item.details_json:
-            step_ids = [
-                s.get("id") for s in item.details_json["steps"] if s.get("id")
-            ]
+            step_ids = [s.get("id") for s in item.details_json["steps"] if s.get("id")]
             # Batch-fetch existing step completions in a single query instead of
             # one query per step (avoids an N+1 over the item's steps).
             existing_steps: dict[str, PlanItemStepCompletion] = {}
             if step_ids:
-                existing_stmt = (
-                    select(PlanItemStepCompletion)
-                    .where(
-                        PlanItemStepCompletion.user_id == current_user.id,
-                        PlanItemStepCompletion.plan_item_id == item_id,
-                        PlanItemStepCompletion.step_id.in_(step_ids),
-                    )
+                existing_stmt = select(PlanItemStepCompletion).where(
+                    PlanItemStepCompletion.user_id == current_user.id,
+                    PlanItemStepCompletion.plan_item_id == item_id,
+                    PlanItemStepCompletion.step_id.in_(step_ids),
                 )
                 existing_result = await db.execute(existing_stmt)
                 existing_steps = {
@@ -1159,7 +1203,7 @@ async def toggle_item_complete(
                         completed_at=now,
                     )
                     db.add(step_completion)
-    
+
     await db.commit()
 
     # Recompute progress
@@ -1204,7 +1248,9 @@ async def toggle_item_complete(
     )
 
 
-@items_router.post("/{item_id}/steps/{step_id}/toggle", response_model=ToggleStepResponse)
+@items_router.post(
+    "/{item_id}/steps/{step_id}/toggle", response_model=ToggleStepResponse
+)
 async def toggle_step_complete(
     item_id: str,
     step_id: str,
@@ -1213,21 +1259,21 @@ async def toggle_step_complete(
 ) -> ToggleStepResponse:
     """
     Toggle completion status for a specific step.
-    
+
     - Auto-marks item complete if ALL steps are now complete.
     - Auto-uncompletes item if step is being unchecked.
-    
+
     LLM USAGE: NONE (database update only)
     """
     item = await _get_item_for_user(db, item_id, current_user.id)
-    
+
     # Verify step exists in details
     if not item.details_json or "steps" not in item.details_json:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Item has no steps defined",
         )
-    
+
     step_ids = [s.get("id") for s in item.details_json["steps"]]
     if step_id not in step_ids:
         raise HTTPException(
@@ -1235,39 +1281,42 @@ async def toggle_step_complete(
             detail=f"Step {step_id} not found in item",
         )
     step_index = step_ids.index(step_id)
-    
+
     # Check current step completion status
-    step_stmt = (
-        select(PlanItemStepCompletion)
-        .where(
-            PlanItemStepCompletion.user_id == current_user.id,
-            PlanItemStepCompletion.plan_item_id == item_id,
-            PlanItemStepCompletion.step_id == step_id,
-        )
+    step_stmt = select(PlanItemStepCompletion).where(
+        PlanItemStepCompletion.user_id == current_user.id,
+        PlanItemStepCompletion.plan_item_id == item_id,
+        PlanItemStepCompletion.step_id == step_id,
     )
     result = await db.execute(step_stmt)
     step_completion = result.scalar_one_or_none()
-    
+
     now = datetime.now(timezone.utc)
-    
+
     if step_completion and step_completion.completed_at:
         # Currently complete -> uncomplete
         step_completion.completed_at = None
         new_step_completed = False
-        
+
         # Auto-uncomplete the item
-        item_completion_stmt = (
-            select(PlanItemCompletion)
-            .where(
-                PlanItemCompletion.user_id == current_user.id,
-                PlanItemCompletion.plan_item_id == item_id,
-            )
+        item_completion_stmt = select(PlanItemCompletion).where(
+            PlanItemCompletion.user_id == current_user.id,
+            PlanItemCompletion.plan_item_id == item_id,
         )
         item_result = await db.execute(item_completion_stmt)
         item_completion = item_result.scalar_one_or_none()
         if item_completion and item_completion.completed_at:
             item_completion.completed_at = None
     else:
+        selected_step = item.details_json["steps"][step_index]
+        if (
+            len(str(selected_step.get("lesson_content") or "").split())
+            < MIN_PLAN_DETAIL_LESSON_WORDS
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This lesson is still being prepared",
+            )
         # Lessons are intentionally sequential. The API enforces the same gate
         # as the UI so a future lesson cannot be completed through a stale or
         # handcrafted client request.
@@ -1282,7 +1331,9 @@ async def toggle_step_complete(
                 )
             )
             completed_prior_ids = set(prior_result.scalars().all())
-            missing_prior = [sid for sid in prior_step_ids if sid not in completed_prior_ids]
+            missing_prior = [
+                sid for sid in prior_step_ids if sid not in completed_prior_ids
+            ]
             if missing_prior:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
@@ -1298,27 +1349,30 @@ async def toggle_step_complete(
                 completed_at=now,
             )
             db.add(step_completion)
-        
+
         new_step_completed = True
-    
+
     await db.commit()
-    
+
     # Recompute progress and check if all steps are now complete
-    progress, is_item_completed = await _compute_item_progress(db, current_user.id, item)
-    
+    progress, is_item_completed = await _compute_item_progress(
+        db, current_user.id, item
+    )
+
     # Auto-mark item complete if all steps done
     total_steps = len(item.details_json["steps"])
-    if new_step_completed and progress.completed_steps == total_steps and not is_item_completed:
-        item_completion_stmt = (
-            select(PlanItemCompletion)
-            .where(
-                PlanItemCompletion.user_id == current_user.id,
-                PlanItemCompletion.plan_item_id == item_id,
-            )
+    if (
+        new_step_completed
+        and progress.completed_steps == total_steps
+        and not is_item_completed
+    ):
+        item_completion_stmt = select(PlanItemCompletion).where(
+            PlanItemCompletion.user_id == current_user.id,
+            PlanItemCompletion.plan_item_id == item_id,
         )
         item_result = await db.execute(item_completion_stmt)
         item_completion = item_result.scalar_one_or_none()
-        
+
         if item_completion:
             item_completion.completed_at = now
         else:
@@ -1360,18 +1414,17 @@ async def toggle_step_complete(
                 prefetch_plan_week_details.apply_async(
                     args=[str(item.plan_id), str(current_user.id), next_week],
                     kwargs={"priority": "low"},
-                    queue="default",
+                    queue="low_priority",
                 )
             except Exception:
                 # Lesson completion is authoritative and must never fail merely
                 # because speculative look-ahead publishing is unavailable.
                 logger.exception(
-                    "[PLAN_ITEM] Could not schedule week look-ahead "
-                    "plan_id=%s week=%s",
+                    "[PLAN_ITEM] Could not schedule week look-ahead plan_id=%s week=%s",
                     item.plan_id,
                     next_week,
                 )
-    
+
     return ToggleStepResponse(
         step_id=step_id,
         completed=new_step_completed,
@@ -1380,7 +1433,9 @@ async def toggle_step_complete(
     )
 
 
-@items_router.post("/{item_id}/regenerate-details", response_model=RegenerateDetailsResponse)
+@items_router.post(
+    "/{item_id}/regenerate-details", response_model=RegenerateDetailsResponse
+)
 async def regenerate_item_details(
     item_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -1388,9 +1443,9 @@ async def regenerate_item_details(
 ) -> RegenerateDetailsResponse:
     """
     Trigger async regeneration of item details (steps + materials) via LLM.
-    
+
     LLM USAGE: INDIRECT (queued via Celery task)
-    
+
     Returns job_id to poll for completion.
     """
     # The row lock makes the active-job check plus insert atomic with respect
@@ -1467,7 +1522,7 @@ async def regenerate_item_details(
         active_job.status = "failed"
         active_job.step = "error"
         active_job.error_message = "Generation worker stopped before completion"
-    
+
     # Create job
     job = PlanItemDetailJob(
         plan_item_id=item_id,
@@ -1478,15 +1533,13 @@ async def regenerate_item_details(
     )
     db.add(job)
     await db.commit()
-    
+
     # Import here to avoid circular imports
     from app.tasks.plans import regenerate_plan_item_details
-    
+
     # Queue the regeneration task on high priority
     try:
-        regenerate_plan_item_details.apply_async(
-            args=[job.id], queue="high_priority"
-        )
+        regenerate_plan_item_details.apply_async(args=[job.id], queue="high_priority")
     except Exception as exc:
         logger.exception(
             "[PLAN_ITEM] Could not publish retry item_id=%s job_id=%s",
@@ -1501,7 +1554,7 @@ async def regenerate_item_details(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Lesson generation is temporarily unavailable",
         ) from exc
-    
+
     return RegenerateDetailsResponse(job_id=job.id)
 
 
@@ -1515,6 +1568,7 @@ async def achievement_suggestion(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> AchievementSuggestionResponse:
     from app.services.achievements.suggestion import ai_suggestion
+
     item = await _get_item_for_user(db, item_id, current_user.id)
     plan = await db.get(Plan, item.plan_id)
     idol = await db.get(Idol, plan.idol_id) if plan else None
@@ -1526,6 +1580,7 @@ async def achievement_suggestion(
 # Plan Week Summary
 # =============================================================================
 
+
 @router.get("/{plan_id}/weeks/{week}/summary", response_model=WeekSummaryResponse)
 async def get_week_summary(
     plan_id: str,
@@ -1535,7 +1590,7 @@ async def get_week_summary(
 ) -> WeekSummaryResponse:
     """
     Get summary of progress for a specific week.
-    
+
     LLM USAGE: NONE (database query only)
     """
     # Verify plan ownership
@@ -1547,27 +1602,24 @@ async def get_week_summary(
     )
     plan_result = await db.execute(plan_stmt)
     plan = plan_result.scalar_one_or_none()
-    
+
     if not plan:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Plan not found",
         )
-    
+
     # Get all items for this week
-    items_stmt = (
-        select(PlanItem.id)
-        .where(
-            PlanItem.plan_id == plan_id,
-            PlanItem.week_start <= week,
-            PlanItem.week_end >= week,
-        )
+    items_stmt = select(PlanItem.id).where(
+        PlanItem.plan_id == plan_id,
+        PlanItem.week_start <= week,
+        PlanItem.week_end >= week,
     )
     items_result = await db.execute(items_stmt)
     item_ids = [row[0] for row in items_result.fetchall()]
-    
+
     total_items = len(item_ids)
-    
+
     if total_items == 0:
         return WeekSummaryResponse(
             week=week,
@@ -1575,7 +1627,7 @@ async def get_week_summary(
             total_items=0,
             percent=0.0,
         )
-    
+
     # Count completed items
     completed_stmt = (
         select(func.count())
@@ -1588,9 +1640,11 @@ async def get_week_summary(
     )
     completed_result = await db.execute(completed_stmt)
     completed_items = completed_result.scalar() or 0
-    
-    percent = round((completed_items / total_items) * 100, 1) if total_items > 0 else 0.0
-    
+
+    percent = (
+        round((completed_items / total_items) * 100, 1) if total_items > 0 else 0.0
+    )
+
     return WeekSummaryResponse(
         week=week,
         completed_items=completed_items,
@@ -1611,8 +1665,11 @@ def _next_cycle_fields(prev_plan) -> dict:
     }
 
 
-@router.post("/{plan_id}/generate-next", response_model=IdolImportResponse,
-             status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{plan_id}/generate-next",
+    response_model=IdolImportResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def generate_next_plan(
     plan_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -1651,6 +1708,7 @@ async def generate_next_plan(
     await db.refresh(job)
 
     from app.tasks.plans import run_plan_generation
+
     run_plan_generation.delay(str(job.id))
     return IdolImportResponse(idolId=job.idol_id, jobId=str(job.id), status="pending")
 
@@ -1662,17 +1720,22 @@ async def plan_cycle_summary(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> CycleSummaryResponse:
     from app.services.achievements.suggestion import cycle_summary
+
     plan = await db.get(Plan, plan_id)
     if not plan or plan.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Plan not found")
     idol = await db.get(Idol, plan.idol_id)
     titles = (
-        await db.execute(
-            select(UserAchievement.title).where(
-                UserAchievement.user_id == current_user.id,
-                UserAchievement.plan_id == plan_id,
+        (
+            await db.execute(
+                select(UserAchievement.title).where(
+                    UserAchievement.user_id == current_user.id,
+                    UserAchievement.plan_id == plan_id,
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     out = await cycle_summary(idol.name if idol else "your mentor", list(titles))
     return CycleSummaryResponse(**out)

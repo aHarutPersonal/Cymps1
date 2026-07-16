@@ -112,6 +112,30 @@ PlanItemDetailed _availableItem() => PlanItemDetailed(
   detailsStatus: 'available',
 );
 
+PlanItemDetailed _partialItem() => PlanItemDetailed(
+  item: BackendPlanItem.fromJson(const {
+    'id': 'x',
+    'title': 'Build the prototype',
+    'description': 'Build and review a useful prototype.',
+  }),
+  detailsStatus: 'partial',
+  jobId: 'detail-job',
+  detailsStep: 'first_lesson_ready',
+  detailsProgress: 70,
+  completedStepIds: const {'step_1'},
+  completedSteps: 1,
+  totalSteps: 3,
+  steps: const [
+    PlanStepDetail(
+      id: 'step_1',
+      title: 'Frame the problem',
+      lessonContent: 'A complete lesson is ready.',
+    ),
+    PlanStepDetail(id: 'step_2', title: 'Test the prototype'),
+    PlanStepDetail(id: 'step_3', title: 'Review the evidence'),
+  ],
+);
+
 const _runningJob = PlanJobStatus(
   id: 'detail-job',
   status: 'running',
@@ -219,6 +243,25 @@ void main() {
     await tester.pump();
     await tester.pump();
     expect(repo.retries, 1);
+
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('partial detail shows the ready lesson while others continue', (
+    tester,
+  ) async {
+    final repo = _ScriptedRepo(
+      [_partialItem()],
+      jobScript: const [_runningJob],
+    );
+    await tester.pumpWidget(_app(repo));
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('Frame the problem'), findsOneWidget);
+    expect(find.text('Test the prototype'), findsOneWidget);
+    expect(find.text('PREPARING'), findsOneWidget);
+    expect(find.textContaining('Lesson one is ready'), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox());
   });

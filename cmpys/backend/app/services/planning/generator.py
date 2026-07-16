@@ -8,13 +8,18 @@ PROMPT MAPPING:
 When PLAN_GENERATOR_MODE=llm and LLM is configured, uses LLM to generate plan items.
 Otherwise, generates deterministic template-based items.
 """
+
 import logging
 from dataclasses import dataclass, field
 
 from app.core.config import settings
 from app.models.plan import PlanItemType
 from app.services.llm import get_llm_client
-from app.services.llm.prompt_loader import load_prompt, render_prompt, sanitize_untrusted_input
+from app.services.llm.prompt_loader import (
+    load_prompt,
+    render_prompt,
+    sanitize_untrusted_input,
+)
 from app.services.llm.schemas import (
     PlanBackboneResponse,
     PlanBackboneWeek,
@@ -34,6 +39,7 @@ PLAN_WEEK_MAX_TOKENS = 5000
 @dataclass
 class PlanItemData:
     """Data for a plan item."""
+
     title: str
     type: PlanItemType
     description: str
@@ -50,6 +56,7 @@ class PlanItemData:
 @dataclass
 class PlanRoadmap:
     """Top-level roadmap data from the new prompt schema."""
+
     roadmap_thesis: str = ""
     anti_goals: list[str] = field(default_factory=list)
     items: list[PlanItemData] = field(default_factory=list)
@@ -91,7 +98,9 @@ def validate_roadmap_structure(roadmap, duration_weeks) -> list[str]:
             tasks_per_week[week] = tasks_per_week.get(week, 0) + 1
     missing = sorted(set(range(1, duration_weeks + 1)) - set(tasks_per_week))
     if missing:
-        warnings.append(f"Plan is missing week(s) {missing} of {duration_weeks} requested.")
+        warnings.append(
+            f"Plan is missing week(s) {missing} of {duration_weeks} requested."
+        )
     for week in range(1, duration_weeks + 1):
         if tasks_per_week.get(week, 0) == 0 and week not in missing:
             warnings.append(f"Week {week} has no tasks.")
@@ -115,9 +124,7 @@ def validate_plan_contract(
         or set(week_numbers) != expected_weeks
         or week_numbers != ordered_weeks
     ):
-        issues.append(
-            f"weeks must be exactly {ordered_weeks}; got {week_numbers}"
-        )
+        issues.append(f"weeks must be exactly {ordered_weeks}; got {week_numbers}")
     if len(week_numbers) != len(set(week_numbers)):
         issues.append("week_number values must be unique")
     if not plan.roadmap_thesis.strip():
@@ -216,7 +223,9 @@ def validate_plan_backbone(
     expected_weeks = list(range(1, duration_weeks + 1))
     actual_weeks = [week.week_number for week in backbone.weeks]
     if actual_weeks != expected_weeks:
-        issues.append(f"backbone weeks must be exactly {expected_weeks}; got {actual_weeks}")
+        issues.append(
+            f"backbone weeks must be exactly {expected_weeks}; got {actual_weeks}"
+        )
 
     mission_types = {"project", "course", "reading"}
     daily_types = {"habit", "practice"}
@@ -306,9 +315,9 @@ def validate_week_against_backbone(
             issues.append(
                 f"task {index + 1} type must remain {backbone_task.type}; got {task.type}"
             )
-        if _resolve_estimated_hours(task.estimated_hours, 168, 1) != _resolve_estimated_hours(
-            backbone_task.estimated_hours, 168, 1
-        ):
+        if _resolve_estimated_hours(
+            task.estimated_hours, 168, 1
+        ) != _resolve_estimated_hours(backbone_task.estimated_hours, 168, 1):
             issues.append(
                 f"task {index + 1} estimated_hours must remain "
                 f"{backbone_task.estimated_hours}; got {task.estimated_hours}"
@@ -363,9 +372,7 @@ def _generate_deterministic_items(
             phase = "Integration"
         available_for_missions = weekly_hours - 1
         mission_count = (
-            1
-            if weekly_hours < 6
-            else min(3, max(2, (available_for_missions + 7) // 8))
+            1 if weekly_hours < 6 else min(3, max(2, (available_for_missions + 7) // 8))
         )
         mission_budget = min(available_for_missions, mission_count * 8)
         daily_hours = weekly_hours - mission_budget
@@ -391,57 +398,61 @@ def _generate_deterministic_items(
         ]
 
         for title, item_type, estimated in mission_specs:
-            items.append(PlanItemData(
-                title=title,
-                type=item_type,
+            items.append(
+                PlanItemData(
+                    title=title,
+                    type=item_type,
+                    description=(
+                        f"Use {idol_name}'s documented domain as a reference point while "
+                        f"advancing the {phase.lower()} stage of {user_goal}. Select one "
+                        "specific technique from the available evidence, study how it works, "
+                        "apply it to a real artifact from your own context, record the choices "
+                        "you made, and revise the artifact once against an explicit quality "
+                        "check. Keep the scope narrow enough to finish this week."
+                    ),
+                    week_start=week,
+                    week_end=week,
+                    success_metric=(
+                        "One finished artifact, one written rationale, and one documented "
+                        "revision pass are saved for review."
+                    ),
+                    estimated_hours=estimated,
+                    meta_json={
+                        "primary_mission": f"Produce a verifiable {phase.lower()} outcome",
+                        "predicted_friction": "The first useful version may feel incomplete",
+                        "friction_solution": "Time-box the draft, then improve it against one rubric",
+                    },
+                )
+            )
+
+        items.append(
+            PlanItemData(
+                title=f"Week {week}: Daily {phase.lower()} drill",
+                type=PlanItemType.PRACTICE,
                 description=(
-                    f"Use {idol_name}'s documented domain as a reference point while "
-                    f"advancing the {phase.lower()} stage of {user_goal}. Select one "
-                    "specific technique from the available evidence, study how it works, "
-                    "apply it to a real artifact from your own context, record the choices "
-                    "you made, and revise the artifact once against an explicit quality "
-                    "check. Keep the scope narrow enough to finish this week."
+                    f"Practice one domain-specific component of {user_goal} for ten to "
+                    "twenty focused minutes on four days this week. Log the input, the "
+                    "observable result, and one adjustment after every repetition so the "
+                    "routine compounds instead of becoming passive repetition."
                 ),
                 week_start=week,
                 week_end=week,
-                success_metric=(
-                    "One finished artifact, one written rationale, and one documented "
-                    "revision pass are saved for review."
-                ),
-                estimated_hours=estimated,
+                success_metric="Four dated practice logs with an output and adjustment are complete.",
+                estimated_hours=daily_hours,
                 meta_json={
                     "primary_mission": f"Produce a verifiable {phase.lower()} outcome",
-                    "predicted_friction": "The first useful version may feel incomplete",
-                    "friction_solution": "Time-box the draft, then improve it against one rubric",
+                    "predicted_friction": "Skipping a day after an imperfect session",
+                    "friction_solution": "Use the minimum ten-minute version and record the result",
+                    "daily_instructions": (
+                        "Set a ten-to-twenty-minute timer and choose one small component of "
+                        "this week's mission. Produce a visible attempt without switching "
+                        "tools. Compare it with yesterday's attempt or the stated rubric, "
+                        "write one sentence about the difference, and log the next adjustment. "
+                        "You are done when the attempt and adjustment are both saved."
+                    ),
                 },
-            ))
-
-        items.append(PlanItemData(
-            title=f"Week {week}: Daily {phase.lower()} drill",
-            type=PlanItemType.PRACTICE,
-            description=(
-                f"Practice one domain-specific component of {user_goal} for ten to "
-                "twenty focused minutes on four days this week. Log the input, the "
-                "observable result, and one adjustment after every repetition so the "
-                "routine compounds instead of becoming passive repetition."
-            ),
-            week_start=week,
-            week_end=week,
-            success_metric="Four dated practice logs with an output and adjustment are complete.",
-            estimated_hours=daily_hours,
-            meta_json={
-                "primary_mission": f"Produce a verifiable {phase.lower()} outcome",
-                "predicted_friction": "Skipping a day after an imperfect session",
-                "friction_solution": "Use the minimum ten-minute version and record the result",
-                "daily_instructions": (
-                    "Set a ten-to-twenty-minute timer and choose one small component of "
-                    "this week's mission. Produce a visible attempt without switching "
-                    "tools. Compare it with yesterday's attempt or the stated rubric, "
-                    "write one sentence about the difference, and log the next adjustment. "
-                    "You are done when the attempt and adjustment are both saved."
-                ),
-            },
-        ))
+            )
+        )
 
     return PlanRoadmap(
         roadmap_thesis=(
@@ -467,7 +478,9 @@ async def _generate_plan_backbone(
     user_prompt: str,
     duration_weeks: int,
     hours_per_week: int,
+    telemetry_context: dict | None = None,
 ) -> PlanBackboneResponse:
+    telemetry_context = telemetry_context or {}
     client = get_llm_client(
         timeout=PLAN_BACKBONE_TIMEOUT_SECONDS,
         max_tokens=PLAN_BACKBONE_MAX_TOKENS,
@@ -496,12 +509,15 @@ async def _generate_plan_backbone(
             model=getattr(client, "model", None),
             result_status="contract_failed",
             quality_score=0.0,
-            metadata={"stage": "draft", "contract_issues": issues[:30]},
+            metadata={
+                **telemetry_context,
+                "stage": "draft",
+                "contract_issues": issues[:30],
+            },
         )
         retry_prompt = user_prompt + (
             "\n\nBACKBONE CONTRACT RETRY: Rewrite the complete compact backbone and "
-            "correct every issue below:\n- "
-            + "\n- ".join(issues[:30])
+            "correct every issue below:\n- " + "\n- ".join(issues[:30])
         )
         validated, response = await client.generate_and_validate(
             system_prompt=system_prompt,
@@ -524,9 +540,12 @@ async def _generate_plan_backbone(
         operation="plan_backbone_generation",
         response=response,
         model=getattr(client, "model", None),
-        result_status="schema_valid" if validated is not None and not issues else "failed",
+        result_status="schema_valid"
+        if validated is not None and not issues
+        else "failed",
         quality_score=1.0 if validated is not None and not issues else 0.0,
         metadata={
+            **telemetry_context,
             "stage": "final",
             "week_count": len(validated.weeks) if validated else 0,
             "contract_issues": issues[:30],
@@ -547,8 +566,10 @@ async def generate_plan_week_from_backbone(
     hours_per_week: int,
     user_context: str = "",
     session_context: str = "",
+    telemetry_context: dict | None = None,
 ) -> PlanWeek:
     """Expand one stable backbone week into execution-ready task copy."""
+    telemetry_context = telemetry_context or {}
     backbone_week = PlanBackboneWeek.model_validate(backbone_week)
     system_prompt = load_prompt("planner_system")
     user_prompt = render_prompt(
@@ -607,6 +628,7 @@ async def generate_plan_week_from_backbone(
             result_status="contract_failed",
             quality_score=0.0,
             metadata={
+                **telemetry_context,
                 "stage": "draft",
                 "week": backbone_week.week_number,
                 "contract_issues": issues[:30],
@@ -630,9 +652,12 @@ async def generate_plan_week_from_backbone(
         operation="plan_week_generation",
         response=response,
         model=getattr(client, "model", None),
-        result_status="schema_valid" if validated is not None and not issues else "failed",
+        result_status="schema_valid"
+        if validated is not None and not issues
+        else "failed",
         quality_score=1.0 if validated is not None and not issues else 0.0,
         metadata={
+            **telemetry_context,
             "stage": "final",
             "week": backbone_week.week_number,
             "contract_issues": issues[:30],
@@ -741,6 +766,7 @@ async def _generate_llm_items(
     comparison_summary: str = "",
     blueprint_markdown: str = "",
     previous_cycle_block: str = "",
+    telemetry_context: dict | None = None,
 ) -> PlanRoadmap:
     """
     Generate plan items using LLM.
@@ -752,30 +778,41 @@ async def _generate_llm_items(
     """
     try:
         system_prompt = load_prompt("planner_system")
-        user_prompt = render_prompt(load_prompt("plan_backbone_generate"), {
-            "user_goal": sanitize_untrusted_input(user_goal),
-            "idol_name": idol_name,
-            "hours_per_week": str(hours_per_week),
-            "target_age": str(target_age or "null"),
-            "user_context": sanitize_untrusted_input(user_context) if user_context else "",
-            "idol_profile_json": idol_profile or {},
-            "idol_persona_json": idol_persona or {},
-            "idol_milestones_json": idol_milestones or [],
-            "gaps_json": gaps or [],
-            "readiness_by_gap_json": readiness_by_gap or {},
-            "interview_transcript_json": interview_transcript_json or "",
-            "comparison_summary": sanitize_untrusted_input(comparison_summary)
-            if comparison_summary else "",
-            "blueprint_markdown": sanitize_untrusted_input(blueprint_markdown)
-            if blueprint_markdown else "",
-            "previous_cycle_block": sanitize_untrusted_input(previous_cycle_block)
-            if previous_cycle_block else "",
-        }, prompt_name="plan_backbone_generate.txt", strict=True)
+        user_prompt = render_prompt(
+            load_prompt("plan_backbone_generate"),
+            {
+                "user_goal": sanitize_untrusted_input(user_goal),
+                "idol_name": idol_name,
+                "hours_per_week": str(hours_per_week),
+                "target_age": str(target_age or "null"),
+                "user_context": sanitize_untrusted_input(user_context)
+                if user_context
+                else "",
+                "idol_profile_json": idol_profile or {},
+                "idol_persona_json": idol_persona or {},
+                "idol_milestones_json": idol_milestones or [],
+                "gaps_json": gaps or [],
+                "readiness_by_gap_json": readiness_by_gap or {},
+                "interview_transcript_json": interview_transcript_json or "",
+                "comparison_summary": sanitize_untrusted_input(comparison_summary)
+                if comparison_summary
+                else "",
+                "blueprint_markdown": sanitize_untrusted_input(blueprint_markdown)
+                if blueprint_markdown
+                else "",
+                "previous_cycle_block": sanitize_untrusted_input(previous_cycle_block)
+                if previous_cycle_block
+                else "",
+            },
+            prompt_name="plan_backbone_generate.txt",
+            strict=True,
+        )
         backbone = await _generate_plan_backbone(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             duration_weeks=duration_weeks,
             hours_per_week=hours_per_week,
+            telemetry_context=telemetry_context,
         )
         first_week = await generate_plan_week_from_backbone(
             backbone_week=backbone.weeks[0],
@@ -789,15 +826,18 @@ async def _generate_llm_items(
             user_goal=user_goal,
             hours_per_week=hours_per_week,
             user_context=user_context,
+            # The transcript already shaped the backbone. Repeating it in the
+            # Week 1 expansion adds prompt latency without new information;
+            # keep only the distilled decision artifacts.
             session_context="\n\n".join(
                 value
                 for value in (
-                    interview_transcript_json,
                     comparison_summary,
                     blueprint_markdown,
                 )
                 if value
             ),
+            telemetry_context=telemetry_context,
         )
         return _roadmap_from_backbone(
             backbone,
@@ -806,7 +846,9 @@ async def _generate_llm_items(
         )
 
     except Exception as e:
-        logger.exception(f"LLM plan generation failed: {e}, falling back to deterministic")
+        logger.exception(
+            f"LLM plan generation failed: {e}, falling back to deterministic"
+        )
 
     # Fall back to deterministic
     return _generate_deterministic_items(
@@ -850,8 +892,7 @@ async def generate_plan(
         PlanRoadmap with roadmap_thesis, anti_goals, and items
     """
     use_llm = (
-        settings.plan_generator_mode == "llm" and
-        settings.llm_configured
+        settings.plan_generator_mode == "llm" and settings.llm_configured
     ) or force_llm
 
     if use_llm:
@@ -875,6 +916,7 @@ async def generate_plan(
             comparison_summary=kwargs.get("comparison_summary", ""),
             blueprint_markdown=kwargs.get("blueprint_markdown", ""),
             previous_cycle_block=previous_cycle_block,
+            telemetry_context=kwargs.get("telemetry_context"),
         )
     else:
         logger.info("Generating plan using deterministic templates")

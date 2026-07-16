@@ -10,7 +10,7 @@ AWS_REGION="${3:-us-east-1}"
 APP_DIR="/opt/cmpys"
 ENV_FILE="$APP_DIR/.env"
 COMPOSE="$APP_DIR/docker-compose.prod.yml"
-RELEASE_SERVICES=(web worker catalog-worker catalog-control beat)
+RELEASE_SERVICES=(web worker worker-high worker-low catalog-worker catalog-control beat)
 PREVIOUS_TAG="$(sed -n 's/^IMAGE_TAG=//p' "$ENV_FILE" | tail -1)"
 PREVIOUS_TAG="${PREVIOUS_TAG:-latest}"
 ROLLBACK_ARMED=false
@@ -19,12 +19,24 @@ compose() {
   docker compose -p cmpys -f "$COMPOSE" --env-file "$ENV_FILE" "$@"
 }
 
+configured_release_services() {
+  local configured service
+  configured="$(compose config --services 2>/dev/null || true)"
+  for service in "${RELEASE_SERVICES[@]}"; do
+    if grep -Fxq "$service" <<<"$configured"; then
+      printf '%s\n' "$service"
+    fi
+  done
+}
+
 rollback_release() {
+  local rollback_services=()
   trap - ERR
   if [[ "$ROLLBACK_ARMED" == "true" ]]; then
+    mapfile -t rollback_services < <(configured_release_services)
     echo "Rolling back services to $PREVIOUS_TAG..." >&2
     IMAGE_TAG="$PREVIOUS_TAG" compose up -d --no-deps --force-recreate \
-      "${RELEASE_SERVICES[@]}" || true
+      "${rollback_services[@]}" || true
   fi
 }
 
@@ -126,6 +138,8 @@ done
 
 echo "Checking Celery workers and queue bindings..."
 wait_for_celery_worker "worker" "default"
+wait_for_celery_worker "worker-high" "high_priority"
+wait_for_celery_worker "worker-low" "low_priority"
 wait_for_celery_worker "catalog-worker" "catalog"
 wait_for_celery_worker "catalog-control" "catalog_control"
 

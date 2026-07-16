@@ -22,7 +22,9 @@ python3.11 -m venv .venv
 cp .env.example .env        # fill in keys
 .venv/bin/alembic upgrade heads
 .venv/bin/uvicorn app.main:app --port 8000 --reload
-.venv/bin/celery -A app.core.celery.celery_app worker -n interactive@%h -Q default,high_priority,low_priority
+.venv/bin/celery -A app.core.celery.celery_app worker -n default@%h --concurrency=2 -Q default
+.venv/bin/celery -A app.core.celery.celery_app worker -n high@%h --concurrency=1 -Q high_priority
+.venv/bin/celery -A app.core.celery.celery_app worker -n low@%h --concurrency=1 -Q low_priority
 .venv/bin/celery -A app.core.celery.celery_app worker -n catalog@%h --concurrency=2 -Q catalog
 .venv/bin/celery -A app.core.celery.celery_app worker -n catalog-control@%h --concurrency=1 -Q catalog_control
 .venv/bin/celery -A app.core.celery.celery_app beat
@@ -43,6 +45,9 @@ Health check: `curl http://localhost:8000/health`
 | `YUNWU_FALLBACK_ENABLED` | Retry failed Yunwu generations through the matching Gemini tier |
 | `TAVILY_API_KEY` | Web search grounding |
 | `JWT_SECRET_KEY` | JWT signing; required in production |
+| `CELERY_DEFAULT_CONCURRENCY` | Normal interactive worker slots (default 2) |
+| `CELERY_HIGH_CONCURRENCY` | Reserved first-use worker slots (default 1) |
+| `CELERY_LOW_CONCURRENCY` | Speculative look-ahead worker slots (default 1) |
 | `CATALOG_SCHEDULER_ENABLED` | Enable continuous catalog ingestion |
 | `CATALOG_DAILY_JOB_LIMIT` | Maximum catalog jobs started per UTC day |
 | `CATALOG_DISPATCH_PER_TICK` | Maximum jobs leased each scheduler tick |
@@ -85,10 +90,11 @@ published. If either public search endpoint is temporarily throttled, a bounded
 curated identity pool keeps discovery moving; the ordinary direct source,
 human-identity, image-license, and publication checks still apply.
 
-Production runs interactive, catalog, and catalog-control queues in separate
-worker processes. Long book/idol generation therefore cannot occupy an
-interactive worker slot; the DB/Redis idle checks remain the admission guard
-for provider quota and background spend.
+Production runs default, high-priority, low-priority, catalog, and
+catalog-control queues in separate worker processes. First-use lesson work
+therefore retains a reserved slot, while speculative look-ahead and long
+book/idol generation cannot occupy it. DB/Redis idle checks remain the
+admission guard for provider quota and background spend.
 
 Book cache misses are inserted idempotently using their canonical key. Failed
 jobs use exponential backoff and stop after `CATALOG_MAX_ATTEMPTS`. Generated

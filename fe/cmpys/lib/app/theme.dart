@@ -130,7 +130,9 @@ abstract final class AppTheme {
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: AppRadii.br16,
-        borderSide: const BorderSide(color: AppColors.brandAccent, width: 1.5),
+        // Focus should improve definition without changing the field to the
+        // brand colour. The cursor remains the clear editing affordance.
+        borderSide: const BorderSide(color: AppColors.borderFocus, width: 1.5),
       ),
       errorBorder: OutlineInputBorder(
         borderRadius: AppRadii.br16,

@@ -584,8 +584,9 @@ List<BookChapter> splitBookChapters(String markdown) {
 }
 
 /// GET /plan-items/{id}/detailed — item + lesson details + progress.
-/// While the lesson is still being generated, `detailsStatus` is `pending`
-/// and `jobId` points at the generation job to poll.
+/// While lessons are still being generated, `detailsStatus` is `pending` or
+/// `partial` and `jobId` points at the generation job to poll. A partial
+/// response contains every outline step plus any lessons already ready.
 class PlanItemDetailed {
   const PlanItemDetailed({
     required this.item,
@@ -605,7 +606,8 @@ class PlanItemDetailed {
   });
 
   final BackendPlanItem item;
-  final String detailsStatus; // available | pending | generating | failed
+  final String detailsStatus;
+  // available | partial | pending | generating | failed
   final List<PlanStepDetail> steps;
   final List<PlanMaterialDetail> materials;
   final bool completed;
@@ -620,10 +622,17 @@ class PlanItemDetailed {
   final bool completedToday;
 
   bool get detailsReady => detailsStatus == 'available';
+  bool get detailsPartial => detailsStatus == 'partial';
+  bool get hasReadyLesson =>
+      steps.any((step) => step.lessonContent?.trim().isNotEmpty ?? false);
   bool get detailsFailed =>
-      detailsStatus == 'failed' || (!detailsReady && !detailsLoading);
+      detailsStatus == 'failed' ||
+      (detailsPartial && detailsError != null) ||
+      (!detailsReady && !detailsPartial && !detailsLoading);
   bool get detailsLoading =>
-      detailsStatus == 'pending' || detailsStatus == 'generating';
+      detailsStatus == 'pending' ||
+      detailsStatus == 'generating' ||
+      (detailsPartial && detailsError == null && jobId != null);
 
   bool isStepCompleted(String stepId) => completedStepIds.contains(stepId);
 

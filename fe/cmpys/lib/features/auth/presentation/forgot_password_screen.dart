@@ -34,6 +34,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
               child: CustomPaint(painter: _RecoveryGridPainter()),
             ),
             SingleChildScrollView(
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
               padding: const EdgeInsets.fromLTRB(24, 12, 24, 32),
               child: ConstrainedBox(
                 constraints: BoxConstraints(

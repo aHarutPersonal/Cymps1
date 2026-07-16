@@ -138,9 +138,23 @@ THINKING_NARRATIVES = {
         "Checking that each step has a concrete definition of done.",
     ],
     "generating_lessons": [
-        "The curriculum outline is ready; writing the focused lessons in parallel.",
-        "Building examples and guided practice for each lesson at the same time.",
-        "Keeping the full reader depth while reducing the wait.",
+        "Writing the first focused lesson so you can begin sooner.",
+        "Building its examples, guided practice, and completion checks.",
+        "The remaining lessons will continue once the first is ready.",
+    ],
+    "outline_ready": [
+        "The lesson sequence is ready; writing lesson one now.",
+        "Keeping the full reader depth while shortening time to first use.",
+    ],
+    "first_lesson_ready": [
+        "Lesson one is ready to read while the remaining lessons continue.",
+        "Writing lessons two and three concurrently in the background.",
+    ],
+    "2_lessons_ready": [
+        "Two lessons are ready; finishing the last focused lesson.",
+    ],
+    "3_lessons_ready": [
+        "All three lessons are ready; checking their material references.",
     ],
     "repairing_lessons": [
         "Strengthening the lessons that missed the reader-quality checks.",
@@ -199,8 +213,8 @@ DISCOVERY_INSIGHTS = {
 
 
 def get_thinking_stream(
-    step: str | None, 
-    idol_name: str, 
+    step: str | None,
+    idol_name: str,
     progress: int,
     domains: list[str] | None = None,
     weekly_hours: float | None = None,
@@ -210,16 +224,16 @@ def get_thinking_stream(
 ) -> dict:
     """
     Generate a stream of thinking text for typewriter effect.
-    
+
     Returns multiple text segments that frontend can animate progressively.
     """
     step = step or "queued"
     narratives = THINKING_NARRATIVES.get(step, THINKING_NARRATIVES["queued"])
     insights = DISCOVERY_INSIGHTS.get(step, [])
-    
+
     # Domain hint for profile extraction
     domain_hint = domains[0] if domains else "their field"
-    
+
     # Calculate which narrative lines to show based on progress within step
     # Each step spans roughly 15-20% progress, so we show more lines as progress increases
     step_progress_map = {
@@ -243,31 +257,35 @@ def get_thinking_stream(
         "loading_context": (0, 30),
         "generating_curriculum": (30, 68),
         "generating_lessons": (45, 75),
+        "outline_ready": (60, 68),
+        "first_lesson_ready": (68, 74),
+        "2_lessons_ready": (74, 80),
+        "3_lessons_ready": (80, 85),
         "repairing_lessons": (60, 75),
         "resolving_materials": (70, 85),
         "finalizing_steps": (80, 100),
     }
-    
+
     start, end = step_progress_map.get(step, (0, 100))
     step_duration = end - start
     progress_in_step = max(0, min(progress - start, step_duration))
-    
+
     # Calculate how many narrative lines to show (progressively reveal more)
     if step_duration > 0:
         ratio = progress_in_step / step_duration
     else:
         ratio = 1.0
-    
+
     num_lines = max(1, int(len(narratives) * ratio) + 1)
     num_lines = min(num_lines, len(narratives))
-    
+
     # Get the lines to display
     lines_to_show = narratives[:num_lines]
-    
+
     # Format with idol name, domain, etc.
     formatted_lines = [
         line.format(
-            idol_name=idol_name, 
+            idol_name=idol_name,
             domain_hint=domain_hint,
             weekly_hours=weekly_hours or 10,
             duration_weeks=duration_weeks or 12,
@@ -276,19 +294,19 @@ def get_thinking_stream(
         )
         for line in lines_to_show
     ]
-    
+
     # Pick an insight if we have any
     current_insight = None
     if insights and progress > start + 5:
         insight_idx = (progress // 7) % len(insights)
         current_insight = insights[insight_idx]
-    
+
     # Current line (the latest one being "typed")
     current_line = formatted_lines[-1] if formatted_lines else ""
-    
+
     # Completed lines (already shown)
     completed_lines = formatted_lines[:-1] if len(formatted_lines) > 1 else []
-    
+
     return {
         "currentLine": current_line,
         "completedLines": completed_lines,
@@ -301,12 +319,13 @@ def get_thinking_stream(
 class ThinkingStream(BaseModel):
     """
     AI thinking stream for typewriter effect.
-    
+
     Frontend should:
     1. Display completedLines immediately
     2. Animate currentLine with typewriter effect
     3. Show insight as a subtle aside
     """
+
     currentLine: str
     completedLines: list[str] = []
     insight: str | None = None
@@ -316,6 +335,7 @@ class ThinkingStream(BaseModel):
 
 class ThinkingText(BaseModel):
     """AI thinking text shown during processing (legacy format)."""
+
     message: str
     funFact: str | None = None
     step: str
@@ -354,7 +374,7 @@ async def get_job_status(
 ) -> JobStatusResponse:
     """
     Get the current status of an import job.
-    
+
     Returns dynamic "AI thinking" text that changes based on the current step
     and progress, providing an engaging experience while waiting.
     """
@@ -406,12 +426,9 @@ async def get_job_status(
 
     if not job and job_type in (None, "suggest"):
         # Try Idol Suggest Job
-        stmt = (
-            select(IdolSuggestJob)
-            .where(
-                IdolSuggestJob.id == job_id,
-                IdolSuggestJob.user_id == current_user.id,
-            )
+        stmt = select(IdolSuggestJob).where(
+            IdolSuggestJob.id == job_id,
+            IdolSuggestJob.user_id == current_user.id,
         )
         result = await db.execute(stmt)
         job = result.scalar_one_or_none()
@@ -421,14 +438,19 @@ async def get_job_status(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Job not found",
         )
-    
+
     # Generic job handling
     idol_name = "this person"
     if hasattr(job, "idol") and job.idol:
         idol_name = job.idol.name
-    elif hasattr(job, "plan_item") and job.plan_item and job.plan_item.plan and job.plan_item.plan.idol:
+    elif (
+        hasattr(job, "plan_item")
+        and job.plan_item
+        and job.plan_item.plan
+        and job.plan_item.plan.idol
+    ):
         idol_name = job.plan_item.plan.idol.name
-    
+
     # Contextual parameters
     weekly_hours = getattr(job, "weekly_hours", None)
     duration_weeks = getattr(job, "duration_weeks", None)
@@ -436,14 +458,14 @@ async def get_job_status(
     task_title = None
     if isinstance(job, PlanItemDetailJob) and job.plan_item:
         task_title = job.plan_item.title
-    
+
     # Try to get preview data if available (profile/achievements already extracted)
     preview_achievements = None
     preview_domains = None
     domains_list = None
-    
+
     idol_id = getattr(job, "idol_id", None)
-    
+
     if idol_id and job.progress_percent >= 25 and isinstance(job, IdolImportJob):
         # Profile might be extracted, try to get domains
         profile_stmt = select(IdolProfile).where(IdolProfile.idol_id == idol_id)
@@ -452,7 +474,7 @@ async def get_job_status(
         if profile:
             domains_list = profile.domains[:5] if profile.domains else None
             preview_domains = domains_list
-    
+
     if idol_id and job.progress_percent >= 60 and isinstance(job, IdolImportJob):
         # Achievements might be extracted, get a preview
         timeline_stmt = (
@@ -465,11 +487,11 @@ async def get_job_status(
         events = timeline_result.scalars().all()
         if events:
             preview_achievements = [e.canonical_title for e in events]
-    
+
     # Check if job has real streamed thinking text AND we are in a step that uses it
     real_thinking = getattr(job, "thinking_text", None)
     use_real_thinking = False
-    
+
     if real_thinking:
         if isinstance(job, PlanGenerationJob):
             # Only show LLM thinking during the balancing phase
@@ -480,13 +502,13 @@ async def get_job_status(
             if job.step in ["extracting_profile", "collecting_sources"]:
                 use_real_thinking = True
         elif isinstance(job, IdolSuggestJob):
-             use_real_thinking = True
+            use_real_thinking = True
         elif isinstance(job, PlanItemDetailJob):
-             use_real_thinking = True
+            use_real_thinking = True
 
     if use_real_thinking:
         # Use real LLM output - split into lines for display
-        lines = real_thinking.strip().split('\n')
+        lines = real_thinking.strip().split("\n")
         # Show last few lines as current, rest as completed
         if lines:
             completed_lines = lines[:-1]
@@ -494,7 +516,7 @@ async def get_job_status(
         else:
             completed_lines = []
             current_line = ""
-        
+
         thinking_stream = ThinkingStream(
             currentLine=current_line[:500],  # Limit length for UI
             completedLines=completed_lines[-10:],  # Keep last 10 lines
@@ -510,9 +532,9 @@ async def get_job_status(
     else:
         # Fallback to simulated thinking
         stream = get_thinking_stream(
-            job.step, 
-            idol_name, 
-            job.progress_percent, 
+            job.step,
+            idol_name,
+            job.progress_percent,
             domains_list,
             weekly_hours=weekly_hours,
             duration_weeks=duration_weeks,
@@ -579,10 +601,10 @@ async def start_job(
 
     # Trigger the Celery task
     run_idol_ingestion.delay(job_id)
-    
+
     # Get idol name for personalized messages
     idol_name = job.idol.name if job.idol else "this person"
-    
+
     # Generate thinking stream
     stream = get_thinking_stream(job.step, idol_name, job.progress_percent, None)
     thinking_stream = ThinkingStream(
@@ -592,7 +614,7 @@ async def start_job(
         step=stream["step"],
         stepProgress=stream["stepProgress"],
     )
-    
+
     thinking_text = ThinkingText(
         message=stream["currentLine"],
         funFact=stream["insight"],

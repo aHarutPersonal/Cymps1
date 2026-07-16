@@ -150,7 +150,9 @@ async def test_future_week_enriches_placeholders_in_place(monkeypatch) -> None:
         "Run the approved drill and save its evidence."
     )
     assert generate_week.await_count == 1
-    assert db.commit.await_count == 2
+    # Lease commit, read-transaction release before the model call, and final
+    # in-place update commit.
+    assert db.commit.await_count == 3
 
 
 def test_week_prefetch_retries_transient_preparation_failure(monkeypatch) -> None:

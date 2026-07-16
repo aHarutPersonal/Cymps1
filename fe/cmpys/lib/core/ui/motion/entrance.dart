@@ -34,7 +34,9 @@ class EntranceScope extends StatefulWidget {
 
   /// Looks up the nearest [EntranceScope]'s first-build timestamp and visit
   /// window, if any. Returns null when there is no ancestor scope.
-  static ({DateTime firstBuiltAt, Duration visitWindow})? maybeOf(BuildContext context) {
+  static ({DateTime firstBuiltAt, Duration visitWindow})? maybeOf(
+    BuildContext context,
+  ) {
     final scope = context.getInheritedWidgetOfExactType<_EntranceScopeMarker>();
     if (scope == null) return null;
     return (firstBuiltAt: scope.firstBuiltAt, visitWindow: scope.visitWindow);
@@ -69,7 +71,8 @@ class _EntranceScopeMarker extends InheritedWidget {
 
   @override
   bool updateShouldNotify(_EntranceScopeMarker oldWidget) =>
-      firstBuiltAt != oldWidget.firstBuiltAt || visitWindow != oldWidget.visitWindow;
+      firstBuiltAt != oldWidget.firstBuiltAt ||
+      visitWindow != oldWidget.visitWindow;
 }
 
 /// Fade + 12px slide-up entrance for one child.
@@ -127,7 +130,9 @@ class _EntranceState extends State<Entrance> {
     if (_played) return widget.child;
 
     final motionEnabled = MotionConfig.enabled(context);
-    final delay = motionEnabled ? Entrance.delayFor(widget.index) : Duration.zero;
+    final delay = motionEnabled
+        ? Entrance.delayFor(widget.index)
+        : Duration.zero;
 
     final animated = widget.child.animate(
       delay: delay,
@@ -148,18 +153,58 @@ class _EntranceState extends State<Entrance> {
   }
 }
 
+/// A short one-time reveal for content produced by a user interaction.
+///
+/// Unlike [Entrance], this intentionally plays even when it is mounted well
+/// after the screen's initial visit (for example, a newly sent chat message).
+/// Reduced-motion users see the child immediately with no transition.
+class FeedbackReveal extends StatefulWidget {
+  const FeedbackReveal({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  State<FeedbackReveal> createState() => _FeedbackRevealState();
+}
+
+class _FeedbackRevealState extends State<FeedbackReveal> {
+  bool _played = false;
+
+  @override
+  Widget build(BuildContext context) {
+    if (_played || !MotionConfig.enabled(context)) return widget.child;
+
+    return widget.child.animate(
+        onComplete: (_) {
+          if (mounted) setState(() => _played = true);
+        },
+      )
+      ..fadeIn(duration: AppDurations.fast, curve: AppCurves.easeOut)
+      ..move(
+        begin: const Offset(0, 8),
+        end: Offset.zero,
+        duration: AppDurations.fast,
+        curve: AppCurves.easeOut,
+      );
+  }
+}
+
 /// Wraps a screen's top-level children in a staggered entrance cascade.
 abstract final class EntranceGroup {
   /// Bare spacers (a [SizedBox] with no child) pass through unwrapped and
   /// don't consume a stagger index, so visible cards stay ~50ms apart
   /// regardless of how many spacers separate them.
-  static bool _isBareSpacer(Widget child) => child is SizedBox && child.child == null;
+  static bool _isBareSpacer(Widget child) =>
+      child is SizedBox && child.child == null;
 
   static List<Widget> wrap(List<Widget> children) {
     var index = 0;
     return [
       for (final child in children)
-        if (_isBareSpacer(child)) child else Entrance(index: index++, child: child),
+        if (_isBareSpacer(child))
+          child
+        else
+          Entrance(index: index++, child: child),
     ];
   }
 }
