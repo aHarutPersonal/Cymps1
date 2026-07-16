@@ -24,6 +24,7 @@ class _ScriptedRepo extends Fake implements PlanRepository {
   int _jobCalls = 0;
   int retries = 0;
   int dailyToggles = 0;
+  PlanJobStatus? jobOverride;
   final List<String> polledJobIds = [];
 
   int get calls => _calls;
@@ -40,6 +41,11 @@ class _ScriptedRepo extends Fake implements PlanRepository {
   @override
   Future<PlanJobStatus> getPlanDetailJobStatus(String jobId) async {
     polledJobIds.add(jobId);
+    final override = jobOverride;
+    if (override != null) {
+      _jobCalls++;
+      return override;
+    }
     final step = _jobScript[_jobCalls.clamp(0, _jobScript.length - 1)];
     _jobCalls++;
     if (step is Exception) throw step;
@@ -148,6 +154,13 @@ const _completedJob = PlanJobStatus(
   status: 'completed',
   progressPercent: 100,
   step: 'done',
+);
+
+const _firstLessonReadyJob = PlanJobStatus(
+  id: 'detail-job',
+  status: 'running',
+  progressPercent: 70,
+  step: 'first_lesson_ready',
 );
 
 const _failedJob = PlanJobStatus(
@@ -263,6 +276,28 @@ void main() {
     expect(find.text('PREPARING'), findsOneWidget);
     expect(find.textContaining('Lesson one is ready'), findsOneWidget);
 
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('first lesson checkpoint refreshes partial content immediately', (
+    tester,
+  ) async {
+    final repo = _ScriptedRepo(
+      [_pendingItem(jobId: 'detail-job'), _partialItem()],
+      jobScript: const [_firstLessonReadyJob],
+    );
+    await tester.pumpWidget(_app(repo));
+    await tester.pump();
+    await tester.pump();
+
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pump();
+
+    expect(repo.jobCalls, 1);
+    expect(repo.calls, 2);
+    expect(find.text('Frame the problem'), findsOneWidget);
+    expect(find.text('Test the prototype'), findsOneWidget);
+    expect(find.text('PREPARING'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
   });
 
@@ -390,11 +425,11 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('permanently pending job reaches a bounded background state', (
+  testWidgets('long-running job keeps sparse automatic background checks', (
     tester,
   ) async {
     final repo = _ScriptedRepo(
-      [_pendingItem(jobId: 'detail-job')],
+      [_pendingItem(jobId: 'detail-job'), _availableItem()],
       jobScript: const [_runningJob],
     );
     await tester.pumpWidget(_app(repo));
@@ -409,8 +444,16 @@ void main() {
     expect(find.text('Check status'), findsOneWidget);
     expect(find.textContaining('still being prepared'), findsOneWidget);
     final callsAtBudget = repo.jobCalls;
-    await tester.pump(const Duration(seconds: 30));
-    expect(repo.jobCalls, callsAtBudget);
+
+    // The long-running card is a lower-frequency state, not a terminal one.
+    // A job that finishes after the fast polling budget should reveal its
+    // lesson automatically without requiring a manual status check.
+    repo.jobOverride = _completedJob;
+    await tester.pump(const Duration(seconds: 15));
+    await tester.pump();
+    expect(repo.jobCalls, greaterThan(callsAtBudget));
+    expect(find.text('Check status'), findsNothing);
+    expect(find.textContaining('still being prepared'), findsNothing);
     await tester.pumpWidget(const SizedBox());
   });
 

@@ -25,11 +25,13 @@ from app.models.user import User
 from app.models.user_profile import UserProfile
 from app.services.planning.generator import generate_plan
 from app.services.content_quality import (
+    MAX_PLAN_DETAIL_LESSON_WORDS,
     MIN_PLAN_DETAIL_LESSON_WORDS,
     MIN_PLAN_DETAIL_MATERIAL_WORDS,
 )
 from app.services.transcripts import build_chat_history_json
 from app.services.llm.schemas import (
+    PLAN_DETAIL_SECTION_MIN_WORDS,
     PlanDetailLessonSectionsOutput,
     PlanDetailStepOutput,
     PlanDetailSubstepsRepairOutput,
@@ -326,6 +328,119 @@ def _normalize_plan_detail_section_substeps(payload: Any) -> Any:
     return {**payload, "substeps": normalized}
 
 
+_PLAN_DETAIL_SECTION_ROWS = (
+    ("why_this_matters", "## Why This Matters"),
+    ("core_framework", "## Core Framework"),
+    ("worked_example", "## Worked Example"),
+    ("failure_modes", "## Failure Modes"),
+    ("guided_practice", "## Guided Practice"),
+    ("check_your_understanding", "## Check Your Understanding"),
+    ("references", "## References"),
+)
+
+
+def _trim_section_to_word_limit(
+    value: str,
+    *,
+    max_words: int,
+    min_words: int,
+) -> str:
+    """Trim an overlong section at a nearby sentence boundary.
+
+    Provider output occasionally exceeds the complete-lesson ceiling by a few
+    percent even after a contract retry. Keeping the prefix of the largest
+    section is deterministic, preserves every required heading, and is much
+    cheaper than discarding several thousand valid words for another model
+    call. The minimum protects the section quality floor.
+    """
+    word_matches = list(re.finditer(r"\S+", value))
+    if len(word_matches) <= max_words:
+        return value.strip()
+
+    raw_prefix = value[: word_matches[max_words - 1].end()].rstrip()
+    preferred_floor = max(min_words, max_words - 80)
+    sentence_ends = list(
+        re.finditer(r"""[.!?](?:["'\u2019\u201d)\]]*)?(?=\s|$)""", raw_prefix)
+    )
+    for sentence_end in reversed(sentence_ends):
+        candidate = raw_prefix[: sentence_end.end()].rstrip()
+        if len(candidate.split()) >= preferred_floor:
+            return candidate
+
+    # Structured sections sometimes contain lists rather than prose. Preserve
+    # their line layout up to the exact word budget instead of flattening it.
+    return raw_prefix.rstrip(" \t\n,;:-") + "."
+
+
+def _assemble_plan_detail_lesson_content(
+    *,
+    title: str,
+    sections: PlanDetailLessonSectionsOutput,
+) -> str:
+    """Build canonical markdown and compact only content above the hard cap."""
+    section_values = {
+        field_name: str(getattr(sections, field_name)).strip()
+        for field_name, _ in _PLAN_DETAIL_SECTION_ROWS
+    }
+
+    def render(values: dict[str, str]) -> str:
+        return "\n\n".join(
+            [f"# {title}"]
+            + [
+                f"{heading}\n{values[field_name]}"
+                for field_name, heading in _PLAN_DETAIL_SECTION_ROWS
+            ]
+        )
+
+    lesson_content = render(section_values)
+    original_words = len(lesson_content.split())
+    if original_words <= MAX_PLAN_DETAIL_LESSON_WORDS:
+        return lesson_content
+
+    # Determine the exact content budget after accounting for title/headings,
+    # then take the overflow from the sections with the most room above their
+    # semantic minimums. In normal operation this trims one over-expanded
+    # section by only a few paragraphs.
+    scaffold_words = len(
+        render({field_name: "" for field_name in section_values}).split()
+    )
+    content_budget = MAX_PLAN_DETAIL_LESSON_WORDS - scaffold_words
+    limits = {
+        field_name: len(value.split()) for field_name, value in section_values.items()
+    }
+    remaining_overflow = max(0, sum(limits.values()) - content_budget)
+    for field_name in sorted(
+        limits,
+        key=lambda name: limits[name] - PLAN_DETAIL_SECTION_MIN_WORDS[name],
+        reverse=True,
+    ):
+        if remaining_overflow <= 0:
+            break
+        removable = max(
+            0,
+            limits[field_name] - PLAN_DETAIL_SECTION_MIN_WORDS[field_name],
+        )
+        removed = min(remaining_overflow, removable)
+        limits[field_name] -= removed
+        remaining_overflow -= removed
+
+    for field_name, value in section_values.items():
+        section_values[field_name] = _trim_section_to_word_limit(
+            value,
+            max_words=limits[field_name],
+            min_words=PLAN_DETAIL_SECTION_MIN_WORDS[field_name],
+        )
+
+    compacted = render(section_values)
+    logger.info(
+        "[PLAN_DETAILS] Compacted overlong lesson '%s' from %s to %s words",
+        title,
+        original_words,
+        len(compacted.split()),
+    )
+    return compacted
+
+
 def _assemble_parallel_lesson_response(
     response: Any,
     *,
@@ -350,18 +465,9 @@ def _assemble_parallel_lesson_response(
         )
         return
 
-    section_rows = (
-        ("## Why This Matters", sections.why_this_matters),
-        ("## Core Framework", sections.core_framework),
-        ("## Worked Example", sections.worked_example),
-        ("## Failure Modes", sections.failure_modes),
-        ("## Guided Practice", sections.guided_practice),
-        ("## Check Your Understanding", sections.check_your_understanding),
-        ("## References", sections.references),
-    )
-    lesson_content = "\n\n".join(
-        [f"# {step.get('title', '')}"]
-        + [f"{heading}\n{content.strip()}" for heading, content in section_rows]
+    lesson_content = _assemble_plan_detail_lesson_content(
+        title=str(step.get("title") or ""),
+        sections=sections,
     )
     reading_minutes = max(1, round(len(lesson_content.split()) / 200))
     practice_minutes = max(20, target_minutes - reading_minutes)

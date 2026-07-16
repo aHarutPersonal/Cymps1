@@ -39,6 +39,14 @@ class PlanItemDetailScreen extends ConsumerStatefulWidget {
 class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
   static const _foregroundPollBudget = Duration(minutes: 2);
   static const _maxForegroundPollAttempts = 20;
+  static const _backgroundPollBudget = Duration(minutes: 10);
+  static const _maxBackgroundPollAttempts = 52;
+  static const _backgroundPollInterval = Duration(seconds: 15);
+  static const _lessonCheckpointSteps = <String>{
+    'first_lesson_ready',
+    '2_lessons_ready',
+    '3_lessons_ready',
+  };
   static const _detailFailureMessage =
       'This lesson could not be prepared. Please generate it again.';
 
@@ -175,14 +183,22 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
 
   void _scheduleDetailPoll() {
     _poll?.cancel();
-    if (!mounted || _takingLong || !_shouldPollDetails(_detailed)) return;
+    if (!mounted || !_shouldPollDetails(_detailed)) return;
     final startedAt = _pollStartedAt ??= DateTime.now();
-    if (_pollAttempt >= _maxForegroundPollAttempts ||
-        DateTime.now().difference(startedAt) >= _foregroundPollBudget) {
-      setState(() => _takingLong = true);
+    final elapsed = DateTime.now().difference(startedAt);
+    if (_pollAttempt >= _maxBackgroundPollAttempts ||
+        elapsed >= _backgroundPollBudget) {
+      if (!_takingLong) setState(() => _takingLong = true);
       return;
     }
-    final delay = _pollAttempt < 4
+    if (!_takingLong &&
+        (_pollAttempt >= _maxForegroundPollAttempts ||
+            elapsed >= _foregroundPollBudget)) {
+      setState(() => _takingLong = true);
+    }
+    final delay = _takingLong
+        ? _backgroundPollInterval
+        : _pollAttempt < 4
         ? const Duration(seconds: 2)
         : _pollAttempt < 10
         ? const Duration(seconds: 4)
@@ -191,7 +207,7 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
   }
 
   Future<void> _pollDetailJob() async {
-    if (!mounted || _pollingJob || _takingLong) return;
+    if (!mounted || _pollingJob) return;
     final detailed = _detailed;
     if (!_shouldPollDetails(detailed)) return;
     _pollingJob = true;
@@ -223,6 +239,12 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
         // the backend or the network, so polling cannot restart forever.
         await _load();
       } else if (job.isCompleted) {
+        await _load();
+      } else if (_lessonCheckpointSteps.contains(job.step) &&
+          job.progressPercent > detailed!.detailsProgress) {
+        // The lightweight status response announces semantic checkpoints but
+        // does not carry lesson text. Refresh exactly once per new checkpoint
+        // so Step 1 becomes readable while the remaining lessons continue.
         await _load();
       } else {
         _scheduleDetailPoll();

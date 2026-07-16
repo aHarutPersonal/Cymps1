@@ -632,6 +632,45 @@ def test_parallel_lesson_rejects_prompt_example_placeholders() -> None:
     assert "why_this_matters has" in (response.error or "")
 
 
+def test_parallel_lesson_compacts_overlong_sections_without_a_model_retry() -> None:
+    payload = _lesson_sections_payload()
+    # Reproduce the production failure mode: every section is complete, but
+    # one verbose section pushes the assembled lesson slightly past 4,200.
+    payload["core_framework"] += "additional evidence and application detail. " * 356
+    response = SimpleNamespace(data=payload, error=None)
+
+    _assemble_parallel_lesson_response(
+        response,
+        step=_outline_payload()["steps"][0],
+        material_titles={"Resource 1", "Resource 2", "Resource 3"},
+        target_minutes=80,
+    )
+
+    assert response.error is None
+    lesson = response.data["lesson_content"]
+    assert 1900 <= len(lesson.split()) <= 4200
+    assert all(
+        heading in lesson
+        for heading in (
+            "## Why This Matters",
+            "## Core Framework",
+            "## Worked Example",
+            "## Failure Modes",
+            "## Guided Practice",
+            "## Check Your Understanding",
+            "## References",
+        )
+    )
+    assert (
+        len(
+            lesson.split("## Core Framework", 1)[1]
+            .split("## Worked Example", 1)[0]
+            .split()
+        )
+        >= 400
+    )
+
+
 def test_section_quality_uses_words_instead_of_brittle_character_counts() -> None:
     sections = PlanDetailLessonSectionsOutput.model_validate(_lesson_sections_payload())
 
