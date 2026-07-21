@@ -42,7 +42,7 @@ void main() {
         isWeb: true,
         platform: TargetPlatform.android,
       ),
-      Env.apiBaseUrlIosSimulator,
+      Env.apiBaseUrlLocalhost,
     );
     expect(
       Env.resolveApiBaseUrl(
@@ -51,7 +51,7 @@ void main() {
         isWeb: false,
         platform: TargetPlatform.iOS,
       ),
-      Env.apiBaseUrlLocalhost,
+      Env.apiBaseUrlProduction,
     );
     expect(
       Env.resolveApiBaseUrl(

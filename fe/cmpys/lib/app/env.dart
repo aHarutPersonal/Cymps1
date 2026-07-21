@@ -20,9 +20,9 @@ import 'package:flutter/foundation.dart';
 ///
 /// ## Platform-specific defaults
 ///
-/// - **iOS Simulator**: Uses `http://localhost:8000` (connects to host machine)
+/// - **iOS (device and simulator)**: Uses the deployed API
 /// - **Android Emulator**: Uses `http://10.0.2.2:8000` (special alias for host)
-/// - **Physical/release builds**: Uses the deployed API unless overridden
+/// - **Release builds**: Uses the deployed API unless overridden
 ///
 abstract final class Env {
   /// API base URL from dart-define, or platform-specific default.
@@ -51,22 +51,21 @@ abstract final class Env {
     if (isRelease) return apiBaseUrlProduction;
     if (isWeb) return apiBaseUrlLocalhost;
     if (platform == TargetPlatform.android) return apiBaseUrlAndroidEmulator;
-    // iOS Simulator and desktop debug builds share the host's loopback
-    // interface. Debug must never silently target production: it bypasses the
-    // locally-started API/worker and makes local fixes appear ineffective.
+    if (platform == TargetPlatform.iOS) return apiBaseUrlProduction;
+    // Desktop debug builds share the host's loopback interface.
     return apiBaseUrlLocalhost;
   }
 
   /// Development API base URL based on platform.
   ///
-  /// - iOS Simulator: localhost points to host machine
+  /// - iOS: deployed API (works on both simulator and physical devices)
   /// - Android Emulator: 10.0.2.2 is special alias for host machine
   /// - Web: localhost works directly
-  /// API base URL for iOS Simulator (localhost works directly).
+  /// API base URL for host-local development.
   static const String apiBaseUrlLocalhost = 'http://localhost:8000/api/v1';
 
-  /// Backward-compatible name used by older tests/callers.
-  static const String apiBaseUrlIosSimulator = apiBaseUrlLocalhost;
+  /// Backward-compatible iOS default used by older tests/callers.
+  static const String apiBaseUrlIosSimulator = apiBaseUrlProduction;
 
   /// API base URL for Android Emulator (10.0.2.2 maps to host localhost).
   static const String apiBaseUrlAndroidEmulator = 'http://10.0.2.2:8000/api/v1';

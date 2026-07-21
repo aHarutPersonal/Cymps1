@@ -6,10 +6,10 @@ Mobile client for the CMPYS mentorship platform.
 
 ```bash
 flutter pub get
-flutter run                 # iOS sim / web — backend at localhost:8000
+flutter run                 # iOS — deployed backend; web — localhost:8000
 ```
 
-Physical device (localhost unreachable):
+Explicit local-backend override:
 
 ```bash
 flutter run --dart-define=API_BASE_URL=http://<your-ip>:8000/api/v1
