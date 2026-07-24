@@ -24,8 +24,8 @@ EXECUTION CONTRACT:
 - Return exactly the same number of tasks, in the same order and with the same
   type and estimated_hours as the approved backbone. Titles may become more
   precise but must preserve the approved intent.
-- Mission task estimates remain within 2-8 hours so their three substantial
-  lessons can truthfully fill the assigned workload.
+- Mission task estimates remain within 2-8 hours so their right-sized set of
+  substantial lessons can truthfully fill the assigned workload.
 - primary_mission must be 35-70 concrete words connecting this week's skill,
   artifact, and place in the twelve-week progression.
 - Every mission description must be 80-140 substantive words. Name the exact

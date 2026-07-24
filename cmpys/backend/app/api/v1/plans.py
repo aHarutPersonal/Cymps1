@@ -22,10 +22,11 @@ from sqlalchemy.orm import selectinload
 
 from app.api.dependencies import get_current_user
 from app.core.db import get_db
-from app.models.intake import IntakeSession
+from app.models.chat import ChatThread, MessageRole
 from app.models.daily_task_completion import DailyTaskCompletion
 from app.models.item_detail_job import PlanItemDetailJob
 from app.models.idol import Idol
+from app.models.intake import IntakeSession, SessionPhase
 from app.models.plan import (
     Plan,
     PlanItem,
@@ -38,6 +39,12 @@ from app.models.plan_job import PlanGenerationJob
 from app.models.user import User
 from app.models.user_achievement import UserAchievement
 from app.services.content_quality import MIN_PLAN_DETAIL_LESSON_WORDS
+from app.services.interview_inputs import (
+    INTERVIEW_ANSWER_KEYS,
+    build_interview_plan_inputs,
+    extract_legacy_weekly_hours,
+)
+from app.services.tavily import is_direct_resource_url
 from app.schemas.plan import (
     AchievementSuggestionResponse,
     BookIdeaDetail,
@@ -326,6 +333,120 @@ async def generate_plan_endpoint(
     Trigger asynchronous plan generation.
     Returns jobId to poll for status.
     """
+    canonical_idol_id = data.idolId
+    canonical_target_age = data.targetAge
+    canonical_weekly_hours = data.weeklyHours
+    canonical_focus = data.focus
+
+    # A linked session is authoritative planning context, not a caller-supplied
+    # lookup hint. Resolve it within the authenticated user's scope before
+    # reading or reusing any job, then derive the plan inputs from that session.
+    if data.sessionId:
+        session = (
+            await db.execute(
+                select(IntakeSession)
+                .options(
+                    selectinload(IntakeSession.interview_thread).selectinload(
+                        ChatThread.messages
+                    )
+                )
+                .where(
+                    IntakeSession.id == data.sessionId,
+                    IntakeSession.user_id == current_user.id,
+                )
+                .with_for_update(of=IntakeSession)
+            )
+        ).scalar_one_or_none()
+        if session is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if not session.idol_id or str(session.idol_id) != str(data.idolId):
+            raise HTTPException(
+                status_code=409,
+                detail="The selected mentor does not match this intake session.",
+            )
+        if session.phase not in {
+            SessionPhase.COMPARISON,
+            SessionPhase.BLUEPRINT,
+            SessionPhase.COMPLETED,
+        }:
+            raise HTTPException(
+                status_code=409,
+                detail="The intake session is not ready for plan generation.",
+            )
+
+        messages = (
+            list(session.interview_thread.messages)
+            if session.interview_thread is not None
+            else []
+        )
+        baseline = build_interview_plan_inputs(
+            messages,
+            session_goal=session.user_goal,
+        )
+        uses_semantic_intake = any(
+            message.role == MessageRole.ASSISTANT
+            and isinstance(message.response_ui_json, dict)
+            and message.response_ui_json.get("answer_key")
+            in INTERVIEW_ANSWER_KEYS
+            for message in messages
+        )
+        if uses_semantic_intake:
+            if baseline["missing_keys"]:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "interview_profile_incomplete",
+                        "message": "The intake is missing required planning answers.",
+                    },
+                )
+            confirmed_hours = baseline.get("weekly_capacity_hours")
+        else:
+            # Legacy clients did not persist semantic answer keys. Keep their
+            # recovery path, but trust only the owned server transcript rather
+            # than the request's caller-controlled weeklyHours fallback.
+            confirmed_hours = extract_legacy_weekly_hours(messages)
+        if not isinstance(confirmed_hours, int):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "interview_profile_incomplete",
+                    "message": (
+                        "The intake has no server-recorded weekly capacity. "
+                        "Resume the intake before recovering plan generation."
+                    ),
+                },
+            )
+        if not isinstance(session.user_age, int) or session.user_age < 1:
+            raise HTTPException(
+                status_code=409,
+                detail="The intake session has no valid learner age.",
+            )
+
+        canonical_idol_id = str(session.idol_id)
+        canonical_target_age = session.user_age
+        canonical_weekly_hours = confirmed_hours
+        target_outcome = baseline.get("target_outcome")
+        canonical_focus = (
+            str(target_outcome.get("answer") or "").strip()
+            if isinstance(target_outcome, dict)
+            else None
+        ) or session.user_goal
+
+        if not (
+            str(session.comparison_output or "").strip()
+            and str(session.blueprint_output or "").strip()
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "session_results_incomplete",
+                    "message": (
+                        "Comparison and blueprint are required before plan "
+                        "generation. Resume this session's generate-results flow."
+                    ),
+                },
+            )
+
     # Recovery calls can arrive after the onboarding SSE already enqueued the
     # job but before the client persisted its id. Reuse that session-linked
     # job instead of charging for and racing a duplicate plan generation.
@@ -335,7 +456,7 @@ async def generate_plan_endpoint(
                 select(PlanGenerationJob)
                 .where(
                     PlanGenerationJob.user_id == current_user.id,
-                    PlanGenerationJob.idol_id == data.idolId,
+                    PlanGenerationJob.idol_id == canonical_idol_id,
                     PlanGenerationJob.session_id == data.sessionId,
                     PlanGenerationJob.status.in_(["pending", "running", "completed"]),
                 )
@@ -345,14 +466,39 @@ async def generate_plan_endpoint(
         ).scalar_one_or_none()
         if existing and existing.status == "completed" and existing.plan_id:
             return IdolImportResponse(
-                idolId=data.idolId,
+                idolId=canonical_idol_id,
                 jobId=str(existing.id),
                 status=existing.status,
             )
         if existing and existing.status in {"pending", "running"}:
+            if (
+                existing.status == "pending"
+                and existing.step == "waiting_for_strategy"
+            ):
+                # generate-results stages this row before writing strategy. If
+                # its terminal dispatch was lost, publish the same durable job
+                # now that both required artifacts are confirmed above.
+                existing.target_age = canonical_target_age
+                existing.duration_weeks = data.durationWeeks
+                existing.weekly_hours = canonical_weekly_hours
+                existing.focus = canonical_focus
+                existing.progress_percent = 0
+                existing.step = "analyzing_gaps"
+                existing.error_message = None
+                await db.commit()
+
+                from app.tasks.plans import run_plan_generation
+
+                run_plan_generation.delay(str(existing.id))
+                return IdolImportResponse(
+                    idolId=canonical_idol_id,
+                    jobId=str(existing.id),
+                    status="pending",
+                )
+
             if not _plan_job_is_stale(existing):
                 return IdolImportResponse(
-                    idolId=data.idolId,
+                    idolId=canonical_idol_id,
                     jobId=str(existing.id),
                     status=existing.status,
                 )
@@ -375,7 +521,7 @@ async def generate_plan_endpoint(
                 data.sessionId,
             )
             return IdolImportResponse(
-                idolId=data.idolId,
+                idolId=canonical_idol_id,
                 jobId=str(existing.id),
                 status="pending",
             )
@@ -383,12 +529,12 @@ async def generate_plan_endpoint(
     # Create the job record
     job = PlanGenerationJob(
         user_id=current_user.id,
-        idol_id=data.idolId,
+        idol_id=canonical_idol_id,
         session_id=data.sessionId,
-        target_age=data.targetAge,
+        target_age=canonical_target_age,
         duration_weeks=data.durationWeeks,
-        weekly_hours=data.weeklyHours,
-        focus=data.focus,
+        weekly_hours=canonical_weekly_hours,
+        focus=canonical_focus,
         status="pending",
         progress_percent=0,
         step="analyzing_gaps",
@@ -403,7 +549,7 @@ async def generate_plan_endpoint(
     run_plan_generation.delay(str(job.id))
 
     return IdolImportResponse(
-        idolId=data.idolId,
+        idolId=canonical_idol_id,
         jobId=str(job.id),
         status="pending",
     )
@@ -759,7 +905,7 @@ def _parse_item_details(details_json: dict | None) -> ItemDetails | None:
     materials = [
         MaterialDetail(
             title=m.get("title", ""),
-            url=m.get("url"),
+            url=(m.get("url") if is_direct_resource_url(m.get("url")) else None),
             type=m.get("type"),
             content_resource_id=m.get("content_resource_id")
             or m.get("contentResourceId"),
@@ -768,6 +914,18 @@ def _parse_item_details(details_json: dict | None) -> ItemDetails | None:
             thumbnail_url=m.get("thumbnail_url") or m.get("thumbnailUrl"),
             license_status=m.get("license_status") or m.get("licenseStatus"),
             search_query=m.get("search_query") or m.get("searchQuery"),
+            url_resolution_status=(
+                m.get("url_resolution_status")
+                or m.get("urlResolutionStatus")
+                or (
+                    "resolved"
+                    if is_direct_resource_url(m.get("url"))
+                    else "unresolved"
+                    if m.get("url")
+                    else None
+                )
+            ),
+            url_provider=m.get("url_provider") or m.get("urlProvider"),
             content_markdown=m.get("content_markdown"),
             duration_minutes=m.get("duration_minutes"),
             reason=m.get("reason"),
@@ -798,7 +956,7 @@ def _lesson_details_meet_quality(details_json: dict | None) -> bool:
     if not details_json:
         return False
     steps = details_json.get("steps", [])
-    if len(steps) != 3:
+    if not steps:
         return False
     lessons = [str(step.get("lesson_content") or "") for step in steps]
     return all(

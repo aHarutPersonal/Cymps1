@@ -44,6 +44,8 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
   static const _backgroundPollInterval = Duration(seconds: 15);
   static const _lessonCheckpointSteps = <String>{
     'first_lesson_ready',
+    'lessons_ready',
+    // Version-2 jobs may still finish with these legacy stage names.
     '2_lessons_ready',
     '3_lessons_ready',
   };
@@ -859,11 +861,13 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
       'user_priority' ||
       'loading_context' => 'Preparing the mentor context for your lesson…',
       'generating_curriculum' =>
-        'Writing your three focused lessons and guided practice…',
+        'Designing the right-sized lesson sequence and guided practice…',
       'generating_lessons' => 'Writing your first focused lesson…',
       'outline_ready' => 'The lesson sequence is ready. Writing lesson one…',
       'first_lesson_ready' =>
         'Lesson one is ready. Writing the remaining lessons…',
+      'lessons_ready' =>
+        'More lessons are ready. Finishing the remaining curriculum…',
       '2_lessons_ready' => 'Two lessons are ready. Finishing the last one…',
       '3_lessons_ready' => 'All lessons are ready. Checking materials…',
       'repairing_lessons' =>
@@ -1188,11 +1192,11 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
         fallbackTitle: m.title,
       );
     } else if (m.prefersExternalLink) {
-      screen = MaterialWebScreen(title: m.title, url: m.url!);
+      screen = MaterialWebScreen(title: m.title, url: m.directUrl!);
     } else if (m.hasInAppContent) {
       screen = MaterialReaderScreen(material: m);
-    } else if (m.url != null && m.url!.isNotEmpty) {
-      screen = MaterialWebScreen(title: m.title, url: m.url!);
+    } else if (m.directUrl != null) {
+      screen = MaterialWebScreen(title: m.title, url: m.directUrl!);
     }
     if (screen == null) return;
     final route = CmpysPageRoute<void>(builder: (_) => screen!);
@@ -1235,7 +1239,7 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
     if (m.hasInAppContent) {
       return (icon: PhosphorIconsRegular.bookOpen, label: 'Read');
     }
-    if (m.url != null && m.url!.isNotEmpty) {
+    if (m.directUrl != null) {
       return (icon: PhosphorIconsRegular.globe, label: 'Open');
     }
     return null;
@@ -1281,6 +1285,16 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
                       color: AppColors.ink2,
                       fontSize: 13,
                       height: 1.4,
+                    ),
+                  ),
+                ],
+                if (m.exactLinkUnavailable && action == null) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    'Exact source link unavailable',
+                    style: AppTypography.caption.copyWith(
+                      color: AppColors.ink3,
+                      fontSize: 12,
                     ),
                   ),
                 ],

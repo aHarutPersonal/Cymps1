@@ -13,6 +13,23 @@ import 'material_reader_screen.dart';
 import 'material_video_screen.dart';
 import 'material_web_screen.dart';
 
+List<PlanMaterialDetail> matchLessonMaterials(
+  List<String> resourceTitles,
+  List<PlanMaterialDetail> materials,
+) {
+  String normalizedTitle(String value) {
+    final lowered = value.toLowerCase().trim();
+    final asciiNormalized = lowered
+        .replaceAll(RegExp(r'[^a-z0-9]+'), ' ')
+        .trim();
+    return asciiNormalized.isEmpty ? lowered : asciiNormalized;
+  }
+  final wanted = resourceTitles.map(normalizedTitle).toSet();
+  return materials
+      .where((material) => wanted.contains(normalizedTitle(material.title)))
+      .toList();
+}
+
 class LessonSection {
   const LessonSection({required this.title, required this.markdown});
 
@@ -103,11 +120,7 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
     super.initState();
     _pageController = PageController();
     _sections = splitLessonSections(widget.step.lessonContent ?? '');
-    final wanted = widget.step.resources.map((e) => e.toLowerCase()).toSet();
-    final matched = widget.materials
-        .where((material) => wanted.contains(material.title.toLowerCase()))
-        .toList();
-    _references = matched.isNotEmpty ? matched : widget.materials;
+    _references = matchLessonMaterials(widget.step.resources, widget.materials);
   }
 
   @override
@@ -433,6 +446,16 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
                     fontSize: 12,
                   ),
                 ),
+                if (material.exactLinkUnavailable && action == null) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    'Exact source link unavailable',
+                    style: AppTypography.caption.copyWith(
+                      color: _muted,
+                      fontSize: 11.5,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -467,7 +490,7 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
     if (material.youtubeVideoId != null) return 'Watch';
     if (material.prefersExternalLink) return 'Open';
     if (material.hasInAppContent) return 'Read';
-    if ((material.url ?? '').isNotEmpty) return 'Open';
+    if (material.directUrl != null) return 'Open';
     return null;
   }
 
@@ -523,11 +546,17 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
     } else if (videoId != null) {
       screen = MaterialVideoScreen(material: material, videoId: videoId);
     } else if (material.prefersExternalLink) {
-      screen = MaterialWebScreen(title: material.title, url: material.url!);
+      screen = MaterialWebScreen(
+        title: material.title,
+        url: material.directUrl!,
+      );
     } else if (material.hasInAppContent) {
       screen = MaterialReaderScreen(material: material);
-    } else if ((material.url ?? '').isNotEmpty) {
-      screen = MaterialWebScreen(title: material.title, url: material.url!);
+    } else if (material.directUrl != null) {
+      screen = MaterialWebScreen(
+        title: material.title,
+        url: material.directUrl!,
+      );
     }
     if (screen == null) return;
     Navigator.of(

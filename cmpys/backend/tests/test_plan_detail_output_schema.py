@@ -19,6 +19,7 @@ from app.tasks.plans import (
     _assemble_parallel_lesson_response,
     _generate_plan_item_details_parallel,
     _merge_plan_detail_repairs,
+    _plan_detail_lesson_count_bounds,
     _plan_detail_repair_plan,
     _plan_detail_recovery_prompt,
     _plan_detail_step_repair_prompt,
@@ -30,7 +31,11 @@ from app.tasks.plans import (
 )
 
 
-def _valid_payload() -> dict:
+def _valid_payload(
+    *,
+    lesson_count: int = 3,
+    material_count: int = 3,
+) -> dict:
     headings = [
         "## Why This Matters",
         "## Core Framework",
@@ -56,10 +61,10 @@ def _valid_payload() -> dict:
                 "reading_minutes": 13,
                 "practice_minutes": 67,
                 "lesson_content": lesson,
-                "resources": ["Resource 1"],
+                "resources": [f"Resource {(index - 1) % material_count + 1}"],
                 "substeps": [substep, substep],
             }
-            for index in range(1, 4)
+            for index in range(1, lesson_count + 1)
         ],
         "materials": [
             {
@@ -72,7 +77,7 @@ def _valid_payload() -> dict:
                 "content_markdown": None,
                 "ideas": [],
             }
-            for index in range(1, 4)
+            for index in range(1, material_count + 1)
         ],
         "definition_of_done": "Three lessons and their outputs are complete.",
         "mental_model": "Deliberate practice",
@@ -96,7 +101,7 @@ def _lesson_with_word_count(word_count: int) -> str:
     return scaffold + "\n\n" + " ".join(["substance"] * (word_count - scaffold_words))
 
 
-def test_plan_detail_schema_requires_all_three_complete_lessons() -> None:
+def test_plan_detail_schema_requires_every_complete_lesson() -> None:
     payload = _valid_payload()
     payload["steps"][0].pop("lesson_content")
     response = SimpleNamespace(data=payload, error=None)
@@ -112,6 +117,33 @@ def test_plan_detail_schema_accepts_prompt_contract() -> None:
 
     assert len(result.steps) == 3
     assert len(result.materials) == 3
+
+
+@pytest.mark.parametrize("count", [1, 3, 5])
+def test_plan_detail_schema_accepts_model_selected_counts(count: int) -> None:
+    result = PlanItemDetailsOutput.model_validate(
+        _valid_payload(lesson_count=count, material_count=count)
+    )
+
+    assert len(result.steps) == count
+    assert len(result.materials) == count
+    assert [step.id for step in result.steps] == [
+        f"step_{index}" for index in range(1, count + 1)
+    ]
+
+
+def test_plan_detail_schema_rejects_non_contiguous_ids() -> None:
+    payload = _valid_payload()
+    payload["steps"][1]["id"] = "step_3"
+
+    with pytest.raises(ValueError, match="contiguous and ordered"):
+        PlanItemDetailsOutput.model_validate(payload)
+
+
+def test_mission_workload_bounds_leave_exact_count_to_the_model() -> None:
+    assert _plan_detail_lesson_count_bounds(2) == (1, 3)
+    assert _plan_detail_lesson_count_bounds(4) == (2, 5)
+    assert _plan_detail_lesson_count_bounds(8) == (3, 5)
 
 
 def test_in_app_lesson_allows_only_a_narrow_word_count_overrun() -> None:
@@ -377,7 +409,7 @@ def test_targeted_repair_declines_unsafe_shared_or_structural_drafts() -> None:
     assert _plan_detail_repair_plan(duplicate_ids) is None
 
     invalid_materials = _valid_payload()
-    invalid_materials["materials"][0]["type"] = "course"
+    invalid_materials["materials"][0]["title"] = "Resource 2"
     invalid_materials["steps"][0]["lesson_content"] = "thin"
     assert _plan_detail_repair_plan(invalid_materials) is None
 
@@ -452,8 +484,15 @@ def test_plan_detail_prompt_examples_obey_their_own_constraints() -> None:
     assert all(12 <= len(substep.split()) <= 60 for substep in substeps)
 
 
-def _outline_payload() -> dict:
-    payload = _valid_payload()
+def _outline_payload(
+    *,
+    lesson_count: int = 3,
+    material_count: int = 3,
+) -> dict:
+    payload = _valid_payload(
+        lesson_count=lesson_count,
+        material_count=material_count,
+    )
     return {
         **payload,
         "steps": [
@@ -492,7 +531,7 @@ def test_parallel_outline_is_small_and_resource_consistent() -> None:
     assert len(outline.materials) == 3
 
 
-def test_parallel_outline_maps_alternative_resource_names_to_materials() -> None:
+def test_parallel_outline_rejects_unapproved_resource_names() -> None:
     payload = _outline_payload()
     payload["materials"][0]["title"] = "The Lean Startup"
     payload["materials"][0]["reason"] = "Lean product experimentation."
@@ -504,17 +543,54 @@ def test_parallel_outline_maps_alternative_resource_names_to_materials() -> None
 
     _validate_plan_detail_outline_response(response)
 
-    assert response.error is None
-    assert set(response.data["steps"][1]["resources"]).issubset(
-        {material["title"] for material in response.data["materials"]}
-    )
-    assert "The Lean Startup" in response.data["steps"][1]["resources"]
+    assert response.error is not None
+    assert "resources" in response.error
 
 
 def test_writing_uses_tiered_modern_thinking_levels() -> None:
     assert _writing_thinking_level("fast") == "minimal"
     assert _writing_thinking_level("balanced") == "minimal"
     assert _writing_thinking_level("quality") == "high"
+
+
+@pytest.mark.asyncio
+async def test_parallel_generation_uses_a_model_selected_five_lesson_outline() -> None:
+    payload = _valid_payload(lesson_count=5, material_count=5)
+    outline = _outline_payload(lesson_count=5, material_count=5)
+
+    class FakeClient:
+        model = "fake-model"
+
+        async def generate_json(self, *, user_prompt, output_model, **kwargs):
+            if output_model is PlanItemDetailsOutlineOutput:
+                return SimpleNamespace(data=copy.deepcopy(outline), error=None)
+            assert any(
+                f'"id":"{step["id"]}"' in user_prompt for step in payload["steps"]
+            )
+            return SimpleNamespace(
+                data=copy.deepcopy(_lesson_sections_payload()),
+                error=None,
+            )
+
+    result, calls, error = await _generate_plan_item_details_parallel(
+        system_prompt="planner",
+        task_title="Build a complete system",
+        mission_hours=5,
+        user_goal="master the workflow",
+        learning_preferences="reading and practice",
+        idol_name="Mentor",
+        idol_domain="technology",
+        idol_evidence={},
+        session_context="",
+        active_tier="balanced",
+        routing_reason="test",
+        client_factory=lambda **kwargs: FakeClient(),
+    )
+
+    assert error is None
+    assert result is not None
+    assert len(result["steps"]) == 5
+    assert len([stage for stage, *_ in calls if "parallel_lesson" in stage]) == 5
 
 
 @pytest.mark.asyncio
@@ -599,9 +675,7 @@ async def test_all_missing_lessons_start_concurrently_and_checkpoint_independent
     assert client_options[0]["tier"] == "balanced"
     assert client_options[0]["thinking_level"] == "medium"
     assert all(options["tier"] == "balanced" for options in client_options[1:])
-    assert all(
-        options["thinking_level"] == "minimal" for options in client_options[1:]
-    )
+    assert all(options["thinking_level"] == "minimal" for options in client_options[1:])
     assert all(options["max_tokens"] == 16000 for options in client_options[1:])
     assert all(options["timeout"] == 120 for options in client_options[1:])
     assert all(options["allow_fallback"] is False for options in client_options[1:])
@@ -834,8 +908,7 @@ async def test_parallel_generation_retries_only_the_failed_lesson() -> None:
     assert {
         stage
         for stage in stages
-        if stage.startswith("parallel_lesson_step_")
-        and stage.endswith("attempt_1")
+        if stage.startswith("parallel_lesson_step_") and stage.endswith("attempt_1")
     } == {
         "parallel_lesson_step_1_attempt_1",
         "parallel_lesson_step_2_attempt_1",
@@ -906,11 +979,11 @@ async def test_thin_section_is_expanded_without_a_full_lesson_rewrite() -> None:
     assert result is not None
     assert lesson_attempts == {"step_1": 1, "step_2": 1, "step_3": 1}
     assert repair_attempts == 1
-    repair_calls = [
-        stage for stage, *_ in calls if "sections_repair" in stage
-    ]
+    repair_calls = [stage for stage, *_ in calls if "sections_repair" in stage]
     assert repair_calls == ["parallel_lesson_step_1_sections_repair_1"]
-    repair_options = [options for options in client_options if options.get("max_tokens") == 6000]
+    repair_options = [
+        options for options in client_options if options.get("max_tokens") == 6000
+    ]
     assert repair_options == [
         {
             "timeout": 60,
@@ -1030,7 +1103,7 @@ async def test_valid_checkpoint_skips_outline_and_completed_first_lesson() -> No
 async def test_invalid_small_outline_retries_before_long_lessons() -> None:
     payload = _valid_payload()
     invalid_outline = _outline_payload()
-    invalid_outline["materials"][0]["type"] = "course"
+    invalid_outline["materials"][0]["title"] = "Resource 2"
     valid_outline = _outline_payload()
     outline_attempts = 0
     outline_prompts: list[str] = []
@@ -1082,4 +1155,4 @@ async def test_invalid_small_outline_retries_before_long_lessons() -> None:
     ]
     assert "OUTLINE CONTRACT RETRY" not in outline_prompts[0]
     assert "OUTLINE CONTRACT RETRY" in outline_prompts[1]
-    assert "exactly one book and one video" in outline_prompts[1]
+    assert "no forced type quota" in outline_prompts[1]

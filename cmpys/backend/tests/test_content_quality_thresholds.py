@@ -38,9 +38,7 @@ def _quality_ready_book_module(*, templated: bool = False) -> dict:
         "ideas": [
             {
                 "title": f"Idea {index + 1}",
-                "content": " ".join(
-                    f"application{index}_{word}" for word in range(40)
-                ),
+                "content": " ".join(f"application{index}_{word}" for word in range(40)),
             }
             for index in range(7)
         ],
@@ -92,20 +90,14 @@ def test_weekly_lesson_bundle_fills_the_mission_hour_budget():
     assert sum(step["estimate_minutes"] for step in normalized["steps"]) == 5 * 60
 
 
-def test_legacy_short_lesson_is_upgraded_when_opened():
+def test_short_lessons_are_upgraded_and_variable_long_lesson_counts_are_ready():
     assert not _lesson_details_meet_quality(
         {"steps": [{"lesson_content": "word " * 500}]}
     )
-    assert not _lesson_details_meet_quality(
-        {"steps": [{"lesson_content": "word " * 1900}]}
+    assert _lesson_details_meet_quality({"steps": [{"lesson_content": "word " * 1900}]})
+    assert _lesson_details_meet_quality(
+        {"steps": [{"lesson_content": "word " * 1900} for _ in range(5)]}
     )
-    assert _lesson_details_meet_quality({
-        "steps": [
-            {"lesson_content": "word " * 1900},
-            {"lesson_content": "word " * 1900},
-            {"lesson_content": "word " * 1900},
-        ]
-    })
 
 
 def test_book_quality_gate_requires_structure_not_only_length():
@@ -148,7 +140,8 @@ def test_book_grounding_gate_accepts_quote_present_in_source():
     )
     report = evaluate_book_module(
         {
-            "content_markdown": f'The author writes, "{quotation}"\n\n' + "word " * 2800,
+            "content_markdown": f'The author writes, "{quotation}"\n\n'
+            + "word " * 2800,
             "sections": [],
             "ideas": [],
         },

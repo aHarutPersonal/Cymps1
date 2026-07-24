@@ -762,6 +762,7 @@ async def _generate_llm_items(
     idol_milestones: dict | list | str | None = None,
     gaps: dict | list | str | None = None,
     readiness_by_gap: dict | list | str | None = None,
+    learner_baseline_json: str = "",
     interview_transcript_json: str = "",
     comparison_summary: str = "",
     blueprint_markdown: str = "",
@@ -793,6 +794,11 @@ async def _generate_llm_items(
                 "idol_milestones_json": idol_milestones or [],
                 "gaps_json": gaps or [],
                 "readiness_by_gap_json": readiness_by_gap or {},
+                "learner_baseline_json": sanitize_untrusted_input(
+                    learner_baseline_json
+                )
+                if learner_baseline_json
+                else "",
                 "interview_transcript_json": interview_transcript_json or "",
                 "comparison_summary": sanitize_untrusted_input(comparison_summary)
                 if comparison_summary
@@ -912,6 +918,7 @@ async def generate_plan(
             idol_milestones=kwargs.get("idol_milestones"),
             gaps=kwargs.get("gaps"),
             readiness_by_gap=kwargs.get("readiness_by_gap"),
+            learner_baseline_json=kwargs.get("learner_baseline_json", ""),
             interview_transcript_json=kwargs.get("interview_transcript_json", ""),
             comparison_summary=kwargs.get("comparison_summary", ""),
             blueprint_markdown=kwargs.get("blueprint_markdown", ""),

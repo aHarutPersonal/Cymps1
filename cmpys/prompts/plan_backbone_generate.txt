@@ -21,6 +21,9 @@ GAP ANALYSIS:
 READINESS:
 {readiness_by_gap_json}
 
+PLAN-READY LEARNER BASELINE (session-scoped, self-reported):
+{learner_baseline_json}
+
 DIAGNOSTIC INTERVIEW:
 {interview_transcript_json}
 COMPARISON VERDICT:
@@ -41,7 +44,7 @@ BACKBONE CONTRACT:
 - Mission types are project, course, or reading. Daily types are habit or
   practice. Every week must contain both categories.
 - Every mission task receives 2-8 estimated hours. This is the complete weekly
-  mission block, including its three guided lessons and deliberate practice.
+  mission block, including its right-sized guided lessons and deliberate practice.
 - The sum of estimated_hours must equal exactly {hours_per_week}. Use the
   learner's full declared capacity rather than returning a thin week. For daily
   work, estimated_hours is the entire week's repeated practice time.
@@ -52,6 +55,11 @@ BACKBONE CONTRACT:
 - The blueprint and diagnostic context are binding when present. Start at the
   learner's actual level and preserve one visible line of progression through
   all twelve weeks.
+- The plan-ready learner baseline is the canonical mapping of interview answers
+  to goal, current achievements/capability, confirmed capacity, constraints,
+  resources, and learning setup. Treat its claims as self-reported, never as
+  externally verified. When a generic gap/readiness seed conflicts with concrete
+  baseline evidence, use the concrete evidence and calibrate the task upward.
 - Never invent quotations, chapter numbers, biographical facts, or resources.
 
 Return strict JSON only:

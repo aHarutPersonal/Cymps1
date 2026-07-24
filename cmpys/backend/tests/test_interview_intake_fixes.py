@@ -9,7 +9,7 @@ from app.api.v1.sessions import (
     _interview_question_params,
 )
 from app.models.chat import MessageRole
-from app.services.llm.prompt_loader import validate_prompt_params
+from app.services.llm.prompt_loader import load_prompt, validate_prompt_params
 
 
 def _user(text: str) -> SimpleNamespace:
@@ -123,3 +123,22 @@ class TestCompletionSignals:
         cleaned = closing.replace(INTERVIEW_COMPLETE_MARKER, "").rstrip()
         assert INTERVIEW_COMPLETE_MARKER not in cleaned
         assert cleaned.endswith("by your age...")
+
+
+def test_interview_prompt_requires_every_plan_ready_input_before_completion():
+    prompt = load_prompt("interview_system.xml") + load_prompt("interview_question")
+
+    for answer_key in (
+        "achievement_inventory",
+        "current_capability",
+        "weekly_hours",
+        "target_outcome",
+        "constraints_resources",
+        "learning_habits_support",
+    ):
+        assert answer_key in prompt
+    assert "1-3 achievements" in prompt
+    assert '"none yet"' in prompt
+    assert "next twelve weeks" in prompt
+    assert "min 3, max 60, step 1, initial 8" in prompt
+    assert "do not close" in prompt

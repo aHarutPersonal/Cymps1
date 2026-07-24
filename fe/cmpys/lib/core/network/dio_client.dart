@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -44,6 +47,7 @@ class DioClient {
 
   final TokenStore _tokenStore;
   late final Dio _dio;
+  static const _maxErrorBodyBytes = 64 * 1024;
 
   /// Get the Dio instance.
   Dio get dio => _dio;
@@ -141,6 +145,12 @@ class DioClient {
         await _tokenStore.clear();
       }
 
+      // `ResponseType.stream` also applies to non-2xx responses, so Dio leaves
+      // FastAPI's small JSON error body as a ResponseBody instead of decoding
+      // it. Consume only a bounded error body before mapping it; otherwise
+      // coded interview conflicts degrade into generic 409s in the UI.
+      await _decodeStreamingErrorBody(error);
+
       handler.reject(
         DioException(
           requestOptions: error.requestOptions,
@@ -151,6 +161,23 @@ class DioClient {
       );
     },
   );
+
+  Future<void> _decodeStreamingErrorBody(DioException error) async {
+    final response = error.response;
+    final body = response?.data;
+    if (response == null || body is! ResponseBody) return;
+
+    final bytes = BytesBuilder(copy: false);
+    try {
+      await for (final chunk in body.stream) {
+        if (bytes.length + chunk.length > _maxErrorBodyBytes) return;
+        bytes.add(chunk);
+      }
+      response.data = jsonDecode(utf8.decode(bytes.takeBytes()));
+    } catch (_) {
+      // A malformed/aborted error stream still maps by HTTP status below.
+    }
+  }
 
   final SingleFlight<bool> _refreshFlight = SingleFlight<bool>();
 
@@ -253,11 +280,16 @@ class DioClient {
     String? code;
 
     if (data is Map<String, dynamic>) {
-      message =
+      final detail = data['detail'];
+      if (detail is Map) {
+        message = detail['message']?.toString();
+        code = detail['code']?.toString();
+      }
+      message ??=
           data['message']?.toString() ??
           data['error']?.toString() ??
-          data['detail']?.toString();
-      code = data['code']?.toString();
+          detail?.toString();
+      code ??= data['code']?.toString();
     }
 
     return ApiError(

@@ -1,27 +1,235 @@
 """
 Material URL resolution service.
 
-Searches YouTube directly for real URLs and validates availability via oEmbed.
-Gemini grounding is a fallback for direct-search misses. If no valid URL is
-found, returns None (not search links).
+Searches YouTube directly for playable videos and Tavily for exact non-video
+resource pages. Search-result pages are never returned. If no sufficiently
+specific direct result is found, the material remains unresolved.
 """
 
 import asyncio
+import ipaddress
 import logging
 import re
 from typing import Optional
-from urllib.parse import quote_plus
+from urllib.parse import parse_qsl, quote_plus, urlencode, urlsplit, urlunsplit
 
 import httpx
 
-logger = logging.getLogger("cmpys.services.video_search")
+logger = logging.getLogger("cmpys.services.material_search")
 
 YOUTUBE_OEMBED_URL = "https://www.youtube.com/oembed"
+TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 
 _RELEVANCE_STOP_WORDS = {
-    "about", "and", "best", "explains", "for", "from", "full", "how",
-    "interview", "official", "the", "this", "to", "video", "with", "without",
+    "about",
+    "and",
+    "best",
+    "explains",
+    "for",
+    "from",
+    "full",
+    "how",
+    "interview",
+    "official",
+    "the",
+    "this",
+    "to",
+    "video",
+    "with",
+    "without",
 }
+
+_TRACKING_QUERY_KEYS = {
+    "fbclid",
+    "gclid",
+    "mc_cid",
+    "mc_eid",
+    "ref",
+    "ref_",
+    "tag",
+}
+_SHORTENER_HOSTS = {
+    "bit.ly",
+    "buff.ly",
+    "goo.gl",
+    "ow.ly",
+    "t.co",
+    "tinyurl.com",
+}
+
+
+def _hostname_is_public(hostname: str) -> bool:
+    host = hostname.rstrip(".").casefold()
+    if (
+        not host
+        or host == "localhost"
+        or host.endswith((".localhost", ".local", ".internal"))
+    ):
+        return False
+    try:
+        return ipaddress.ip_address(host).is_global
+    except ValueError:
+        return True
+
+
+def is_direct_resource_url(url: str | None) -> bool:
+    """Return whether a URL is a safe-looking destination, not a search page."""
+    if not url:
+        return False
+    try:
+        parsed = urlsplit(url.strip())
+        host = (parsed.hostname or "").casefold()
+        path = parsed.path.rstrip("/").casefold()
+        query_keys = {key.casefold() for key, _ in parse_qsl(parsed.query)}
+    except ValueError:
+        return False
+    if (
+        parsed.scheme not in {"http", "https"}
+        or parsed.username is not None
+        or parsed.password is not None
+        or not _hostname_is_public(host)
+        or host in _SHORTENER_HOSTS
+    ):
+        return False
+
+    if (
+        ("google." in host and path == "/search")
+        or (host.endswith("bing.com") and path == "/search")
+        or (host.endswith("search.yahoo.com"))
+        or (host.endswith("duckduckgo.com") and "q" in query_keys)
+        or ((host.startswith("amazon.") or ".amazon." in host) and path == "/s")
+        or (host.endswith("coursera.org") and path == "/search")
+        or (host.endswith("youtube.com") and path == "/results")
+    ):
+        return False
+    if path in {"/search", "/find", "/results"} and query_keys.intersection(
+        {"q", "query", "keyword", "search", "search_query"}
+    ):
+        return False
+    return True
+
+
+def _canonicalize_direct_url(url: str) -> str | None:
+    if not is_direct_resource_url(url):
+        return None
+    parsed = urlsplit(url.strip())
+    clean_query = urlencode(
+        [
+            (key, value)
+            for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+            if not key.casefold().startswith("utm_")
+            and key.casefold() not in _TRACKING_QUERY_KEYS
+        ],
+        doseq=True,
+    )
+    return urlunsplit(
+        (parsed.scheme, parsed.netloc, parsed.path or "/", clean_query, "")
+    )
+
+
+def _resource_tokens(value: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"\w+", value.casefold(), re.UNICODE)
+        if len(token) >= 2 and token not in _RELEVANCE_STOP_WORDS
+    }
+
+
+def _candidate_match_score(material: dict, candidate: dict) -> float | None:
+    """Score only candidates that preserve the requested resource identity."""
+    title = str(material.get("title") or "").strip()
+    material_type = str(material.get("type") or "").casefold()
+    candidate_title = str(candidate.get("title") or "").casefold()
+    misleading_markers = {
+        "book": {" review", " summary", " notes", " quotes"},
+        "course": {" review", " reviews", " alternatives"},
+        "tool": {" review", " reviews", " alternatives"},
+    }.get(material_type, set())
+    if any(marker in candidate_title for marker in misleading_markers):
+        return None
+    wanted = _resource_tokens(title)
+    if not wanted:
+        return None
+    creator = _resource_tokens(str(material.get("author_or_creator") or ""))
+    candidate_text = " ".join(
+        str(candidate.get(key) or "") for key in ("title", "content", "url")
+    )
+    found = _resource_tokens(candidate_text)
+    title_coverage = len(wanted & found) / len(wanted)
+    required_coverage = 1.0 if len(wanted) <= 2 else 0.6
+    if title_coverage < required_coverage:
+        return None
+
+    creator_coverage = len(creator & found) / len(creator) if creator else 1.0
+    if len(wanted) <= 2 and creator and creator_coverage == 0:
+        return None
+    try:
+        provider_score = max(0.0, min(1.0, float(candidate.get("score") or 0)))
+    except (TypeError, ValueError):
+        provider_score = 0.0
+    exact_phrase = " ".join(title.casefold().split()) in " ".join(
+        candidate_text.casefold().split()
+    )
+    return (
+        0.55 * title_coverage
+        + 0.2 * creator_coverage
+        + 0.2 * provider_score
+        + (0.05 if exact_phrase else 0.0)
+    )
+
+
+async def _tavily_search(query: str) -> list[dict]:
+    """Run one bounded Tavily search and return its direct result candidates."""
+    from app.core.config import settings
+
+    api_key = settings.tavily_api_key
+    if not api_key:
+        logger.info("[MATERIAL] Tavily is not configured; leaving resource unresolved")
+        return []
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                TAVILY_SEARCH_URL,
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={
+                    "query": query,
+                    "search_depth": "advanced",
+                    "max_results": 5,
+                    "include_answer": False,
+                    "include_raw_content": False,
+                },
+                timeout=12.0,
+            )
+        response.raise_for_status()
+        payload = response.json()
+        results = payload.get("results", []) if isinstance(payload, dict) else []
+        return [result for result in results if isinstance(result, dict)]
+    except Exception as exc:
+        logger.warning("[MATERIAL] Tavily search failed: %s", exc)
+        return []
+
+
+async def _resolve_single_non_video(material: dict) -> Optional[str]:
+    title = str(material.get("title") or "").strip()
+    creator = str(material.get("author_or_creator") or "").strip()
+    material_type = str(material.get("type") or "resource").strip()
+    query = f'"{title}"'
+    if creator:
+        query += f' "{creator}"'
+    query += f" {material_type} official"
+
+    ranked: list[tuple[float, str]] = []
+    for candidate in await _tavily_search(query):
+        canonical_url = _canonicalize_direct_url(str(candidate.get("url") or ""))
+        if canonical_url is None:
+            continue
+        score = _candidate_match_score(material, candidate)
+        if score is not None:
+            ranked.append((score, canonical_url))
+    if not ranked:
+        return None
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    return ranked[0][1]
 
 
 async def _youtube_oembed_metadata(
@@ -50,6 +258,7 @@ async def _validate_youtube_url(client: httpx.AsyncClient, url: str) -> bool:
 
 def _oembed_matches_query(metadata: dict, query: str) -> bool:
     """Reject playable-but-irrelevant first results before the fast-path wins."""
+
     def tokens(value: str) -> set[str]:
         return {
             token
@@ -58,9 +267,7 @@ def _oembed_matches_query(metadata: dict, query: str) -> bool:
         }
 
     wanted = tokens(query)
-    candidate = tokens(
-        f"{metadata.get('title', '')} {metadata.get('author_name', '')}"
-    )
+    candidate = tokens(f"{metadata.get('title', '')} {metadata.get('author_name', '')}")
     if not wanted or not candidate:
         return False
     overlap = wanted & candidate
@@ -71,7 +278,7 @@ def _oembed_matches_query(metadata: dict, query: str) -> bool:
 
 def _extract_youtube_urls(text: str) -> list[str]:
     """Extract YouTube watch URLs from text (11-char video IDs only)."""
-    pattern = r'https?://(?:www\.)?youtube\.com/watch\?v=[\w-]{11}'
+    pattern = r"https?://(?:www\.)?youtube\.com/watch\?v=[\w-]{11}"
     return list(dict.fromkeys(re.findall(pattern, text)))  # deduplicate
 
 
@@ -144,11 +351,11 @@ async def _search_video_via_google(query: str) -> Optional[str]:
         # Validate up to 3 URLs via oEmbed
         async with httpx.AsyncClient() as http_client:
             for url in urls[:3]:
-                if await _validate_youtube_url(http_client, url):
+                metadata = await _youtube_oembed_metadata(http_client, url)
+                if metadata and _oembed_matches_query(metadata, query):
                     logger.info(f"[VIDEO] ✓ Valid: {url} for '{query}'")
                     return url
-                else:
-                    logger.warning(f"[VIDEO] ✗ Unavailable: {url}")
+                logger.warning(f"[VIDEO] ✗ Unavailable or irrelevant: {url}")
 
         return None
 
@@ -193,7 +400,9 @@ async def _search_video_via_youtube_api(query: str) -> Optional[str]:
                 url = f"https://www.youtube.com/watch?v={vid}"
                 metadata = await _youtube_oembed_metadata(client, url)
                 if metadata and _oembed_matches_query(metadata, query):
-                    logger.info(f"[VIDEO] ✓ Relevant YouTube result: {url} for '{query}'")
+                    logger.info(
+                        f"[VIDEO] ✓ Relevant YouTube result: {url} for '{query}'"
+                    )
                     return url
                 if metadata:
                     logger.info(
@@ -219,62 +428,43 @@ async def _resolve_single_video(query: str) -> Optional[str]:
 
 async def resolve_material_urls(materials: list[dict]) -> list[dict]:
     """
-    Resolve materials to real URLs. For videos, finds exact YouTube watch URLs.
-    NEVER returns search page URLs — only real embeddable video URLs or None.
+    Resolve materials to direct URLs or None. Existing and discovered search
+    pages are rejected; an unresolved identity never becomes a synthetic link.
     """
     if not materials:
         return []
 
-    video_indices: list[int] = []
-    for i, m in enumerate(materials):
-        if m.get("type") == "video":
-            video_indices.append(i)
-
-    # Resolve videos in parallel
-    if video_indices:
-        video_tasks = [
-            _resolve_single_video(
-                materials[i].get("search_query", materials[i].get("title", ""))
-            )
-            for i in video_indices
-        ]
-        video_urls = await asyncio.gather(*video_tasks)
-    else:
-        video_urls = []
-
-    # Build result
-    resolved = []
-    video_url_map = dict(zip(video_indices, video_urls))
-
-    for i, material in enumerate(materials):
+    async def resolve_one(material: dict) -> dict:
         mat = dict(material)
+        existing = _canonicalize_direct_url(str(mat.get("url") or ""))
+        material_type = str(mat.get("type") or "article")
+        if existing is not None:
+            url = existing
+            provider = "existing"
+        elif material_type == "video":
+            url = await _resolve_single_video(
+                str(mat.get("search_query") or mat.get("title") or "")
+            )
+            url = _canonicalize_direct_url(url or "")
+            provider = "youtube" if url else None
+        elif material_type == "in_app_lesson":
+            url = None
+            provider = None
+        else:
+            url = await _resolve_single_non_video(mat)
+            provider = "tavily" if url else None
+        mat["url"] = url
+        mat["url_resolution_status"] = (
+            "resolved"
+            if url
+            else "not_applicable"
+            if material_type == "in_app_lesson"
+            else "unresolved"
+        )
+        mat["url_provider"] = provider
+        return mat
 
-        if i in video_url_map:
-            # Only set URL if we got a real video URL, otherwise None
-            mat["url"] = video_url_map[i]  # None is fine — feed filters nulls
-        elif mat.get("url") is None and mat.get("type") != "video":
-            # Non-video: use search fallback
-            mat["url"] = _fallback_url(material)["url"]
-
-        resolved.append(mat)
-
-    valid_count = sum(1 for u in video_urls if u)
-    logger.info(f"[VIDEO] Resolved {valid_count}/{len(video_indices)} videos")
+    resolved = await asyncio.gather(*(resolve_one(material) for material in materials))
+    valid_count = sum(1 for material in resolved if material.get("url"))
+    logger.info("[MATERIAL] Resolved %s/%s direct URLs", valid_count, len(materials))
     return resolved
-
-
-def _fallback_url(material: dict) -> dict:
-    """Generate a search URL fallback for non-video materials only."""
-    mat = dict(material)
-    query = quote_plus(mat.get("search_query", mat.get("title", "")))
-    mat_type = mat.get("type", "article")
-
-    if mat_type in ("book",):
-        mat["url"] = f"https://www.amazon.com/s?k={query}"
-    elif mat_type in ("course",):
-        mat["url"] = f"https://www.coursera.org/search?query={query}"
-    else:
-        mat["url"] = f"https://www.google.com/search?q={query}"
-
-    mat.pop("search_query", None)
-    return mat

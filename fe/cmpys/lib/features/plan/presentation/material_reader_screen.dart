@@ -228,7 +228,8 @@ class _MaterialReaderScreenState extends ConsumerState<MaterialReaderScreen> {
   }
 
   Widget _unavailableState(PlanMaterialDetail material) {
-    final hasLink = material.url != null && material.url!.trim().isNotEmpty;
+    final directUrl = material.directUrl;
+    final hasLink = directUrl != null;
     return CmpysCardSurface(
       color: AppColors.paper2,
       child: Column(
@@ -258,10 +259,8 @@ class _MaterialReaderScreenState extends ConsumerState<MaterialReaderScreen> {
               leadingIcon: Icons.open_in_new_rounded,
               onTap: () => Navigator.of(context, rootNavigator: true).push(
                 CmpysPageRoute<void>(
-                  builder: (_) => MaterialWebScreen(
-                    title: material.title,
-                    url: material.url!,
-                  ),
+                  builder: (_) =>
+                      MaterialWebScreen(title: material.title, url: directUrl),
                 ),
               ),
               child: const Text('Open original resource'),

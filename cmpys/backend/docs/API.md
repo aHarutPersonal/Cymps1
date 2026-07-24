@@ -25,10 +25,10 @@ The core agentic flow. Each session progresses through phases:
 
 | Method | Path | Body/Params | Notes |
 |---|---|---|---|
-| POST | `` | `{age, financial_status, interests}` | Create session. **409** if active session exists. |
+| POST | `` | `{age, financial_status, interests, goal?}` | Create session. **409** if active session exists. |
 | POST | `/{id}/suggest-idols` | — | LLM mentor suggestions: `[{name, era, relevance_summary, confidence}]` |
 | POST | `/{id}/select-idol` | `{idol_name, wikidata_id?}` | Set mentor > `interview` |
-| POST | `/{id}/interview` | `{content}` | **SSE.** Events: `status`, `chunk{content}`, `done{turn, max_turns, phase_transition}`, `error` |
+| POST | `/{id}/interview` | `{content, is_kickoff?, question_id?}` | **SSE.** Events: `status`, `chunk{content}`, `done{turn, max_turns, phase_transition, question_id?, response_ui?}`, `error` |
 | POST | `/{id}/generate-results` | — | **SSE.** Events: `section{comparison\|blueprint}`, `chunk{section, content}`, `done`, `error` |
 | POST | `/{id}/guided-learning` | `{content}` | **SSE.** Mentor chat. Events: `chunk{content}`, `done`, `error` |
 | GET | `/{id}/feed` | — | Per-session daily insight cards |
@@ -36,6 +36,41 @@ The core agentic flow. Each session progresses through phases:
 | GET | `/current` | — | Most recent non-completed session |
 | GET | `/latest` | — | Most recent session (including completed) |
 | DELETE | `/current` | — | Abandon (force-complete) active session |
+
+For a non-final interview question, `done.response_ui` is a versioned hint for
+the response composer. Version 1 supports `text`, `single_choice`, and `number`.
+Clients must fall back to text for missing or unsupported metadata. Choice and
+number selections are still submitted as natural-language `content`, so the
+interview transcript remains the canonical record. The backend adds a trusted
+`answer_key` to each persisted question and uses the question UUID to bind the
+answer to one of six required plan inputs: achievement inventory, current
+capability, weekly hours, target outcome, constraints/resources, and learning
+habits/support. The interview cannot close until all six have an answer;
+`"none yet"` is a valid achievement baseline.
+
+Weekly capacity is a dedicated number question with an end-to-end range of
+3–60 hours per week. A selected value, one bare integer, or one integer stated
+explicitly as hours per week is stored as the session's confirmed plan capacity.
+Ranges, fractions, and prose containing multiple numbers are not rounded or
+guessed. Invalid custom capacity receives `409` with
+`detail.code = invalid_interview_answer`; clients restore the same composer,
+preserve the text for correction, and do not duplicate the mentor question. The
+historical 10-hour default is used only for interviews created before semantic
+answer keys.
+
+At result generation, the exact self-reported achievement inventory and other
+plan inputs are registered in the reusable user profile and passed as a
+session-scoped learner baseline to comparison, blueprint, and plan generation.
+Self-reported intake prose is not silently promoted to a verified achievement
+record.
+
+A repeated kickoff replays
+the persisted question with the same `question_id` and `response_ui`. Current
+clients return that `question_id` with their answer so a lost terminal SSE event
+can replay the already-committed response without duplicating the turn. Answer
+claims are serialized per interview thread; a concurrent retry receives `409`
+with `detail.code = interview_turn_in_progress`, while a superseded question
+uses `detail.code = stale_interview_question`.
 
 ### Session response shape
 
@@ -97,6 +132,12 @@ The core agentic flow. Each session progresses through phases:
 | GET | `/current` | Current active plan |
 | POST | `/{id}/items` | Add plan item |
 | GET | `/{id}/weeks/{week}/summary` | Weekly summary |
+
+When `POST /generate` includes `sessionId`, that session must belong to the
+authenticated user and match `idolId`. The session's age, concrete target
+outcome, and confirmed weekly capacity are authoritative; caller defaults cannot
+replace them. Later week and lesson generation retain the source session and
+learner-baseline snapshot recorded on the plan.
 
 ## Notes — `/notes`
 

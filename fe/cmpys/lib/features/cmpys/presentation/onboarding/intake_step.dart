@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -5,9 +7,12 @@ import '../../../../app/design_tokens.dart';
 import '../../../../core/network/api_error.dart';
 import '../../../../core/network/coalesced_text.dart';
 import '../../../../core/ui/cmpys/cmpys_primitives.dart';
+import '../../../../core/ui/motion/motion_config.dart';
 import '../../../session/data/session_repository.dart';
+import '../../../session/models/interview_response_ui.dart';
 import '../../../session/models/session_models.dart';
 import '../../data/cmpys_seed.dart';
+import 'intake_answer_composer.dart';
 
 /// Idol-led intake — fully AI-driven.
 ///
@@ -35,7 +40,6 @@ class CmpysIntakeChatStep extends ConsumerStatefulWidget {
 }
 
 class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
-  final TextEditingController _input = TextEditingController();
   final ScrollController _scroll = ScrollController();
   final List<_M> _msgs = [];
   bool _scrollFrameScheduled = false;
@@ -47,13 +51,19 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
   /// In-flight mentor text — a [ValueNotifier] so each SSE chunk repaints
   /// only the streaming bubble instead of rebuilding the whole step.
   final ValueNotifier<String> _streamingText = ValueNotifier('');
-  bool _awaitingText = false; // user's turn to answer
+  InterviewResponseUi? _responseUi; // user's active response composer
+  String? _questionId;
   bool _finished = false; // phase transitioned, advancing
   String? _error; // visible error; retry re-sends _lastSent
+  String? _validationError; // recoverable validation shown in the composer
+  String? _validationDraft; // rejected text kept editable for correction
   String? _lastSent;
   bool _lastSentWasKickoff = false;
+  String? _lastQuestionId;
+  _OptimisticAnswer? _optimisticAnswer;
   int _turns = 0;
   int _maxTurns = 5;
+  Timer? _advanceTimer;
 
   /// Hidden protocol message that elicits the mentor's opening question.
   /// Sent with `isKickoff: true` so the backend never persists it as the
@@ -77,7 +87,7 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
 
   @override
   void dispose() {
-    _input.dispose();
+    _advanceTimer?.cancel();
     _scroll.dispose();
     _streamingText.dispose();
     super.dispose();
@@ -116,7 +126,7 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
         _advance();
         return;
       }
-      await _sendTurn(_kickoff, showAsUser: false, isKickoff: true);
+      await _sendTurn(_kickoff, isKickoff: true);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -127,20 +137,38 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
         // and selection. Sending the kickoff directly would always 409.
         _lastSent = null;
         _lastSentWasKickoff = false;
+        _lastQuestionId = null;
       });
     }
   }
 
   Future<void> _answer(String text) async {
     if (text.trim().isEmpty) return;
+    final answeredQuestionId = _questionId;
+    final answeredResponseUi = _responseUi;
+    final answerKey = answeredQuestionId ?? 'turn_$_turns';
+    final answer = text.trim();
+    final bubble = _M(me: true, text: answer);
+    final hadPreviousDraft = widget.draft.intakeAnswers.containsKey(answerKey);
+    final previousDraft = widget.draft.intakeAnswers[answerKey];
     setState(() {
-      _msgs.add(_M(me: true, text: text.trim()));
-      _awaitingText = false;
-      _input.clear();
+      _msgs.add(bubble);
+      _responseUi = null;
+      _questionId = null;
+      _validationError = null;
+      _validationDraft = null;
+      _optimisticAnswer = _OptimisticAnswer(
+        bubble: bubble,
+        draftKey: answerKey,
+        hadPreviousDraft: hadPreviousDraft,
+        previousDraft: previousDraft,
+        responseUi: answeredResponseUi,
+        questionId: answeredQuestionId,
+      );
     });
-    widget.draft.intakeAnswers['turn_$_turns'] = text.trim();
+    widget.draft.intakeAnswers[answerKey] = answer;
     _scrollToBottom();
-    await _sendTurn(text.trim(), showAsUser: true);
+    await _sendTurn(answer, questionId: answeredQuestionId);
   }
 
   Future<void> _retry() async {
@@ -152,17 +180,15 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
     setState(() => _error = null);
     await _sendTurn(
       last,
-      showAsUser: false,
-      isRetry: true,
       isKickoff: _lastSentWasKickoff,
+      questionId: _lastQuestionId,
     );
   }
 
   Future<void> _sendTurn(
     String content, {
-    required bool showAsUser,
-    bool isRetry = false,
     bool isKickoff = false,
+    String? questionId,
   }) async {
     setState(() {
       _typing = true;
@@ -172,9 +198,12 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
     });
     _lastSent = content;
     _lastSentWasKickoff = isKickoff;
+    _lastQuestionId = questionId;
 
     final repo = ref.read(sessionRepositoryProvider);
     bool transition = false;
+    InterviewResponseUi? nextResponseUi;
+    String? nextQuestionId;
     final streamed = CoalescedText(
       onUpdate: (value) {
         if (!mounted) return;
@@ -188,6 +217,7 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
         _sessionId!,
         content,
         isKickoff: isKickoff,
+        questionId: questionId,
       )) {
         if (!mounted) return;
         final type = ev['type'] as String? ?? '';
@@ -203,8 +233,15 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
           transition = ev['phase_transition'] == true;
           _turns = (ev['turn'] as int?) ?? _turns + 1;
           _maxTurns = (ev['max_turns'] as int?) ?? _maxTurns;
+          if (!transition) {
+            nextResponseUi = InterviewResponseUi.fromJson(ev['response_ui']);
+            nextQuestionId = ev['question_id']?.toString();
+          }
         } else if (type == 'error') {
-          throw StateError(ev['message']?.toString() ?? 'interview error');
+          throw _InterviewStreamError(
+            message: ev['message']?.toString() ?? 'interview error',
+            code: ev['code']?.toString(),
+          );
         }
       }
       if (!mounted) return;
@@ -218,7 +255,13 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
         _typing = false;
         _streaming = false;
         _streamingText.value = '';
-        _awaitingText = !transition;
+        _responseUi = transition
+            ? null
+            : nextResponseUi ?? InterviewResponseUi.text();
+        _questionId = transition ? null : nextQuestionId;
+        _validationError = null;
+        _validationDraft = null;
+        _optimisticAnswer = null;
       });
       _scrollToBottom();
 
@@ -226,6 +269,72 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
     } catch (e) {
       if (!mounted) return;
       debugPrint('💥 interview send failed: $e');
+      final turnInProgress =
+          e is ApiError && e.code == 'interview_turn_in_progress';
+      final invalidAnswer =
+          (e is ApiError && e.code == 'invalid_interview_answer') ||
+          (e is _InterviewStreamError && e.code == 'invalid_interview_answer');
+      if (invalidAnswer) {
+        // Validation rejected this answer without advancing the interview.
+        // Restore the same composer locally so the question is not replayed
+        // or duplicated, and keep the user's text available for correction.
+        streamed.dispose();
+        final optimistic = _optimisticAnswer;
+        setState(() {
+          _discardOptimisticAnswer();
+          _responseUi = optimistic?.responseUi ?? InterviewResponseUi.text();
+          _questionId = optimistic?.questionId;
+          _validationError = switch (e) {
+            ApiError() => e.message,
+            _InterviewStreamError() => e.message,
+            _ => 'Please check this answer and try again.',
+          };
+          _validationDraft = content;
+          _typing = false;
+          _streaming = false;
+          _streamingText.value = '';
+          _error = null;
+          _lastSent = null;
+          _lastSentWasKickoff = false;
+          _lastQuestionId = null;
+        });
+        _scrollToBottom();
+        return;
+      }
+      final streamNeedsResync =
+          e is _InterviewStreamError &&
+          const {
+            'stale_interview_question',
+            'interview_session_changed',
+            'interview_turn_superseded',
+          }.contains(e.code);
+      final rejectedOptimisticAnswer =
+          e is ApiError && e.statusCode == 409 && !turnInProgress;
+      final shouldResync =
+          (!isKickoff &&
+              e is ApiError &&
+              e.statusCode == 409 &&
+              !turnInProgress) ||
+          streamNeedsResync;
+      if (shouldResync) {
+        // Stop the failed stream's coalescing timer before bootstrap starts a
+        // replacement stream, or a delayed partial chunk can overwrite it.
+        streamed.dispose();
+        setState(() {
+          if (rejectedOptimisticAnswer) _discardOptimisticAnswer();
+          _typing = false;
+          _streaming = false;
+          _streamingText.value = '';
+          _error = null;
+          _validationError = null;
+          _validationDraft = null;
+          _lastSent = null;
+          _lastSentWasKickoff = false;
+          _lastQuestionId = null;
+        });
+        await _bootstrap();
+        return;
+      }
       final setupConflict = isKickoff && e is ApiError && e.statusCode == 409;
       setState(() {
         _typing = false;
@@ -235,6 +344,7 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
         if (setupConflict) {
           _lastSent = null;
           _lastSentWasKickoff = false;
+          _lastQuestionId = null;
         }
       });
     } finally {
@@ -252,7 +362,27 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
     return 'Couldn’t prepare ${widget.idol.short}. Tap retry to try the setup again.';
   }
 
+  void _discardOptimisticAnswer() {
+    final optimistic = _optimisticAnswer;
+    if (optimistic == null) return;
+    _msgs.remove(optimistic.bubble);
+    if (optimistic.hadPreviousDraft) {
+      widget.draft.intakeAnswers[optimistic.draftKey] =
+          optimistic.previousDraft!;
+    } else {
+      widget.draft.intakeAnswers.remove(optimistic.draftKey);
+    }
+    _optimisticAnswer = null;
+  }
+
   String _turnErrorMessage(Object error) {
+    if (error is ApiError && error.code == 'interview_turn_in_progress') {
+      return '${widget.idol.short} is still finishing that reply. Tap retry in a moment.';
+    }
+    if (error is _InterviewStreamError &&
+        error.code == 'interview_turn_in_progress') {
+      return '${widget.idol.short} is still finishing that reply. Tap retry in a moment.';
+    }
     if (error is ApiError && error.statusCode == 409) {
       return '${widget.idol.short} isn’t ready yet. Tap retry to finish setup.';
     }
@@ -271,8 +401,12 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
   void _advance() {
     if (_finished) return;
     _finished = true;
-    setState(() => _awaitingText = false);
-    Future.delayed(const Duration(milliseconds: 600), () {
+    setState(() {
+      _responseUi = null;
+      _questionId = null;
+      _optimisticAnswer = null;
+    });
+    _advanceTimer = Timer(const Duration(milliseconds: 600), () {
       if (mounted) widget.onDone();
     });
   }
@@ -377,6 +511,7 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
   Widget _messages() {
     return ListView(
       controller: _scroll,
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
       children: [
         Center(
@@ -564,8 +699,9 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
   Widget _answerArea() {
     final bottomInset = MediaQuery.of(context).padding.bottom;
     final pad = EdgeInsets.fromLTRB(14, 10, 14, 18 + bottomInset);
+    final responseUi = _responseUi;
 
-    if (!_awaitingText) {
+    if (responseUi == null) {
       final status = _finished
           ? 'Analyzing your answers…'
           : _error != null
@@ -595,67 +731,54 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
         color: AppColors.card,
         border: Border(top: BorderSide(color: AppColors.hair, width: 1)),
       ),
-      child: Container(
-        decoration: BoxDecoration(
-          color: AppColors.paper,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: AppColors.hair2, width: 1.5),
-        ),
-        padding: const EdgeInsets.fromLTRB(16, 4, 6, 4),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            Expanded(
-              child: TextField(
-                controller: _input,
-                minLines: 1,
-                maxLines: 5,
-                autofocus: true,
-                textAlignVertical: TextAlignVertical.center,
-                onTapOutside: (_) =>
-                    FocusManager.instance.primaryFocus?.unfocus(),
-                style: AppTypography.body.copyWith(fontSize: 15.5),
-                cursorColor: AppColors.green,
-                decoration: const InputDecoration(
-                  hintText: 'Type your answer…',
-                  border: InputBorder.none,
-                  isDense: true,
-                  filled: false,
-                  contentPadding: EdgeInsets.symmetric(vertical: 11),
-                ),
-              ),
-            ),
-            GestureDetector(
-              onTap: () => _answer(_input.text),
-              child: ValueListenableBuilder<TextEditingValue>(
-                valueListenable: _input,
-                builder: (_, value, _) => Container(
-                  width: 44,
-                  height: 44,
-                  margin: const EdgeInsets.only(bottom: 1),
-                  decoration: BoxDecoration(
-                    color: value.text.trim().isEmpty
-                        ? AppColors.hair2
-                        : AppColors.green,
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(
-                    Icons.arrow_upward_rounded,
-                    color: Colors.white,
-                    size: 18,
-                  ),
-                ),
-              ),
-            ),
-          ],
+      child: AnimatedSwitcher(
+        duration: MotionConfig.enabled(context)
+            ? AppDurations.fast
+            : Duration.zero,
+        switchInCurve: AppCurves.easeOut,
+        switchOutCurve: Curves.easeIn,
+        child: IntakeAnswerComposer(
+          key: ValueKey(_questionId ?? 'turn-$_turns-${responseUi.kind.name}'),
+          responseUi: responseUi,
+          initialText: _validationDraft,
+          validationMessage: _validationError,
+          onSubmit: _answer,
         ),
       ),
     );
   }
 }
 
+class _InterviewStreamError implements Exception {
+  const _InterviewStreamError({required this.message, this.code});
+
+  final String message;
+  final String? code;
+
+  @override
+  String toString() => message;
+}
+
 class _M {
   _M({required this.me, required this.text});
   final bool me;
   final String text;
+}
+
+class _OptimisticAnswer {
+  const _OptimisticAnswer({
+    required this.bubble,
+    required this.draftKey,
+    required this.hadPreviousDraft,
+    required this.previousDraft,
+    required this.responseUi,
+    required this.questionId,
+  });
+
+  final _M bubble;
+  final String draftKey;
+  final bool hadPreviousDraft;
+  final String? previousDraft;
+  final InterviewResponseUi? responseUi;
+  final String? questionId;
 }

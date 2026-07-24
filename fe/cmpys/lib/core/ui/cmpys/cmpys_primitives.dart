@@ -169,6 +169,10 @@ class CmpysMentorAvatar extends StatelessWidget {
 
 enum CmpysHaptic { none, selection, light }
 
+class _CmpysActivateIntent extends Intent {
+  const _CmpysActivateIntent();
+}
+
 /// Shared press feedback for cards, chips, and compact icon actions.
 ///
 /// It gives touch and pointer interactions the same quick response while
@@ -195,10 +199,29 @@ class CmpysPressable extends StatefulWidget {
 
 class _CmpysPressableState extends State<CmpysPressable> {
   bool _pressed = false;
+  bool _focused = false;
+
+  static const _activationShortcuts = <ShortcutActivator, Intent>{
+    SingleActivator(LogicalKeyboardKey.enter, includeRepeats: false):
+        _CmpysActivateIntent(),
+    SingleActivator(LogicalKeyboardKey.numpadEnter, includeRepeats: false):
+        _CmpysActivateIntent(),
+    SingleActivator(LogicalKeyboardKey.space, includeRepeats: false):
+        _CmpysActivateIntent(),
+    SingleActivator(LogicalKeyboardKey.gameButtonA, includeRepeats: false):
+        _CmpysActivateIntent(),
+    SingleActivator(LogicalKeyboardKey.select, includeRepeats: false):
+        _CmpysActivateIntent(),
+  };
 
   void _setPressed(bool value) {
     if (_pressed == value) return;
     setState(() => _pressed = value);
+  }
+
+  void _setFocused(bool value) {
+    if (_focused == value) return;
+    setState(() => _focused = value);
   }
 
   void _handleTap() {
@@ -235,14 +258,39 @@ class _CmpysPressableState extends State<CmpysPressable> {
       ),
     );
 
+    final interaction = FocusableActionDetector(
+      enabled: enabled,
+      shortcuts: _activationShortcuts,
+      actions: <Type, Action<Intent>>{
+        _CmpysActivateIntent: CallbackAction<_CmpysActivateIntent>(
+          onInvoke: (_) {
+            _handleTap();
+            return null;
+          },
+        ),
+      },
+      onShowFocusHighlight: _setFocused,
+      child: MouseRegion(
+        cursor: enabled ? SystemMouseCursors.click : MouseCursor.defer,
+        child: Container(
+          foregroundDecoration: _focused
+              ? BoxDecoration(
+                  border: Border.all(color: AppColors.green, width: 2),
+                  borderRadius: BorderRadius.circular(12),
+                )
+              : null,
+          child: gesture,
+        ),
+      ),
+    );
     return Semantics(
       button: true,
       enabled: enabled,
       label: widget.semanticLabel,
-      child: MouseRegion(
-        cursor: enabled ? SystemMouseCursors.click : MouseCursor.defer,
-        child: gesture,
-      ),
+      onTap: enabled ? _handleTap : null,
+      child: widget.semanticLabel == null
+          ? interaction
+          : ExcludeSemantics(child: interaction),
     );
   }
 }
@@ -278,8 +326,6 @@ class CmpysButton extends StatefulWidget {
 }
 
 class _CmpysButtonState extends State<CmpysButton> {
-  bool _pressed = false;
-
   ({double height, double fontSize, double padH}) get _dims {
     switch (widget.size) {
       case CmpysBtnSize.sm:
@@ -335,59 +381,44 @@ class _CmpysButtonState extends State<CmpysButton> {
     final d = _dims;
     final p = _palette;
     final enabled = !widget.disabled && widget.onTap != null;
-    final motionEnabled = MotionConfig.enabled(context);
 
     return Opacity(
       opacity: enabled ? 1.0 : 0.4,
-      child: GestureDetector(
-        onTapDown: enabled ? (_) => setState(() => _pressed = true) : null,
-        onTapUp: enabled ? (_) => setState(() => _pressed = false) : null,
-        onTapCancel: enabled ? () => setState(() => _pressed = false) : null,
-        onTap: enabled
-            ? () {
-                HapticFeedback.lightImpact();
-                widget.onTap!();
-              }
-            : null,
-        child: AnimatedScale(
-          duration: motionEnabled
-              ? const Duration(milliseconds: 110)
-              : Duration.zero,
-          curve: AppCurves.easeOut,
-          scale: motionEnabled && _pressed ? 0.975 : 1.0,
-          child: Container(
-            height: d.height,
-            padding: EdgeInsets.symmetric(horizontal: d.padH),
-            width: widget.full ? double.infinity : null,
-            decoration: BoxDecoration(
-              color: p.bg,
-              borderRadius: AppRadii.button,
-              border: p.border,
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                if (widget.leadingIcon != null) ...[
-                  Icon(widget.leadingIcon, size: d.fontSize + 3, color: p.fg),
-                  const SizedBox(width: 8),
-                ],
-                Flexible(
-                  child: DefaultTextStyle(
-                    style: AppTypography.button.copyWith(
-                      color: p.fg,
-                      fontSize: d.fontSize,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                    child: widget.child,
-                  ),
-                ),
-                if (widget.trailingIcon != null) ...[
-                  const SizedBox(width: 8),
-                  Icon(widget.trailingIcon, size: d.fontSize + 3, color: p.fg),
-                ],
+      child: CmpysPressable(
+        onTap: enabled ? widget.onTap : null,
+        haptic: CmpysHaptic.light,
+        child: Container(
+          height: d.height,
+          padding: EdgeInsets.symmetric(horizontal: d.padH),
+          width: widget.full ? double.infinity : null,
+          decoration: BoxDecoration(
+            color: p.bg,
+            borderRadius: AppRadii.button,
+            border: p.border,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              if (widget.leadingIcon != null) ...[
+                Icon(widget.leadingIcon, size: d.fontSize + 3, color: p.fg),
+                const SizedBox(width: 8),
               ],
-            ),
+              Flexible(
+                child: DefaultTextStyle(
+                  style: AppTypography.button.copyWith(
+                    color: p.fg,
+                    fontSize: d.fontSize,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                  child: widget.child,
+                ),
+              ),
+              if (widget.trailingIcon != null) ...[
+                const SizedBox(width: 8),
+                Icon(widget.trailingIcon, size: d.fontSize + 3, color: p.fg),
+              ],
+            ],
           ),
         ),
       ),
@@ -418,30 +449,33 @@ class CmpysChipPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final motionEnabled = MotionConfig.enabled(context);
-    return CmpysPressable(
-      onTap: onTap,
-      haptic: CmpysHaptic.selection,
-      semanticLabel: label,
-      child: AnimatedContainer(
-        duration: motionEnabled
-            ? const Duration(milliseconds: 140)
-            : Duration.zero,
-        curve: AppCurves.easeOut,
-        padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 9),
-        decoration: BoxDecoration(
-          color: active ? tint : Colors.transparent,
-          borderRadius: AppRadii.brFull,
-          border: Border.all(
-            color: active ? color : AppColors.hair2,
-            width: 1.5,
+    return Semantics(
+      selected: active,
+      child: CmpysPressable(
+        onTap: onTap,
+        haptic: CmpysHaptic.selection,
+        semanticLabel: label,
+        child: AnimatedContainer(
+          duration: motionEnabled
+              ? const Duration(milliseconds: 140)
+              : Duration.zero,
+          curve: AppCurves.easeOut,
+          padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 9),
+          decoration: BoxDecoration(
+            color: active ? tint : Colors.transparent,
+            borderRadius: AppRadii.brFull,
+            border: Border.all(
+              color: active ? color : AppColors.hair2,
+              width: 1.5,
+            ),
           ),
-        ),
-        child: Text(
-          label,
-          style: AppTypography.bodyMedium.copyWith(
-            color: active ? color : AppColors.ink2,
-            fontWeight: FontWeight.w500,
-            fontSize: 14,
+          child: Text(
+            label,
+            style: AppTypography.bodyMedium.copyWith(
+              color: active ? color : AppColors.ink2,
+              fontWeight: FontWeight.w500,
+              fontSize: 14,
+            ),
           ),
         ),
       ),

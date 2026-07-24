@@ -6,6 +6,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../../app/design_tokens.dart';
 import '../../../core/ui/app_shell.dart';
+import '../models/plan_models.dart';
 
 class MaterialWebScreen extends StatefulWidget {
   const MaterialWebScreen({super.key, required this.title, required this.url});
@@ -18,24 +19,29 @@ class MaterialWebScreen extends StatefulWidget {
 }
 
 class _MaterialWebScreenState extends State<MaterialWebScreen> {
-  late final WebViewController _controller;
+  WebViewController? _controller;
   int _progress = 0;
 
   @override
   void initState() {
     super.initState();
+    final directUrl = safeDirectMaterialUrl(widget.url);
+    if (directUrl == null) return;
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setNavigationDelegate(NavigationDelegate(
-        onProgress: (p) {
-          if (mounted) setState(() => _progress = p);
-        },
-      ))
-      ..loadRequest(Uri.parse(widget.url));
+      ..setNavigationDelegate(
+        NavigationDelegate(
+          onProgress: (p) {
+            if (mounted) setState(() => _progress = p);
+          },
+        ),
+      )
+      ..loadRequest(Uri.parse(directUrl));
   }
 
   @override
   Widget build(BuildContext context) {
+    final controller = _controller;
     return Scaffold(
       backgroundColor: AppColors.paper,
       appBar: AppBar(
@@ -43,23 +49,29 @@ class _MaterialWebScreenState extends State<MaterialWebScreen> {
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.chevron_left_rounded,
-              size: 26, color: AppColors.ink),
+          icon: const Icon(
+            Icons.chevron_left_rounded,
+            size: 26,
+            color: AppColors.ink,
+          ),
           onPressed: () => Navigator.of(context).maybePop(),
         ),
-        title: Text(widget.title,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: AppTypography.bodyMedium.copyWith(fontSize: 15)),
-        bottom: _progress < 100
+        title: Text(
+          widget.title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: AppTypography.bodyMedium.copyWith(fontSize: 15),
+        ),
+        bottom: controller != null && _progress < 100
             ? PreferredSize(
                 preferredSize: const Size.fromHeight(2),
                 child: LinearProgressIndicator(
                   value: _progress / 100,
                   minHeight: 2,
                   backgroundColor: AppColors.hair,
-                  valueColor:
-                      const AlwaysStoppedAnimation<Color>(AppColors.green),
+                  valueColor: const AlwaysStoppedAnimation<Color>(
+                    AppColors.green,
+                  ),
                 ),
               )
             : null,
@@ -67,7 +79,15 @@ class _MaterialWebScreenState extends State<MaterialWebScreen> {
       // Reserve space for the floating tab nav so it doesn't cover the page.
       body: Padding(
         padding: EdgeInsets.only(bottom: AppShell.bottomNavClearance(context)),
-        child: WebViewWidget(controller: _controller),
+        child: controller == null
+            ? Center(
+                child: Text(
+                  'This resource does not have a verified direct link.',
+                  textAlign: TextAlign.center,
+                  style: AppTypography.bodyMedium,
+                ),
+              )
+            : WebViewWidget(controller: controller),
       ),
     );
   }

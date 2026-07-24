@@ -1,5 +1,9 @@
+import 'dart:async';
+
+import 'package:cmpys/app/design_tokens.dart';
 import 'package:cmpys/core/network/dio_client.dart';
 import 'package:cmpys/core/storage/token_store.dart';
+import 'package:cmpys/features/plan/presentation/book_narration.dart';
 import 'package:cmpys/features/plan/presentation/book_reader_screen.dart';
 import 'package:cmpys/features/plan/presentation/reading_library_screen.dart';
 import 'package:cmpys/features/session/data/content_resources_repository.dart';
@@ -70,6 +74,69 @@ Combine the decision label and return point in one daily review.
     Map<String, dynamic>? cursorJson,
     bool? completed,
   }) async => resource;
+}
+
+class _FakeBookNarrator implements BookNarrator {
+  BookNarrationProgressHandler? progressHandler;
+  BookNarrationErrorHandler? errorHandler;
+  final List<String> spokenTexts = [];
+  final List<double> speeds = [];
+  Completer<void>? _speech;
+  int stopCalls = 0;
+
+  @override
+  void setProgressHandler(BookNarrationProgressHandler? handler) {
+    progressHandler = handler;
+  }
+
+  @override
+  void setErrorHandler(BookNarrationErrorHandler? handler) {
+    errorHandler = handler;
+  }
+
+  @override
+  Future<void> initialize({required double speed}) async {
+    speeds.add(speed);
+  }
+
+  @override
+  Future<void> setSpeed(double speed) async {
+    speeds.add(speed);
+  }
+
+  @override
+  Future<void> speak(String text) {
+    spokenTexts.add(text);
+    _speech = Completer<void>();
+    return _speech!.future;
+  }
+
+  void emitProgress({
+    required int start,
+    required int end,
+    required String word,
+  }) {
+    progressHandler?.call(start, end, word);
+  }
+
+  @override
+  Future<void> stop() async {
+    stopCalls++;
+    if (_speech case final speech? when !speech.isCompleted) {
+      speech.complete();
+    }
+  }
+
+  @override
+  Future<void> dispose() => stop();
+}
+
+bool _containsLiveWordHighlight(InlineSpan span) {
+  if (span.style?.backgroundColor == AppColors.green) return true;
+  if (span is TextSpan) {
+    return span.children?.any(_containsLiveWordHighlight) ?? false;
+  }
+  return false;
 }
 
 void main() {
@@ -158,6 +225,118 @@ void main() {
 
     expect(find.text('CHAPTER 01 OF 03'), findsOneWidget);
     expect(find.text('GLOBAL SHELL NAV'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('listen follows narration with sentence and word highlighting', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final repository = _FakeContentResourcesRepository();
+    final narrator = _FakeBookNarrator();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          contentResourcesRepositoryProvider.overrideWithValue(repository),
+        ],
+        child: MaterialApp(
+          home: BookReaderScreen(
+            resourceId: 'book-1',
+            fallbackTitle: 'Fallback',
+            narrator: narrator,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('book-listen-button')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('book-listen-button')));
+    await tester.pumpAndSettle();
+
+    const firstSentence =
+        'A useful decision starts by separating a reversible choice from an irreversible one.';
+    expect(find.byKey(const Key('book-narration-player')), findsOneWidget);
+    expect(narrator.spokenTexts, [firstSentence]);
+    expect(
+      find.bySemanticsLabel('Now reading: $firstSentence'),
+      findsOneWidget,
+    );
+    expect(find.text('1×'), findsOneWidget);
+
+    narrator.emitProgress(start: 2, end: 8, word: 'useful');
+    await tester.pump();
+    expect(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is RichText && _containsLiveWordHighlight(widget.text),
+      ),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byKey(const Key('book-narration-play-pause')));
+    await tester.pumpAndSettle();
+    expect(narrator.stopCalls, greaterThanOrEqualTo(1));
+    expect(find.byIcon(Icons.play_arrow_rounded), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('book-narration-speed')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('1.5×').last);
+    await tester.pumpAndSettle();
+    expect(narrator.speeds.last, 1.5);
+    expect(find.text('1.5×'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('book-narration-next')));
+    await tester.pumpAndSettle();
+    expect(
+      find.bySemanticsLabel(
+        'Now reading: Speed belongs to the first category; care belongs to the second.',
+      ),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('listening controls fit a narrow phone with larger text', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(320, 568);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final repository = _FakeContentResourcesRepository();
+    final narrator = _FakeBookNarrator();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          contentResourcesRepositoryProvider.overrideWithValue(repository),
+        ],
+        child: MaterialApp(
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(
+              context,
+            ).copyWith(textScaler: const TextScaler.linear(1.35)),
+            child: child!,
+          ),
+          home: BookReaderScreen(
+            resourceId: 'book-1',
+            fallbackTitle: 'Fallback',
+            narrator: narrator,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('book-listen-button')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('book-narration-player')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

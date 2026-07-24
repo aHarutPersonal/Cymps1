@@ -155,6 +155,8 @@ class MaterialDetail(BaseModel):
     thumbnail_url: str | None = None
     license_status: str | None = None
     search_query: str | None = None
+    url_resolution_status: str | None = None
+    url_provider: str | None = None
     # Additional fields from LLM prompt schema
     content_markdown: str | None = None  # In-app lesson content
     duration_minutes: int | None = None  # Estimated duration

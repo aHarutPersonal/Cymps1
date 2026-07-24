@@ -4,6 +4,7 @@ Pydantic schemas for LLM extraction outputs.
 These models match the JSON schemas defined in the prompt templates
 and are used to validate LLM responses.
 """
+
 import datetime
 from enum import Enum
 from typing import Annotated, Literal
@@ -66,7 +67,7 @@ class PlanItemType(str, Enum):
 
 class Evidence(BaseModel):
     """Evidence snippet from source text."""
-    
+
     source_id: str
     chunk_index: int = Field(ge=0)
     source_url: str
@@ -81,7 +82,7 @@ class Evidence(BaseModel):
 
 class ExtractedProfile(BaseModel):
     """Profile extracted from sources."""
-    
+
     display_name: str
     short_description: str | None = None
     birth_date: datetime.date | None = None
@@ -98,7 +99,7 @@ class ExtractedProfile(BaseModel):
 
 class ProfileExtractionResponse(BaseModel):
     """Response from profile extraction."""
-    
+
     profile: ExtractedProfile
 
 
@@ -109,7 +110,7 @@ class ProfileExtractionResponse(BaseModel):
 
 class AchievementCandidate(BaseModel):
     """Achievement candidate extracted from sources."""
-    
+
     title: str = Field(max_length=200)
     description: str = Field(max_length=2000)
     date: datetime.date | None = None
@@ -123,7 +124,7 @@ class AchievementCandidate(BaseModel):
 
 class AchievementsExtractionResponse(BaseModel):
     """Response from achievements extraction."""
-    
+
     candidates: list[AchievementCandidate]
 
 
@@ -134,7 +135,7 @@ class AchievementsExtractionResponse(BaseModel):
 
 class TimelineEvent(BaseModel):
     """Normalized timeline event."""
-    
+
     canonical_title: str = Field(max_length=200)
     canonical_description: str = Field(max_length=2000)
     date: datetime.date | None = None
@@ -148,14 +149,14 @@ class TimelineEvent(BaseModel):
 
 class DedupeNote(BaseModel):
     """Note about merged/deduplicated events."""
-    
+
     merged_titles: list[str]
     reason: str
 
 
 class TimelineNormalizationResponse(BaseModel):
     """Response from timeline normalization."""
-    
+
     timeline: list[TimelineEvent]
     dedupe_notes: list[DedupeNote] = Field(default_factory=list)
 
@@ -167,7 +168,7 @@ class TimelineNormalizationResponse(BaseModel):
 
 class Milestone(BaseModel):
     """Milestone for a specific age."""
-    
+
     title: str = Field(max_length=200)
     description: str = Field(max_length=2000)
     age_at_event: int = Field(ge=0, le=150)
@@ -179,7 +180,7 @@ class Milestone(BaseModel):
 
 class MilestonesByAgeResponse(BaseModel):
     """Response from milestones by age query."""
-    
+
     target_age: int = Field(ge=0, le=150)
     mode: MilestoneMode
     milestones: list[Milestone]
@@ -196,7 +197,9 @@ class BinaryTask(BaseModel):
 
     title: str = Field(max_length=300)
     description: str = Field(min_length=10, max_length=1000)
-    type: str = Field(default="project", max_length=50)  # project|course|habit|practice|reading|reflection
+    type: str = Field(
+        default="project", max_length=50
+    )  # project|course|habit|practice|reading|reflection
     estimated_hours: float = Field(default=1.0, ge=0.1, le=168.0)
     daily_instructions: str | None = Field(default=None, max_length=2000)
     success_metric: str | None = Field(default=None, max_length=300)
@@ -283,8 +286,15 @@ class PlanDetailIdeaOutput(BaseModel):
     category: str | None = None
 
 
+MIN_PLAN_DETAIL_LESSONS = 1
+MAX_PLAN_DETAIL_LESSONS = 5
+MIN_PLAN_DETAIL_MATERIALS = 1
+MAX_PLAN_DETAIL_MATERIALS = 6
+MAX_PLAN_DETAIL_RESOURCES_PER_LESSON = 2
+
+
 class PlanDetailMaterialOutput(BaseModel):
-    title: str
+    title: str = Field(min_length=1, max_length=300)
     type: Literal["book", "video", "in_app_lesson", "article", "course", "tool"]
     author_or_creator: str | None = None
     search_query: str
@@ -299,30 +309,46 @@ class PlanDetailMaterialOutput(BaseModel):
 class PlanDetailStepOutlineOutput(BaseModel):
     """Small curriculum scaffold produced before long lessons are written."""
 
-    id: str = Field(pattern=r"^step_[1-3]$")
+    id: str = Field(pattern=r"^step_[1-9][0-9]*$")
     title: str = Field(max_length=60)
     description: str
-    resources: list[str] = Field(min_length=1, max_length=2)
+    resources: list[str] = Field(
+        min_length=1,
+        max_length=MAX_PLAN_DETAIL_RESOURCES_PER_LESSON,
+    )
 
 
 class PlanItemDetailsOutlineOutput(BaseModel):
     """Shared lesson sequence and materials for parallel lesson generation."""
 
-    steps: list[PlanDetailStepOutlineOutput] = Field(min_length=3, max_length=3)
-    materials: list[PlanDetailMaterialOutput] = Field(min_length=3, max_length=3)
+    steps: list[PlanDetailStepOutlineOutput] = Field(
+        min_length=MIN_PLAN_DETAIL_LESSONS,
+        max_length=MAX_PLAN_DETAIL_LESSONS,
+    )
+    materials: list[PlanDetailMaterialOutput] = Field(
+        min_length=MIN_PLAN_DETAIL_MATERIALS,
+        max_length=MAX_PLAN_DETAIL_MATERIALS,
+    )
     definition_of_done: str
     mental_model: str
 
     @model_validator(mode="after")
     def require_consistent_outline(self) -> "PlanItemDetailsOutlineOutput":
         issues: list[str] = []
-        expected_ids = ["step_1", "step_2", "step_3"]
+        expected_ids = [f"step_{index}" for index in range(1, len(self.steps) + 1)]
         if [step.id for step in self.steps] != expected_ids:
             issues.append(
-                "outline step ids must be step_1, step_2, and step_3 in order"
+                "outline step ids must be contiguous and ordered from step_1 "
+                f"through step_{len(self.steps)}"
             )
 
+        folded_titles = [
+            material.title.strip().casefold() for material in self.materials
+        ]
+        if len(folded_titles) != len(set(folded_titles)):
+            issues.append("outline material titles must be unique")
         material_titles = {material.title for material in self.materials}
+        referenced_titles: set[str] = set()
         for step in self.steps:
             invalid_resources = [
                 title for title in step.resources if title not in material_titles
@@ -332,15 +358,19 @@ class PlanItemDetailsOutlineOutput(BaseModel):
                     f"{step.id} resources must exactly match outline material titles: "
                     f"{invalid_resources}"
                 )
-
-        kinds = [material.type for material in self.materials]
-        if kinds.count("book") != 1 or kinds.count("video") != 1:
-            issues.append("outline materials must contain exactly one book and one video")
-        if sum(kind in {"article", "course", "tool"} for kind in kinds) != 1:
+            referenced_titles.update(step.resources)
+        unused_titles = material_titles - referenced_titles
+        if unused_titles:
             issues.append(
-                "outline third material must be an article, course, or tool"
+                "every outline material must support at least one lesson; unused: "
+                f"{sorted(unused_titles)}"
             )
         for material in self.materials:
+            if material.type == "in_app_lesson":
+                issues.append(
+                    "outline materials cannot use in_app_lesson; choose a real "
+                    "external resource for direct-link resolution"
+                )
             if material.content_markdown is not None:
                 issues.append(
                     f"outline material '{material.title}' content_markdown must be null"
@@ -356,14 +386,17 @@ class PlanItemDetailsOutlineOutput(BaseModel):
 
 
 class PlanDetailStepOutput(BaseModel):
-    id: str = Field(pattern=r"^step_[1-3]$")
+    id: str = Field(pattern=r"^step_[1-9][0-9]*$")
     title: str = Field(max_length=60)
     description: str
     estimate_minutes: int = Field(ge=40, le=180)
     reading_minutes: int = Field(ge=8, le=30)
     practice_minutes: int = Field(ge=20, le=172)
     lesson_content: str
-    resources: list[str] = Field(min_length=1, max_length=2)
+    resources: list[str] = Field(
+        min_length=1,
+        max_length=MAX_PLAN_DETAIL_RESOURCES_PER_LESSON,
+    )
     substeps: list[str] = Field(min_length=1)
 
 
@@ -410,10 +443,7 @@ def plan_detail_step_quality_issues(
     for index, substep in enumerate(step.substeps, start=1):
         words = len(substep.split())
         if words < 12:
-            issues.append(
-                f"{step.id} substep {index} has {words} words; "
-                "minimum is 12"
-            )
+            issues.append(f"{step.id} substep {index} has {words} words; minimum is 12")
     return issues
 
 
@@ -421,19 +451,9 @@ def plan_detail_material_quality_issues(
     materials: list[PlanDetailMaterialOutput],
 ) -> list[str]:
     issues: list[str] = []
-    kinds = [material.type for material in materials]
-    if kinds.count("book") != 1 or kinds.count("video") != 1:
-        issues.append("materials must contain exactly one book and one video")
-    if (
-        sum(
-            kind in {"article", "course", "tool", "in_app_lesson"}
-            for kind in kinds
-        )
-        != 1
-    ):
-        issues.append(
-            "the third material must be an article, course, tool, or in_app_lesson"
-        )
+    folded_titles = [material.title.strip().casefold() for material in materials]
+    if len(folded_titles) != len(set(folded_titles)):
+        issues.append("material titles must be unique")
 
     for material in materials:
         content = material.content_markdown
@@ -525,9 +545,7 @@ class PlanDetailLessonSectionsOutput(BaseModel):
             "explaining what to use from each."
         ),
     )
-    substeps: list[
-        Annotated[str, Field(min_length=1)]
-    ] = Field(
+    substeps: list[Annotated[str, Field(min_length=1)]] = Field(
         min_length=1,
         description=(
             "One string per necessary executable action; each targets 20-60 "
@@ -625,9 +643,7 @@ class PlanDetailSubstepsRepairOutput(BaseModel):
         for index, substep in enumerate(self.substeps, start=1):
             words = len(substep.split())
             if words < 12:
-                issues.append(
-                    f"substep {index} has {words} words; minimum is 12"
-                )
+                issues.append(f"substep {index} has {words} words; minimum is 12")
         if issues:
             raise ValueError("; ".join(issues))
         return self
@@ -636,8 +652,14 @@ class PlanDetailSubstepsRepairOutput(BaseModel):
 class PlanItemDetailsDraftOutput(BaseModel):
     """Structurally valid draft that can be repaired without discarding it."""
 
-    steps: list[PlanDetailStepOutput] = Field(min_length=3, max_length=3)
-    materials: list[PlanDetailMaterialOutput] = Field(min_length=3, max_length=3)
+    steps: list[PlanDetailStepOutput] = Field(
+        min_length=MIN_PLAN_DETAIL_LESSONS,
+        max_length=MAX_PLAN_DETAIL_LESSONS,
+    )
+    materials: list[PlanDetailMaterialOutput] = Field(
+        min_length=MIN_PLAN_DETAIL_MATERIALS,
+        max_length=MAX_PLAN_DETAIL_MATERIALS,
+    )
     definition_of_done: str
     mental_model: str
 
@@ -650,14 +672,26 @@ class PlanItemDetailsOutput(PlanItemDetailsDraftOutput):
         """Protect reader depth and resource integrity before persistence."""
         material_titles = {material.title for material in self.materials}
         issues: list[str] = []
-        if len({step.id for step in self.steps}) != 3:
-            issues.append("step ids must be unique")
+        expected_ids = [f"step_{index}" for index in range(1, len(self.steps) + 1)]
+        if [step.id for step in self.steps] != expected_ids:
+            issues.append(
+                "step ids must be contiguous and ordered from step_1 "
+                f"through step_{len(self.steps)}"
+            )
+        referenced_titles: set[str] = set()
         for step in self.steps:
+            referenced_titles.update(step.resources)
             issues.extend(
                 plan_detail_step_quality_issues(
                     step,
                     material_titles=material_titles,
                 )
+            )
+        unused_titles = material_titles - referenced_titles
+        if unused_titles:
+            issues.append(
+                "every material must support at least one lesson; unused: "
+                f"{sorted(unused_titles)}"
             )
         issues.extend(plan_detail_material_quality_issues(self.materials))
         if issues:
@@ -672,15 +706,17 @@ class PlanItemDetailsOutput(PlanItemDetailsDraftOutput):
 
 class EraContext(str, Enum):
     """Era classification for worldview adaptation."""
-    ANCIENT = "ancient"           # Before 500 CE
-    MEDIEVAL = "medieval"         # 500-1500 CE
-    EARLY_MODERN = "early_modern" # 1500-1800
-    MODERN = "modern"             # 1800-1980
-    CONTEMPORARY = "contemporary" # 1980-present
+
+    ANCIENT = "ancient"  # Before 500 CE
+    MEDIEVAL = "medieval"  # 500-1500 CE
+    EARLY_MODERN = "early_modern"  # 1500-1800
+    MODERN = "modern"  # 1800-1980
+    CONTEMPORARY = "contemporary"  # 1980-present
 
 
 class WorldviewAdapter(BaseModel):
     """Maps modern concepts to idol-era equivalents."""
+
     startup: str = Field(default="venture")
     customers: str = Field(default="those you serve")
     market: str = Field(default="terrain")
@@ -695,7 +731,7 @@ class WorldviewAdapter(BaseModel):
 
 class Persona(BaseModel):
     """Chat persona for idol simulation."""
-    
+
     voice_style: str = Field(max_length=500)
     principles: list[str] = Field(default_factory=list)
     dos: list[str] = Field(default_factory=list)
@@ -707,27 +743,26 @@ class Persona(BaseModel):
     disclaimer: str = Field(
         default="AI simulation based on public sources; may be inaccurate."
     )
-    
+
     # Era-aware fields for historical authenticity
     era_context: EraContext = Field(default=EraContext.CONTEMPORARY)
     lexicon_allow: list[str] = Field(
-        default_factory=list,
-        description="Era-appropriate terms/phrases to use"
+        default_factory=list, description="Era-appropriate terms/phrases to use"
     )
     lexicon_ban: list[str] = Field(
         default_factory=list,
-        description="Modern jargon to avoid for historical figures"
+        description="Modern jargon to avoid for historical figures",
     )
     worldview_adapter: WorldviewAdapter = Field(default_factory=WorldviewAdapter)
     default_frameworks: list[str] = Field(
         default_factory=list,
-        description="Idol-native problem-solving frameworks (e.g., military strategy, scientific method)"
+        description="Idol-native problem-solving frameworks (e.g., military strategy, scientific method)",
     )
 
 
 class PersonaPackResponse(BaseModel):
     """Response from persona pack generation."""
-    
+
     persona: Persona
 
 
@@ -738,7 +773,7 @@ class PersonaPackResponse(BaseModel):
 
 class LLMDiscoveryCandidate(BaseModel):
     """A person candidate from LLM discovery."""
-    
+
     name: str = Field(max_length=200)
     description: str | None = Field(default=None, max_length=500)
     birth_year: int | None = None
@@ -749,7 +784,7 @@ class LLMDiscoveryCandidate(BaseModel):
 
 class IdolDiscoverResponse(BaseModel):
     """Response from idol discovery LLM call."""
-    
+
     candidates: list[LLMDiscoveryCandidate] = Field(default_factory=list)
 
 
@@ -760,21 +795,23 @@ class IdolDiscoverResponse(BaseModel):
 
 class InterviewQuestionResponse(BaseModel):
     """LLM output for a single interview turn."""
-    
-    question: str = Field(max_length=2000, description="The idol's in-character question")
+
+    question: str = Field(
+        max_length=2000, description="The idol's in-character question"
+    )
     emotional_reaction: str = Field(
         max_length=1000,
-        description="The idol's emotional reaction to the user's previous answer"
+        description="The idol's emotional reaction to the user's previous answer",
     )
     should_continue: bool = Field(
         default=True,
-        description="False when the idol signals the interview is complete"
+        description="False when the idol signals the interview is complete",
     )
 
 
 class CitedAchievement(BaseModel):
     """A specific idol achievement cited in the comparison."""
-    
+
     achievement: str = Field(max_length=500)
     age_at_achievement: int | None = Field(None, ge=0, le=150)
     source_hint: str | None = Field(None, max_length=500)
@@ -782,11 +819,11 @@ class CitedAchievement(BaseModel):
 
 class ComparisonResponse(BaseModel):
     """LLM output for the brutal reality comparison."""
-    
+
     comparison_text: str = Field(description="Full comparison prose in idol's voice")
     cited_achievements: list[CitedAchievement] = Field(
         default_factory=list,
-        description="Structured list of idol achievements referenced"
+        description="Structured list of idol achievements referenced",
     )
 
 
@@ -837,25 +874,29 @@ class AIComparisonOutput(BaseModel):
 
 class CitedResource(BaseModel):
     """A real resource recommended in the blueprint."""
-    
+
     title: str = Field(max_length=300)
     url: str | None = Field(None, max_length=2000)
-    resource_type: str = Field(default="book", max_length=50)  # book, course, article, platform
+    resource_type: str = Field(
+        default="book", max_length=50
+    )  # book, course, article, platform
 
 
 class BlueprintResponse(BaseModel):
     """LLM output for the Q1–Q4 quarterly blueprint."""
-    
-    blueprint_markdown: str = Field(description="Full Q1–Q4 blueprint in Markdown format")
+
+    blueprint_markdown: str = Field(
+        description="Full Q1–Q4 blueprint in Markdown format"
+    )
     resources_cited: list[CitedResource] = Field(
         default_factory=list,
-        description="Structured list of resources recommended across all quarters"
+        description="Structured list of resources recommended across all quarters",
     )
 
 
 class IdolSuggestion(BaseModel):
     """A single idol suggestion for the session-based flow."""
-    
+
     name: str = Field(max_length=200)
     era: str = Field(max_length=100, description="Life dates or era label")
     relevance_summary: str = Field(max_length=500)
@@ -866,7 +907,7 @@ class IdolSuggestion(BaseModel):
 
 class IdolSuggestionsResponse(BaseModel):
     """Response from the session-based idol suggestion flow (exactly 3)."""
-    
+
     suggestions: list[IdolSuggestion] = Field(
         min_length=1,
         max_length=3,

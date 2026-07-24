@@ -148,13 +148,17 @@ THINKING_NARRATIVES = {
     ],
     "first_lesson_ready": [
         "Lesson one is ready to read while the remaining lessons continue.",
-        "Writing lessons two and three concurrently in the background.",
+        "Writing the remaining lessons concurrently in the background.",
     ],
+    "lessons_ready": [
+        "More lessons are ready; finishing the remaining curriculum.",
+    ],
+    # Legacy checkpoint names remain readable for in-flight version-2 jobs.
     "2_lessons_ready": [
         "Two lessons are ready; finishing the last focused lesson.",
     ],
     "3_lessons_ready": [
-        "All three lessons are ready; checking their material references.",
+        "All lessons are ready; checking their material references.",
     ],
     "repairing_lessons": [
         "Strengthening the lessons that missed the reader-quality checks.",
@@ -259,6 +263,7 @@ def get_thinking_stream(
         "generating_lessons": (45, 75),
         "outline_ready": (60, 68),
         "first_lesson_ready": (68, 74),
+        "lessons_ready": (72, 82),
         "2_lessons_ready": (74, 80),
         "3_lessons_ready": (80, 85),
         "repairing_lessons": (60, 75),

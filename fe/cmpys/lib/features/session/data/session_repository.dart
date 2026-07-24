@@ -257,12 +257,14 @@ class SessionRepository {
     String sessionId,
     String content, {
     bool isKickoff = false,
+    String? questionId,
   }) async* {
     debugPrint('💬 Sending interview message to session $sessionId');
 
     final response = await _streamPost('/sessions/$sessionId/interview', {
       'content': content,
       'is_kickoff': isKickoff,
+      if (questionId != null) 'question_id': questionId,
     });
 
     final stream = response.data.stream as Stream<List<int>>;

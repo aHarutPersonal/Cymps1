@@ -35,4 +35,4 @@ def test_plan_context_keeps_profile_persona_milestones_and_gaps():
     assert context["idol_persona"]["principles"] == ["imagination and rigor"]
     assert context["idol_milestones"][0]["title"] == "Published Notes"
     assert context["gaps"] == ["learning"]
-    assert context["readiness_by_gap"] == {"learning": "beginner"}
+    assert context["readiness_by_gap"] == {"learning": "unassessed"}

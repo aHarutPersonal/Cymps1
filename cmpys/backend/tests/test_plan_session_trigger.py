@@ -17,12 +17,25 @@ from app.models.item_detail_job import PlanItemDetailJob
 
 
 class _FakeMessage:
-    def __init__(self, role_value: str, content: str):
+    def __init__(
+        self,
+        role_value: str,
+        content: str,
+        *,
+        message_id: str = "",
+        answer_key: str | None = None,
+        reply_to: str | None = None,
+    ):
         class _Role:
             def __init__(self, value):
                 self.value = value
         self.role = _Role(role_value)
         self.content = content
+        self.id = message_id
+        self.response_ui_json = (
+            {"answer_key": answer_key} if answer_key else None
+        )
+        self.reply_to_message_id = reply_to
 
 
 class _FakeResult:
@@ -38,8 +51,10 @@ class _FakeDB:
 
     def __init__(self, results):
         self._results = list(results)
+        self.statements = []
 
-    async def execute(self, *args, **kwargs):
+    async def execute(self, statement, *args, **kwargs):
+        self.statements.append(statement)
         return _FakeResult(self._results.pop(0))
 
 
@@ -140,11 +155,34 @@ class TestLoadSessionContext:
             interview_thread_id="thread-1",
             comparison_output="By 28 I ran a partnership; you have read three books.",
             blueprint_output="## Weeks 1-3: Foundation\nLearn balance sheets.",
+            user_goal="Build a durable investing practice",
         )
         thread = SimpleNamespace(
             messages=[
-                _FakeMessage("assistant", "What have you built?"),
-                _FakeMessage("user", "A small trading model."),
+                _FakeMessage(
+                    "assistant",
+                    "What have you built?",
+                    message_id="q1",
+                    answer_key="achievement_inventory",
+                ),
+                _FakeMessage(
+                    "user",
+                    "A small trading model.",
+                    message_id="a1",
+                    reply_to="q1",
+                ),
+                _FakeMessage(
+                    "assistant",
+                    "What will you produce in twelve weeks?",
+                    message_id="q2",
+                    answer_key="target_outcome",
+                ),
+                _FakeMessage(
+                    "user",
+                    "Publish an audited investing memo.",
+                    message_id="a2",
+                    reply_to="q2",
+                ),
             ]
         )
         db = _FakeDB([session, thread])  # session lookup, then thread lookup
@@ -154,22 +192,44 @@ class TestLoadSessionContext:
         assert ctx["comparison_summary"] == session.comparison_output
         assert ctx["blueprint_markdown"] == session.blueprint_output
         assert "A small trading model." in ctx["interview_transcript_json"]
+        assert ctx["north_star_goal"] == "Build a durable investing practice"
+        assert ctx["execution_goal"] == "Publish an audited investing memo."
+        assert ctx["learner_baseline"]["achievement_inventory"]["answer"] == (
+            "A small trading model."
+        )
         # User turn must be wrapped as untrusted DATA.
         assert _UNTRUSTED_OPEN in ctx["interview_transcript_json"]
 
     @pytest.mark.asyncio
-    async def test_session_id_resolves_without_user_or_idol(self):
-        # Exact linkage: a session_id alone is enough (no user/idol needed).
+    async def test_session_id_without_owner_scope_is_never_loaded(self):
+        db = _FakeDB([])
+
+        assert await _load_session_context(db, session_id="s1") == {}
+        assert db.statements == []
+
+    @pytest.mark.asyncio
+    async def test_exact_session_query_is_scoped_to_owner_and_mentor(self):
         session = SimpleNamespace(
             interview_thread_id=None,
-            comparison_output="by-id verdict",
+            comparison_output="owned verdict",
             blueprint_output=None,
+            user_goal="Build wealth",
         )
         db = _FakeDB([session])
 
-        ctx = await _load_session_context(db, session_id="s1")
+        ctx = await _load_session_context(
+            db,
+            user_id="u1",
+            idol_id="i1",
+            session_id="s1",
+        )
 
-        assert ctx == {"comparison_summary": "by-id verdict"}
+        sql = str(db.statements[0])
+        assert "intake_sessions.id" in sql
+        assert "intake_sessions.user_id" in sql
+        assert "intake_sessions.idol_id" in sql
+        assert ctx["comparison_summary"] == "owned verdict"
+        assert ctx["north_star_goal"] == "Build wealth"
 
     @pytest.mark.asyncio
     async def test_handles_session_without_interview_thread(self):

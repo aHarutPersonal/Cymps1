@@ -383,6 +383,7 @@ class PlanMaterialDetail {
     this.contentMarkdown,
     this.contentResourceId,
     this.canonicalKey,
+    this.urlResolutionStatus,
     this.ideas = const [],
   });
 
@@ -398,11 +399,19 @@ class PlanMaterialDetail {
   /// instead of inline in [contentMarkdown].
   final String? contentResourceId;
   final String? canonicalKey;
+  final String? urlResolutionStatus;
   final List<BookIdea> ideas;
+
+  /// A backend-provided exact destination after rejecting search pages and
+  /// unsafe schemes. Kept defensive here so legacy rows cannot reopen them.
+  String? get directUrl => safeDirectMaterialUrl(url);
+
+  bool get exactLinkUnavailable =>
+      urlResolutionStatus == 'unresolved' && directUrl == null;
 
   /// YouTube video id when [url] points at YouTube, else null.
   String? get youtubeVideoId {
-    final u = url;
+    final u = directUrl;
     if (u == null || u.isEmpty) return null;
     final uri = Uri.tryParse(u);
     if (uri == null) return null;
@@ -431,7 +440,7 @@ class PlanMaterialDetail {
   /// lessons. Legacy rows may still carry a metadata-only resource id, so a
   /// real external link must win unless genuine inline content exists.
   bool get prefersExternalLink =>
-      (url != null && url!.trim().isNotEmpty) &&
+      directUrl != null &&
       const {'course', 'tool', 'template'}.contains(type) &&
       !hasInlineContent;
 
@@ -451,6 +460,9 @@ class PlanMaterialDetail {
         contentMarkdown: j['content_markdown'] as String?,
         contentResourceId: j['content_resource_id']?.toString(),
         canonicalKey: (j['canonical_key'] ?? j['canonicalKey'])?.toString(),
+        urlResolutionStatus:
+            (j['url_resolution_status'] ?? j['urlResolutionStatus'])
+                ?.toString(),
         ideas:
             (j['ideas'] as List?)
                 ?.whereType<Map<String, dynamic>>()
@@ -458,6 +470,53 @@ class PlanMaterialDetail {
                 .toList() ??
             const [],
       );
+}
+
+String? safeDirectMaterialUrl(String? value) {
+  final raw = value?.trim();
+  if (raw == null || raw.isEmpty) return null;
+  final uri = Uri.tryParse(raw);
+  if (uri == null ||
+      !const {'http', 'https'}.contains(uri.scheme.toLowerCase()) ||
+      uri.host.isEmpty ||
+      uri.userInfo.isNotEmpty) {
+    return null;
+  }
+  final host = uri.host.toLowerCase();
+  final path = uri.path.replaceFirst(RegExp(r'/+$'), '').toLowerCase();
+  final queryKeys = uri.queryParameters.keys
+      .map((key) => key.toLowerCase())
+      .toSet();
+  if (host == 'localhost' ||
+      host == '::1' ||
+      host == '0.0.0.0' ||
+      host.startsWith('127.') ||
+      host.startsWith('10.') ||
+      host.startsWith('192.168.') ||
+      host.startsWith('169.254.') ||
+      host.endsWith('.localhost') ||
+      host.endsWith('.local') ||
+      (host.contains('google.') && path == '/search') ||
+      (host.endsWith('bing.com') && path == '/search') ||
+      host.endsWith('search.yahoo.com') ||
+      (host.endsWith('duckduckgo.com') && queryKeys.contains('q')) ||
+      ((host.startsWith('amazon.') || host.contains('.amazon.')) &&
+          path == '/s') ||
+      (host.endsWith('coursera.org') && path == '/search') ||
+      (host.endsWith('youtube.com') && path == '/results')) {
+    return null;
+  }
+  if (const {'/search', '/find', '/results'}.contains(path) &&
+      queryKeys.intersection(const {
+        'q',
+        'query',
+        'keyword',
+        'search',
+        'search_query',
+      }).isNotEmpty) {
+    return null;
+  }
+  return raw;
 }
 
 /// Shared content resource (GET /content-resources/{id}) — holds the full

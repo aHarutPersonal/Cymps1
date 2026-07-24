@@ -13,12 +13,12 @@ class _SelectionRetryRepository extends Fake implements SessionRepository {
   SelectIdolRequest? selectedRequest;
 
   Session _session(SessionPhase phase) => Session(
-        id: 'session-1',
-        phase: phase,
-        userAge: 28,
-        userFinancialStatus: 'employed',
-        userInterests: const ['Technology'],
-      );
+    id: 'session-1',
+    phase: phase,
+    userAge: 28,
+    userFinancialStatus: 'employed',
+    userInterests: const ['Technology'],
+  );
 
   @override
   Future<Session> getSession(String sessionId) async {
@@ -43,6 +43,7 @@ class _SelectionRetryRepository extends Fake implements SessionRepository {
     String sessionId,
     String content, {
     bool isKickoff = false,
+    String? questionId,
   }) async* {
     interviewSends++;
     yield {'type': 'chunk', 'content': 'What will you build first?'};

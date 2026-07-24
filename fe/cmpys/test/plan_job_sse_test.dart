@@ -206,8 +206,18 @@ void main() {
       'url': 'https://www.coursera.org/search?query=business+analytics',
       'content_resource_id': 'legacy-metadata-only-resource',
     });
-    expect(externalCourse.prefersExternalLink, isTrue);
+    expect(externalCourse.prefersExternalLink, isFalse);
+    expect(externalCourse.directUrl, isNull);
     expect(externalCourse.hasInAppContent, isFalse);
+
+    final exactCourse = PlanMaterialDetail.fromJson({
+      'title': 'Introduction to Business Analytics',
+      'type': 'course',
+      'url': 'https://www.coursera.org/learn/wharton-business-analytics',
+      'url_resolution_status': 'resolved',
+    });
+    expect(exactCourse.prefersExternalLink, isTrue);
+    expect(exactCourse.directUrl, contains('/learn/'));
 
     final deferredBook = PlanMaterialDetail.fromJson({
       'title': 'The Effective Executive',
@@ -307,6 +317,7 @@ class _PlanJobRepository implements AgenticSessionRepository {
     String sessionId,
     String content, {
     bool isKickoff = false,
+    String? questionId,
   }) {
     throw UnimplementedError();
   }

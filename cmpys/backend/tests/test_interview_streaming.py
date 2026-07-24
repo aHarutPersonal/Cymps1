@@ -265,10 +265,18 @@ async def test_interview_returns_sse_before_fetching_missing_idol_facts(monkeypa
     async def fake_get_session(session_id, user_id, db):
         return session
 
+    async def fake_lock_interview_session(*_args, **_kwargs):
+        return session
+
     async def forbidden_grounding(*args, **kwargs):
         raise AssertionError("missing idol facts should not block SSE start")
 
     monkeypatch.setattr(sessions_api, "_get_session", fake_get_session)
+    monkeypatch.setattr(
+        sessions_api,
+        "_lock_interview_session_state",
+        fake_lock_interview_session,
+    )
     monkeypatch.setattr(sessions_api, "generate_with_grounding", forbidden_grounding)
 
     response = await sessions_api.interview(

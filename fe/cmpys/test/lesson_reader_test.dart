@@ -78,6 +78,51 @@ void main() {
     expect(detailed.isStepUnlocked(2), isFalse);
   });
 
+  test('lesson progression supports one and five lesson missions', () {
+    const oneLesson = PlanItemDetailed(
+      item: _item,
+      detailsStatus: 'available',
+      steps: [PlanStepDetail(id: 'step_1', title: 'Build the artifact')],
+      totalSteps: 1,
+    );
+    expect(oneLesson.activeStepIndex, 0);
+    expect(oneLesson.isStepUnlocked(0), isTrue);
+
+    const fiveLessons = PlanItemDetailed(
+      item: _item,
+      detailsStatus: 'available',
+      steps: [
+        PlanStepDetail(id: 'step_1', title: 'One'),
+        PlanStepDetail(id: 'step_2', title: 'Two'),
+        PlanStepDetail(id: 'step_3', title: 'Three'),
+        PlanStepDetail(id: 'step_4', title: 'Four'),
+        PlanStepDetail(id: 'step_5', title: 'Five'),
+      ],
+      completedStepIds: {'step_1', 'step_2'},
+      completedSteps: 2,
+      totalSteps: 5,
+    );
+    expect(fiveLessons.activeStepIndex, 2);
+    expect(fiveLessons.isStepUnlocked(2), isTrue);
+    expect(fiveLessons.isStepUnlocked(3), isFalse);
+    expect(fiveLessons.isStepUnlocked(4), isFalse);
+  });
+
+  test('lesson references never fall back to unrelated materials', () {
+    const materials = [
+      PlanMaterialDetail(title: 'Deep Work: Rules for Focused Success'),
+      PlanMaterialDetail(title: 'Unrelated Resource'),
+    ];
+
+    expect(
+      matchLessonMaterials(const [
+        'Deep Work — Rules for Focused Success',
+      ], materials).map((material) => material.title),
+      ['Deep Work: Rules for Focused Success'],
+    );
+    expect(matchLessonMaterials(const ['Missing title'], materials), isEmpty);
+  });
+
   test('lesson markdown is split into reader-sized sections', () {
     final sections = splitLessonSections('''
 # Define the purpose

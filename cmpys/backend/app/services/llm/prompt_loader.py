@@ -178,6 +178,11 @@ PROMPT_PLACEHOLDERS = {
         "idol_domain",
         "idol_evidence_json",
         "session_context",
+        "minimum_lessons",
+        "maximum_lessons",
+        "minimum_materials",
+        "maximum_materials",
+        "maximum_resources_per_lesson",
     ],
 
     "plan_item_detail_lesson.txt": [
@@ -206,6 +211,7 @@ PROMPT_PLACEHOLDERS = {
         "idol_milestones_json",
         "gaps_json",
         "readiness_by_gap_json",
+        "learner_baseline_json",
         "interview_transcript_json",
         "comparison_summary",
         "blueprint_markdown",
@@ -283,6 +289,10 @@ PROMPT_PLACEHOLDERS = {
         "max_turns",
         "idol_facts_json",
         "user_message",
+        "required_answer_key",
+        "required_answer_instruction",
+        "answered_keys_json",
+        "missing_keys_json",
     ],
     
     "comparison_generate.txt": [

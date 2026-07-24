@@ -136,6 +136,7 @@ async def test_initial_plan_generates_backbone_then_only_week_one(monkeypatch) -
         hours_per_week=5,
         duration_weeks=12,
         idol_profile={"domains": ["computing"]},
+        learner_baseline_json='{"weekly_capacity_hours":5,"achievement_inventory":{"answer":"Built a compiler"}}',
         interview_transcript_json="RAW INTERVIEW TRANSCRIPT",
         comparison_summary="DISTILLED COMPARISON",
         blueprint_markdown="DISTILLED BLUEPRINT",
@@ -157,6 +158,9 @@ async def test_initial_plan_generates_backbone_then_only_week_one(monkeypatch) -
     )
     assert len(roadmap.backbone_weeks) == 12
     assert "RAW INTERVIEW TRANSCRIPT" in rendered_prompts[PlanBackboneResponse]
+    assert "Built a compiler" in rendered_prompts[PlanBackboneResponse]
+    assert "<<<USER_INPUT" in rendered_prompts[PlanBackboneResponse]
+    assert rendered_prompts[PlanBackboneResponse].count("USER_INPUT>>>") >= 1
     assert "RAW INTERVIEW TRANSCRIPT" not in rendered_prompts[PlanGenerationResponse]
     assert "DISTILLED COMPARISON" in rendered_prompts[PlanGenerationResponse]
     assert "DISTILLED BLUEPRINT" in rendered_prompts[PlanGenerationResponse]
