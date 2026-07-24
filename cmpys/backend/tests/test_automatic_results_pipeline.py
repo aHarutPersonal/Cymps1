@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy.dialects import postgresql
 
 from app.api.v1 import sessions as sessions_api
 from app.models.chat import ChatMessage, ChatThread, MessageRole
@@ -53,6 +54,17 @@ def _plan_ready_messages(weekly_hours: int = 8) -> list[ChatMessage]:
             ]
         )
     return messages
+
+
+def _use_session_lock(monkeypatch, session: IntakeSession) -> None:
+    async def lock_session(*args, **kwargs):
+        return session
+
+    monkeypatch.setattr(
+        sessions_api,
+        "_lock_interview_session_state",
+        lock_session,
+    )
 
 
 @pytest.mark.asyncio
@@ -143,6 +155,25 @@ async def test_dispatches_staged_plan_job_only_once(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_session_lock_targets_only_intake_row_with_eager_outer_joins() -> None:
+    session = IntakeSession(id="session-1", user_id="user-1")
+    db = AsyncMock()
+    db.execute.return_value = _Result(session)
+
+    locked = await sessions_api._lock_interview_session_state(
+        db,
+        session_id="session-1",
+        user_id="user-1",
+    )
+
+    statement = db.execute.await_args.args[0]
+    sql = str(statement.compile(dialect=postgresql.dialect()))
+    assert locked is session
+    assert "LEFT OUTER JOIN" in sql
+    assert "FOR UPDATE OF intake_sessions" in sql
+
+
+@pytest.mark.asyncio
 async def test_completed_results_replay_without_repeating_llm_calls(monkeypatch) -> None:
     session = IntakeSession(
         id="session-1",
@@ -184,6 +215,7 @@ async def test_completed_results_replay_without_repeating_llm_calls(monkeypatch)
         return None
 
     monkeypatch.setattr(sessions_api, "_get_session", fake_get_session)
+    _use_session_lock(monkeypatch, session)
     monkeypatch.setattr(sessions_api, "comparison_stream", forbidden_stream)
     monkeypatch.setattr(sessions_api, "blueprint_stream", forbidden_stream)
     monkeypatch.setattr(
@@ -228,6 +260,19 @@ async def test_claim_waiter_refreshes_session_before_replaying_completed_artifac
         interview_thread_id="thread-1",
     )
     session.idol = Idol(id="idol-1", name="Ada Lovelace", domain="technology")
+    refreshed_session = IntakeSession(
+        id="session-1",
+        user_id="user-1",
+        idol_id="idol-1",
+        phase=SessionPhase.COMPLETED,
+        user_age=28,
+        user_goal="build a product",
+        interview_thread_id="thread-1",
+        comparison_output="Winner comparison",
+        blueprint_output="Winner blueprint",
+        comparison_scores_json={"dimensions": []},
+    )
+    refreshed_session.idol = session.idol
     thread = ChatThread(id="thread-1", user_id="user-1", idol_id="idol-1")
     thread.messages = []
     plan_job = SimpleNamespace(
@@ -242,18 +287,10 @@ async def test_claim_waiter_refreshes_session_before_replaying_completed_artifac
     async def fake_get_session(*args, **kwargs):
         return session
 
-    async def refresh_after_previous_owner_committed(
-        instance,
-        *,
-        with_for_update=False,
-        **kwargs,
-    ):
-        assert instance is session
-        assert with_for_update is True
-        session.phase = SessionPhase.COMPLETED
-        session.comparison_output = "Winner comparison"
-        session.blueprint_output = "Winner blueprint"
-        session.comparison_scores_json = {"dimensions": []}
+    async def refresh_after_previous_owner_committed(*args, **kwargs):
+        assert kwargs["session_id"] == "session-1"
+        assert kwargs["user_id"] == "user-1"
+        return refreshed_session
 
     async def forbidden_stream(*args, **kwargs):
         raise AssertionError("refreshed artifacts must be replayed, not regenerated")
@@ -265,8 +302,12 @@ async def test_claim_waiter_refreshes_session_before_replaying_completed_artifac
     async def skip_claim_release(*args, **kwargs):
         return None
 
-    db.refresh.side_effect = refresh_after_previous_owner_committed
     monkeypatch.setattr(sessions_api, "_get_session", fake_get_session)
+    monkeypatch.setattr(
+        sessions_api,
+        "_lock_interview_session_state",
+        refresh_after_previous_owner_committed,
+    )
     monkeypatch.setattr(sessions_api, "comparison_stream", forbidden_stream)
     monkeypatch.setattr(sessions_api, "blueprint_stream", forbidden_stream)
     monkeypatch.setattr(
@@ -290,7 +331,6 @@ async def test_claim_waiter_refreshes_session_before_replaying_completed_artifac
     assert "Winner comparison" in body
     assert "Winner blueprint" in body
     assert '"type": "done"' in body
-    db.refresh.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -341,6 +381,7 @@ async def test_comparison_cas_does_not_overwrite_a_completed_artifact(
         return None
 
     monkeypatch.setattr(sessions_api, "_get_session", fake_get_session)
+    _use_session_lock(monkeypatch, session)
     monkeypatch.setattr(sessions_api, "comparison_stream", fake_comparison)
     monkeypatch.setattr(sessions_api, "blueprint_stream", forbidden_blueprint)
     monkeypatch.setattr(
@@ -425,6 +466,7 @@ async def test_blueprint_retry_reuses_finished_comparison(monkeypatch) -> None:
 
     delay = MagicMock()
     monkeypatch.setattr(sessions_api, "_get_session", fake_get_session)
+    _use_session_lock(monkeypatch, session)
     monkeypatch.setattr(sessions_api, "comparison_stream", forbidden_comparison)
     monkeypatch.setattr(sessions_api, "blueprint_stream", fake_blueprint)
     monkeypatch.setattr(
@@ -498,6 +540,7 @@ async def test_confirmed_interview_hours_reach_the_staged_plan_job(monkeypatch) 
         captured["plan_inputs"] = plan_inputs
 
     monkeypatch.setattr(sessions_api, "_get_session", fake_get_session)
+    _use_session_lock(monkeypatch, session)
     monkeypatch.setattr(
         sessions_api,
         "_get_or_create_session_plan_job",

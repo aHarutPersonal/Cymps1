@@ -2464,7 +2464,14 @@ async def generate_results(
     # Refresh it under a row lock before deciding which artifacts still need to
     # be generated; otherwise this waiter can regenerate a completed comparison
     # and pair it with the previous owner's already-persisted blueprint.
-    await db.refresh(session, with_for_update=True)
+    # Reuse the qualified session lock: ``session`` carries joined eager loads
+    # for the optional idol profile and persona, so an unqualified FOR UPDATE
+    # would ask PostgreSQL to lock nullable outer-join rows and be rejected.
+    session = await _lock_interview_session_state(
+        db,
+        session_id=session_id,
+        user_id=str(current_user.id),
+    )
     if (
         str(session.interview_thread_id) != str(claimed_thread.id)
         or str(session.idol_id) != str(claimed_thread.idol_id)
