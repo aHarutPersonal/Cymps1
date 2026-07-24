@@ -37,16 +37,17 @@ class Settings(BaseSettings):
     openai_fast_model: str = "gpt-4o-mini"  # Lightweight model for thinking/discovery
     openai_quality_model: str = "gpt-4.1"  # Selective fallback for failed quality gates
 
-    # Yunwu's OpenAI-compatible gateway. Quality is prioritized for visible
-    # writing, while the fast tier handles bounded extraction and metadata work.
+    # Yunwu's OpenAI-compatible gateway routes the current Gemini family.
+    # Flash-Lite handles bounded work, Flash handles visible generation, and
+    # Pro is reserved for deterministic quality-gate failures.
     yunwu_api_key: str | None = None
     yunwu_base_url: str = "https://yunwu.ai/v1"
-    yunwu_fast_model: str = "gpt-5.6-luna"
-    yunwu_model: str = "grok-4.5"
-    yunwu_quality_model: str = "claude-fable-5"
+    yunwu_fast_model: str = "gemini-3.5-flash-lite"
+    yunwu_model: str = "gemini-3.6-flash"
+    yunwu_quality_model: str = "gemini-3.1-pro-preview"
     yunwu_fallback_enabled: bool = True
-    # Pricing depends on the API token's assigned route. Six is the most
-    # expensive Grok-capable public group and is therefore the safe default.
+    # Pricing depends on the API token's assigned Yunwu route. Six remains a
+    # conservative default for a high-quality official transfer group.
     yunwu_group_ratio: float = 6.0
     yunwu_quota_price_cny: float = 0.5
     yunwu_usd_exchange_rate: float = 7.3
@@ -56,8 +57,10 @@ class Settings(BaseSettings):
     
     # Google Gemini (search grounding + LearnLM tutoring + structured extraction)
     gemini_api_key: str | None = None
-    gemini_model: str = "gemini-2.5-flash"  # User-visible plans and long-form content
-    gemini_fast_model: str = "gemini-3.1-flash-lite"  # Extraction, tagging, and cheap checks
+    # Current GA models. Flash handles user-visible planning/writing while
+    # Flash-Lite handles bounded extraction, routing, and metadata work.
+    gemini_model: str = "gemini-3.6-flash"
+    gemini_fast_model: str = "gemini-3.5-flash-lite"
     gemini_quality_model: str = "gemini-3.1-pro-preview"  # Selective quality fallback, never the default
     
     # Plan generation
@@ -72,7 +75,7 @@ class Settings(BaseSettings):
     # within a predictable LLM budget while still draining demand continuously.
     catalog_scheduler_enabled: bool = True
     catalog_tick_seconds: int = 60
-    catalog_dispatch_per_tick: int = 2
+    catalog_dispatch_per_tick: int = 1
     catalog_daily_job_limit: int = 50
     catalog_seed_per_tick: int = 25
     catalog_max_attempts: int = 3

@@ -11,6 +11,7 @@ from app.services.llm.client import (
     OpenAILLMClient,
     get_llm_client,
 )
+from app.services.llm.gemini_compat import generation_config_kwargs
 
 
 def test_gemini_tiers_route_to_cost_quality_models(monkeypatch):
@@ -44,6 +45,33 @@ def test_fast_flag_remains_backward_compatible(monkeypatch):
     assert client.model == "flash-lite-test"
 
 
+def test_current_gemini_models_use_levels_instead_of_legacy_budgets(monkeypatch):
+    monkeypatch.setattr(settings, "llm_provider", "gemini")
+    monkeypatch.setattr(settings, "gemini_api_key", "test-key")
+    monkeypatch.setattr(settings, "gemini_fast_model", "gemini-3.5-flash-lite")
+    monkeypatch.setattr(settings, "gemini_model", "gemini-3.6-flash")
+    monkeypatch.setattr(settings, "gemini_quality_model", "gemini-3.1-pro-preview")
+
+    fast = get_llm_client(tier="fast")
+    balanced = get_llm_client(tier="balanced", thinking_level="medium")
+    quality = get_llm_client(tier="quality")
+
+    assert (fast.thinking_level, fast.thinking_budget) == ("minimal", None)
+    assert (balanced.thinking_level, balanced.thinking_budget) == ("medium", None)
+    assert (quality.thinking_level, quality.thinking_budget) == ("high", None)
+
+
+def test_current_gemini_config_omits_deprecated_sampling_parameters():
+    kwargs = generation_config_kwargs(
+        model="gemini-3.6-flash",
+        temperature=0.8,
+        thinking_level="low",
+    )
+
+    assert "temperature" not in kwargs
+    assert str(kwargs["thinking_config"].thinking_level).casefold().endswith("low")
+
+
 def test_yunwu_tiers_route_to_quality_first_models(monkeypatch):
     monkeypatch.setattr(settings, "llm_provider", "yunwu")
     monkeypatch.setattr(settings, "yunwu_api_key", "test-key")
@@ -64,6 +92,33 @@ def test_yunwu_tiers_route_to_quality_first_models(monkeypatch):
     assert balanced.provider_name == "yunwu"
     assert balanced.temperature == 0.35
     assert quality.model == "quality-test"
+
+
+def test_yunwu_routes_current_gemini_tiers_through_gateway(monkeypatch):
+    monkeypatch.setattr(settings, "llm_provider", "yunwu")
+    monkeypatch.setattr(settings, "yunwu_api_key", "test-key")
+    monkeypatch.setattr(settings, "yunwu_fallback_enabled", False)
+    monkeypatch.setattr(settings, "yunwu_fast_model", "gemini-3.5-flash-lite")
+    monkeypatch.setattr(settings, "yunwu_model", "gemini-3.6-flash")
+    monkeypatch.setattr(
+        settings,
+        "yunwu_quality_model",
+        "gemini-3.1-pro-preview",
+    )
+
+    clients = [
+        get_llm_client(tier="fast"),
+        get_llm_client(tier="balanced"),
+        get_llm_client(tier="quality"),
+    ]
+
+    assert all(isinstance(client, OpenAILLMClient) for client in clients)
+    assert [client.model for client in clients] == [
+        "gemini-3.5-flash-lite",
+        "gemini-3.6-flash",
+        "gemini-3.1-pro-preview",
+    ]
+    assert all(client.provider_name == "yunwu" for client in clients)
 
 
 def test_yunwu_without_key_falls_back_to_dummy(monkeypatch):

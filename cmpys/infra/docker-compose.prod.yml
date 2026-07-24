@@ -2,6 +2,7 @@ services:
   postgres:
     image: pgvector/pgvector:pg16
     restart: unless-stopped
+    cpu_shares: 1024
     environment:
       POSTGRES_USER: cmpys
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -17,6 +18,7 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    cpu_shares: 512
     volumes:
       - cmpys_redis:/data
     healthcheck:
@@ -39,18 +41,22 @@ services:
     image: ${ECR_URL}:${IMAGE_TAG:-latest}
     command: web
     restart: unless-stopped
+    cpu_shares: 2048
     ports:
       - "8000:8000"
     environment:
       DATABASE_URL: postgresql+psycopg://cmpys:${POSTGRES_PASSWORD}@postgres:5432/cmpys
       REDIS_URL: redis://redis:6379/0
       GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_FAST_MODEL: ${GEMINI_FAST_MODEL:-gemini-3.5-flash-lite}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.6-flash}
+      GEMINI_QUALITY_MODEL: ${GEMINI_QUALITY_MODEL:-gemini-3.1-pro-preview}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       YUNWU_API_KEY: ${YUNWU_API_KEY:-}
       YUNWU_BASE_URL: ${YUNWU_BASE_URL:-https://yunwu.ai/v1}
-      YUNWU_FAST_MODEL: ${YUNWU_FAST_MODEL:-gpt-5.6-luna}
-      YUNWU_MODEL: ${YUNWU_MODEL:-grok-4.5}
-      YUNWU_QUALITY_MODEL: ${YUNWU_QUALITY_MODEL:-claude-fable-5}
+      YUNWU_FAST_MODEL: ${YUNWU_FAST_MODEL:-gemini-3.5-flash-lite}
+      YUNWU_MODEL: ${YUNWU_MODEL:-gemini-3.6-flash}
+      YUNWU_QUALITY_MODEL: ${YUNWU_QUALITY_MODEL:-gemini-3.1-pro-preview}
       YUNWU_FALLBACK_ENABLED: ${YUNWU_FALLBACK_ENABLED:-true}
       YUNWU_GROUP_RATIO: ${YUNWU_GROUP_RATIO:-6}
       YUNWU_QUOTA_PRICE_CNY: ${YUNWU_QUOTA_PRICE_CNY:-0.5}
@@ -81,16 +87,20 @@ services:
     image: ${ECR_URL}:${IMAGE_TAG:-latest}
     command: worker
     restart: unless-stopped
+    cpu_shares: 1024
     environment:
       DATABASE_URL: postgresql+psycopg://cmpys:${POSTGRES_PASSWORD}@postgres:5432/cmpys
       REDIS_URL: redis://redis:6379/0
       GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_FAST_MODEL: ${GEMINI_FAST_MODEL:-gemini-3.5-flash-lite}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.6-flash}
+      GEMINI_QUALITY_MODEL: ${GEMINI_QUALITY_MODEL:-gemini-3.1-pro-preview}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       YUNWU_API_KEY: ${YUNWU_API_KEY:-}
       YUNWU_BASE_URL: ${YUNWU_BASE_URL:-https://yunwu.ai/v1}
-      YUNWU_FAST_MODEL: ${YUNWU_FAST_MODEL:-gpt-5.6-luna}
-      YUNWU_MODEL: ${YUNWU_MODEL:-grok-4.5}
-      YUNWU_QUALITY_MODEL: ${YUNWU_QUALITY_MODEL:-claude-fable-5}
+      YUNWU_FAST_MODEL: ${YUNWU_FAST_MODEL:-gemini-3.5-flash-lite}
+      YUNWU_MODEL: ${YUNWU_MODEL:-gemini-3.6-flash}
+      YUNWU_QUALITY_MODEL: ${YUNWU_QUALITY_MODEL:-gemini-3.1-pro-preview}
       YUNWU_FALLBACK_ENABLED: ${YUNWU_FALLBACK_ENABLED:-true}
       YUNWU_GROUP_RATIO: ${YUNWU_GROUP_RATIO:-6}
       YUNWU_QUOTA_PRICE_CNY: ${YUNWU_QUOTA_PRICE_CNY:-0.5}
@@ -103,9 +113,15 @@ services:
       LLM_BACKGROUND_BUDGET_SOFT_RATIO: ${LLM_BACKGROUND_BUDGET_SOFT_RATIO:-0.85}
       LLM_BUDGET_INCLUDE_SEARCH_OVERAGE: ${LLM_BUDGET_INCLUDE_SEARCH_OVERAGE:-false}
       ADAPTIVE_ROUTING_ENABLED: ${ADAPTIVE_ROUTING_ENABLED:-true}
+      CELERY_DEFAULT_POOL: ${CELERY_DEFAULT_POOL:-solo}
+      CELERY_DEFAULT_CONCURRENCY: ${CELERY_DEFAULT_CONCURRENCY:-1}
+      CELERY_HIGH_POOL: ${CELERY_HIGH_POOL:-solo}
+      CELERY_HIGH_CONCURRENCY: ${CELERY_HIGH_CONCURRENCY:-1}
+      CELERY_LOW_POOL: ${CELERY_LOW_POOL:-solo}
+      CELERY_LOW_CONCURRENCY: ${CELERY_LOW_CONCURRENCY:-1}
       CATALOG_SCHEDULER_ENABLED: ${CATALOG_SCHEDULER_ENABLED:-true}
       CATALOG_DAILY_JOB_LIMIT: ${CATALOG_DAILY_JOB_LIMIT:-50}
-      CATALOG_DISPATCH_PER_TICK: ${CATALOG_DISPATCH_PER_TICK:-2}
+      CATALOG_DISPATCH_PER_TICK: ${CATALOG_DISPATCH_PER_TICK:-1}
       CATALOG_QUOTES_PER_IDOL_LIMIT: ${CATALOG_QUOTES_PER_IDOL_LIMIT:-30}
       CATALOG_QUOTE_MIN_CONFIDENCE: ${CATALOG_QUOTE_MIN_CONFIDENCE:-0.84}
       CATALOG_QUOTE_VERIFICATION_ENABLED: ${CATALOG_QUOTE_VERIFICATION_ENABLED:-true}
@@ -127,29 +143,35 @@ services:
   worker-high:
     <<: *interactive-worker
     command: worker-high
+    cpu_shares: 1536
 
   worker-low:
     <<: *interactive-worker
     command: worker-low
+    cpu_shares: 512
 
   # Keep autonomous catalog generation out of the user-facing worker pool.
-  # Match the default two-job dispatcher so one long book generation cannot
-  # leave the next requested guide sitting behind it in the worker process.
+  # A single background slot prevents speculative work from exhausting the
+  # small production host while the dedicated interactive queues stay free.
   # The separate control worker keeps Beat ticks and wake-ups responsive.
   catalog-worker:
     image: ${ECR_URL}:${IMAGE_TAG:-latest}
     command: catalog-worker
     restart: unless-stopped
+    cpu_shares: 256
     environment:
       DATABASE_URL: postgresql+psycopg://cmpys:${POSTGRES_PASSWORD}@postgres:5432/cmpys
       REDIS_URL: redis://redis:6379/0
       GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_FAST_MODEL: ${GEMINI_FAST_MODEL:-gemini-3.5-flash-lite}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.6-flash}
+      GEMINI_QUALITY_MODEL: ${GEMINI_QUALITY_MODEL:-gemini-3.1-pro-preview}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       YUNWU_API_KEY: ${YUNWU_API_KEY:-}
       YUNWU_BASE_URL: ${YUNWU_BASE_URL:-https://yunwu.ai/v1}
-      YUNWU_FAST_MODEL: ${YUNWU_FAST_MODEL:-gpt-5.6-luna}
-      YUNWU_MODEL: ${YUNWU_MODEL:-grok-4.5}
-      YUNWU_QUALITY_MODEL: ${YUNWU_QUALITY_MODEL:-claude-fable-5}
+      YUNWU_FAST_MODEL: ${YUNWU_FAST_MODEL:-gemini-3.5-flash-lite}
+      YUNWU_MODEL: ${YUNWU_MODEL:-gemini-3.6-flash}
+      YUNWU_QUALITY_MODEL: ${YUNWU_QUALITY_MODEL:-gemini-3.1-pro-preview}
       YUNWU_FALLBACK_ENABLED: ${YUNWU_FALLBACK_ENABLED:-true}
       YUNWU_GROUP_RATIO: ${YUNWU_GROUP_RATIO:-6}
       YUNWU_QUOTA_PRICE_CNY: ${YUNWU_QUOTA_PRICE_CNY:-0.5}
@@ -161,10 +183,11 @@ services:
       LLM_BACKGROUND_BUDGET_SOFT_RATIO: ${LLM_BACKGROUND_BUDGET_SOFT_RATIO:-0.85}
       LLM_BUDGET_INCLUDE_SEARCH_OVERAGE: ${LLM_BUDGET_INCLUDE_SEARCH_OVERAGE:-false}
       ADAPTIVE_ROUTING_ENABLED: ${ADAPTIVE_ROUTING_ENABLED:-true}
-      CATALOG_WORKER_CONCURRENCY: ${CATALOG_WORKER_CONCURRENCY:-2}
+      CATALOG_WORKER_POOL: ${CATALOG_WORKER_POOL:-solo}
+      CATALOG_WORKER_CONCURRENCY: ${CATALOG_WORKER_CONCURRENCY:-1}
       CATALOG_SCHEDULER_ENABLED: ${CATALOG_SCHEDULER_ENABLED:-true}
       CATALOG_DAILY_JOB_LIMIT: ${CATALOG_DAILY_JOB_LIMIT:-50}
-      CATALOG_DISPATCH_PER_TICK: ${CATALOG_DISPATCH_PER_TICK:-2}
+      CATALOG_DISPATCH_PER_TICK: ${CATALOG_DISPATCH_PER_TICK:-1}
       CATALOG_QUOTES_PER_IDOL_LIMIT: ${CATALOG_QUOTES_PER_IDOL_LIMIT:-30}
       CATALOG_QUOTE_MIN_CONFIDENCE: ${CATALOG_QUOTE_MIN_CONFIDENCE:-0.84}
       CATALOG_QUOTE_VERIFICATION_ENABLED: ${CATALOG_QUOTE_VERIFICATION_ENABLED:-true}
@@ -185,23 +208,28 @@ services:
     image: ${ECR_URL}:${IMAGE_TAG:-latest}
     command: catalog-control
     restart: unless-stopped
+    cpu_shares: 256
     environment:
       DATABASE_URL: postgresql+psycopg://cmpys:${POSTGRES_PASSWORD}@postgres:5432/cmpys
       REDIS_URL: redis://redis:6379/0
       GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_FAST_MODEL: ${GEMINI_FAST_MODEL:-gemini-3.5-flash-lite}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.6-flash}
+      GEMINI_QUALITY_MODEL: ${GEMINI_QUALITY_MODEL:-gemini-3.1-pro-preview}
       YUNWU_API_KEY: ${YUNWU_API_KEY:-}
       YUNWU_BASE_URL: ${YUNWU_BASE_URL:-https://yunwu.ai/v1}
-      YUNWU_FAST_MODEL: ${YUNWU_FAST_MODEL:-gpt-5.6-luna}
-      YUNWU_MODEL: ${YUNWU_MODEL:-grok-4.5}
-      YUNWU_QUALITY_MODEL: ${YUNWU_QUALITY_MODEL:-claude-fable-5}
+      YUNWU_FAST_MODEL: ${YUNWU_FAST_MODEL:-gemini-3.5-flash-lite}
+      YUNWU_MODEL: ${YUNWU_MODEL:-gemini-3.6-flash}
+      YUNWU_QUALITY_MODEL: ${YUNWU_QUALITY_MODEL:-gemini-3.1-pro-preview}
       YUNWU_FALLBACK_ENABLED: ${YUNWU_FALLBACK_ENABLED:-true}
       YUNWU_GROUP_RATIO: ${YUNWU_GROUP_RATIO:-6}
       YUNWU_QUOTA_PRICE_CNY: ${YUNWU_QUOTA_PRICE_CNY:-0.5}
       YUNWU_USD_EXCHANGE_RATE: ${YUNWU_USD_EXCHANGE_RATE:-7.3}
       LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
+      CATALOG_CONTROL_POOL: ${CATALOG_CONTROL_POOL:-solo}
       CATALOG_SCHEDULER_ENABLED: ${CATALOG_SCHEDULER_ENABLED:-true}
       CATALOG_DAILY_JOB_LIMIT: ${CATALOG_DAILY_JOB_LIMIT:-50}
-      CATALOG_DISPATCH_PER_TICK: ${CATALOG_DISPATCH_PER_TICK:-2}
+      CATALOG_DISPATCH_PER_TICK: ${CATALOG_DISPATCH_PER_TICK:-1}
       CATALOG_QUOTES_PER_IDOL_LIMIT: ${CATALOG_QUOTES_PER_IDOL_LIMIT:-30}
       CATALOG_QUOTE_MIN_CONFIDENCE: ${CATALOG_QUOTE_MIN_CONFIDENCE:-0.84}
       CATALOG_QUOTE_VERIFICATION_ENABLED: ${CATALOG_QUOTE_VERIFICATION_ENABLED:-true}
@@ -231,15 +259,19 @@ services:
     image: ${ECR_URL}:${IMAGE_TAG:-latest}
     command: beat
     restart: unless-stopped
+    cpu_shares: 128
     environment:
       DATABASE_URL: postgresql+psycopg://cmpys:${POSTGRES_PASSWORD}@postgres:5432/cmpys
       REDIS_URL: redis://redis:6379/0
       GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_FAST_MODEL: ${GEMINI_FAST_MODEL:-gemini-3.5-flash-lite}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.6-flash}
+      GEMINI_QUALITY_MODEL: ${GEMINI_QUALITY_MODEL:-gemini-3.1-pro-preview}
       YUNWU_API_KEY: ${YUNWU_API_KEY:-}
       YUNWU_BASE_URL: ${YUNWU_BASE_URL:-https://yunwu.ai/v1}
-      YUNWU_FAST_MODEL: ${YUNWU_FAST_MODEL:-gpt-5.6-luna}
-      YUNWU_MODEL: ${YUNWU_MODEL:-grok-4.5}
-      YUNWU_QUALITY_MODEL: ${YUNWU_QUALITY_MODEL:-claude-fable-5}
+      YUNWU_FAST_MODEL: ${YUNWU_FAST_MODEL:-gemini-3.5-flash-lite}
+      YUNWU_MODEL: ${YUNWU_MODEL:-gemini-3.6-flash}
+      YUNWU_QUALITY_MODEL: ${YUNWU_QUALITY_MODEL:-gemini-3.1-pro-preview}
       YUNWU_FALLBACK_ENABLED: ${YUNWU_FALLBACK_ENABLED:-true}
       YUNWU_GROUP_RATIO: ${YUNWU_GROUP_RATIO:-6}
       YUNWU_QUOTA_PRICE_CNY: ${YUNWU_QUOTA_PRICE_CNY:-0.5}
@@ -247,7 +279,7 @@ services:
       LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
       CATALOG_SCHEDULER_ENABLED: ${CATALOG_SCHEDULER_ENABLED:-true}
       CATALOG_DAILY_JOB_LIMIT: ${CATALOG_DAILY_JOB_LIMIT:-50}
-      CATALOG_DISPATCH_PER_TICK: ${CATALOG_DISPATCH_PER_TICK:-2}
+      CATALOG_DISPATCH_PER_TICK: ${CATALOG_DISPATCH_PER_TICK:-1}
       CATALOG_QUOTES_PER_IDOL_LIMIT: ${CATALOG_QUOTES_PER_IDOL_LIMIT:-30}
       CATALOG_QUOTE_MIN_CONFIDENCE: ${CATALOG_QUOTE_MIN_CONFIDENCE:-0.84}
       CATALOG_QUOTE_VERIFICATION_ENABLED: ${CATALOG_QUOTE_VERIFICATION_ENABLED:-true}

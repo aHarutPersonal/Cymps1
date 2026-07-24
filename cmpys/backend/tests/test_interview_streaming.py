@@ -133,7 +133,7 @@ async def test_guided_stream_has_a_short_response_budget(monkeypatch):
     ]
 
     assert chunks == ["A focused answer."]
-    assert captured["config"].max_output_tokens == 1200
+    assert captured["config"].max_output_tokens == 900
 
 
 @pytest.mark.asyncio

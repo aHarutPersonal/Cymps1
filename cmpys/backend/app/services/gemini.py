@@ -24,6 +24,11 @@ from google import genai
 from google.genai import types
 
 from app.core.config import settings
+from app.services.llm.gemini_compat import (
+    ThinkingLevel,
+    generation_config_kwargs,
+    resolve_thinking_config,
+)
 
 logger = logging.getLogger("cmpys.services.gemini")
 
@@ -92,6 +97,17 @@ def _gemini_client() -> genai.Client:
     return _client_singleton
 
 
+def _model_for_tier(tier: str) -> str:
+    try:
+        return {
+            "fast": settings.gemini_fast_model,
+            "balanced": settings.gemini_model,
+            "quality": settings.gemini_quality_model,
+        }[tier]
+    except KeyError as exc:
+        raise ValueError(f"Unknown Gemini tier: {tier}") from exc
+
+
 def detect_intent(message: str) -> str:
     """
     Classify user message intent for routing.
@@ -110,15 +126,25 @@ async def generate_with_grounding(
     user_message: str,
     conversation_history: str = "",
     operation: str = "grounded_generation",
+    tier: str = "balanced",
+    thinking_level: ThinkingLevel | None = "low",
+    max_output_tokens: int = 2_000,
 ) -> str:
     """
-    Single Gemini 2.5 Flash call with Google Search grounding.
+    Single configurable Gemini call with Google Search grounding.
 
     For callers that need the complete response (JSON contracts, fact
     lookups) — no streaming involved. The model automatically searches
     Google before responding and cites real URLs.
     """
     client = _gemini_client()
+    model = _model_for_tier(tier)
+    resolved_level, resolved_budget = resolve_thinking_config(
+        model=model,
+        tier=tier,
+        thinking_level=thinking_level,
+        thinking_budget=None,
+    )
     started = time.perf_counter()
 
     if conversation_history:
@@ -130,14 +156,20 @@ async def generate_with_grounding(
 
     try:
         response = await client.aio.models.generate_content(
-            model="gemini-2.5-flash",
+            model=model,
             contents=contents,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
                 tools=[types.Tool(google_search=types.GoogleSearch())],
-                temperature=0.7,
+                max_output_tokens=max_output_tokens,
                 http_options=types.HttpOptions(
                     timeout=GEMINI_REQUEST_TIMEOUT_MS,
+                ),
+                **generation_config_kwargs(
+                    model=model,
+                    temperature=0.7,
+                    thinking_level=resolved_level,
+                    thinking_budget=resolved_budget,
                 ),
             ),
         )
@@ -161,7 +193,7 @@ async def generate_with_grounding(
             [
                 UsageRecord(
                     operation=operation,
-                    model="gemini-2.5-flash",
+                    model=model,
                     provider="gemini",
                     prompt_tokens=getattr(usage, "prompt_token_count", None),
                     completion_tokens=getattr(usage, "candidates_token_count", None),
@@ -191,6 +223,9 @@ async def _stream_generate(
     grounded: bool = True,
     temperature: float = 0.7,
     max_output_tokens: int | None = None,
+    tier: str = "balanced",
+    thinking_level: ThinkingLevel | None = "low",
+    operation: str = "interactive_stream",
 ) -> AsyncGenerator[str, None]:
     """
     True token streaming via generate_content_stream (the pattern proven by
@@ -200,23 +235,38 @@ async def _stream_generate(
     (~10x fewer SSE events downstream).
     """
     client = _gemini_client()
+    model = _model_for_tier(tier)
+    resolved_level, resolved_budget = resolve_thinking_config(
+        model=model,
+        tier=tier,
+        thinking_level=thinking_level,
+        thinking_budget=None,
+    )
     tools = [types.Tool(google_search=types.GoogleSearch())] if grounded else None
     started = time.perf_counter()
     first_text_at: float | None = None
     response_chars = 0
     finish_reason = "unknown"
+    usage = None
+    queries: set[str] = set()
+    grounded_source_count = 0
 
     try:
         stream = client.aio.models.generate_content_stream(
-            model="gemini-2.5-flash",
+            model=model,
             contents=contents,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
                 tools=tools,
-                temperature=temperature,
                 max_output_tokens=max_output_tokens,
                 http_options=types.HttpOptions(
                     timeout=GEMINI_REQUEST_TIMEOUT_MS,
+                ),
+                **generation_config_kwargs(
+                    model=model,
+                    temperature=temperature,
+                    thinking_level=resolved_level,
+                    thinking_budget=resolved_budget,
                 ),
             ),
         )
@@ -225,6 +275,7 @@ async def _stream_generate(
         if inspect.iscoroutine(stream):
             stream = await stream
         async for chunk in stream:
+            usage = getattr(chunk, "usage_metadata", None) or usage
             for candidate in getattr(chunk, "candidates", None) or []:
                 reason = getattr(candidate, "finish_reason", None)
                 if reason is not None:
@@ -232,6 +283,13 @@ async def _stream_generate(
                         getattr(reason, "name", None)
                         or str(reason).rsplit(".", maxsplit=1)[-1]
                     )
+                metadata = getattr(candidate, "grounding_metadata", None)
+                grounded_source_count += len(
+                    getattr(metadata, "grounding_chunks", None) or []
+                )
+                for query in getattr(metadata, "web_search_queries", None) or []:
+                    if str(query).strip():
+                        queries.add(str(query).strip())
             text = getattr(chunk, "text", None)
             if text:
                 if first_text_at is None:
@@ -259,6 +317,35 @@ async def _stream_generate(
             response_chars,
             finish_reason,
         )
+        # The final real SDK chunk carries usage metadata. Avoid opening a
+        # telemetry DB session for mocks/providers that did not supply it.
+        if usage is not None:
+            from app.services.llm.telemetry import UsageRecord, record_usage_records
+
+            await record_usage_records(
+                [
+                    UsageRecord(
+                        operation=operation,
+                        model=model,
+                        provider="gemini",
+                        prompt_tokens=getattr(usage, "prompt_token_count", None),
+                        completion_tokens=getattr(usage, "candidates_token_count", None),
+                        total_tokens=getattr(usage, "total_token_count", None),
+                        duration_ms=duration_ms,
+                        grounded=grounded,
+                        search_queries=len(queries),
+                        success=response_chars > 0,
+                        result_status="streamed" if response_chars else "empty",
+                        metadata={
+                            "first_text_ms": round(first_text_ms, 1),
+                            "response_chars": response_chars,
+                            "finish_reason": finish_reason,
+                            "grounded_source_count": grounded_source_count,
+                            "thinking_level": resolved_level,
+                        },
+                    )
+                ]
+            )
     except Exception as e:
         logger.error(f"[GEMINI] {label} stream error: {e}")
         raise
@@ -284,7 +371,10 @@ async def stream_learnlm(
         label="LearnLM",
         grounded=False,
         temperature=0.8,
-        max_output_tokens=1200,
+        max_output_tokens=900,
+        tier="balanced",
+        thinking_level="low",
+        operation="guided_learning_stream",
     ):
         yield text
 
@@ -318,6 +408,10 @@ async def interview_stream(
         label="Interview",
         grounded=False,
         temperature=0.8,
+        max_output_tokens=500,
+        tier="balanced",
+        thinking_level="low",
+        operation="interview_stream",
     ):
         yield text
 
@@ -339,6 +433,10 @@ async def comparison_stream(
         contents=user_message,
         label="Comparison",
         grounded=True,
+        max_output_tokens=1_400,
+        tier="balanced",
+        thinking_level="low",
+        operation="comparison_stream",
     ):
         yield text
 
@@ -361,5 +459,9 @@ async def blueprint_stream(
         contents=user_message,
         label="Blueprint",
         grounded=False,
+        max_output_tokens=1_000,
+        tier="balanced",
+        thinking_level="low",
+        operation="blueprint_stream",
     ):
         yield text

@@ -547,6 +547,16 @@ PLAN_DETAIL_SECTION_MIN_WORDS = {
     "references": 40,
 }
 
+PLAN_DETAIL_SECTION_TARGET_WORDS = {
+    "why_this_matters": 220,
+    "core_framework": 650,
+    "worked_example": 420,
+    "failure_modes": 300,
+    "guided_practice": 450,
+    "check_your_understanding": 220,
+    "references": 80,
+}
+
 
 def plan_detail_lesson_section_quality_issues(
     sections: PlanDetailLessonSectionsOutput,
@@ -560,6 +570,48 @@ def plan_detail_lesson_section_quality_issues(
                 f"{field_name} has {word_count} words; minimum is {minimum_words}"
             )
     return issues
+
+
+class PlanDetailSectionRepairItemOutput(BaseModel):
+    """One replacement section for a mostly valid long-form lesson."""
+
+    field_name: Literal[
+        "why_this_matters",
+        "core_framework",
+        "worked_example",
+        "failure_modes",
+        "guided_practice",
+        "check_your_understanding",
+        "references",
+    ]
+    content: str = Field(min_length=1)
+
+
+class PlanDetailSectionsRepairOutput(BaseModel):
+    """Focused expansions that avoid rewriting several thousand good words."""
+
+    sections: list[PlanDetailSectionRepairItemOutput] = Field(
+        min_length=1,
+        max_length=7,
+    )
+
+    @model_validator(mode="after")
+    def require_unique_complete_sections(self) -> "PlanDetailSectionsRepairOutput":
+        field_names = [section.field_name for section in self.sections]
+        issues: list[str] = []
+        if len(field_names) != len(set(field_names)):
+            issues.append("section repair field names must be unique")
+        for section in self.sections:
+            word_count = len(section.content.split())
+            minimum = PLAN_DETAIL_SECTION_MIN_WORDS[section.field_name]
+            if word_count < minimum:
+                issues.append(
+                    f"{section.field_name} repair has {word_count} words; "
+                    f"minimum is {minimum}"
+                )
+        if issues:
+            raise ValueError("; ".join(issues))
+        return self
 
 
 class PlanDetailSubstepsRepairOutput(BaseModel):

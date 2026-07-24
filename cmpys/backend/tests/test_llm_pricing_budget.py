@@ -31,14 +31,14 @@ def test_cost_estimate_includes_hidden_thinking_tokens():
 
 
 def test_current_gemini_price_cards_cover_all_configured_tiers():
-    fast = price_card_for_model("gemini-3.1-flash-lite")
-    balanced = price_card_for_model("gemini-2.5-flash")
+    fast = price_card_for_model("gemini-3.5-flash-lite")
+    balanced = price_card_for_model("gemini-3.6-flash")
     quality = price_card_for_model("gemini-3.1-pro-preview")
 
-    assert (fast.input_usd_per_million, fast.output_usd_per_million) == (0.25, 1.5)
+    assert (fast.input_usd_per_million, fast.output_usd_per_million) == (0.3, 2.5)
     assert (balanced.input_usd_per_million, balanced.output_usd_per_million) == (
-        0.3,
-        2.5,
+        1.5,
+        7.5,
     )
     assert (quality.input_usd_per_million, quality.output_usd_per_million) == (
         2.0,
@@ -62,6 +62,23 @@ def test_yunwu_default_route_price_cards_use_effective_cash_cost(monkeypatch):
     assert quality.input_usd_per_million == pytest.approx(10 / 14.6)
     assert quality.output_usd_per_million == pytest.approx(50 / 14.6)
     assert balanced.token_rates(200_001) == pytest.approx((4 / 14.6, 12 / 14.6))
+
+
+def test_yunwu_gemini_tiers_use_gateway_cash_conversion(monkeypatch):
+    monkeypatch.setattr(settings, "yunwu_group_ratio", 1.0)
+    monkeypatch.setattr(settings, "yunwu_quota_price_cny", 0.5)
+    monkeypatch.setattr(settings, "yunwu_usd_exchange_rate", 7.3)
+
+    fast = price_card_for_model("gemini-3.5-flash-lite", provider="yunwu")
+    balanced = price_card_for_model("gemini-3.6-flash", provider="yunwu")
+    quality = price_card_for_model("gemini-3.1-pro-preview", provider="yunwu")
+
+    assert fast.input_usd_per_million == pytest.approx(0.30 / 14.6)
+    assert fast.output_usd_per_million == pytest.approx(2.50 / 14.6)
+    assert balanced.input_usd_per_million == pytest.approx(1.50 / 14.6)
+    assert balanced.output_usd_per_million == pytest.approx(7.50 / 14.6)
+    assert quality.input_usd_per_million == pytest.approx(2.00 / 14.6)
+    assert quality.output_usd_per_million == pytest.approx(12.00 / 14.6)
 
 
 def test_yunwu_price_card_respects_assigned_route_multiplier(monkeypatch):

@@ -352,9 +352,10 @@ async def generate_book_module(
         },
         strict=True,
     )
-    # This is long-form writing, not a reasoning task. A zero thinking budget
-    # keeps latency and billed output tokens down without weakening the source
-    # context or the explicit structure in the prompt.
+    # This is structured long-form writing rather than deep problem solving.
+    # The explicit source/section contract supplies the reasoning scaffold.
+    # Minimal reasoning avoids spending the output budget on hidden tokens and
+    # prevents long JSON strings from being truncated.
     routing_decision = await choose_llm_tier(
         operation="book_module_generation",
         routing_key=canonical_book_key(title, author),
@@ -365,7 +366,7 @@ async def generate_book_module(
         timeout=180.0,
         max_tokens=16000,
         tier=active_tier,
-        thinking_budget=0,
+        thinking_level="high" if active_tier == "quality" else "minimal",
         temperature=0.2,
     )
     generation_calls: list[dict[str, Any]] = []
@@ -455,7 +456,7 @@ async def generate_book_module(
                 timeout=180.0,
                 max_tokens=16000,
                 tier="balanced",
-                thinking_budget=0,
+                thinking_level="minimal",
                 temperature=0.2,
             )
             recovery_reason = "fast_schema_fallback"
@@ -503,7 +504,7 @@ async def generate_book_module(
             timeout=60.0,
             max_tokens=5000,
             tier="fast",
-            thinking_budget=0,
+            thinking_level="minimal",
             temperature=0.1,
         )
         metadata_prompt = (
@@ -571,7 +572,7 @@ async def generate_book_module(
                 timeout=180.0,
                 max_tokens=16000,
                 tier="balanced",
-                thinking_budget=0,
+                thinking_level="minimal",
                 temperature=0.2,
             )
             retry_reason = "fast_quality_fallback"
@@ -611,7 +612,9 @@ async def generate_book_module(
             timeout=180.0,
             max_tokens=16000,
             tier="quality",
+            thinking_level="high",
             temperature=0.15,
+            allow_fallback=False,
         )
         quality_response = await quality_client.generate_json(
             system_prompt=system_prompt,

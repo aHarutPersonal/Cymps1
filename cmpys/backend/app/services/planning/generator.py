@@ -485,7 +485,7 @@ async def _generate_plan_backbone(
         timeout=PLAN_BACKBONE_TIMEOUT_SECONDS,
         max_tokens=PLAN_BACKBONE_MAX_TOKENS,
         tier="balanced",
-        thinking_budget=0,
+        thinking_level="medium",
     )
     validated, response = await client.generate_and_validate(
         system_prompt=system_prompt,
@@ -595,7 +595,7 @@ async def generate_plan_week_from_backbone(
         timeout=PLAN_WEEK_TIMEOUT_SECONDS,
         max_tokens=PLAN_WEEK_MAX_TOKENS,
         tier="balanced",
-        thinking_budget=0,
+        thinking_level="medium",
     )
     validated, response = await client.generate_and_validate(
         system_prompt=system_prompt,

@@ -14,6 +14,12 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ValidationError
 
+from app.services.llm.gemini_compat import (
+    ThinkingLevel,
+    generation_config_kwargs,
+    resolve_thinking_config,
+)
+
 if TYPE_CHECKING:
     import openai
 
@@ -148,7 +154,9 @@ class LLMResponse(BaseModel):
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     total_tokens: int | None = None
+    thoughts_tokens: int | None = None
     duration_ms: float | None = None
+    finish_reason: str | None = None
     provider: str | None = None
     fallback_from_model: str | None = None
     fallback_from_provider: str | None = None
@@ -832,18 +840,31 @@ class GeminiLLMClient(BaseLLMClient):
     
     def __init__(
         self,
-        model: str = "gemini-2.5-flash",
+        model: str = "gemini-3.6-flash",
         api_key: str | None = None,
         timeout: float = 60.0,
         max_tokens: int | None = None,
         thinking_budget: int | None = None,
+        thinking_level: ThinkingLevel | None = None,
         temperature: float = 0.1,
     ):
         self.model = model
         self.api_key = api_key
         self.timeout = timeout
         self.max_tokens = max_tokens
-        self.thinking_budget = thinking_budget
+        inferred_tier = (
+            "quality"
+            if "pro" in model.casefold()
+            else "fast"
+            if "lite" in model.casefold()
+            else "balanced"
+        )
+        self.thinking_level, self.thinking_budget = resolve_thinking_config(
+            model=model,
+            tier=inferred_tier,
+            thinking_level=thinking_level,
+            thinking_budget=thinking_budget,
+        )
         self.temperature = temperature
         self.provider_name = "gemini"
     
@@ -891,13 +912,22 @@ class GeminiLLMClient(BaseLLMClient):
             # call) and enforce the configured timeout — previously stored
             # but never applied, so user-facing paths could hang unbounded.
             from app.services.gemini import _gemini_client
-            client = _gemini_client() if api_key == settings.gemini_api_key else genai.Client(api_key=api_key)
+            client = (
+                _gemini_client()
+                if api_key == settings.gemini_api_key
+                else genai.Client(api_key=api_key)
+            )
 
             # Build config
             config_kwargs: dict[str, Any] = {
-                "temperature": self.temperature,
                 "response_mime_type": "application/json",
                 "http_options": types.HttpOptions(timeout=int(self.timeout * 1000)),
+                **generation_config_kwargs(
+                    model=self.model,
+                    temperature=self.temperature,
+                    thinking_level=self.thinking_level,
+                    thinking_budget=self.thinking_budget,
+                ),
             }
             if self.max_tokens:
                 config_kwargs["max_output_tokens"] = self.max_tokens
@@ -907,11 +937,6 @@ class GeminiLLMClient(BaseLLMClient):
                 config_kwargs["response_schema"] = output_model
             elif json_schema is not None:
                 config_kwargs["response_json_schema"] = json_schema
-            if self.thinking_budget is not None:
-                config_kwargs["thinking_config"] = types.ThinkingConfig(
-                    thinking_budget=self.thinking_budget,
-                )
-            
             config = types.GenerateContentConfig(
                 system_instruction=system_prompt,
                 **config_kwargs,
@@ -977,7 +1002,13 @@ class GeminiLLMClient(BaseLLMClient):
                         if response.usage_metadata
                         else None
                     ),
+                    thoughts_tokens=(
+                        getattr(response.usage_metadata, "thoughts_token_count", None)
+                        if response.usage_metadata
+                        else None
+                    ),
                     duration_ms=duration_ms,
+                    finish_reason=finish_reason,
                     provider="gemini",
                 )
             except json.JSONDecodeError as e:
@@ -1007,7 +1038,17 @@ class GeminiLLMClient(BaseLLMClient):
                             if response.usage_metadata
                             else None
                         ),
+                        thoughts_tokens=(
+                            getattr(
+                                response.usage_metadata,
+                                "thoughts_token_count",
+                                None,
+                            )
+                            if response.usage_metadata
+                            else None
+                        ),
                         duration_ms=duration_ms,
+                        finish_reason=finish_reason,
                         provider="gemini",
                     )
                 
@@ -1033,7 +1074,13 @@ class GeminiLLMClient(BaseLLMClient):
                         if response.usage_metadata
                         else None
                     ),
+                    thoughts_tokens=(
+                        getattr(response.usage_metadata, "thoughts_token_count", None)
+                        if response.usage_metadata
+                        else None
+                    ),
                     duration_ms=duration_ms,
+                    finish_reason=finish_reason,
                     provider="gemini",
                 )
         
@@ -1055,6 +1102,7 @@ def get_llm_client(
     fast: bool = False,
     tier: str | None = None,
     thinking_budget: int | None = None,
+    thinking_level: ThinkingLevel | None = None,
     temperature: float = 0.1,
     allow_fallback: bool = True,
 ) -> BaseLLMClient:
@@ -1068,8 +1116,9 @@ def get_llm_client(
         max_tokens: Optional max tokens to generate (limits response size)
         fast: Backward-compatible alias for ``tier="fast"``
         tier: ``fast`` (Flash-Lite), ``balanced`` (Flash), or ``quality`` (Pro)
-        thinking_budget: Gemini thinking-token budget. Use 0 for extraction or
-            long-form writing where the prompt already supplies the structure.
+        thinking_budget: Legacy Gemini 2.5 numeric reasoning control.
+        thinking_level: Gemini 3 reasoning control. The factory translates a
+            legacy budget when callers have not migrated yet.
         allow_fallback: Whether Yunwu failures may retry through Gemini. Disable
             for latency-sensitive calls that already have focused retries.
     """
@@ -1093,13 +1142,18 @@ def get_llm_client(
             "balanced": settings.gemini_model,
             "quality": settings.gemini_quality_model,
         }[resolved_tier]
-        if thinking_budget is None and resolved_tier == "fast":
-            thinking_budget = 0
+        thinking_level, thinking_budget = resolve_thinking_config(
+            model=model,
+            tier=resolved_tier,
+            thinking_level=thinking_level,
+            thinking_budget=thinking_budget,
+        )
         return GeminiLLMClient(
             model=model,
             timeout=timeout,
             max_tokens=max_tokens,
             thinking_budget=thinking_budget,
+            thinking_level=thinking_level,
             temperature=temperature,
         )
     elif provider == "openai":
@@ -1133,14 +1187,20 @@ def get_llm_client(
                 "balanced": settings.gemini_model,
                 "quality": settings.gemini_quality_model,
             }[resolved_tier]
-            fallback_thinking_budget = thinking_budget
-            if fallback_thinking_budget is None and resolved_tier == "fast":
-                fallback_thinking_budget = 0
+            fallback_thinking_level, fallback_thinking_budget = (
+                resolve_thinking_config(
+                    model=fallback_model,
+                    tier=resolved_tier,
+                    thinking_level=thinking_level,
+                    thinking_budget=thinking_budget,
+                )
+            )
             fallback_client = GeminiLLMClient(
                 model=fallback_model,
                 timeout=timeout,
                 max_tokens=max_tokens,
                 thinking_budget=fallback_thinking_budget,
+                thinking_level=fallback_thinking_level,
                 temperature=temperature,
             )
 

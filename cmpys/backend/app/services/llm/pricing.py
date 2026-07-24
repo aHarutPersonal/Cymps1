@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from app.core.config import settings
 
 
-PRICING_VERSION = "multi-provider-2026-07-15"
+PRICING_VERSION = "multi-provider-2026-07-24-yunwu-gemini"
 
 
 @dataclass(frozen=True)
@@ -52,6 +52,24 @@ def price_card_for_model(model: str, provider: str | None = None) -> PriceCard:
             / exchange_rate
             * max(settings.yunwu_group_ratio, 0.0)
         )
+        if normalized.startswith("gemini-3.5-flash-lite"):
+            return PriceCard(
+                0.30 * cash_multiplier,
+                2.50 * cash_multiplier,
+            )
+        if normalized.startswith("gemini-3.6-flash"):
+            return PriceCard(
+                1.50 * cash_multiplier,
+                7.50 * cash_multiplier,
+            )
+        if normalized.startswith("gemini-3.1-pro"):
+            return PriceCard(
+                2.00 * cash_multiplier,
+                12.00 * cash_multiplier,
+                long_context_threshold=200_000,
+                long_input_usd_per_million=4.00 * cash_multiplier,
+                long_output_usd_per_million=18.00 * cash_multiplier,
+            )
         if normalized == "gpt-5.6-luna":
             return PriceCard(1.0 * cash_multiplier, 6.0 * cash_multiplier)
         if normalized == "grok-4.5":
@@ -78,6 +96,27 @@ def price_card_for_model(model: str, provider: str | None = None) -> PriceCard:
             long_input_usd_per_million=2.50,
             long_output_usd_per_million=15.00,
             search_usd_per_unit=0.035,
+        )
+    if normalized.startswith("gemini-3.5-flash-lite"):
+        return PriceCard(
+            0.30,
+            2.50,
+            search_usd_per_unit=0.014,
+            search_billing="search_query",
+        )
+    if normalized.startswith("gemini-3.6-flash"):
+        return PriceCard(
+            1.50,
+            7.50,
+            search_usd_per_unit=0.014,
+            search_billing="search_query",
+        )
+    if normalized.startswith("gemini-3.5-flash"):
+        return PriceCard(
+            1.50,
+            9.00,
+            search_usd_per_unit=0.014,
+            search_billing="search_query",
         )
     if normalized.startswith("gemini-3.1-flash-lite"):
         return PriceCard(

@@ -167,12 +167,12 @@ async def test_initial_plan_generates_backbone_then_only_week_one(monkeypatch) -
             "timeout": generator.PLAN_BACKBONE_TIMEOUT_SECONDS,
             "max_tokens": generator.PLAN_BACKBONE_MAX_TOKENS,
             "tier": "balanced",
-            "thinking_budget": 0,
+            "thinking_level": "medium",
         },
         {
             "timeout": generator.PLAN_WEEK_TIMEOUT_SECONDS,
             "max_tokens": generator.PLAN_WEEK_MAX_TOKENS,
             "tier": "balanced",
-            "thinking_budget": 0,
+            "thinking_level": "medium",
         },
     ]

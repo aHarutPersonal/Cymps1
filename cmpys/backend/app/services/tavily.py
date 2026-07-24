@@ -83,14 +83,26 @@ async def _search_video_via_google(query: str) -> Optional[str]:
     try:
         from google.genai import types
 
+        from app.core.config import settings
         from app.services.gemini import (
             GEMINI_REQUEST_TIMEOUT_MS,
             _gemini_client,
         )
+        from app.services.llm.gemini_compat import (
+            generation_config_kwargs,
+            resolve_thinking_config,
+        )
 
         client = _gemini_client()
+        model = settings.gemini_fast_model
+        thinking_level, thinking_budget = resolve_thinking_config(
+            model=model,
+            tier="fast",
+            thinking_level="minimal",
+            thinking_budget=None,
+        )
         response = await client.aio.models.generate_content(
-            model="gemini-2.5-flash",
+            model=model,
             contents=(
                 f"Find the exact YouTube video for: {query}\n\n"
                 "IMPORTANT RULES:\n"
@@ -104,9 +116,15 @@ async def _search_video_via_google(query: str) -> Optional[str]:
             ),
             config=types.GenerateContentConfig(
                 tools=[types.Tool(google_search=types.GoogleSearch())],
-                temperature=0.0,
+                max_output_tokens=200,
                 http_options=types.HttpOptions(
                     timeout=GEMINI_REQUEST_TIMEOUT_MS,
+                ),
+                **generation_config_kwargs(
+                    model=model,
+                    temperature=0.0,
+                    thinking_level=thinking_level,
+                    thinking_budget=thinking_budget,
                 ),
             ),
         )

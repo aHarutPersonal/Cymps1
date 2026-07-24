@@ -957,6 +957,9 @@ async def _prefetch_idol_facts(session_id: str, idol_name: str, user_age: int | 
             system_prompt="You are a historical fact checker. Return accurate, sourced facts.",
             user_message=facts_prompt,
             operation="idol_fact_lookup",
+            tier="fast",
+            thinking_level="minimal",
+            max_output_tokens=900,
         )
         if not facts_response:
             return
@@ -1289,6 +1292,9 @@ async def interview(
                     system_prompt="You are a historical fact checker. Return accurate, sourced facts.",
                     user_message=facts_prompt,
                     operation="interview_idol_fact_lookup",
+                    tier="fast",
+                    thinking_level="minimal",
+                    max_output_tokens=900,
                 )
                 session.idol_facts_json = {"raw_facts": facts_response}
 

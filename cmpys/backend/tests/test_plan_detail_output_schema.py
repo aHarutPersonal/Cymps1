@@ -8,6 +8,7 @@ import pytest
 from app.services.llm.prompt_loader import load_prompt
 from app.services.llm.schemas import (
     PlanDetailLessonSectionsOutput,
+    PlanDetailSectionsRepairOutput,
     PlanDetailStepRepairOutput,
     PlanDetailSubstepsRepairOutput,
     PlanItemDetailsOutlineOutput,
@@ -25,7 +26,7 @@ from app.tasks.plans import (
     _validate_plan_detail_response,
     _validate_plan_detail_outline_response,
     _validate_plan_detail_step_response,
-    _writing_thinking_budget,
+    _writing_thinking_level,
 )
 
 
@@ -510,19 +511,20 @@ def test_parallel_outline_maps_alternative_resource_names_to_materials() -> None
     assert "The Lean Startup" in response.data["steps"][1]["resources"]
 
 
-def test_quality_writing_keeps_required_model_thinking_enabled() -> None:
-    assert _writing_thinking_budget("quality") is None
-    assert _writing_thinking_budget("balanced") == 0
+def test_writing_uses_tiered_modern_thinking_levels() -> None:
+    assert _writing_thinking_level("fast") == "minimal"
+    assert _writing_thinking_level("balanced") == "minimal"
+    assert _writing_thinking_level("quality") == "high"
 
 
 @pytest.mark.asyncio
-async def test_first_lesson_is_prioritized_then_remaining_lessons_are_concurrent(
+async def test_all_missing_lessons_start_concurrently_and_checkpoint_independently(
     monkeypatch,
 ) -> None:
     payload = _valid_payload()
     outline = _outline_payload()
     started: set[str] = set()
-    remaining_started = asyncio.Event()
+    all_started = asyncio.Event()
     client_options: list[dict] = []
     checkpoints: list[tuple[str, list[str]]] = []
 
@@ -539,10 +541,9 @@ async def test_first_lesson_is_prioritized_then_remaining_lessons_are_concurrent
                 if f'"id":"{candidate["id"]}"' in user_prompt
             )
             started.add(step["id"])
-            if step["id"] != "step_1":
-                if {"step_2", "step_3"}.issubset(started):
-                    remaining_started.set()
-                await asyncio.wait_for(remaining_started.wait(), timeout=1)
+            if {"step_1", "step_2", "step_3"}.issubset(started):
+                all_started.set()
+            await asyncio.wait_for(all_started.wait(), timeout=1)
             return SimpleNamespace(
                 data=copy.deepcopy(_lesson_sections_payload()),
                 error=None,
@@ -587,20 +588,22 @@ async def test_first_lesson_is_prioritized_then_remaining_lessons_are_concurrent
         1900 <= len(step["lesson_content"].split()) <= 4200 for step in result["steps"]
     )
     assert all("## References" in step["lesson_content"] for step in result["steps"])
-    assert [stage for stage, *_ in calls[:2]] == [
-        "parallel_outline_attempt_1",
+    assert calls[0][0] == "parallel_outline_attempt_1"
+    assert {stage for stage, *_ in calls[1:]} == {
         "parallel_lesson_step_1_attempt_1",
-    ]
-    assert {stage for stage, *_ in calls[2:]} == {
         "parallel_lesson_step_2_attempt_1",
         "parallel_lesson_step_3_attempt_1",
     }
     assert checkpoints[0] == ("outline_ready", [])
-    assert checkpoints[1] == ("step_1_ready", ["step_1"])
     assert set(checkpoints[-1][1]) == {"step_1", "step_2", "step_3"}
     assert client_options[0]["tier"] == "balanced"
-    assert all(options["tier"] == "quality" for options in client_options[1:])
-    assert all(options["timeout"] == 180 for options in client_options[1:])
+    assert client_options[0]["thinking_level"] == "medium"
+    assert all(options["tier"] == "balanced" for options in client_options[1:])
+    assert all(
+        options["thinking_level"] == "minimal" for options in client_options[1:]
+    )
+    assert all(options["max_tokens"] == 16000 for options in client_options[1:])
+    assert all(options["timeout"] == 120 for options in client_options[1:])
     assert all(options["allow_fallback"] is False for options in client_options[1:])
 
 
@@ -796,10 +799,8 @@ async def test_parallel_generation_retries_only_the_failed_lesson() -> None:
             attempts_by_step[step_id] = attempts_by_step.get(step_id, 0) + 1
             prompts_by_step.setdefault(step_id, []).append(user_prompt)
             if step_id == "step_1" and attempts_by_step[step_id] == 1:
-                invalid = {
-                    **_lesson_sections_payload(),
-                    "core_framework": "650-750 words without the heading",
-                }
+                invalid = _lesson_sections_payload()
+                invalid.pop("references")
                 return SimpleNamespace(data=invalid, error=None)
             return SimpleNamespace(
                 data=copy.deepcopy(_lesson_sections_payload()),
@@ -825,16 +826,100 @@ async def test_parallel_generation_retries_only_the_failed_lesson() -> None:
     assert result is not None
     assert attempts_by_step == {"step_1": 2, "step_2": 1, "step_3": 1}
     assert "PREVIOUS ATTEMPT ERROR" in prompts_by_step["step_1"][1]
-    assert "core_framework has" in prompts_by_step["step_1"][1]
-    assert [stage for stage, *_ in calls[:3]] == [
-        "parallel_outline_attempt_1",
+    assert "references" in prompts_by_step["step_1"][1]
+    stages = [stage for stage, *_ in calls]
+    assert stages.count("parallel_outline_attempt_1") == 1
+    assert stages.count("parallel_lesson_step_1_attempt_1") == 1
+    assert stages.count("parallel_lesson_step_1_attempt_2") == 1
+    assert {
+        stage
+        for stage in stages
+        if stage.startswith("parallel_lesson_step_")
+        and stage.endswith("attempt_1")
+    } == {
         "parallel_lesson_step_1_attempt_1",
-        "parallel_lesson_step_1_attempt_2",
-    ]
-    assert {stage for stage, *_ in calls[3:]} == {
         "parallel_lesson_step_2_attempt_1",
         "parallel_lesson_step_3_attempt_1",
     }
+
+
+@pytest.mark.asyncio
+async def test_thin_section_is_expanded_without_a_full_lesson_rewrite() -> None:
+    outline = _outline_payload()
+    lesson_attempts: dict[str, int] = {}
+    repair_attempts = 0
+    client_options: list[dict] = []
+
+    class FakeClient:
+        model = "fake-model"
+
+        async def generate_json(self, *, user_prompt, output_model, **kwargs):
+            nonlocal repair_attempts
+            if output_model is PlanItemDetailsOutlineOutput:
+                return SimpleNamespace(data=copy.deepcopy(outline), error=None)
+            if output_model is PlanDetailSectionsRepairOutput:
+                repair_attempts += 1
+                assert "core_framework" in user_prompt
+                return SimpleNamespace(
+                    data={
+                        "sections": [
+                            {
+                                "field_name": "core_framework",
+                                "content": "expanded mechanism " * 325,
+                            }
+                        ]
+                    },
+                    error=None,
+                )
+
+            step_id = next(
+                candidate["id"]
+                for candidate in outline["steps"]
+                if f'"id":"{candidate["id"]}"' in user_prompt
+            )
+            lesson_attempts[step_id] = lesson_attempts.get(step_id, 0) + 1
+            sections = copy.deepcopy(_lesson_sections_payload())
+            if step_id == "step_1":
+                sections["core_framework"] = "thin mechanism " * 175
+            return SimpleNamespace(data=sections, error=None)
+
+    def client_factory(**kwargs):
+        client_options.append(kwargs)
+        return FakeClient()
+
+    result, calls, error = await _generate_plan_item_details_parallel(
+        system_prompt="planner",
+        task_title="Build a validated experiment",
+        mission_hours=5,
+        user_goal="learn product experimentation",
+        learning_preferences="reading and practice",
+        idol_name="Mentor",
+        idol_domain="technology",
+        idol_evidence={},
+        session_context="",
+        active_tier="balanced",
+        routing_reason="test",
+        client_factory=client_factory,
+    )
+
+    assert error is None
+    assert result is not None
+    assert lesson_attempts == {"step_1": 1, "step_2": 1, "step_3": 1}
+    assert repair_attempts == 1
+    repair_calls = [
+        stage for stage, *_ in calls if "sections_repair" in stage
+    ]
+    assert repair_calls == ["parallel_lesson_step_1_sections_repair_1"]
+    repair_options = [options for options in client_options if options.get("max_tokens") == 6000]
+    assert repair_options == [
+        {
+            "timeout": 60,
+            "max_tokens": 6000,
+            "tier": "balanced",
+            "thinking_level": "minimal",
+            "allow_fallback": False,
+        }
+    ]
 
 
 @pytest.mark.asyncio

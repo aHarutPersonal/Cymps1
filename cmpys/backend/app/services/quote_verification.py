@@ -284,17 +284,32 @@ Otherwise use likely_match or inconclusive. Include every quote_id exactly once.
     )
 
     from app.services.gemini import _gemini_client
+    from app.services.llm.gemini_compat import (
+        generation_config_kwargs,
+        resolve_thinking_config,
+    )
 
     started = time.perf_counter()
+    thinking_level, thinking_budget = resolve_thinking_config(
+        model=settings.gemini_model,
+        tier="balanced",
+        thinking_level="medium",
+        thinking_budget=None,
+    )
     response = await _gemini_client().aio.models.generate_content(
         model=settings.gemini_model,
         contents=user_prompt,
         config=types.GenerateContentConfig(
             system_instruction=system_prompt,
             tools=[types.Tool(google_search=types.GoogleSearch())],
-            temperature=0.0,
             max_output_tokens=2400,
             http_options=types.HttpOptions(timeout=90_000),
+            **generation_config_kwargs(
+                model=settings.gemini_model,
+                temperature=0.0,
+                thinking_level=thinking_level,
+                thinking_budget=thinking_budget,
+            ),
         ),
     )
     duration_ms = (time.perf_counter() - started) * 1000

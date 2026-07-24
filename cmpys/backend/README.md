@@ -10,7 +10,9 @@ feed), and content resources.
 - PostgreSQL via SQLAlchemy (async) + Alembic migrations
 - Redis + Celery for background jobs
 - Celery Beat catalog scheduler with daily job budgets and retry backoff
-- Google Gemini (`gemini-2.5-flash`) for LLM generation
+- Google Gemini through Yunwu: 3.6 Flash for user-visible generation, 3.5
+  Flash-Lite for bounded work, and 3.1 Pro only for failed quality gates;
+  native Google remains the grounding and independent-fallback path
 - Tavily for web-grounded search
 - Wikiquote for free source-backed quote discovery
 
@@ -39,19 +41,28 @@ Health check: `curl http://localhost:8000/health`
 | `DATABASE_URL` | Async Postgres (`postgresql+psycopg://...`) |
 | `REDIS_URL` | Redis for Celery |
 | `GEMINI_API_KEY` | Google Gemini API key |
+| `GEMINI_MODEL` | User-visible/long-form model (default `gemini-3.6-flash`) |
+| `GEMINI_FAST_MODEL` | Extraction/metadata model (default `gemini-3.5-flash-lite`) |
+| `GEMINI_QUALITY_MODEL` | Selective quality fallback (default `gemini-3.1-pro-preview`) |
 | `YUNWU_API_KEY` | Yunwu gateway API key when `LLM_PROVIDER=yunwu` |
 | `YUNWU_BASE_URL` | Yunwu OpenAI-compatible endpoint (default `https://yunwu.ai/v1`) |
+| `YUNWU_FAST_MODEL` | Yunwu model for bounded work (default `gemini-3.5-flash-lite`) |
+| `YUNWU_MODEL` | Yunwu model for visible generation (default `gemini-3.6-flash`) |
+| `YUNWU_QUALITY_MODEL` | Yunwu quality fallback (default `gemini-3.1-pro-preview`) |
 | `YUNWU_GROUP_RATIO` | Billing multiplier for the API token's assigned Yunwu route; defaults conservatively to `6` |
-| `YUNWU_FALLBACK_ENABLED` | Retry failed Yunwu generations through the matching Gemini tier |
+| `YUNWU_FALLBACK_ENABLED` | Retry failed Yunwu-routed generations through native Google Gemini |
 | `TAVILY_API_KEY` | Web search grounding |
 | `JWT_SECRET_KEY` | JWT signing; required in production |
-| `CELERY_DEFAULT_CONCURRENCY` | Normal interactive worker slots (default 2) |
+| `CELERY_DEFAULT_POOL` | Worker process pool; `solo` avoids prefork memory duplication on the small production host |
+| `CELERY_DEFAULT_CONCURRENCY` | Normal interactive worker slots (default 1; requests still fan out asynchronously inside a job) |
+| `CELERY_HIGH_POOL` / `CELERY_LOW_POOL` | Priority-worker process pools (default `solo`) |
 | `CELERY_HIGH_CONCURRENCY` | Reserved first-use worker slots (default 1) |
 | `CELERY_LOW_CONCURRENCY` | Speculative look-ahead worker slots (default 1) |
 | `CATALOG_SCHEDULER_ENABLED` | Enable continuous catalog ingestion |
 | `CATALOG_DAILY_JOB_LIMIT` | Maximum catalog jobs started per UTC day |
 | `CATALOG_DISPATCH_PER_TICK` | Maximum jobs leased each scheduler tick |
-| `CATALOG_WORKER_CONCURRENCY` | Parallel catalog execution slots; keep at least as high as the dispatch batch (default 2) |
+| `CATALOG_WORKER_POOL` | Background worker process pool (default `solo`) |
+| `CATALOG_WORKER_CONCURRENCY` | Background execution slots (default 1) |
 | `CATALOG_QUOTES_PER_IDOL_LIMIT` | Maximum sourced quotes retained per idol/import |
 | `CATALOG_QUOTE_MIN_CONFIDENCE` | Deterministic quote provenance threshold |
 | `CATALOG_QUOTE_VERIFICATION_ENABLED` | Enable independent Gemini Search cross-checks |
@@ -138,8 +149,8 @@ paid jobs stay queued until the next UTC day. User-triggered app requests are
 not blocked by this catalog guard. Per-job reserves for already running work
 prevent parallel workers from consuming the same remaining budget twice.
 
-Gemini 2.5 Search overage is excluded by default because the catalog's normal
-two grounded calls per day are inside Google's paid-tier free allowance. Set
+Gemini Search overage is excluded by default because the catalog's normal two
+grounded calls per day are inside Google's paid-tier free allowance. Set
 `LLM_BUDGET_INCLUDE_SEARCH_OVERAGE=true` for a conservative worst-case estimate
 after that allowance is exceeded. Pricing assumptions are versioned in every
 usage event and follow the official [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing).

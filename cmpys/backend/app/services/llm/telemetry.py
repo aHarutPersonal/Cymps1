@@ -77,6 +77,16 @@ def usage_record_from_response(
         quality_score=quality_score,
         metadata={
             **(metadata or {}),
+            **(
+                {"finish_reason": response.finish_reason}
+                if getattr(response, "finish_reason", None)
+                else {}
+            ),
+            **(
+                {"thoughts_tokens": response.thoughts_tokens}
+                if getattr(response, "thoughts_tokens", None) is not None
+                else {}
+            ),
             **({"error": str(error)[:500]} if error else {}),
             **(
                 {

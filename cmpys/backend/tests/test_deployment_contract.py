@@ -60,3 +60,17 @@ def test_interactive_queues_have_reserved_worker_roles() -> None:
     assert "-Q low_priority" in entrypoint
     assert "worker-high:" in compose
     assert "worker-low:" in compose
+
+
+def test_small_host_uses_single_process_workers_and_cpu_priority() -> None:
+    entrypoint = (PROJECT_ROOT / "backend" / "docker-entrypoint.sh").read_text()
+    compose = (PROJECT_ROOT / "infra" / "docker-compose.prod.yml").read_text()
+
+    assert '--pool="${CELERY_DEFAULT_POOL:-solo}"' in entrypoint
+    assert '--concurrency="${CELERY_DEFAULT_CONCURRENCY:-1}"' in entrypoint
+    assert '--pool="${CATALOG_WORKER_POOL:-solo}"' in entrypoint
+    assert '--concurrency="${CATALOG_WORKER_CONCURRENCY:-1}"' in entrypoint
+    assert "cpu_shares: 2048" in compose
+    assert "cpu_shares: 1536" in compose
+    assert "cpu_shares: 256" in compose
+    assert "CATALOG_DISPATCH_PER_TICK:-1" in compose
