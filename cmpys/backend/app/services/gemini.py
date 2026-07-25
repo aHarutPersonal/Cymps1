@@ -37,6 +37,13 @@ logger = logging.getLogger("cmpys.services.gemini")
 # request or worker slot indefinitely.
 GEMINI_REQUEST_TIMEOUT_MS = 60_000
 
+# The blueprint contract asks for up to 550 polished words. Gemini 3.x counts
+# internal thinking against the output budget, so the former 1,000-token cap
+# could terminate an otherwise healthy response with MAX_TOKENS before the
+# final sections were emitted. Keep enough headroom for low-level reasoning
+# plus the complete user-visible document.
+BLUEPRINT_MAX_OUTPUT_TOKENS = 2_000
+
 # Keywords that suggest user is asking for learning resources
 RESOURCE_KEYWORDS = {
     "book", "video", "course", "recommend", "resource", "reading",
@@ -459,7 +466,7 @@ async def blueprint_stream(
         contents=user_message,
         label="Blueprint",
         grounded=False,
-        max_output_tokens=1_000,
+        max_output_tokens=BLUEPRINT_MAX_OUTPUT_TOKENS,
         tier="balanced",
         thinking_level="low",
         operation="blueprint_stream",

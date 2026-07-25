@@ -198,6 +198,7 @@ async def test_agentic_streams_use_expected_grounding_policy(monkeypatch):
     ] == ["ok"]
 
     assert [call["grounded"] for call in calls] == [False, True, False]
+    assert calls[2]["max_output_tokens"] == gemini.BLUEPRINT_MAX_OUTPUT_TOKENS
 
 
 def test_interview_prompts_include_chat_history_exactly_once():
