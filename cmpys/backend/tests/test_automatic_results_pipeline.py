@@ -23,6 +23,16 @@ class _Result:
         return self.value
 
 
+def _current_scores() -> dict:
+    return {
+        "version": 2,
+        "methodology": "like_for_like_evidence",
+        "overall": {"status": "insufficient_evidence"},
+        "dimensions": [],
+        "milestones": [],
+    }
+
+
 def _plan_ready_messages(weekly_hours: int = 8) -> list[ChatMessage]:
     values = {
         "achievement_inventory": "I shipped a prototype used by five people.",
@@ -187,7 +197,7 @@ async def test_completed_results_replay_without_repeating_llm_calls(monkeypatch)
         interview_thread_id="thread-1",
         comparison_output="Cached comparison",
         blueprint_output="Cached blueprint",
-        comparison_scores_json={"dimensions": []},
+        comparison_scores_json=_current_scores(),
     )
     session.idol = Idol(id="idol-1", name="Ada Lovelace", domain="technology")
     thread = ChatThread(id="thread-1", user_id="user-1", idol_id="idol-1")
@@ -270,7 +280,7 @@ async def test_claim_waiter_refreshes_session_before_replaying_completed_artifac
         interview_thread_id="thread-1",
         comparison_output="Winner comparison",
         blueprint_output="Winner blueprint",
-        comparison_scores_json={"dimensions": []},
+        comparison_scores_json=_current_scores(),
     )
     refreshed_session.idol = session.idol
     thread = ChatThread(id="thread-1", user_id="user-1", idol_id="idol-1")
@@ -429,7 +439,7 @@ async def test_blueprint_retry_reuses_finished_comparison(monkeypatch) -> None:
         interview_thread_id="thread-1",
         comparison_output="Keep this comparison",
         blueprint_output=None,
-        comparison_scores_json={"dimensions": []},
+        comparison_scores_json=_current_scores(),
     )
     session.idol = Idol(id="idol-1", name="Ada Lovelace", domain="technology")
     thread = ChatThread(id="thread-1", user_id="user-1", idol_id="idol-1")
@@ -513,7 +523,7 @@ async def test_confirmed_interview_hours_reach_the_staged_plan_job(monkeypatch) 
         interview_thread_id="thread-1",
         comparison_output="Cached comparison",
         blueprint_output="Cached blueprint",
-        comparison_scores_json={"dimensions": []},
+        comparison_scores_json=_current_scores(),
     )
     session.idol = Idol(id="idol-1", name="Ada Lovelace", domain="technology")
     thread = ChatThread(id="thread-1", user_id="user-1", idol_id="idol-1")

@@ -1,10 +1,66 @@
+import 'dart:async';
+import 'dart:collection';
+
+import 'package:audio_session/audio_session.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:just_audio/just_audio.dart';
 import 'package:markdown/markdown.dart' as md;
+
+import '../../session/data/content_resources_repository.dart';
 
 typedef BookNarrationProgressHandler =
     void Function(int start, int end, String word);
 typedef BookNarrationErrorHandler = void Function(Object error);
+typedef BookNarrationVoiceHandler = void Function(BookNarrationVoiceKind voice);
+
+enum BookNarrationStyle {
+  expressive(
+    apiName: 'expressive',
+    label: 'Expressive',
+    description: 'Dynamic pacing and emotion that follow the meaning.',
+  ),
+  warm(
+    apiName: 'warm',
+    label: 'Warm',
+    description: 'Intimate, encouraging, and softly expressive.',
+  ),
+  grounded(
+    apiName: 'grounded',
+    label: 'Grounded',
+    description: 'Thoughtful, calm, and naturally varied.',
+  );
+
+  const BookNarrationStyle({
+    required this.apiName,
+    required this.label,
+    required this.description,
+  });
+
+  final String apiName;
+  final String label;
+  final String description;
+}
+
+enum BookNarrationVoiceKind { expressiveAi, device }
+
+/// Optional capability used by the reader to prepare upcoming sentences while
+/// the current one plays, avoiding mechanical gaps between clips.
+abstract interface class BookNarrationPreloader {
+  Future<void> prepare(String text);
+}
+
+/// Optional controls implemented by the adaptive production narrator. Keeping
+/// this separate leaves small test and accessibility narrators simple.
+abstract interface class BookNarrationStyleController {
+  BookNarrationStyle get style;
+
+  BookNarrationVoiceKind get voiceKind;
+
+  void setVoiceHandler(BookNarrationVoiceHandler? handler);
+
+  Future<void> setStyle(BookNarrationStyle style);
+}
 
 /// Small boundary around the platform speech engine so the reader can be
 /// exercised without a native plugin in widget tests.
@@ -23,6 +79,375 @@ abstract interface class BookNarrator {
   Future<void> stop();
 
   Future<void> dispose();
+}
+
+/// Human-style narration backed by cached speech audio and precise word cues.
+final class ExpressiveBookNarrator
+    implements BookNarrator, BookNarrationPreloader {
+  ExpressiveBookNarrator({
+    required ContentResourcesRepository repository,
+    required String resourceId,
+  }) : _repository = repository,
+       _resourceId = resourceId;
+
+  final ContentResourcesRepository _repository;
+  final String _resourceId;
+  final LinkedHashMap<String, Future<BookNarrationAudio>> _prepared =
+      LinkedHashMap();
+  AudioPlayer? _player;
+  StreamSubscription<Duration>? _positionSubscription;
+  BookNarrationProgressHandler? _progressHandler;
+  BookNarrationErrorHandler? _errorHandler;
+  BookNarrationStyle _style = BookNarrationStyle.expressive;
+  double _speed = 1;
+  int _playRun = 0;
+  int _lastCueStart = -1;
+
+  BookNarrationStyle get style => _style;
+
+  @override
+  void setProgressHandler(BookNarrationProgressHandler? handler) {
+    _progressHandler = handler;
+  }
+
+  @override
+  void setErrorHandler(BookNarrationErrorHandler? handler) {
+    _errorHandler = handler;
+  }
+
+  Future<void> setStyle(BookNarrationStyle style) async {
+    if (_style == style) return;
+    _style = style;
+    await stop();
+  }
+
+  @override
+  Future<void> initialize({required double speed}) async {
+    final session = await AudioSession.instance;
+    await session.configure(AudioSessionConfiguration.speech());
+    _player ??= AudioPlayer();
+    await setSpeed(speed);
+  }
+
+  @override
+  Future<void> setSpeed(double speed) async {
+    _speed = speed;
+    await _player?.setSpeed(speed);
+  }
+
+  @override
+  Future<void> prepare(String text) async {
+    await _load(text);
+  }
+
+  Future<BookNarrationAudio> _load(String text) {
+    final key = '${_style.apiName}\u0000$text';
+    final existing = _prepared.remove(key);
+    if (existing != null) {
+      _prepared[key] = existing;
+      return existing;
+    }
+    if (_prepared.length >= 12) {
+      _prepared.remove(_prepared.keys.first);
+    }
+
+    late final Future<BookNarrationAudio> request;
+    request = () async {
+      try {
+        return await _repository.prepareNarration(
+          _resourceId,
+          text: text,
+          style: _style.apiName,
+        );
+      } catch (_) {
+        if (identical(_prepared[key], request)) _prepared.remove(key);
+        rethrow;
+      }
+    }();
+    _prepared[key] = request;
+    return request;
+  }
+
+  @override
+  Future<void> speak(String text) async {
+    if (_player == null) await initialize(speed: _speed);
+    final run = ++_playRun;
+    _lastCueStart = -1;
+    try {
+      final audio = await _load(text);
+      if (run != _playRun) return;
+      final player = _player!;
+      final loadedDuration = await player.setUrl(audio.audioUri.toString());
+      if (run != _playRun) return;
+      await player.setSpeed(_speed);
+      final duration = loadedDuration ?? audio.duration ?? player.duration;
+      await _positionSubscription?.cancel();
+      _positionSubscription = player
+          .createPositionStream(
+            minPeriod: const Duration(milliseconds: 45),
+            maxPeriod: const Duration(milliseconds: 100),
+          )
+          .listen((position) {
+            if (run != _playRun) return;
+            _emitProgress(
+              text: text,
+              position: position,
+              duration: duration,
+              alignment: audio.alignment,
+            );
+          });
+      _emitProgress(
+        text: text,
+        position: Duration.zero,
+        duration: duration,
+        alignment: audio.alignment,
+      );
+      await player.play();
+    } catch (error) {
+      // An adaptive narrator suppresses this handler while it transparently
+      // switches to the device voice. Direct consumers still receive it.
+      _errorHandler?.call(error);
+      rethrow;
+    } finally {
+      if (run == _playRun) {
+        await _positionSubscription?.cancel();
+        _positionSubscription = null;
+      }
+    }
+  }
+
+  void _emitProgress({
+    required String text,
+    required Duration position,
+    required Duration? duration,
+    required List<BookNarrationCue> alignment,
+  }) {
+    final cue = alignment.isNotEmpty
+        ? _alignedCue(alignment, position)
+        : _estimatedCue(text, position, duration);
+    if (cue == null || cue.start == _lastCueStart) return;
+    _lastCueStart = cue.start;
+    _progressHandler?.call(
+      cue.start,
+      cue.end,
+      text.substring(cue.start, cue.end),
+    );
+  }
+
+  _LocalNarrationCue? _alignedCue(
+    List<BookNarrationCue> alignment,
+    Duration position,
+  ) {
+    var low = 0;
+    var high = alignment.length - 1;
+    while (low <= high) {
+      final middle = (low + high) >> 1;
+      final cue = alignment[middle];
+      if (position < cue.startTime) {
+        high = middle - 1;
+      } else if (position >= cue.endTime) {
+        low = middle + 1;
+      } else {
+        return _LocalNarrationCue(cue.start, cue.end);
+      }
+    }
+    final nearest = (high < 0 ? 0 : high)
+        .clamp(0, alignment.length - 1)
+        .toInt();
+    final cue = alignment[nearest];
+    return _LocalNarrationCue(cue.start, cue.end);
+  }
+
+  _LocalNarrationCue? _estimatedCue(
+    String text,
+    Duration position,
+    Duration? duration,
+  ) {
+    if (duration == null || duration <= Duration.zero) return null;
+    final words = RegExp(r'\S+').allMatches(text).toList(growable: false);
+    if (words.isEmpty) return null;
+    final total = duration.inMicroseconds;
+    final current = position.inMicroseconds.clamp(0, total);
+    var totalWeight = 0;
+    final weights = <int>[];
+    for (final word in words) {
+      final value = word.group(0)!;
+      var weight = value.length.clamp(1, 14);
+      if (RegExp(r'[,;:]$').hasMatch(value)) weight += 3;
+      if (RegExp(r'[.!?]$').hasMatch(value)) weight += 6;
+      weights.add(weight);
+      totalWeight += weight;
+    }
+    var elapsedWeight = 0;
+    for (var index = 0; index < words.length; index++) {
+      elapsedWeight += weights[index];
+      if (current * totalWeight <= total * elapsedWeight) {
+        return _LocalNarrationCue(words[index].start, words[index].end);
+      }
+    }
+    return _LocalNarrationCue(words.last.start, words.last.end);
+  }
+
+  @override
+  Future<void> stop() async {
+    _playRun++;
+    await _positionSubscription?.cancel();
+    _positionSubscription = null;
+    await _player?.stop();
+  }
+
+  @override
+  Future<void> dispose() async {
+    _progressHandler = null;
+    _errorHandler = null;
+    await stop();
+    await _player?.dispose();
+    _player = null;
+  }
+}
+
+/// Uses expressive narration whenever the network/provider is available and
+/// silently preserves listening with the installed device voice otherwise.
+final class AdaptiveBookNarrator
+    implements
+        BookNarrator,
+        BookNarrationPreloader,
+        BookNarrationStyleController {
+  AdaptiveBookNarrator({
+    required ExpressiveBookNarrator expressive,
+    required SystemBookNarrator device,
+  }) : _expressive = expressive,
+       _device = device {
+    _expressive.setProgressHandler((start, end, word) {
+      if (!_usingDevice) _progressHandler?.call(start, end, word);
+    });
+    _device.setProgressHandler((start, end, word) {
+      if (_usingDevice) _progressHandler?.call(start, end, word);
+    });
+    // Primary errors are handled by switching sources in speak().
+    _expressive.setErrorHandler(null);
+    _device.setErrorHandler((error) => _errorHandler?.call(error));
+  }
+
+  final ExpressiveBookNarrator _expressive;
+  final SystemBookNarrator _device;
+  BookNarrationProgressHandler? _progressHandler;
+  BookNarrationErrorHandler? _errorHandler;
+  BookNarrationVoiceHandler? _voiceHandler;
+  bool _usingDevice = false;
+  bool _expressiveReady = false;
+  bool _deviceReady = false;
+  double _speed = 1;
+
+  @override
+  BookNarrationStyle get style => _expressive.style;
+
+  @override
+  BookNarrationVoiceKind get voiceKind => _usingDevice
+      ? BookNarrationVoiceKind.device
+      : BookNarrationVoiceKind.expressiveAi;
+
+  @override
+  void setProgressHandler(BookNarrationProgressHandler? handler) {
+    _progressHandler = handler;
+  }
+
+  @override
+  void setErrorHandler(BookNarrationErrorHandler? handler) {
+    _errorHandler = handler;
+  }
+
+  @override
+  void setVoiceHandler(BookNarrationVoiceHandler? handler) {
+    _voiceHandler = handler;
+  }
+
+  @override
+  Future<void> initialize({required double speed}) async {
+    _speed = speed;
+    try {
+      await _expressive.initialize(speed: speed);
+      _expressiveReady = true;
+    } catch (_) {
+      await _switchToDevice();
+    }
+  }
+
+  @override
+  Future<void> setSpeed(double speed) async {
+    _speed = speed;
+    if (_expressiveReady) await _expressive.setSpeed(speed);
+    if (_deviceReady) await _device.setSpeed(speed);
+  }
+
+  @override
+  Future<void> setStyle(BookNarrationStyle style) async {
+    await _expressive.setStyle(style);
+    if (_usingDevice) {
+      _usingDevice = false;
+      _voiceHandler?.call(voiceKind);
+    }
+  }
+
+  @override
+  Future<void> prepare(String text) async {
+    if (_usingDevice) return;
+    try {
+      await _expressive.prepare(text);
+    } catch (_) {
+      // speak() performs the visible, deterministic fallback. A speculative
+      // prefetch failure should not interrupt the sentence already playing.
+    }
+  }
+
+  @override
+  Future<void> speak(String text) async {
+    if (!_usingDevice) {
+      try {
+        if (!_expressiveReady) {
+          await _expressive.initialize(speed: _speed);
+          _expressiveReady = true;
+        }
+        await _expressive.speak(text);
+        return;
+      } catch (_) {
+        await _expressive.stop();
+        await _switchToDevice();
+      }
+    }
+    await _device.speak(text);
+  }
+
+  Future<void> _switchToDevice() async {
+    if (!_deviceReady) {
+      await _device.initialize(speed: _speed);
+      _deviceReady = true;
+    }
+    if (!_usingDevice) {
+      _usingDevice = true;
+      _voiceHandler?.call(voiceKind);
+    }
+  }
+
+  @override
+  Future<void> stop() async {
+    await Future.wait<void>([_expressive.stop(), _device.stop()]);
+  }
+
+  @override
+  Future<void> dispose() async {
+    _progressHandler = null;
+    _errorHandler = null;
+    _voiceHandler = null;
+    await Future.wait<void>([_expressive.dispose(), _device.dispose()]);
+  }
+}
+
+final class _LocalNarrationCue {
+  const _LocalNarrationCue(this.start, this.end);
+
+  final int start;
+  final int end;
 }
 
 /// Device-local narration using the installed system voices. No network or

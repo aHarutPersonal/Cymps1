@@ -337,6 +337,7 @@ PROMPT_PLACEHOLDERS = {
     "comparison_scores.txt": [
         "idol_name",
         "user_age",
+        "achievement_baseline_status",
         "user_profile_json",
         "interview_transcript_json",
         "idol_facts_json",

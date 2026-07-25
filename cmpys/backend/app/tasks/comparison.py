@@ -35,7 +35,14 @@ def backfill_comparison_scores(self, session_id: str) -> dict:
 async def _backfill_comparison_scores_async(session_id: str) -> dict:
     from app.models.chat import ChatThread
     from app.models.intake import IntakeSession
-    from app.services.comparison.scoring import generate_comparison_scores
+    from app.services.comparison.scoring import (
+        comparison_scores_are_current,
+        generate_comparison_scores,
+    )
+    from app.services.interview_inputs import (
+        build_interview_plan_inputs,
+        provider_interview_plan_inputs,
+    )
     from app.services.llm.client import get_llm_client
     from app.services.transcripts import build_chat_history_json
 
@@ -48,7 +55,7 @@ async def _backfill_comparison_scores_async(session_id: str) -> dict:
         session = result.scalar_one_or_none()
         if not session:
             return {"status": "skipped", "reason": "session_not_found"}
-        if session.comparison_scores_json:
+        if comparison_scores_are_current(session.comparison_scores_json):
             return {"status": "skipped", "reason": "scores_already_present"}
         if not session.comparison_output:
             return {"status": "skipped", "reason": "no_comparison_output"}
@@ -56,6 +63,7 @@ async def _backfill_comparison_scores_async(session_id: str) -> dict:
         # Same context the streaming scorer uses: transcript reconstructed
         # from the interview thread with user turns wrapped as untrusted DATA.
         interview_transcript = ""
+        interview_messages = []
         if session.interview_thread_id:
             thread_result = await db.execute(
                 select(ChatThread)
@@ -64,14 +72,30 @@ async def _backfill_comparison_scores_async(session_id: str) -> dict:
             )
             thread = thread_result.scalar_one_or_none()
             if thread and thread.messages:
+                interview_messages = list(thread.messages)
                 interview_transcript = build_chat_history_json(
                     thread.messages, sanitize_user=True
                 )
+
+        session_goal = getattr(session, "user_goal", None)
+        if not isinstance(session_goal, str):
+            session_goal = None
+        plan_inputs = build_interview_plan_inputs(
+            interview_messages,
+            session_goal=session_goal,
+        )
+        learner_baseline = (
+            provider_interview_plan_inputs(plan_inputs)
+            if plan_inputs["answered_keys"]
+            else None
+        )
 
         user_profile = {
             "age": session.user_age,
             "financial_status": session.user_financial_status,
             "interests": session.user_interests,
+            "goal": session_goal,
+            "learner_baseline": learner_baseline,
         }
 
         scores = await generate_comparison_scores(
@@ -82,6 +106,9 @@ async def _backfill_comparison_scores_async(session_id: str) -> dict:
             interview_transcript_json=interview_transcript,
             idol_facts_json=json.dumps(session.idol_facts_json or {}),
             comparison_summary=session.comparison_output or "",
+            achievement_baseline_status=plan_inputs[
+                "achievement_baseline_status"
+            ],
         )
         if not scores:
             return {"status": "failed", "reason": "scorer_returned_none"}

@@ -24,9 +24,13 @@ const _storeKey = 'cmpys_store_v1';
 // Conversion helpers — raw comparisonScores map → seed-shaped objects
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Convert a raw `comparisonScores` map (from the session) into seed-shaped
-/// dimensions. Returns null when absent/empty so callers fall back to seed.
+/// Convert an evidence-grounded v2 `comparisonScores` map into dimensions.
+/// Legacy scores are hidden while the backend regenerates them.
 List<CmpysDimension>? dimsFromScores(Map<String, dynamic>? scores) {
+  if (scores?['version'] != 2 ||
+      scores?['methodology'] != 'like_for_like_evidence') {
+    return null;
+  }
   final raw = scores?['dimensions'];
   if (raw is! List || raw.isEmpty) return null;
   final out = <CmpysDimension>[];
@@ -35,10 +39,14 @@ List<CmpysDimension>? dimsFromScores(Map<String, dynamic>? scores) {
     out.add(CmpysDimension(
       id: (d['id'] ?? '').toString(),
       label: (d['label'] ?? '').toString(),
-      you: (d['you'] as num?)?.toInt() ?? 0,
-      idol: (d['idol'] as num?)?.toInt() ?? 0,
+      you: (d['you'] as num?)?.toInt(),
+      idol: (d['idol'] as num?)?.toInt(),
       youNote: (d['you_note'] ?? '').toString(),
       idolNote: (d['idol_note'] ?? '').toString(),
+      status: (d['status'] ?? 'insufficient_user_evidence').toString(),
+      comparisonBasis: (d['comparison_basis'] ?? '').toString(),
+      youEvidence: (d['you_evidence'] ?? 'none').toString(),
+      idolEvidence: (d['idol_evidence'] ?? 'none').toString(),
     ));
   }
   return out.isEmpty ? null : out;
@@ -47,6 +55,10 @@ List<CmpysDimension>? dimsFromScores(Map<String, dynamic>? scores) {
 /// Convert raw milestones into seed-shaped CmpysMilestone with stable ids
 /// (`m1`..). Returns null when absent so callers fall back to seed.
 List<CmpysMilestone>? milestonesFromScores(Map<String, dynamic>? scores) {
+  if (scores?['version'] != 2 ||
+      scores?['methodology'] != 'like_for_like_evidence') {
+    return null;
+  }
   final raw = scores?['milestones'];
   if (raw is! List || raw.isEmpty) return null;
   final out = <CmpysMilestone>[];
@@ -406,17 +418,33 @@ class CmpysState {
   /// Generated comparison dimensions with reassessment shifts applied
   /// (you-score capped at 100). Missing backend scores stay empty; demo values
   /// are never substituted.
-  List<({String id, String label, int you, int idol, String youNote, String idolNote})>
-      liveDims() {
+  List<({
+    String id,
+    String label,
+    int? you,
+    int? idol,
+    String youNote,
+    String idolNote,
+    String status,
+    String comparisonBasis,
+    String youEvidence,
+    String idolEvidence,
+  })> liveDims() {
     final base = dimsFromScores(liveComparisonScores) ?? const <CmpysDimension>[];
     return base
         .map((d) => (
               id: d.id,
               label: d.label,
-              you: (d.you + (dimShift[d.id] ?? 0)).clamp(0, 100),
+              you: d.you == null
+                  ? null
+                  : (d.you! + (dimShift[d.id] ?? 0)).clamp(0, 100),
               idol: d.idol,
               youNote: d.youNote,
               idolNote: d.idolNote,
+              status: d.status,
+              comparisonBasis: d.comparisonBasis,
+              youEvidence: d.youEvidence,
+              idolEvidence: d.idolEvidence,
             ))
         .toList();
   }

@@ -17,7 +17,18 @@ import '../state/cmpys_backend_sync.dart';
 import '../state/cmpys_store.dart';
 import 'record_screen.dart';
 
-typedef LiveDim = ({String id, String label, int you, int idol, String youNote, String idolNote});
+typedef LiveDim = ({
+  String id,
+  String label,
+  int? you,
+  int? idol,
+  String youNote,
+  String idolNote,
+  String status,
+  String comparisonBasis,
+  String youEvidence,
+  String idolEvidence,
+});
 
 /// CMPYS Compare tab — head-to-head gauge, verdict, record entry, radar,
 /// expandable dimensions, milestones (claimable), strengths.
@@ -49,17 +60,27 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
     final ms = st.liveMilestones();
     final cmpAge = st.user.age;
     final hasScores = dims.isNotEmpty;
-    final youAvg = hasScores
-        ? (dims.map((d) => d.you).reduce((a, b) => a + b) / dims.length).round()
+    final comparableDims = dims.where((d) =>
+        d.status == 'comparable' && d.you != null && d.idol != null).toList();
+    final rawOverall = st.liveComparisonScores?['overall'];
+    final overall = rawOverall is Map
+        ? rawOverall.cast<String, dynamic>()
+        : null;
+    final hasOverall = overall?['status'] == 'estimated' &&
+        comparableDims.length == dims.length && dims.isNotEmpty;
+    final youAvg = hasOverall
+        ? (comparableDims.map((d) => d.you!).reduce((a, b) => a + b) /
+                comparableDims.length).round()
         : 0;
-    final idolAvg = hasScores
-        ? (dims.map((d) => d.idol).reduce((a, b) => a + b) / dims.length).round()
+    final idolAvg = hasOverall
+        ? (comparableDims.map((d) => d.idol!).reduce((a, b) => a + b) /
+                comparableDims.length).round()
         : 0;
-    final overall = idolAvg > 0 ? (youAvg / idolAvg * 100).round() : 0;
+    final readinessGap = idolAvg - youAvg;
     final hitCount = ms.where((m) => st.milestones[m.id] ?? false).length;
     final pending = st.pendingWins().length;
     final initial = st.user.name.isNotEmpty ? st.user.name[0].toUpperCase() : 'Y';
-    final strengths = dims.where((d) => d.you >= d.idol).toList();
+    final strengths = comparableDims.where((d) => d.you! >= d.idol!).toList();
 
     return Scaffold(
       backgroundColor: AppColors.paper,
@@ -80,8 +101,10 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
               ],
             ),
             const SizedBox(height: 16),
-            if (hasScores)
-              _gaugeHero(st, idol, youAvg, idolAvg, overall, initial)
+            if (hasScores && hasOverall)
+              _readinessHero(idol, youAvg, idolAvg, readinessGap, initial)
+            else if (hasScores)
+              _insufficientEvidenceHero(overall)
             else
               _comparisonScoresStatus(scoresSync),
             const SizedBox(height: 14),
@@ -90,8 +113,10 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
             _recordEntry(st, idol, hasScores ? pending : 0),
             if (hasScores) ...[
               const SizedBox(height: 18),
-              _radarCard(idol, dims),
-              const SizedBox(height: 16),
+              if (comparableDims.length >= 3) ...[
+                _radarCard(idol, comparableDims),
+                const SizedBox(height: 16),
+              ],
               _dimensionRows(dims),
               if (ms.isNotEmpty) ...[
                 const SizedBox(height: 22),
@@ -215,51 +240,119 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
     );
   }
 
-  Widget _gaugeHero(CmpysState st, CmpysIdol idol, int youAvg, int idolAvg,
-      int overall, String initial) {
+  Widget _readinessHero(CmpysIdol idol, int youAvg, int idolAvg,
+      int gap, String initial) {
+    final gapText = gap > 0 ? '−$gap' : gap < 0 ? '+${-gap}' : '0';
     return CmpysCardSurface(
       raised: true,
       pad: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
-      child: Row(
+      child: Column(
         children: [
-          _gaugeSide(
-            CmpysMonogram(
-                initials: initial,
-                size: 56,
-                color: AppColors.ochre2,
-                tint: AppColors.ochreSoft),
-            'You, now',
-            'INDEX $youAvg',
-          ),
-          Expanded(
-            child: CmpysRing(
-              value: overall.toDouble().clamp(0, 100),
-              size: 92,
-              stroke: 8,
-              color: AppColors.ochre,
-              track: AppColors.hair,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text('$overall%',
-                      style: AppTypography.display.copyWith(
-                          fontSize: 24, fontWeight: FontWeight.w800, height: 1)),
-                  Text('of ${idol.short}',
-                      style: AppTypography.caption.copyWith(
-                          color: AppColors.ink3, fontSize: 10.5)),
-                ],
+          Row(
+            children: [
+              _gaugeSide(
+                CmpysMonogram(
+                    initials: initial,
+                    size: 56,
+                    color: AppColors.ochre2,
+                    tint: AppColors.ochreSoft),
+                'You, now',
+                'READINESS $youAvg',
               ),
-            ),
+              Expanded(
+                child: Center(
+                  child: Container(
+                    width: 92,
+                    height: 92,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: AppColors.paper2,
+                      border: Border.all(color: AppColors.hair, width: 8),
+                    ),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(gapText,
+                            style: AppTypography.display.copyWith(
+                                fontSize: 24,
+                                fontWeight: FontWeight.w800,
+                                height: 1)),
+                        Text('point gap',
+                            style: AppTypography.caption.copyWith(
+                                color: AppColors.ink3, fontSize: 10.5)),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              _gaugeSide(
+                CmpysMentorAvatar(
+                    slug: idol.slug,
+                    initials: idol.initials,
+                    color: idol.color,
+                    tint: idol.tint,
+                    size: 56),
+                idol.short,
+                'BENCHMARK $idolAvg',
+              ),
+            ],
           ),
-          _gaugeSide(
-            CmpysMentorAvatar(
-                slug: idol.slug,
-                initials: idol.initials,
-                color: idol.color,
-                tint: idol.tint,
-                size: 56),
-            idol.short,
-            'INDEX $idolAvg',
+          const SizedBox(height: 14),
+          Text('Evidence-tier estimate · not a percentage of achievements',
+              textAlign: TextAlign.center,
+              style: AppTypography.caption
+                  .copyWith(color: AppColors.ink3, fontSize: 11.5)),
+        ],
+      ),
+    );
+  }
+
+  Widget _insufficientEvidenceHero(Map<String, dynamic>? overall) {
+    final comparable = (overall?['comparable_dimensions'] as num?)?.toInt() ?? 0;
+    final total = (overall?['total_dimensions'] as num?)?.toInt() ?? 5;
+    final reason = (overall?['reason'] ??
+            'There is not enough like-for-like evidence for an overall score.')
+        .toString();
+    return CmpysCardSurface(
+      key: const Key('comparison-overall-insufficient'),
+      raised: true,
+      pad: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: AppColors.ochreSoft,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(PhosphorIconsBold.scales,
+                    size: 20, color: AppColors.ochre2),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text('No honest overall score yet',
+                    style: AppTypography.h4.copyWith(fontSize: 16)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(reason,
+              style: AppTypography.caption
+                  .copyWith(color: AppColors.ink2, fontSize: 13, height: 1.45)),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            decoration: BoxDecoration(
+              color: AppColors.paper2,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text('$comparable/$total dimensions are like-for-like',
+                style: AppTypography.monoLabel
+                    .copyWith(color: AppColors.ink3, fontSize: 10.5)),
           ),
         ],
       ),
@@ -497,11 +590,11 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
               painter: _RadarPainter(
                   dims: dims
                       .map((d) =>
-                          (label: _dimShort[d.id] ?? d.label, you: d.you, idol: d.idol))
+                          (label: _dimShort[d.id] ?? d.label, you: d.you!, idol: d.idol!))
                       .toList()),
             ),
           ),
-          Text('Tap a dimension below for the story behind it',
+          Text('Comparable dimensions only · tap below for evidence',
               style: AppTypography.caption
                   .copyWith(color: AppColors.ink3, fontSize: 12)),
         ],
@@ -538,8 +631,10 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
 
   Widget _dimRow(LiveDim d, {required bool first}) {
     final open = _open == d.id;
-    final gap = d.idol - d.you;
-    final ahead = gap < 0;
+    final comparable =
+        d.status == 'comparable' && d.you != null && d.idol != null;
+    final gap = comparable ? d.idol! - d.you! : null;
+    final ahead = gap != null && gap < 0;
     return Container(
       decoration: BoxDecoration(
         border: first
@@ -568,13 +663,22 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
                         padding: const EdgeInsets.symmetric(
                             horizontal: 9, vertical: 3),
                         decoration: BoxDecoration(
-                            color: ahead
+                            color: !comparable
+                                ? AppColors.paper2
+                                : ahead
                                 ? AppColors.greenSoft
                                 : AppColors.claySoft,
                             borderRadius: BorderRadius.circular(999)),
-                        child: Text(ahead ? '+${-gap}' : '−$gap',
+                        child: Text(
+                            comparable
+                                ? ahead
+                                    ? '+${-gap}'
+                                    : '−$gap'
+                                : _dimensionStatusLabel(d.status),
                             style: AppTypography.kicker.copyWith(
-                                color: ahead
+                                color: !comparable
+                                    ? AppColors.ink3
+                                    : ahead
                                     ? AppColors.green2
                                     : AppColors.clay,
                                 fontSize: 10.5)),
@@ -582,22 +686,53 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
                     ],
                   ),
                   const SizedBox(height: 8),
-                  _barWithVal(d.you, AppColors.ochre, AppColors.ochre2),
-                  const SizedBox(height: 6),
-                  _barWithVal(d.idol, AppColors.green, AppColors.green2),
+                  if (comparable) ...[
+                    _barWithVal(d.you!, AppColors.ochre, AppColors.ochre2),
+                    const SizedBox(height: 6),
+                    _barWithVal(d.idol!, AppColors.green, AppColors.green2),
+                  ] else
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 9),
+                      decoration: BoxDecoration(
+                        color: AppColors.paper2,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        d.comparisonBasis.isNotEmpty
+                            ? 'No numeric score · ${d.comparisonBasis}'
+                            : 'No numeric score · evidence is not comparable',
+                        style: AppTypography.caption.copyWith(
+                            color: AppColors.ink3,
+                            fontSize: 11.5,
+                            height: 1.35),
+                      ),
+                    ),
                 ],
               ),
             ),
             if (open) ...[
               const SizedBox(height: 12),
-              _noteLine(AppColors.ochre, d.youNote),
-              const SizedBox(height: 8),
-              _noteLine(AppColors.green, d.idolNote),
+              if (d.youNote.isNotEmpty)
+                _noteLine(AppColors.ochre, d.youNote),
+              if (d.youNote.isNotEmpty && d.idolNote.isNotEmpty)
+                const SizedBox(height: 8),
+              if (d.idolNote.isNotEmpty)
+                _noteLine(AppColors.green, d.idolNote),
             ],
           ],
         ),
       ),
     );
+  }
+
+  String _dimensionStatusLabel(String status) {
+    return switch (status) {
+      'different_basis' => 'Different basis',
+      'insufficient_idol_evidence' => 'Need mentor evidence',
+      _ => 'Need your evidence',
+    };
   }
 
   Widget _barWithVal(int value, Color color, Color valueColor) {

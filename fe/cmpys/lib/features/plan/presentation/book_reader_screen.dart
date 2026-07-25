@@ -54,6 +54,7 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
   bool _narrationFinished = false;
   bool _narratorReady = false;
   bool _narrationChangingChapter = false;
+  bool _deviceFallbackAnnounced = false;
   int _narrationRun = 0;
   int? _narrationSegmentIndex;
   int _narrationWordStart = 0;
@@ -61,6 +62,8 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
   int _narrationResumeOffset = 0;
   int _speechBaseOffset = 0;
   double _narrationSpeed = 1;
+  BookNarrationStyle _narrationStyle = BookNarrationStyle.expressive;
+  BookNarrationVoiceKind _narrationVoice = BookNarrationVoiceKind.expressiveAi;
   final Map<String, GlobalKey> _narrationBlockKeys = {};
 
   ContentResourcesRepository get _repository =>
@@ -84,9 +87,22 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
   @override
   void initState() {
     super.initState();
-    _narrator = widget.narrator ?? SystemBookNarrator();
+    _narrator =
+        widget.narrator ??
+        AdaptiveBookNarrator(
+          expressive: ExpressiveBookNarrator(
+            repository: _repository,
+            resourceId: widget.resourceId,
+          ),
+          device: SystemBookNarrator(),
+        );
     _narrator.setProgressHandler(_onNarrationProgress);
     _narrator.setErrorHandler(_onNarrationError);
+    if (_narrator case final BookNarrationStyleController controller) {
+      _narrationStyle = controller.style;
+      _narrationVoice = controller.voiceKind;
+      controller.setVoiceHandler(_onNarrationVoiceChanged);
+    }
     _load();
   }
 
@@ -95,6 +111,9 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
     _narrationRun++;
     _narrator.setProgressHandler(null);
     _narrator.setErrorHandler(null);
+    if (_narrator case final BookNarrationStyleController controller) {
+      controller.setVoiceHandler(null);
+    }
     unawaited(_narrator.dispose());
     _pageController.dispose();
     super.dispose();
@@ -114,6 +133,22 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
       ]);
       final resource = results[0] as ContentResource;
       final notes = results[1] as List<ContentHighlight>;
+      final cursor = resource.cursorJson;
+      final savedStyle = BookNarrationStyle.values.where(
+        (style) => style.apiName == cursor?['narrationStyle']?.toString(),
+      );
+      final narrationStyle = savedStyle.isEmpty
+          ? _narrationStyle
+          : savedStyle.first;
+      final narrationSpeed = switch (cursor?['narrationSpeed']) {
+        final num speed
+            when const [0.75, 1.0, 1.25, 1.5, 2.0].contains(speed.toDouble()) =>
+          speed.toDouble(),
+        _ => _narrationSpeed,
+      };
+      if (_narrator case final BookNarrationStyleController controller) {
+        await controller.setStyle(narrationStyle);
+      }
       final markdown = resource.contentMarkdown?.trim() ?? '';
       final chapters = markdown.isEmpty
           ? <BookChapter>[]
@@ -142,6 +177,8 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
         _narrationBlockKeys.clear();
         _notes = notes;
         _chapterIndex = initialChapter!;
+        _narrationStyle = narrationStyle;
+        _narrationSpeed = narrationSpeed;
         _loading = false;
       });
     } catch (_) {
@@ -170,6 +207,8 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
         cursorJson: {
           'chapter': _chapterIndex,
           'chapterTitle': _chapters[_chapterIndex].title,
+          'narrationStyle': _narrationStyle.apiName,
+          'narrationSpeed': _narrationSpeed,
         },
       );
     } catch (_) {
@@ -222,6 +261,15 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
       _narrationPreparing = false;
     });
     _toast('Narration paused. Try playing it again.');
+  }
+
+  void _onNarrationVoiceChanged(BookNarrationVoiceKind voice) {
+    if (!mounted || _narrationVoice == voice) return;
+    setState(() => _narrationVoice = voice);
+    if (voice == BookNarrationVoiceKind.device && !_deviceFallbackAnnounced) {
+      _deviceFallbackAnnounced = true;
+      _toast('Expressive voice is offline. Continuing with the device voice.');
+    }
   }
 
   Future<void> _toggleNarration() async {
@@ -311,6 +359,7 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
         _narrationWordEnd = offset;
       });
       _revealNarrationSegment();
+      _prefetchUpcomingNarration(document, segmentIndex);
 
       try {
         await _narrator.speak(segment.text.substring(offset));
@@ -468,7 +517,56 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
       await _narrator.stop();
       if (_narratorReady) await _narrator.setSpeed(speed);
     } catch (_) {}
+    unawaited(_persistProgress());
     if (continuePlaying && mounted) unawaited(_playNarration());
+  }
+
+  Future<void> _changeNarrationStyle(BookNarrationStyle style) async {
+    if (_narrationStyle == style ||
+        _narrator is! BookNarrationStyleController) {
+      return;
+    }
+    final controller = _narrator as BookNarrationStyleController;
+    final continuePlaying = _narrationPlaying;
+    _narrationRun++;
+    setState(() {
+      _narrationStyle = style;
+      _narrationVoice = BookNarrationVoiceKind.expressiveAi;
+      _narrationPlaying = false;
+      _narrationPreparing = continuePlaying;
+    });
+    try {
+      await _narrator.stop();
+      await controller.setStyle(style);
+    } catch (_) {
+      if (mounted) _toast('Couldn’t change the narration style.');
+    }
+    if (!mounted) return;
+    setState(() => _narrationPreparing = false);
+    unawaited(_persistProgress());
+    if (continuePlaying) unawaited(_playNarration());
+  }
+
+  void _prefetchUpcomingNarration(
+    BookNarrationDocument document,
+    int currentIndex,
+  ) {
+    if (_narrator is! BookNarrationPreloader) return;
+    final preloader = _narrator as BookNarrationPreloader;
+    for (
+      var index = currentIndex + 1;
+      index < document.segments.length && index <= currentIndex + 2;
+      index++
+    ) {
+      final text = document.segments[index].text;
+      unawaited(() async {
+        try {
+          await preloader.prepare(text);
+        } catch (_) {
+          // Prefetch is opportunistic; speak() owns fallback and error UX.
+        }
+      }());
+    }
   }
 
   GlobalKey _narrationBlockKey(int chapterIndex, int blockIndex) {
@@ -1223,6 +1321,9 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
   }
 
   Widget _narrationPlayer() {
+    final compactControls =
+        MediaQuery.sizeOf(context).width < 360 ||
+        MediaQuery.textScalerOf(context).scale(14) > 17;
     final document = _currentNarrationDocument;
     final segment = _currentNarrationSegment;
     final segmentCount = document?.segments.length ?? 0;
@@ -1235,7 +1336,9 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
     final currentText =
         segment?.text ??
         (_narrationPreparing
-            ? 'Preparing the system voice…'
+            ? _narrationVoice == BookNarrationVoiceKind.device
+                  ? 'Preparing the device voice…'
+                  : 'Preparing expressive narration…'
             : 'Ready to listen');
     final speedLabel = _narrationSpeed == _narrationSpeed.roundToDouble()
         ? '${_narrationSpeed.toInt()}×'
@@ -1278,7 +1381,9 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'LISTENING · CHAPTER ${_chapterIndex + 1} OF ${_chapters.length}',
+                      'LISTENING · ${_narrationVoice == BookNarrationVoiceKind.device ? 'DEVICE VOICE' : '${_narrationStyle.label.toUpperCase()} AI'} · CHAPTER ${_chapterIndex + 1} OF ${_chapters.length}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: AppTypography.kicker.copyWith(
                         color: AppColors.green,
                         fontSize: 9.5,
@@ -1316,6 +1421,97 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
           const SizedBox(height: 8),
           Row(
             children: [
+              PopupMenuButton<BookNarrationStyle>(
+                key: const Key('book-narration-style'),
+                tooltip: 'Narration style',
+                initialValue: _narrationStyle,
+                onSelected: (style) => unawaited(_changeNarrationStyle(style)),
+                color: _chrome,
+                itemBuilder: (context) => [
+                  for (final style in BookNarrationStyle.values)
+                    PopupMenuItem<BookNarrationStyle>(
+                      value: style,
+                      height: 64,
+                      child: Row(
+                        children: [
+                          SizedBox(
+                            width: 26,
+                            child: style == _narrationStyle
+                                ? const Icon(
+                                    Icons.check_rounded,
+                                    size: 18,
+                                    color: AppColors.green,
+                                  )
+                                : null,
+                          ),
+                          Expanded(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  style.label,
+                                  style: AppTypography.bodyMedium.copyWith(
+                                    color: _ink,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  style.description,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: AppTypography.caption.copyWith(
+                                    color: _muted,
+                                    fontSize: 11,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+                child: Container(
+                  height: 34,
+                  padding: EdgeInsets.symmetric(
+                    horizontal: compactControls ? 8 : 10,
+                  ),
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: _background,
+                    borderRadius: AppRadii.brFull,
+                    border: Border.all(color: _muted.withValues(alpha: .16)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        _narrationVoice == BookNarrationVoiceKind.device
+                            ? Icons.phone_iphone_rounded
+                            : Icons.auto_awesome_rounded,
+                        size: 14,
+                        color: _narrationVoice == BookNarrationVoiceKind.device
+                            ? _muted
+                            : AppColors.green,
+                      ),
+                      if (!compactControls) ...[
+                        const SizedBox(width: 5),
+                        Text(
+                          _narrationVoice == BookNarrationVoiceKind.device
+                              ? 'Device'
+                              : _narrationStyle.label,
+                          style: AppTypography.captionMedium.copyWith(
+                            color: _ink,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
               PopupMenuButton<double>(
                 key: const Key('book-narration-speed'),
                 tooltip: 'Listening speed',
@@ -1388,7 +1584,12 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
                   fontSize: 9.5,
                 ),
               ),
-              const SizedBox(width: 5),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
               IconButton(
                 key: const Key('book-narration-previous'),
                 tooltip: 'Previous sentence',

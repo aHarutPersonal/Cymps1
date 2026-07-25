@@ -242,13 +242,24 @@ class CmpysDimension {
     required this.idol,
     required this.youNote,
     required this.idolNote,
+    this.status = 'comparable',
+    this.comparisonBasis = '',
+    this.youEvidence = 'none',
+    this.idolEvidence = 'none',
   });
   final String id;
   final String label;
-  final int you;
-  final int idol;
+  final int? you;
+  final int? idol;
   final String youNote;
   final String idolNote;
+  final String status;
+  final String comparisonBasis;
+  final String youEvidence;
+  final String idolEvidence;
+
+  bool get isComparable =>
+      status == 'comparable' && you != null && idol != null;
 }
 
 class CmpysMilestone {

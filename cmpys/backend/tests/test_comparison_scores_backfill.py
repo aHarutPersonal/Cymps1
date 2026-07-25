@@ -5,6 +5,16 @@ import pytest
 from app.tasks import comparison as comparison_tasks
 
 
+def _current_scores() -> dict:
+    return {
+        "version": 2,
+        "methodology": "like_for_like_evidence",
+        "overall": {},
+        "dimensions": [],
+        "milestones": [],
+    }
+
+
 class ScalarResult:
     def __init__(self, value=None):
         self._value = value
@@ -38,6 +48,7 @@ def _session(**overrides):
     session.user_age = 28
     session.user_financial_status = "modest"
     session.user_interests = ["investing"]
+    session.user_goal = None
     session.idol_facts_json = {}
     for key, value in overrides.items():
         setattr(session, key, value)
@@ -45,8 +56,15 @@ def _session(**overrides):
 
 
 @pytest.mark.asyncio
-async def test_backfill_generates_and_persists_scores(monkeypatch):
-    session = _session()
+@pytest.mark.parametrize(
+    "existing_scores",
+    [None, {"dimensions": [{"id": "capital", "you": 45, "idol": 90}]}],
+)
+async def test_backfill_generates_and_replaces_missing_or_stale_scores(
+    monkeypatch,
+    existing_scores,
+):
+    session = _session(comparison_scores_json=existing_scores)
     db = AsyncMock()
     db.execute.return_value = ScalarResult(session)
     monkeypatch.setattr(comparison_tasks, "async_session_maker", FakeSessionMaker(db))
@@ -76,7 +94,7 @@ async def test_backfill_generates_and_persists_scores(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_backfill_skips_when_scores_already_present(monkeypatch):
-    session = _session(comparison_scores_json={"dimensions": []})
+    session = _session(comparison_scores_json=_current_scores())
     db = AsyncMock()
     db.execute.return_value = ScalarResult(session)
     monkeypatch.setattr(comparison_tasks, "async_session_maker", FakeSessionMaker(db))
@@ -149,7 +167,7 @@ def test_maybe_enqueue_scores_backfill_dedupes_and_guards(monkeypatch):
     assert enqueued[0]["args"] == ["sess-needs"]
     assert enqueued[0]["queue"] == "low_priority"
 
-    has_scores = _session(id="sess-done", comparison_scores_json={"dimensions": []})
+    has_scores = _session(id="sess-done", comparison_scores_json=_current_scores())
     sessions_api._maybe_enqueue_scores_backfill(has_scores)
     no_verdict = _session(id="sess-early", comparison_output=None)
     sessions_api._maybe_enqueue_scores_backfill(no_verdict)

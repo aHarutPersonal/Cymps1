@@ -95,6 +95,16 @@ class TestPromptContentFixes:
         # And it now frames the gap as trainable.
         assert "trainable" in text
 
+    def test_comparison_refuses_unlike_financial_constructs(self):
+        prose_prompt = load_prompt("comparison_generate").lower()
+        score_prompt = load_prompt("comparison_scores").lower()
+
+        assert "compare like with like" in prose_prompt
+        assert "personal savings" in prose_prompt
+        assert "external capital raised" in prose_prompt
+        assert "personal savings versus company ipo proceeds" in score_prompt
+        assert "must be \"different_basis\"" in score_prompt
+
     def test_timeline_normalize_age_example_not_zero(self):
         text = load_prompt("timeline_normalize")
         assert '"age_at_event": 0,' not in text

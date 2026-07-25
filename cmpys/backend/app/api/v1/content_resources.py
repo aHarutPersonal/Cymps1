@@ -1,4 +1,5 @@
 """Shared content resource and Vault endpoints."""
+from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Annotated
 
@@ -23,6 +24,9 @@ from app.schemas.content_resource import (
     ContentHighlightCreate,
     ContentHighlightListResponse,
     ContentHighlightResponse,
+    ContentNarrationCue,
+    ContentNarrationRequest,
+    ContentNarrationResponse,
     ContentProgressUpdate,
     ContentResourceListResponse,
     ContentResourceReferenceResponse,
@@ -30,6 +34,11 @@ from app.schemas.content_resource import (
     ContentResourceSaveRequest,
     ContentResourceSaveResponse,
     ContinueReadingResponse,
+)
+from app.services.book_narration import (
+    BookNarrationUnavailableError,
+    narration_text_belongs_to_resource,
+    render_book_narration,
 )
 
 router = APIRouter(prefix="/content-resources", tags=["content-resources"])
@@ -464,6 +473,51 @@ async def get_content_resource(
     save = await _get_save(db, current_user.id, resource_id)
     progress = await _get_progress(db, current_user.id, resource_id)
     return _resource_response(resource, save=save, progress=progress)
+
+
+@router.post("/{resource_id}/narration", response_model=ContentNarrationResponse)
+async def prepare_content_narration(
+    resource_id: str,
+    data: ContentNarrationRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> ContentNarrationResponse:
+    """Prepare expressive AI narration for a passage in this book.
+
+    Rendering is shared and content-addressed, while access to generation stays
+    authenticated. The passage membership check prevents the speech endpoint
+    from becoming an unrestricted proxy for arbitrary text.
+    """
+
+    del current_user  # Authentication is intentional even though the cache is shared.
+    resource = await _get_resource(db, resource_id)
+    text = data.text.strip()
+    if not narration_text_belongs_to_resource(text, resource.content_markdown or ""):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Narration passage does not belong to this resource",
+        )
+
+    # Release the read transaction before provider/network work.
+    await db.commit()
+    try:
+        asset = await render_book_narration(text, data.style.value)
+    except BookNarrationUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Expressive narration is temporarily unavailable",
+        ) from exc
+
+    return ContentNarrationResponse(
+        audioUrl=asset.audio_url,
+        style=data.style,
+        voice=asset.voice,
+        provider="openai",
+        isAiGenerated=True,
+        durationMs=asset.duration_ms,
+        alignment=[ContentNarrationCue(**asdict(cue)) for cue in asset.alignment],
+        cached=asset.cached,
+    )
 
 
 @router.post("/{resource_id}/save", response_model=ContentResourceSaveResponse)

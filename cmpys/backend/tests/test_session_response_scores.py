@@ -18,18 +18,31 @@ def _session(scores):
     )
 
 
+def _current_scores(**overrides):
+    scores = {
+        "version": 2,
+        "methodology": "like_for_like_evidence",
+        "overall": {"status": "insufficient_evidence"},
+        "dimensions": [],
+        "milestones": [],
+    }
+    scores.update(overrides)
+    return scores
+
+
 def test_includes_scores_when_present():
-    s = _session({"dimensions": [], "milestones": []})
+    scores = _current_scores()
+    s = _session(scores)
     out = _build_session_response(s)
-    assert out["comparisonScores"] == {"dimensions": [], "milestones": []}
+    assert out["comparisonScores"] == scores
 
 
 def test_response_model_preserves_scores_under_client_contract_key():
     """Catch FastAPI/Pydantic filtering after the response dict is built."""
-    scores = {
-        "dimensions": [{"id": "capital", "you": 35, "idol": 70}],
-        "milestones": [{"id": "m1", "label": "First milestone"}],
-    }
+    scores = _current_scores(
+        dimensions=[{"id": "capital", "you": None, "idol": None}],
+        milestones=[{"id": "m1", "label": "First milestone"}],
+    )
 
     response = SessionResponse.model_validate(
         _build_session_response(_session(scores))
@@ -40,4 +53,11 @@ def test_response_model_preserves_scores_under_client_contract_key():
 
 def test_null_when_absent():
     out = _build_session_response(_session(None))
+    assert out["comparisonScores"] is None
+
+
+def test_legacy_scores_are_hidden_until_regenerated():
+    out = _build_session_response(
+        _session({"dimensions": [{"id": "capital", "you": 45, "idol": 90}]})
+    )
     assert out["comparisonScores"] is None

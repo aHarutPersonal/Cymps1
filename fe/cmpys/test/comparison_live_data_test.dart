@@ -31,6 +31,8 @@ void main() {
     final store = CmpysStore();
     await Future<void>.delayed(Duration.zero);
     store.syncFromSession(_session('first', scores: {
+      'version': 2,
+      'methodology': 'like_for_like_evidence',
       'dimensions': [
         {
           'id': 'clarity',
@@ -39,6 +41,7 @@ void main() {
           'idol': 70,
           'you_note': 'Generated user note',
           'idol_note': 'Generated mentor note',
+          'status': 'comparable',
         },
       ],
     }));
@@ -54,12 +57,15 @@ void main() {
     final store = CmpysStore();
     await store.ready;
     store.syncFromSession(_session('persisted', scores: {
+      'version': 2,
+      'methodology': 'like_for_like_evidence',
       'dimensions': [
         {
           'id': 'clarity',
           'label': 'Clarity',
           'you': 55,
           'idol': 75,
+          'status': 'comparable',
         },
       ],
       'milestones': <Map<String, dynamic>>[],

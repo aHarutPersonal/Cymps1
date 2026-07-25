@@ -37,6 +37,17 @@ class Settings(BaseSettings):
     openai_fast_model: str = "gpt-4o-mini"  # Lightweight model for thinking/discovery
     openai_quality_model: str = "gpt-4.1"  # Selective fallback for failed quality gates
 
+    # Expressive in-reader narration. Speech is generated once per unique
+    # sentence/style and cached in ``media``; Whisper word timing keeps the
+    # visual reader synchronized with the recording. The dated speech model is
+    # pinned so narration does not change character unexpectedly between app
+    # releases.
+    book_narration_enabled: bool = True
+    book_narration_tts_model: str = "gpt-4o-mini-tts-2025-12-15"
+    book_narration_alignment_model: str = "whisper-1"
+    book_narration_media_dir: str = "media"
+    book_narration_timeout_seconds: float = 60.0
+
     # Yunwu's OpenAI-compatible gateway routes the current Gemini family.
     # Flash-Lite handles bounded work, Flash handles visible generation, and
     # Pro is reserved for deterministic quality-gate failures.

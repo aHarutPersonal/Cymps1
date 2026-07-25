@@ -56,7 +56,10 @@ from app.services.gemini import (
     generate_with_grounding,
     stream_learnlm,
 )
-from app.services.comparison.scoring import generate_comparison_scores
+from app.services.comparison.scoring import (
+    comparison_scores_are_current,
+    generate_comparison_scores,
+)
 from app.services.content_resources import attach_content_resources_to_materials
 from app.services.llm import get_llm_client
 from app.services.llm.prompt_loader import load_and_render, sanitize_untrusted_input
@@ -1044,7 +1047,10 @@ def _maybe_enqueue_scores_backfill(session: IntakeSession) -> None:
     any fetch of such a session queues background generation. Best-effort:
     a broker hiccup must never fail the read path.
     """
-    if session.comparison_scores_json is not None or not session.comparison_output:
+    if (
+        comparison_scores_are_current(session.comparison_scores_json)
+        or not session.comparison_output
+    ):
         return
     session_id = str(session.id)
     if session_id in _scores_backfill_enqueued:
@@ -1105,7 +1111,13 @@ def _build_session_response(session: IntakeSession) -> dict:
         "interview_turn_count": session.interview_turn_count,
         "comparison_output": session.comparison_output,
         "blueprint_output": session.blueprint_output,
-        "comparisonScores": getattr(session, "comparison_scores_json", None),
+        "comparisonScores": (
+            session.comparison_scores_json
+            if comparison_scores_are_current(
+                getattr(session, "comparison_scores_json", None)
+            )
+            else None
+        ),
         "interview_thread_id": session.interview_thread_id,
         "created_at": session.created_at.isoformat() if session.created_at else None,
         "updated_at": session.updated_at.isoformat() if session.updated_at else None,
@@ -2603,7 +2615,9 @@ async def generate_results(
                 yield f"data: {json_lib.dumps({'type': 'error', 'section': 'comparison', 'message': 'Comparison generation failed. Please try again.', 'retryable': True})}\n\n"
                 return
 
-        if pipeline_session.comparison_scores_json is None:
+        if not comparison_scores_are_current(
+            pipeline_session.comparison_scores_json
+        ):
             # Score generation depends only on the comparison, so overlap it
             # with blueprint writing and plan preparation.
             scores_task = asyncio.create_task(generate_comparison_scores(
@@ -2616,6 +2630,9 @@ async def generate_results(
                     pipeline_session.idol_facts_json or {}
                 ),
                 comparison_summary=full_comparison,
+                achievement_baseline_status=plan_inputs[
+                    "achievement_baseline_status"
+                ],
             ))
 
         # =====================================================================
@@ -2716,7 +2733,9 @@ async def generate_results(
         # comparison is the mirror; these are the numbers behind the Compare
         # screen's gauges/radar. Best-effort: a failure leaves
         # comparison_scores_json null and the client shows a pending state.
-        if pipeline_session.comparison_scores_json is not None:
+        if comparison_scores_are_current(
+            pipeline_session.comparison_scores_json
+        ):
             yield f"data: {json_lib.dumps({'type': 'comparison_scores', 'ready': True})}\n\n"
         elif scores_task is not None:
             try:

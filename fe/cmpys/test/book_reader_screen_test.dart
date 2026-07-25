@@ -48,6 +48,7 @@ Combine the decision label and return point in one daily review.
     isSaved: true,
     progressPercent: 0,
   );
+  Map<String, dynamic>? lastCursorJson;
   @override
   Future<ContentResource> getResource(String resourceId) async => resource;
 
@@ -73,16 +74,27 @@ Combine the decision label and return point in one daily review.
     required int progressPercent,
     Map<String, dynamic>? cursorJson,
     bool? completed,
-  }) async => resource;
+  }) async {
+    lastCursorJson = cursorJson;
+    return resource;
+  }
 }
 
-class _FakeBookNarrator implements BookNarrator {
+class _FakeBookNarrator implements BookNarrator, BookNarrationStyleController {
   BookNarrationProgressHandler? progressHandler;
   BookNarrationErrorHandler? errorHandler;
+  BookNarrationVoiceHandler? voiceHandler;
   final List<String> spokenTexts = [];
   final List<double> speeds = [];
+  final List<BookNarrationStyle> styles = [];
   Completer<void>? _speech;
   int stopCalls = 0;
+
+  @override
+  BookNarrationStyle style = BookNarrationStyle.expressive;
+
+  @override
+  BookNarrationVoiceKind voiceKind = BookNarrationVoiceKind.expressiveAi;
 
   @override
   void setProgressHandler(BookNarrationProgressHandler? handler) {
@@ -92,6 +104,17 @@ class _FakeBookNarrator implements BookNarrator {
   @override
   void setErrorHandler(BookNarrationErrorHandler? handler) {
     errorHandler = handler;
+  }
+
+  @override
+  void setVoiceHandler(BookNarrationVoiceHandler? handler) {
+    voiceHandler = handler;
+  }
+
+  @override
+  Future<void> setStyle(BookNarrationStyle style) async {
+    this.style = style;
+    styles.add(style);
   }
 
   @override
@@ -267,6 +290,7 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('1×'), findsOneWidget);
+    expect(find.text('Expressive'), findsOneWidget);
 
     narrator.emitProgress(start: 2, end: 8, word: 'useful');
     await tester.pump();
@@ -289,6 +313,19 @@ void main() {
     await tester.pumpAndSettle();
     expect(narrator.speeds.last, 1.5);
     expect(find.text('1.5×'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('book-narration-style')));
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Dynamic pacing and emotion that follow the meaning.'),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Warm'));
+    await tester.pumpAndSettle();
+    expect(narrator.styles.last, BookNarrationStyle.warm);
+    expect(find.text('Warm'), findsOneWidget);
+    expect(repository.lastCursorJson?['narrationStyle'], 'warm');
+    expect(repository.lastCursorJson?['narrationSpeed'], 1.5);
 
     await tester.tap(find.byKey(const Key('book-narration-next')));
     await tester.pumpAndSettle();

@@ -18,6 +18,39 @@ class ContentResourcesRepository {
     return ContentResource.fromJson(response.data as Map<String, dynamic>);
   }
 
+  Future<BookNarrationAudio> prepareNarration(
+    String resourceId, {
+    required String text,
+    required String style,
+  }) async {
+    final response = await _dioClient.post(
+      '/content-resources/$resourceId/narration',
+      data: {'text': text, 'style': style},
+    );
+    final data = response.data as Map<String, dynamic>;
+    final rawUrl = data['audioUrl']?.toString() ?? '';
+    if (rawUrl.isEmpty) {
+      throw const FormatException('Narration response has no audio URL');
+    }
+    final parsedUrl = Uri.parse(rawUrl);
+    final base = Uri.parse(_dioClient.baseUrl);
+    final origin = base.replace(path: '/', query: null, fragment: null);
+    final alignment = (data['alignment'] as List? ?? const [])
+        .map((raw) => BookNarrationCue.fromJson(raw as Map<String, dynamic>))
+        .toList(growable: false);
+    return BookNarrationAudio(
+      audioUri: parsedUrl.hasScheme ? parsedUrl : origin.resolveUri(parsedUrl),
+      style: data['style']?.toString() ?? style,
+      voice: data['voice']?.toString() ?? '',
+      duration: switch (data['durationMs']) {
+        final num milliseconds => Duration(milliseconds: milliseconds.round()),
+        _ => null,
+      },
+      alignment: alignment,
+      isAiGenerated: data['isAiGenerated'] != false,
+    );
+  }
+
   Future<List<ContentResource>> listVaultResources() async {
     final response = await _dioClient.get('/content-resources/vault');
     final data = response.data as Map<String, dynamic>;
@@ -124,4 +157,45 @@ class ContentResourcesRepository {
     if (resource == null) return null;
     return ContentResource.fromJson(resource);
   }
+}
+
+class BookNarrationAudio {
+  const BookNarrationAudio({
+    required this.audioUri,
+    required this.style,
+    required this.voice,
+    required this.duration,
+    required this.alignment,
+    required this.isAiGenerated,
+  });
+
+  final Uri audioUri;
+  final String style;
+  final String voice;
+  final Duration? duration;
+  final List<BookNarrationCue> alignment;
+  final bool isAiGenerated;
+}
+
+class BookNarrationCue {
+  const BookNarrationCue({
+    required this.start,
+    required this.end,
+    required this.startTime,
+    required this.endTime,
+  });
+
+  factory BookNarrationCue.fromJson(Map<String, dynamic> json) {
+    return BookNarrationCue(
+      start: (json['start'] as num).toInt(),
+      end: (json['end'] as num).toInt(),
+      startTime: Duration(milliseconds: (json['startMs'] as num).round()),
+      endTime: Duration(milliseconds: (json['endMs'] as num).round()),
+    );
+  }
+
+  final int start;
+  final int end;
+  final Duration startTime;
+  final Duration endTime;
 }

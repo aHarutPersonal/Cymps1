@@ -1171,7 +1171,10 @@ class _ReassessOverlayState extends ConsumerState<ReassessOverlay> {
     super.initState();
     final st = ref.read(cmpysStoreProvider);
     _deltas = st.assessDeltas();
-    _beforeScores = {for (final d in st.liveDims()) d.id: d.you};
+    _beforeScores = {
+      for (final d in st.liveDims())
+        if (d.you != null) d.id: d.you!,
+    };
   }
 
   List<String> get _lines {

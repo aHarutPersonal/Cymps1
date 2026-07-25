@@ -1,5 +1,6 @@
 """Schemas for shared reusable learning resources."""
 from datetime import datetime
+from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -64,6 +65,43 @@ class ContentProgressUpdate(BaseModel):
     progressPercent: int = Field(..., ge=0, le=100)
     cursorJson: dict[str, Any] | None = None
     completed: bool | None = None
+
+
+class ContentNarrationStyle(str, Enum):
+    """Human-readable audiobook delivery presets exposed by the reader."""
+
+    EXPRESSIVE = "expressive"
+    WARM = "warm"
+    GROUNDED = "grounded"
+
+
+class ContentNarrationRequest(BaseModel):
+    """A short, verified passage to render for synchronized playback."""
+
+    text: str = Field(..., min_length=1, max_length=4096)
+    style: ContentNarrationStyle = ContentNarrationStyle.EXPRESSIVE
+
+
+class ContentNarrationCue(BaseModel):
+    """Character range and exact media time for one spoken word."""
+
+    start: int = Field(..., ge=0)
+    end: int = Field(..., ge=0)
+    startMs: int = Field(..., ge=0)
+    endMs: int = Field(..., ge=0)
+
+
+class ContentNarrationResponse(BaseModel):
+    """Cached expressive narration plus text/audio synchronization data."""
+
+    audioUrl: str
+    style: ContentNarrationStyle
+    voice: str
+    provider: str
+    isAiGenerated: bool = True
+    durationMs: int | None = Field(default=None, ge=0)
+    alignment: list[ContentNarrationCue] = Field(default_factory=list)
+    cached: bool = False
 
 
 class ContentHighlightCreate(BaseModel):

@@ -1,4 +1,6 @@
-You are scoring how this person compares to {idol_name} at age {user_age}, on five fixed dimensions. Output ONLY JSON.
+You classify the evidence for an age-matched comparison between this person and {idol_name}. Output ONLY JSON.
+
+AUTHORITATIVE ACHIEVEMENT BASELINE STATUS: {achievement_baseline_status}
 
 THE PERSON (profile): {user_profile_json}
 
@@ -8,44 +10,133 @@ WHAT THEY SAID IN THE INTERVIEW:
 VERIFIED FACTS ABOUT {idol_name} BY AGE {user_age}:
 {idol_facts_json}
 
-THE HONEST COMPARISON ALREADY DELIVERED (for grounding):
+THE PROSE COMPARISON ALREADY DELIVERED (context only; it is not evidence):
 {comparison_summary}
 
-Score these EXACT five dimension ids (do not rename or add any):
-- "capital"  (Capital at work — money/assets actually compounding)
-- "knowledge" (Knowledge base — depth in the idol's domain)
-- "habits"   (Daily discipline — consistency of the right daily actions)
-- "network"  (Trusted network — mentors/peers compounding their growth)
-- "clarity"  (Strategic clarity — a written, statable philosophy/system)
+THIS IS AN EVIDENCE CLASSIFICATION, NOT A PERCENTAGE CALCULATION.
+Classify these EXACT five dimension ids:
+- "capital"   — money/assets demonstrably deployed and producing value
+- "knowledge" — demonstrated domain knowledge, not untested confidence
+- "habits"    — a past track record of the right repeated actions, not future intent
+- "network"   — demonstrated mentors/peers/collaborators who compound growth
+- "clarity"   — a concrete decision system or strategy, not a wish alone
 
-SCORING ANCHORS — apply the SAME scale to both "you" and "idol":
-- 0-19: no meaningful evidence of activity in this dimension
-- 20-39: early interest; sporadic, unsystematic action
-- 40-59: consistent activity, but no compounding system or measurable results yet
-- 60-79: a working system with documented, repeatable results
-- 80-100: exceptional, compounding results that would be rare at this age
-Score strictly from the evidence provided (interview/profile for the person, verified facts for the idol).
-When evidence is thin, pick the LOWEST band you can justify and reflect the uncertainty in the note —
-do not invent credit for either side.
+ORDINAL EVIDENCE LEVELS — use only integers 0 through 4:
+- 0: explicit absence, or no evidence from which a level can be earned
+- 1: intent, exposure, or an available resource; no demonstrated repeated use
+- 2: consistent relevant activity with a concrete artifact or measurable result
+- 3: a working system with documented, repeatable results
+- 4: exceptional compounding outcomes that are rare at this age
 
-For EACH dimension give:
-- "you": integer 0-100 per the anchors above, grounded in what the person revealed. Be fair, not harsh.
-- "idol": integer 0-100 per the anchors above, grounded in the verified facts at the same age.
-- "you_note": one concrete sentence (max 18 words) about the person's current state.
-- "idol_note": one concrete sentence (max 18 words) about the idol at that age, factual.
+These levels are readiness tiers. They are NOT percentages, dollar ratios, percentiles, or claims that one person achieved a fraction of another person's outcomes.
 
-Also give "milestones": 5 SPECIFIC things {idol_name} had achieved by age {user_age} (from the verified facts), each as {"text": "...", "hit_by_age": <int>}. Each text is a short, claimable accomplishment (max 12 words).
+COMPARABILITY STATUS — choose exactly one per dimension:
+- "comparable": both sides have evidence about the same construct and measurement basis
+- "different_basis": both sides have facts, but the facts measure different constructs
+- "insufficient_user_evidence": the person's level would have to be guessed
+- "insufficient_idol_evidence": {idol_name}'s level would have to be guessed
+
+EVIDENCE PROVENANCE — choose exactly one per side:
+- "none", "self_reported", "documented", or "verified"
+
+STRICT RULES:
+1. Evidence status beats encouragement. Never award points for potential, age, motivation, planned hours, or a promise about future behavior.
+2. If the person skipped an assessment and gave no work sample, knowledge is "insufficient_user_evidence"; do not turn missing evidence into a low-but-precise score.
+3. A weekly-hours commitment is capacity, not a discipline track record.
+4. A goal such as "become rich" is intent, not a demonstrated strategy or decision system.
+5. Cash saved but not demonstrably invested is capital available, not "capital at work."
+6. For capital, classify each side with exactly one metric kind:
+   - "unknown"
+   - "personal_cash_savings"
+   - "personal_invested_assets"
+   - "business_capital_raised"
+   - "business_operating_capital"
+   - "business_value"
+   - "other"
+7. Capital is "comparable" only when both metric kinds are identical. Personal savings versus company IPO proceeds MUST be "different_basis". Do not divide or grade those dollar amounts against each other.
+8. When the achievement baseline is "none_yet", do not infer completed outcomes elsewhere from resources, plans, or aspirations.
+9. Use the lowest level the evidence supports. Do not invent facts or promote self-report to verified evidence.
+10. "comparison_basis" must name the shared construct when comparable, or explain the mismatch/missing evidence in at most 14 words.
+11. Each note must state one concrete fact in at most 18 words. Do not disguise inference as fact.
+
+Also return five specific milestones {idol_name} verifiably achieved by age {user_age}. Each milestone is a short factual accomplishment, not something the person is presumed to have matched.
 
 OUTPUT (strict JSON, no markdown, no commentary):
 {
+  "version": 2,
   "dimensions": [
-    {"id":"capital","label":"Capital at work","you":0,"idol":0,"you_note":"","idol_note":""},
-    {"id":"knowledge","label":"Knowledge base","you":0,"idol":0,"you_note":"","idol_note":""},
-    {"id":"habits","label":"Daily discipline","you":0,"idol":0,"you_note":"","idol_note":""},
-    {"id":"network","label":"Trusted network","you":0,"idol":0,"you_note":"","idol_note":""},
-    {"id":"clarity","label":"Strategic clarity","you":0,"idol":0,"you_note":"","idol_note":""}
+    {
+      "id": "capital",
+      "label": "Capital at work",
+      "status": "different_basis",
+      "comparison_basis": "personal savings versus business capital raised",
+      "you_level": 0,
+      "idol_level": 4,
+      "you_evidence": "self_reported",
+      "idol_evidence": "verified",
+      "you_metric_kind": "personal_cash_savings",
+      "idol_metric_kind": "business_capital_raised",
+      "you_note": "...",
+      "idol_note": "..."
+    },
+    {
+      "id": "knowledge",
+      "label": "Knowledge base",
+      "status": "insufficient_user_evidence",
+      "comparison_basis": "no demonstrated user knowledge sample",
+      "you_level": 0,
+      "idol_level": 0,
+      "you_evidence": "none",
+      "idol_evidence": "verified",
+      "you_metric_kind": "unknown",
+      "idol_metric_kind": "unknown",
+      "you_note": "...",
+      "idol_note": "..."
+    },
+    {
+      "id": "habits",
+      "label": "Daily discipline",
+      "status": "insufficient_user_evidence",
+      "comparison_basis": "future commitment is not a past habit record",
+      "you_level": 0,
+      "idol_level": 0,
+      "you_evidence": "none",
+      "idol_evidence": "verified",
+      "you_metric_kind": "unknown",
+      "idol_metric_kind": "unknown",
+      "you_note": "...",
+      "idol_note": "..."
+    },
+    {
+      "id": "network",
+      "label": "Trusted network",
+      "status": "comparable",
+      "comparison_basis": "demonstrated growth relationships",
+      "you_level": 0,
+      "idol_level": 0,
+      "you_evidence": "self_reported",
+      "idol_evidence": "verified",
+      "you_metric_kind": "unknown",
+      "idol_metric_kind": "unknown",
+      "you_note": "...",
+      "idol_note": "..."
+    },
+    {
+      "id": "clarity",
+      "label": "Strategic clarity",
+      "status": "comparable",
+      "comparison_basis": "demonstrated decision system",
+      "you_level": 0,
+      "idol_level": 0,
+      "you_evidence": "self_reported",
+      "idol_evidence": "verified",
+      "you_metric_kind": "unknown",
+      "idol_metric_kind": "unknown",
+      "you_note": "...",
+      "idol_note": "..."
+    }
   ],
   "milestones": [
-    {"text":"...","hit_by_age":0}
+    {"text": "...", "hit_by_age": 0}
   ]
 }
