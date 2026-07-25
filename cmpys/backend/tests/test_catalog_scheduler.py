@@ -4,8 +4,9 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.celery import celery_app
+from app.models.idol import CatalogStatus
 from app.tasks import catalog
-from app.tasks.catalog import retry_delay_seconds
+from app.tasks.catalog import catalog_retry_delay_seconds, retry_delay_seconds
 from app.tasks.ingestion import _idol_catalog_quality
 from app.models.ingest_job import IngestKind, IngestState
 
@@ -15,6 +16,26 @@ def test_catalog_retry_backoff_is_bounded():
     assert retry_delay_seconds(2) == 600
     assert retry_delay_seconds(3) == 1200
     assert retry_delay_seconds(99) == 21600
+
+
+def test_user_requested_book_retries_quickly_and_bypasses_background_budget():
+    user_book = SimpleNamespace(
+        kind=IngestKind.BOOK,
+        priority=catalog.USER_DEMANDED_BOOK_PRIORITY,
+        attempts=1,
+        payload_json={"origin": "plan_material"},
+    )
+    autonomous_book = SimpleNamespace(
+        kind=IngestKind.BOOK,
+        priority=10,
+        attempts=1,
+        payload_json={"origin": catalog.IDLE_DISCOVERY_ORIGIN},
+    )
+
+    assert catalog_retry_delay_seconds(user_book) == 15
+    assert catalog.bypasses_background_budget(user_book) is True
+    assert catalog_retry_delay_seconds(autonomous_book) == 300
+    assert catalog.bypasses_background_budget(autonomous_book) is False
 
 
 def test_catalog_supports_quote_ingestion_jobs():
@@ -79,9 +100,7 @@ def test_celery_beat_and_routes_include_catalog_workers():
     assert discovery_schedule["options"]["queue"] == "catalog_control"
     assert discovery_schedule["schedule"] >= 60
     assert (
-        celery_app.conf.task_routes["app.tasks.catalog.catalog_discovery_tick"][
-            "queue"
-        ]
+        celery_app.conf.task_routes["app.tasks.catalog.catalog_discovery_tick"]["queue"]
         == "catalog_control"
     )
 
@@ -98,9 +117,7 @@ def test_catalog_task_entrypoints_reuse_the_worker_event_loop(monkeypatch):
     monkeypatch.setattr(catalog.settings, "catalog_scheduler_enabled", True)
     monkeypatch.setattr(catalog.settings, "catalog_idle_discovery_enabled", True)
 
-    assert catalog.enqueue_catalog_book.run("A Book", None) == {
-        "runner": "persistent"
-    }
+    assert catalog.enqueue_catalog_book.run("A Book", None) == {"runner": "persistent"}
     assert catalog.catalog_tick.run() == {"runner": "persistent"}
     assert catalog.catalog_discovery_tick.run() == {"runner": "persistent"}
     assert catalog.process_catalog_job.run("job-1") == {"runner": "persistent"}
@@ -149,3 +166,64 @@ async def test_catalog_failure_schedules_its_due_retry(monkeypatch):
     assert job.locked_at is None
     assert job.next_attempt_at is not None
     assert scheduled == {"queue": "catalog_control", "countdown": 300}
+
+
+@pytest.mark.asyncio
+async def test_failed_book_quality_is_requeued_before_becoming_terminal(monkeypatch):
+    from app.services import content_resources
+
+    job = SimpleNamespace(
+        attempts=1,
+        kind=IngestKind.BOOK,
+        priority=catalog.USER_DEMANDED_BOOK_PRIORITY,
+        state=IngestState.RUNNING,
+        last_error=None,
+        locked_at=object(),
+        next_attempt_at=None,
+        completed_at=None,
+    )
+    resource = SimpleNamespace(
+        id="resource-1",
+        canonical_key="book:author:title",
+        status=CatalogStatus.FLAGGED,
+        metadata_json={"quality_report": {"score": 0.52, "issues": ["too short"]}},
+    )
+
+    class Database:
+        async def get(self, _model, _job_id):
+            return job
+
+        async def commit(self):
+            return None
+
+    @asynccontextmanager
+    async def session_maker():
+        yield Database()
+
+    async def generate_resource(*_args, **_kwargs):
+        return resource
+
+    scheduled = {}
+    monkeypatch.setattr(catalog, "async_session_maker", session_maker)
+    monkeypatch.setattr(
+        content_resources,
+        "get_or_create_book_module_resource",
+        generate_resource,
+    )
+    monkeypatch.setattr(
+        catalog.catalog_tick,
+        "apply_async",
+        lambda **kwargs: scheduled.update(kwargs),
+    )
+    monkeypatch.setattr(catalog.settings, "catalog_max_attempts", 3)
+
+    result = await catalog._process_book_job(
+        "job-1", {"title": "Title", "author": "Author"}
+    )
+
+    assert result["status"] == "queued"
+    assert job.state == IngestState.QUEUED
+    assert job.completed_at is None
+    assert job.next_attempt_at is not None
+    assert "quality_gate_failed" in job.last_error
+    assert scheduled == {"queue": "catalog_control", "countdown": 15}

@@ -8,40 +8,67 @@ void main() {
       'phase': 'completed',
       'user_age': 24,
       'user_interests': <String>[],
+      'comparisonScoresStatus': 'ready',
+      'comparisonScoresRetryable': false,
       'comparisonScores': {
         'dimensions': [
-          {'id': 'capital', 'label': 'Capital at work', 'you': 30, 'idol': 70,
-           'you_note': 'a', 'idol_note': 'b'}
+          {
+            'id': 'capital',
+            'label': 'Capital at work',
+            'you': 30,
+            'idol': 70,
+            'you_note': 'a',
+            'idol_note': 'b',
+          },
         ],
-        'milestones': [{'id': 'm1', 'label': 'Did a thing', 'hit_by_age': 22}],
+        'milestones': [
+          {'id': 'm1', 'label': 'Did a thing', 'hit_by_age': 22},
+        ],
       },
     });
     expect(s.comparisonScores?['dimensions'], isA<List>());
     expect((s.comparisonScores!['dimensions'] as List).first['id'], 'capital');
+    expect(s.comparisonScoresStatus, 'ready');
+    expect(s.comparisonScoresRetryable, isFalse);
   });
 
   test('Session.fromJson tolerates missing comparisonScores', () {
     final s = Session.fromJson({
-      'id': 's1', 'phase': 'intake', 'user_age': 0, 'user_interests': <String>[],
+      'id': 's1',
+      'phase': 'intake',
+      'user_age': 0,
+      'user_interests': <String>[],
     });
     expect(s.comparisonScores, isNull);
+    expect(s.comparisonScoresStatus, 'not_started');
+    expect(s.comparisonScoresRetryable, isFalse);
   });
 
-  test('Session.fromJson accepts snake-case comparison scores for compatibility',
-      () {
-    final s = Session.fromJson({
-      'id': 's1',
-      'phase': 'completed',
-      'user_age': 24,
-      'user_interests': <String>[],
-      'comparison_scores': {
-        'dimensions': [
-          {'id': 'clarity', 'you': 40, 'idol': 80},
-        ],
-      },
-    });
+  test(
+    'Session.fromJson accepts snake-case comparison scores for compatibility',
+    () {
+      final s = Session.fromJson({
+        'id': 's1',
+        'phase': 'completed',
+        'user_age': 24,
+        'user_interests': <String>[],
+        'comparison_scores_status': 'failed',
+        'comparison_scores_retryable': true,
+        'comparison_scores': {
+          'dimensions': [
+            {'id': 'clarity', 'you': 40, 'idol': 80},
+          ],
+        },
+      });
 
-    expect((s.comparisonScores!['dimensions'] as List).first['id'], 'clarity');
-    expect(s.toJson()['comparisonScores'], s.comparisonScores);
-  });
+      expect(
+        (s.comparisonScores!['dimensions'] as List).first['id'],
+        'clarity',
+      );
+      expect(s.toJson()['comparisonScores'], s.comparisonScores);
+      expect(s.comparisonScoresStatus, 'failed');
+      expect(s.comparisonScoresRetryable, isTrue);
+      expect(s.toJson()['comparisonScoresStatus'], 'failed');
+    },
+  );
 }

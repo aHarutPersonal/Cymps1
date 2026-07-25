@@ -62,6 +62,10 @@ logger = logging.getLogger(__name__)
 WEEK_PREPARATION_STALE_AFTER = timedelta(minutes=10)
 
 
+class PlanGenerationUnavailableError(RuntimeError):
+    """Raised so a persisted failed plan job is also a failed Celery task."""
+
+
 def _writing_thinking_level(tier: str) -> str:
     """Avoid hidden-token truncation in prose; reserve depth for escalation."""
     return {
@@ -1397,9 +1401,7 @@ async def _load_session_context(
         ]
         if idol_id:
             predicates.append(IntakeSession.idol_id == idol_id)
-        result = await db.execute(
-            select(IntakeSession).where(*predicates)
-        )
+        result = await db.execute(select(IntakeSession).where(*predicates))
     elif user_id and idol_id:
         result = await db.execute(
             select(IntakeSession)
@@ -1478,6 +1480,8 @@ def run_plan_generation(self, job_id: str) -> dict:
     logger.info(f"[PLANNING] Starting plan generation for job_id={job_id}")
     try:
         result = run_async(_run_plan_generation_async(job_id))
+        if result.get("error"):
+            raise PlanGenerationUnavailableError(str(result["error"]))
         logger.info(f"[PLANNING] Completed job_id={job_id}, result={result}")
         return result
     except Exception as e:
@@ -1903,6 +1907,7 @@ async def _run_plan_generation_async(job_id: str) -> dict:
                         "queue_wait_ms": queue_wait_ms,
                         "plan_pipeline_ms": plan_pipeline_ms,
                     },
+                    "generation_source": roadmap.generation_source,
                 },
                 cycle_number=job.cycle_number or 1,
                 previous_plan_id=job.previous_plan_id,
@@ -2101,7 +2106,9 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
         # Step 1: Loading context (the atomic claim above persisted 10%).
         plan = item.plan
         idol = plan.idol if plan else None
-        roadmap = plan.roadmap_json if plan and isinstance(plan.roadmap_json, dict) else {}
+        roadmap = (
+            plan.roadmap_json if plan and isinstance(plan.roadmap_json, dict) else {}
+        )
         idol_name = idol.name if idol else "this person"
         idol_domain = idol.domain if idol and idol.domain else "general excellence"
 
@@ -2806,9 +2813,7 @@ async def _prepare_plan_week_items_async(
             )
         )
         context_snapshot = roadmap.get("user_context_snapshot")
-        context_parts: list[str] = (
-            [str(context_snapshot)] if context_snapshot else []
-        )
+        context_parts: list[str] = [str(context_snapshot)] if context_snapshot else []
         if profile and not context_snapshot:
             if profile.interests:
                 context_parts.append("Interests: " + ", ".join(profile.interests[:5]))

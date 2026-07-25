@@ -190,6 +190,15 @@ class SessionRepository {
     return Session.fromJson(response.data as Map<String, dynamic>);
   }
 
+  /// Reset and enqueue a bounded retry after comparison scoring reaches a
+  /// terminal failure. Ordinary polling never creates duplicate attempts.
+  Future<Session> retryComparisonScores(String sessionId) async {
+    final response = await _dioClient.post(
+      '/sessions/$sessionId/comparison-scores/retry',
+    );
+    return Session.fromJson(response.data as Map<String, dynamic>);
+  }
+
   /// Abandon the user's current in-progress session so a fresh one can start.
   /// Best-effort: the backend rejects a second active session, so we clear the
   /// current one server-side when the endpoint is available and ignore the

@@ -24,6 +24,7 @@ List<PlanMaterialDetail> matchLessonMaterials(
         .trim();
     return asciiNormalized.isEmpty ? lowered : asciiNormalized;
   }
+
   final wanted = resourceTitles.map(normalizedTitle).toSet();
   return materials
       .where((material) => wanted.contains(normalizedTitle(material.title)))
@@ -507,6 +508,16 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
         bookResourceId = await ref
             .read(planRepositoryProvider)
             .waitForContentResourceId(canonicalKey);
+      } on BookGuideUnavailableException catch (error) {
+        if (!mounted) return;
+        setState(() => _preparingBookGuideKeys.remove(canonicalKey));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(error.message),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
       } catch (_) {
         if (!mounted) return;
         setState(() => _preparingBookGuideKeys.remove(canonicalKey));

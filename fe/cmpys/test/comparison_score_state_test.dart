@@ -157,6 +157,19 @@ void main() {
     expect(find.byType(CircularProgressIndicator), findsNothing);
   });
 
+  testWidgets('terminal score failure shows an explicit fresh retry', (
+    tester,
+  ) async {
+    await _pumpCompare(
+      tester,
+      (ref) async => ComparisonScoresSyncResult.failed,
+    );
+
+    expect(find.byKey(const Key('comparison-scores-failed')), findsOneWidget);
+    expect(find.text('We couldn’t finish your comparison.'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+  });
+
   testWidgets('no achievements shows no invented overall percentage', (
     tester,
   ) async {

@@ -197,6 +197,8 @@ mixin _$Session {
   String? get blueprintOutput => throw _privateConstructorUsedError;
   Map<String, dynamic>? get comparisonScores =>
       throw _privateConstructorUsedError;
+  String get comparisonScoresStatus => throw _privateConstructorUsedError;
+  bool get comparisonScoresRetryable => throw _privateConstructorUsedError;
   String? get interviewThreadId => throw _privateConstructorUsedError;
   DateTime? get createdAt => throw _privateConstructorUsedError;
   DateTime? get updatedAt => throw _privateConstructorUsedError;
@@ -223,6 +225,8 @@ abstract class $SessionCopyWith<$Res> {
     String? comparisonOutput,
     String? blueprintOutput,
     Map<String, dynamic>? comparisonScores,
+    String comparisonScoresStatus,
+    bool comparisonScoresRetryable,
     String? interviewThreadId,
     DateTime? createdAt,
     DateTime? updatedAt,
@@ -256,6 +260,8 @@ class _$SessionCopyWithImpl<$Res, $Val extends Session>
     Object? comparisonOutput = freezed,
     Object? blueprintOutput = freezed,
     Object? comparisonScores = freezed,
+    Object? comparisonScoresStatus = null,
+    Object? comparisonScoresRetryable = null,
     Object? interviewThreadId = freezed,
     Object? createdAt = freezed,
     Object? updatedAt = freezed,
@@ -302,6 +308,14 @@ class _$SessionCopyWithImpl<$Res, $Val extends Session>
                 ? _value.comparisonScores
                 : comparisonScores // ignore: cast_nullable_to_non_nullable
                       as Map<String, dynamic>?,
+            comparisonScoresStatus: null == comparisonScoresStatus
+                ? _value.comparisonScoresStatus
+                : comparisonScoresStatus // ignore: cast_nullable_to_non_nullable
+                      as String,
+            comparisonScoresRetryable: null == comparisonScoresRetryable
+                ? _value.comparisonScoresRetryable
+                : comparisonScoresRetryable // ignore: cast_nullable_to_non_nullable
+                      as bool,
             interviewThreadId: freezed == interviewThreadId
                 ? _value.interviewThreadId
                 : interviewThreadId // ignore: cast_nullable_to_non_nullable
@@ -353,6 +367,8 @@ abstract class _$$SessionImplCopyWith<$Res> implements $SessionCopyWith<$Res> {
     String? comparisonOutput,
     String? blueprintOutput,
     Map<String, dynamic>? comparisonScores,
+    String comparisonScoresStatus,
+    bool comparisonScoresRetryable,
     String? interviewThreadId,
     DateTime? createdAt,
     DateTime? updatedAt,
@@ -386,6 +402,8 @@ class __$$SessionImplCopyWithImpl<$Res>
     Object? comparisonOutput = freezed,
     Object? blueprintOutput = freezed,
     Object? comparisonScores = freezed,
+    Object? comparisonScoresStatus = null,
+    Object? comparisonScoresRetryable = null,
     Object? interviewThreadId = freezed,
     Object? createdAt = freezed,
     Object? updatedAt = freezed,
@@ -432,6 +450,14 @@ class __$$SessionImplCopyWithImpl<$Res>
             ? _value._comparisonScores
             : comparisonScores // ignore: cast_nullable_to_non_nullable
                   as Map<String, dynamic>?,
+        comparisonScoresStatus: null == comparisonScoresStatus
+            ? _value.comparisonScoresStatus
+            : comparisonScoresStatus // ignore: cast_nullable_to_non_nullable
+                  as String,
+        comparisonScoresRetryable: null == comparisonScoresRetryable
+            ? _value.comparisonScoresRetryable
+            : comparisonScoresRetryable // ignore: cast_nullable_to_non_nullable
+                  as bool,
         interviewThreadId: freezed == interviewThreadId
             ? _value.interviewThreadId
             : interviewThreadId // ignore: cast_nullable_to_non_nullable
@@ -463,6 +489,8 @@ class _$SessionImpl extends _Session {
     this.comparisonOutput,
     this.blueprintOutput,
     final Map<String, dynamic>? comparisonScores,
+    this.comparisonScoresStatus = 'not_started',
+    this.comparisonScoresRetryable = false,
     this.interviewThreadId,
     this.createdAt,
     this.updatedAt,
@@ -506,6 +534,12 @@ class _$SessionImpl extends _Session {
   }
 
   @override
+  @JsonKey()
+  final String comparisonScoresStatus;
+  @override
+  @JsonKey()
+  final bool comparisonScoresRetryable;
+  @override
   final String? interviewThreadId;
   @override
   final DateTime? createdAt;
@@ -514,7 +548,7 @@ class _$SessionImpl extends _Session {
 
   @override
   String toString() {
-    return 'Session(id: $id, phase: $phase, userAge: $userAge, userFinancialStatus: $userFinancialStatus, userInterests: $userInterests, selectedIdol: $selectedIdol, interviewTurnCount: $interviewTurnCount, comparisonOutput: $comparisonOutput, blueprintOutput: $blueprintOutput, comparisonScores: $comparisonScores, interviewThreadId: $interviewThreadId, createdAt: $createdAt, updatedAt: $updatedAt)';
+    return 'Session(id: $id, phase: $phase, userAge: $userAge, userFinancialStatus: $userFinancialStatus, userInterests: $userInterests, selectedIdol: $selectedIdol, interviewTurnCount: $interviewTurnCount, comparisonOutput: $comparisonOutput, blueprintOutput: $blueprintOutput, comparisonScores: $comparisonScores, comparisonScoresStatus: $comparisonScoresStatus, comparisonScoresRetryable: $comparisonScoresRetryable, interviewThreadId: $interviewThreadId, createdAt: $createdAt, updatedAt: $updatedAt)';
   }
 
   @override
@@ -543,6 +577,13 @@ class _$SessionImpl extends _Session {
               other._comparisonScores,
               _comparisonScores,
             ) &&
+            (identical(other.comparisonScoresStatus, comparisonScoresStatus) ||
+                other.comparisonScoresStatus == comparisonScoresStatus) &&
+            (identical(
+                  other.comparisonScoresRetryable,
+                  comparisonScoresRetryable,
+                ) ||
+                other.comparisonScoresRetryable == comparisonScoresRetryable) &&
             (identical(other.interviewThreadId, interviewThreadId) ||
                 other.interviewThreadId == interviewThreadId) &&
             (identical(other.createdAt, createdAt) ||
@@ -564,6 +605,8 @@ class _$SessionImpl extends _Session {
     comparisonOutput,
     blueprintOutput,
     const DeepCollectionEquality().hash(_comparisonScores),
+    comparisonScoresStatus,
+    comparisonScoresRetryable,
     interviewThreadId,
     createdAt,
     updatedAt,
@@ -590,6 +633,8 @@ abstract class _Session extends Session {
     final String? comparisonOutput,
     final String? blueprintOutput,
     final Map<String, dynamic>? comparisonScores,
+    final String comparisonScoresStatus,
+    final bool comparisonScoresRetryable,
     final String? interviewThreadId,
     final DateTime? createdAt,
     final DateTime? updatedAt,
@@ -616,6 +661,10 @@ abstract class _Session extends Session {
   String? get blueprintOutput;
   @override
   Map<String, dynamic>? get comparisonScores;
+  @override
+  String get comparisonScoresStatus;
+  @override
+  bool get comparisonScoresRetryable;
   @override
   String? get interviewThreadId;
   @override

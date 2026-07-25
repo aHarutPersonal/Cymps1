@@ -1,4 +1,5 @@
 """Schemas for shared reusable learning resources."""
+
 from datetime import datetime
 from enum import Enum
 from typing import Any
@@ -37,11 +38,27 @@ class ContentResourceListResponse(BaseModel):
     total: int
 
 
+class ContentResourceResolutionStatus(str, Enum):
+    """Truthful lifecycle returned by late-bound plan materials."""
+
+    READY = "ready"
+    QUEUED = "queued"
+    PROCESSING = "processing"
+    RETRY_WAIT = "retry_wait"
+    FAILED_QUALITY = "failed_quality"
+    FAILED = "failed"
+    MISSING = "missing"
+
+
 class ContentResourceReferenceResponse(BaseModel):
     """Small late-binding response for a generated shared resource."""
 
-    id: str
+    id: str | None = None
     canonicalKey: str
+    status: ContentResourceResolutionStatus
+    retryable: bool = False
+    message: str | None = None
+    qualityScore: float | None = None
 
 
 class ContentResourceSaveRequest(BaseModel):

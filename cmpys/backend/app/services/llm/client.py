@@ -4,9 +4,11 @@ LLM client abstraction for structured JSON generation.
 Provides an abstract interface and a DummyLLMClient for development
 that returns deterministic fixtures.
 """
+
 import asyncio
 import json
 import logging
+import time
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -40,7 +42,7 @@ async def _retry_async(fn, attempts=3, base_delay=0.5):
             last_exc = exc
             if attempt == attempts - 1:
                 break
-            delay = base_delay * (2 ** attempt)
+            delay = base_delay * (2**attempt)
             if delay > 0:
                 await asyncio.sleep(delay)
     raise last_exc
@@ -76,20 +78,20 @@ def _repair_json(raw: str) -> dict | None:
     #    Valid JSON escapes: \", \\, \/, \b, \f, \n, \r, \t, \uXXXX
     text = re.sub(
         r'\\(?!["\\bfnrtu/])',
-        r'\\\\',
+        r"\\\\",
         text,
     )
 
     # 3. Remove trailing commas before } or ]
-    text = re.sub(r',\s*([}\]])', r'\1', text)
+    text = re.sub(r",\s*([}\]])", r"\1", text)
 
     # 3b. Insert missing commas between adjacent values
     #     Handles: } { → }, {   and  } "key" → }, "key"
     #     and: "value" "key" → "value", "key"  (number/bool/null before ")
-    text = re.sub(r'(\})\s*(\{)', r'\1, \2', text)
-    text = re.sub(r'(\})\s*(")', r'\1, \2', text)
-    text = re.sub(r'("])\s*(")', r'\1, \2', text)
-    text = re.sub(r'(true|false|null|\d+)\s*\n\s*(")', r'\1,\n\2', text)
+    text = re.sub(r"(\})\s*(\{)", r"\1, \2", text)
+    text = re.sub(r'(\})\s*(")', r"\1, \2", text)
+    text = re.sub(r'("])\s*(")', r"\1, \2", text)
+    text = re.sub(r'(true|false|null|\d+)\s*\n\s*(")', r"\1,\n\2", text)
 
     # 4. Try parsing
     try:
@@ -101,10 +103,10 @@ def _repair_json(raw: str) -> dict | None:
     #    and add missing closing braces
     try:
         # Count open/close braces and brackets
-        open_braces = text.count('{')
-        close_braces = text.count('}')
-        open_brackets = text.count('[')
-        close_brackets = text.count(']')
+        open_braces = text.count("{")
+        close_braces = text.count("}")
+        open_brackets = text.count("[")
+        close_brackets = text.count("]")
 
         # If we're inside an unclosed string, close it
         # Simple heuristic: count unescaped quotes
@@ -112,7 +114,7 @@ def _repair_json(raw: str) -> dict | None:
         i = 0
         while i < len(text):
             c = text[i]
-            if c == '\\' and in_string:
+            if c == "\\" and in_string:
                 i += 2
                 continue
             if c == '"':
@@ -124,8 +126,8 @@ def _repair_json(raw: str) -> dict | None:
             repair += '"'
 
         # Add missing closing brackets/braces
-        repair += ']' * max(0, open_brackets - close_brackets)
-        repair += '}' * max(0, open_braces - close_braces)
+        repair += "]" * max(0, open_brackets - close_brackets)
+        repair += "}" * max(0, open_braces - close_braces)
 
         return json.loads(repair)
     except json.JSONDecodeError:
@@ -133,9 +135,9 @@ def _repair_json(raw: str) -> dict | None:
 
     # 6. Last resort: truncate to last valid closing brace and try
     try:
-        last_brace = text.rfind('}')
+        last_brace = text.rfind("}")
         if last_brace > 0:
-            truncated = text[:last_brace + 1]
+            truncated = text[: last_brace + 1]
             return json.loads(truncated)
     except json.JSONDecodeError:
         pass
@@ -145,7 +147,7 @@ def _repair_json(raw: str) -> dict | None:
 
 class LLMResponse(BaseModel):
     """Response from an LLM call."""
-    
+
     data: dict[str, Any]
     raw_response: str | None = None
     retried: bool = False
@@ -165,7 +167,7 @@ class LLMResponse(BaseModel):
 
 class BaseLLMClient(ABC):
     """Abstract base class for LLM clients."""
-    
+
     @abstractmethod
     async def generate_json(
         self,
@@ -176,18 +178,18 @@ class BaseLLMClient(ABC):
     ) -> LLMResponse:
         """
         Generate structured JSON from prompts.
-        
+
         Args:
             system_prompt: System message setting up the LLM behavior
             user_prompt: User message with the actual request
             json_schema: Optional JSON schema for validation
             output_model: Optional Pydantic model for validation
-            
+
         Returns:
             LLMResponse with parsed data or error
         """
         pass
-    
+
     async def generate_and_validate(
         self,
         system_prompt: str,
@@ -197,16 +199,16 @@ class BaseLLMClient(ABC):
     ) -> tuple[BaseModel | None, LLMResponse]:
         """
         Generate JSON and validate against a Pydantic model.
-        
+
         If validation fails and repair_on_failure is True, retries once
         with a repair prompt.
-        
+
         Args:
             system_prompt: System message
             user_prompt: User message
             output_model: Pydantic model to validate against
             repair_on_failure: Whether to retry with repair prompt on validation failure
-            
+
         Returns:
             Tuple of (validated model or None, LLMResponse)
         """
@@ -215,10 +217,10 @@ class BaseLLMClient(ABC):
             user_prompt=user_prompt,
             output_model=output_model,
         )
-        
+
         if response.error:
             return None, response
-        
+
         # Try to validate
         try:
             validated = output_model.model_validate(response.data)
@@ -227,7 +229,7 @@ class BaseLLMClient(ABC):
             if not repair_on_failure:
                 response.error = f"Validation failed: {e}"
                 return None, response
-            
+
             # Retry with repair prompt
             repair_prompt = self._build_repair_prompt(
                 original_prompt=user_prompt,
@@ -235,7 +237,7 @@ class BaseLLMClient(ABC):
                 validation_error=str(e),
                 schema=output_model.model_json_schema(),
             )
-            
+
             repair_response = await self.generate_json(
                 system_prompt=system_prompt,
                 user_prompt=repair_prompt,
@@ -255,17 +257,17 @@ class BaseLLMClient(ABC):
                 repair_response.duration_ms or 0.0
             )
             repair_response.model = repair_response.model or response.model
-            
+
             if repair_response.error:
                 return None, repair_response
-            
+
             try:
                 validated = output_model.model_validate(repair_response.data)
                 return validated, repair_response
             except ValidationError as e2:
                 repair_response.error = f"Validation failed after repair: {e2}"
                 return None, repair_response
-    
+
     def _build_repair_prompt(
         self,
         original_prompt: str,
@@ -294,14 +296,14 @@ Please output ONLY the corrected JSON that matches the schema exactly."""
 class DummyLLMClient(BaseLLMClient):
     """
     Dummy LLM client for development.
-    
+
     Returns deterministic fixtures from the /fixtures directory.
     Fixture files are named: {extraction_type}.json
     """
-    
+
     def __init__(self, fixtures_dir: Path | None = None):
         self.fixtures_dir = fixtures_dir or FIXTURES_DIR
-    
+
     async def generate_json(
         self,
         system_prompt: str,
@@ -311,12 +313,12 @@ class DummyLLMClient(BaseLLMClient):
     ) -> LLMResponse:
         """
         Return fixture data based on prompt content.
-        
+
         Determines fixture type by looking for keywords in the user_prompt.
         """
         fixture_type = self._determine_fixture_type(user_prompt)
         fixture_path = self.fixtures_dir / f"{fixture_type}.json"
-        
+
         if not fixture_path.exists():
             logger.warning(f"Fixture not found: {fixture_path}, using empty response")
             return LLMResponse(
@@ -324,11 +326,11 @@ class DummyLLMClient(BaseLLMClient):
                 error=f"Fixture not found: {fixture_type}.json",
                 provider="dummy",
             )
-        
+
         try:
             with open(fixture_path) as f:
                 data = json.load(f)
-            
+
             return LLMResponse(
                 data=data,
                 raw_response=json.dumps(data),
@@ -367,10 +369,60 @@ class DummyLLMClient(BaseLLMClient):
 class FallbackLLMClient(BaseLLMClient):
     """Retry failed structured generation through an independent provider."""
 
+    # A gateway outage should cost a worker one timeout, not one timeout per
+    # prompt.  The breaker is deliberately process-local: it avoids adding a
+    # Redis dependency to every LLM call while still protecting each web or
+    # worker process from repeatedly waiting on the same unhealthy endpoint.
+    _circuit_open_until: dict[tuple[str, str], float] = {}
+    _circuit_last_error: dict[tuple[str, str], str] = {}
+    _circuit_cooldown_seconds = 300.0
+
     def __init__(self, primary: BaseLLMClient, fallback: BaseLLMClient):
         self.primary = primary
         self.fallback = fallback
         self.model = getattr(primary, "model", None)
+
+    def _primary_circuit_key(self) -> tuple[str, str]:
+        return (
+            str(
+                getattr(self.primary, "provider_name", None)
+                or self.primary.__class__.__name__
+            ),
+            str(getattr(self.primary, "base_url", None) or "default"),
+        )
+
+    @staticmethod
+    def _is_operational_failure(error: str | None) -> bool:
+        if not error:
+            return False
+        normalized = error.casefold()
+        return any(
+            marker in normalized
+            for marker in (
+                "timeout",
+                "timed out",
+                "gateway",
+                "unavailable",
+                "connection",
+                "connect error",
+                "transport",
+                "network",
+                "rate limit",
+                "overloaded",
+                "http 429",
+                "status 429",
+                "http 500",
+                "http 502",
+                "http 503",
+                "http 504",
+            )
+        )
+
+    @classmethod
+    def reset_circuits_for_tests(cls) -> None:
+        """Clear process-local health state between isolated unit tests."""
+        cls._circuit_open_until.clear()
+        cls._circuit_last_error.clear()
 
     async def generate_json(
         self,
@@ -379,21 +431,55 @@ class FallbackLLMClient(BaseLLMClient):
         json_schema: dict[str, Any] | None = None,
         output_model: type[BaseModel] | None = None,
     ) -> LLMResponse:
-        try:
-            primary_response = await self.primary.generate_json(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                json_schema=json_schema,
-                output_model=output_model,
+        circuit_key = self._primary_circuit_key()
+        now = time.monotonic()
+        open_until = self._circuit_open_until.get(circuit_key, 0.0)
+        if open_until > now:
+            remaining = max(1, round(open_until - now))
+            last_error = self._circuit_last_error.get(
+                circuit_key, "operational failure"
             )
-        except Exception as exc:
-            logger.exception("[LLM] Primary provider raised before returning a response")
             primary_response = LLMResponse(
                 data={},
-                error=f"Primary provider error: {exc}",
+                error=(
+                    f"Primary provider circuit open for {remaining}s after: "
+                    f"{last_error}"
+                ),
                 model=getattr(self.primary, "model", None),
                 provider=getattr(self.primary, "provider_name", None),
             )
+            logger.warning(
+                "[LLM] Skipping unhealthy primary provider=%s endpoint=%s for %ss",
+                circuit_key[0],
+                circuit_key[1],
+                remaining,
+            )
+        else:
+            try:
+                primary_response = await self.primary.generate_json(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    json_schema=json_schema,
+                    output_model=output_model,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "[LLM] Primary provider raised before returning a response"
+                )
+                primary_response = LLMResponse(
+                    data={},
+                    error=f"Primary provider error: {exc}",
+                    model=getattr(self.primary, "model", None),
+                    provider=getattr(self.primary, "provider_name", None),
+                )
+            if self._is_operational_failure(primary_response.error):
+                self._circuit_open_until[circuit_key] = (
+                    time.monotonic() + self._circuit_cooldown_seconds
+                )
+                self._circuit_last_error[circuit_key] = str(primary_response.error)
+            elif not primary_response.error:
+                self._circuit_open_until.pop(circuit_key, None)
+                self._circuit_last_error.pop(circuit_key, None)
         if not primary_response.error:
             return primary_response
 
@@ -411,7 +497,9 @@ class FallbackLLMClient(BaseLLMClient):
                 output_model=output_model,
             )
         except Exception as exc:
-            logger.exception("[LLM] Fallback provider raised before returning a response")
+            logger.exception(
+                "[LLM] Fallback provider raised before returning a response"
+            )
             fallback_response = LLMResponse(
                 data={},
                 error=f"Fallback provider error: {exc}",
@@ -422,34 +510,33 @@ class FallbackLLMClient(BaseLLMClient):
             self.fallback, "provider_name", None
         )
         fallback_response.retried = True
-        fallback_response.fallback_from_model = (
-            primary_response.model or getattr(self.primary, "model", None)
+        fallback_response.fallback_from_model = primary_response.model or getattr(
+            self.primary, "model", None
         )
-        fallback_response.fallback_from_provider = (
-            primary_response.provider
-            or getattr(self.primary, "provider_name", None)
+        fallback_response.fallback_from_provider = primary_response.provider or getattr(
+            self.primary, "provider_name", None
         )
         fallback_response.fallback_error = primary_response.error
-        fallback_response.duration_ms = float(primary_response.duration_ms or 0.0) + float(
-            fallback_response.duration_ms or 0.0
-        )
+        fallback_response.duration_ms = float(
+            primary_response.duration_ms or 0.0
+        ) + float(fallback_response.duration_ms or 0.0)
         return fallback_response
 
 
 class OpenAILLMClient(BaseLLMClient):
     """
     OpenAI LLM client for production use.
-    
+
     Supports OpenAI and OpenAI-compatible gateways.
     Uses connection pooling isolated by endpoint, credential, and timeout.
     """
-    
+
     # Singleton client instance for connection reuse
     _client_instances: dict[
         tuple[str, str, float, int, asyncio.AbstractEventLoop],
         "openai.AsyncOpenAI",
     ] = {}
-    
+
     def __init__(
         self,
         model: str = "gpt-4o",
@@ -467,12 +554,12 @@ class OpenAILLMClient(BaseLLMClient):
         self.base_url = base_url.rstrip("/") if base_url else None
         self.provider_name = provider_name
         self.temperature = temperature
-    
+
     def _get_client(self, api_key: str) -> "openai.AsyncOpenAI":
         """Get or create a singleton OpenAI client for connection reuse."""
         import openai
         import httpx
-        
+
         loop = asyncio.get_running_loop()
         # Yunwu already has an independent Gemini fallback. Retrying the same
         # timed-out gateway first can multiply a 60-second user-facing wait.
@@ -487,7 +574,7 @@ class OpenAILLMClient(BaseLLMClient):
         cached = OpenAILLMClient._client_instances.get(cache_key)
         if cached is not None:
             return cached
-        
+
         # Create new client with optimized settings
         kwargs: dict[str, Any] = {
             "api_key": api_key,
@@ -501,7 +588,7 @@ class OpenAILLMClient(BaseLLMClient):
         )
         OpenAILLMClient._client_instances[cache_key] = client
         return client
-    
+
     async def generate_json(
         self,
         system_prompt: str,
@@ -511,7 +598,7 @@ class OpenAILLMClient(BaseLLMClient):
     ) -> LLMResponse:
         """Generate JSON using OpenAI API with optimized settings."""
         import time
-        
+
         try:
             import openai
         except ImportError:
@@ -522,9 +609,9 @@ class OpenAILLMClient(BaseLLMClient):
                 model=self.model,
                 provider=self.provider_name,
             )
-        
+
         from app.core.config import settings
-        
+
         api_key = self.api_key or (
             settings.openai_api_key if self.provider_name == "openai" else None
         )
@@ -537,18 +624,20 @@ class OpenAILLMClient(BaseLLMClient):
                 model=self.model,
                 provider=self.provider_name,
             )
-        
+
         client = self._get_client(api_key)
         provider_label = self.provider_name.upper()
-        
+
         # Log request details
         model_name = output_model.__name__ if output_model else "generic"
         prompt_preview = user_prompt[:200].replace("\n", " ")
-        logger.info(f"[LLM] Request: model={self.model}, output={model_name}, max_tokens={self.max_tokens}")
+        logger.info(
+            f"[LLM] Request: model={self.model}, output={model_name}, max_tokens={self.max_tokens}"
+        )
         logger.debug(f"[LLM] Prompt preview: {prompt_preview}...")
-        
+
         start_time = time.perf_counter()
-        
+
         try:
             # Build request kwargs
             request_kwargs: dict[str, Any] = {
@@ -560,13 +649,13 @@ class OpenAILLMClient(BaseLLMClient):
                 "response_format": {"type": "json_object"},
                 "temperature": self.temperature,
             }
-            
+
             # Add max_tokens if specified (helps speed up response)
             if self.max_tokens:
                 request_kwargs["max_tokens"] = self.max_tokens
-            
+
             response = await client.chat.completions.create(**request_kwargs)
-            
+
             duration_ms = (time.perf_counter() - start_time) * 1000
 
             raw_content = response.choices[0].message.content
@@ -587,7 +676,7 @@ class OpenAILLMClient(BaseLLMClient):
                     duration_ms=duration_ms,
                     provider=self.provider_name,
                 )
-            
+
             # Log usage stats
             if usage:
                 logger.info(
@@ -598,10 +687,12 @@ class OpenAILLMClient(BaseLLMClient):
                 )
             else:
                 logger.info(f"[LLM] Response received: {duration_ms:.0f}ms")
-            
+
             try:
                 data = json.loads(raw_content)
-                logger.debug(f"[LLM] JSON parsed successfully, keys: {list(data.keys()) if isinstance(data, dict) else 'array'}")
+                logger.debug(
+                    f"[LLM] JSON parsed successfully, keys: {list(data.keys()) if isinstance(data, dict) else 'array'}"
+                )
                 return LLMResponse(
                     data=data,
                     raw_response=raw_content,
@@ -613,8 +704,10 @@ class OpenAILLMClient(BaseLLMClient):
                     provider=self.provider_name,
                 )
             except json.JSONDecodeError as e:
-                logger.warning(f"[LLM] Invalid JSON in response: {e}, attempting repair...")
-                
+                logger.warning(
+                    f"[LLM] Invalid JSON in response: {e}, attempting repair..."
+                )
+
                 # Attempt repair
                 repaired = _repair_json(raw_content)
                 if repaired is not None:
@@ -630,10 +723,8 @@ class OpenAILLMClient(BaseLLMClient):
                         duration_ms=duration_ms,
                         provider=self.provider_name,
                     )
-                
-                logger.error(
-                    "[LLM] JSON repair failed for %s response", provider_label
-                )
+
+                logger.error("[LLM] JSON repair failed for %s response", provider_label)
                 logger.debug(f"[LLM] Raw content: {raw_content[:500]}...")
                 return LLMResponse(
                     data={},
@@ -646,10 +737,12 @@ class OpenAILLMClient(BaseLLMClient):
                     duration_ms=duration_ms,
                     provider=self.provider_name,
                 )
-                
+
         except openai.APITimeoutError:
             duration_ms = (time.perf_counter() - start_time) * 1000
-            logger.error(f"[LLM] API timeout after {duration_ms:.0f}ms (limit: {self.timeout}s)")
+            logger.error(
+                f"[LLM] API timeout after {duration_ms:.0f}ms (limit: {self.timeout}s)"
+            )
             return LLMResponse(
                 data={},
                 error=f"{provider_label} API timeout after {self.timeout}s",
@@ -677,7 +770,7 @@ class OpenAILLMClient(BaseLLMClient):
                 duration_ms=duration_ms,
                 provider=self.provider_name,
             )
-    
+
     async def generate_json_streaming(
         self,
         system_prompt: str,
@@ -687,10 +780,10 @@ class OpenAILLMClient(BaseLLMClient):
     ) -> LLMResponse:
         """
         Generate JSON using OpenAI API with streaming.
-        
+
         Streams tokens in real-time and calls on_chunk callback with accumulated text.
         This provides a better UX by showing "thinking" as it happens.
-        
+
         Args:
             system_prompt: System message
             user_prompt: User message
@@ -698,7 +791,7 @@ class OpenAILLMClient(BaseLLMClient):
             on_chunk: Async callback called with accumulated text after each chunk
         """
         import time
-        
+
         try:
             import openai
         except ImportError:
@@ -709,9 +802,9 @@ class OpenAILLMClient(BaseLLMClient):
                 model=self.model,
                 provider=self.provider_name,
             )
-        
+
         from app.core.config import settings
-        
+
         api_key = self.api_key or (
             settings.openai_api_key if self.provider_name == "openai" else None
         )
@@ -724,18 +817,18 @@ class OpenAILLMClient(BaseLLMClient):
                 model=self.model,
                 provider=self.provider_name,
             )
-        
+
         client = self._get_client(api_key)
         provider_label = self.provider_name.upper()
-        
+
         model_name = output_model.__name__ if output_model else "generic"
         logger.info(f"[LLM] Streaming request: model={self.model}, output={model_name}")
-        
+
         start_time = time.perf_counter()
         accumulated_text = ""
         chunk_count = 0
         last_callback_len = 0
-        
+
         try:
             request_kwargs: dict[str, Any] = {
                 "model": self.model,
@@ -747,18 +840,18 @@ class OpenAILLMClient(BaseLLMClient):
                 "temperature": self.temperature,
                 "stream": True,
             }
-            
+
             if self.max_tokens:
                 request_kwargs["max_tokens"] = self.max_tokens
-            
+
             stream = await client.chat.completions.create(**request_kwargs)
-            
+
             async for chunk in stream:
                 chunk_count += 1
                 delta = chunk.choices[0].delta
                 if delta.content:
                     accumulated_text += delta.content
-                    
+
                     # Call callback every ~200 chars to update UI
                     if on_chunk and len(accumulated_text) - last_callback_len >= 200:
                         try:
@@ -766,20 +859,20 @@ class OpenAILLMClient(BaseLLMClient):
                             last_callback_len = len(accumulated_text)
                         except Exception as e:
                             logger.warning(f"[LLM] on_chunk callback error: {e}")
-            
+
             # Final callback with complete text
             if on_chunk and len(accumulated_text) > last_callback_len:
                 try:
                     await on_chunk(accumulated_text)
                 except Exception as e:
                     logger.warning(f"[LLM] Final on_chunk callback error: {e}")
-            
+
             duration_ms = (time.perf_counter() - start_time) * 1000
             logger.info(
                 f"[LLM] Streaming complete: {duration_ms:.0f}ms, "
                 f"chunks={chunk_count}, chars={len(accumulated_text)}"
             )
-            
+
             if not accumulated_text:
                 return LLMResponse(
                     data={},
@@ -788,7 +881,7 @@ class OpenAILLMClient(BaseLLMClient):
                     duration_ms=duration_ms,
                     provider=self.provider_name,
                 )
-            
+
             try:
                 data = json.loads(accumulated_text)
                 return LLMResponse(
@@ -808,7 +901,7 @@ class OpenAILLMClient(BaseLLMClient):
                     duration_ms=duration_ms,
                     provider=self.provider_name,
                 )
-                
+
         except openai.APITimeoutError:
             duration_ms = (time.perf_counter() - start_time) * 1000
             logger.error(f"[LLM] Streaming timeout after {duration_ms:.0f}ms")
@@ -831,13 +924,44 @@ class OpenAILLMClient(BaseLLMClient):
             )
 
 
+def _is_gemini_invalid_argument_error(exc: Exception) -> bool:
+    """Return whether Gemini rejected request configuration before generation."""
+    message = str(exc).casefold()
+    status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+    return (
+        status == 400
+        or str(status).casefold() in {"400", "invalid_argument"}
+        or "invalid_argument" in message
+        or "invalid argument" in message
+    )
+
+
+def _gemini_compatibility_prompt(
+    user_prompt: str,
+    *,
+    json_schema: dict[str, Any] | None,
+    output_model: type[BaseModel] | None,
+) -> str:
+    """Move an unsupported native response schema into the prompt contract."""
+    schema = (
+        output_model.model_json_schema() if output_model is not None else json_schema
+    )
+    if schema is None:
+        return user_prompt
+    return (
+        user_prompt
+        + "\n\nCOMPATIBILITY MODE: Return only one complete JSON value matching this "
+        "schema exactly:\n" + json.dumps(schema, ensure_ascii=False)
+    )
+
+
 class GeminiLLMClient(BaseLLMClient):
     """
     Google Gemini LLM client for production use.
-    
+
     Uses google.genai SDK with JSON output mode.
     """
-    
+
     def __init__(
         self,
         model: str = "gemini-3.6-flash",
@@ -867,7 +991,7 @@ class GeminiLLMClient(BaseLLMClient):
         )
         self.temperature = temperature
         self.provider_name = "gemini"
-    
+
     async def generate_json(
         self,
         system_prompt: str,
@@ -877,7 +1001,7 @@ class GeminiLLMClient(BaseLLMClient):
     ) -> LLMResponse:
         """Generate JSON using Google Gemini API."""
         import time
-        
+
         try:
             from google import genai
             from google.genai import types
@@ -889,9 +1013,9 @@ class GeminiLLMClient(BaseLLMClient):
                 model=self.model,
                 provider="gemini",
             )
-        
+
         from app.core.config import settings
-        
+
         api_key = self.api_key or settings.gemini_api_key
         if not api_key:
             logger.error("[LLM] GEMINI_API_KEY not configured")
@@ -901,17 +1025,19 @@ class GeminiLLMClient(BaseLLMClient):
                 model=self.model,
                 provider="gemini",
             )
-        
+
         model_name = output_model.__name__ if output_model else "generic"
         logger.info(f"[LLM] Gemini request: model={self.model}, output={model_name}")
-        
+
         start_time = time.perf_counter()
-        
+        compatibility_retried = False
+
         try:
             # Reuse the shared warm client (avoids a TCP+TLS handshake per
             # call) and enforce the configured timeout — previously stored
             # but never applied, so user-facing paths could hang unbounded.
             from app.services.gemini import _gemini_client
+
             client = (
                 _gemini_client()
                 if api_key == settings.gemini_api_key
@@ -941,21 +1067,58 @@ class GeminiLLMClient(BaseLLMClient):
                 system_instruction=system_prompt,
                 **config_kwargs,
             )
-            
-            response = await client.aio.models.generate_content(
-                model=self.model,
-                contents=user_prompt,
-                config=config,
-            )
-            
+
+            try:
+                response = await client.aio.models.generate_content(
+                    model=self.model,
+                    contents=user_prompt,
+                    config=config,
+                )
+            except Exception as exc:
+                if not _is_gemini_invalid_argument_error(exc):
+                    raise
+                # Gemini model/API versions do not all accept the same native
+                # response-schema and thinking fields. A request-shape 400 is
+                # deterministic, so retry once without those optional fields
+                # and keep the exact schema in the prompt instead.
+                compatibility_retried = True
+                logger.warning(
+                    "[LLM] Gemini rejected native config for model=%s; "
+                    "retrying in compatibility mode: %s",
+                    self.model,
+                    exc,
+                )
+                compatibility_kwargs: dict[str, Any] = {
+                    "response_mime_type": "application/json",
+                    "http_options": types.HttpOptions(timeout=int(self.timeout * 1000)),
+                }
+                if self.max_tokens:
+                    compatibility_kwargs["max_output_tokens"] = self.max_tokens
+                compatibility_config = types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    **compatibility_kwargs,
+                )
+                response = await client.aio.models.generate_content(
+                    model=self.model,
+                    contents=_gemini_compatibility_prompt(
+                        user_prompt,
+                        json_schema=json_schema,
+                        output_model=output_model,
+                    ),
+                    config=compatibility_config,
+                )
+
             duration_ms = (time.perf_counter() - start_time) * 1000
-            
+
             raw_content = response.text
             if not raw_content:
-                logger.warning(f"[LLM] Empty response from Gemini after {duration_ms:.0f}ms")
+                logger.warning(
+                    f"[LLM] Empty response from Gemini after {duration_ms:.0f}ms"
+                )
                 return LLMResponse(
                     data={},
                     error="Empty response from Gemini",
+                    retried=compatibility_retried,
                     model=self.model,
                     duration_ms=duration_ms,
                     provider="gemini",
@@ -965,7 +1128,7 @@ class GeminiLLMClient(BaseLLMClient):
             if getattr(response, "candidates", None):
                 reason = getattr(response.candidates[0], "finish_reason", None)
                 finish_reason = getattr(reason, "name", None) or str(reason)
-            
+
             # Log usage
             if response.usage_metadata:
                 logger.info(
@@ -979,13 +1142,16 @@ class GeminiLLMClient(BaseLLMClient):
                     f"[LLM] Gemini response: {duration_ms:.0f}ms, "
                     f"finish_reason={finish_reason}"
                 )
-            
+
             try:
                 data = json.loads(raw_content)
-                logger.debug(f"[LLM] JSON parsed, keys: {list(data.keys()) if isinstance(data, dict) else 'array'}")
+                logger.debug(
+                    f"[LLM] JSON parsed, keys: {list(data.keys()) if isinstance(data, dict) else 'array'}"
+                )
                 return LLMResponse(
                     data=data,
                     raw_response=raw_content,
+                    retried=compatibility_retried,
                     model=self.model,
                     prompt_tokens=(
                         response.usage_metadata.prompt_token_count
@@ -1012,8 +1178,10 @@ class GeminiLLMClient(BaseLLMClient):
                     provider="gemini",
                 )
             except json.JSONDecodeError as e:
-                logger.warning(f"[LLM] Invalid JSON in Gemini response: {e}, attempting repair...")
-                
+                logger.warning(
+                    f"[LLM] Invalid JSON in Gemini response: {e}, attempting repair..."
+                )
+
                 # Attempt repair
                 repaired = _repair_json(raw_content)
                 if repaired is not None:
@@ -1051,12 +1219,13 @@ class GeminiLLMClient(BaseLLMClient):
                         finish_reason=finish_reason,
                         provider="gemini",
                     )
-                
+
                 logger.error("[LLM] JSON repair failed for Gemini response")
                 logger.debug(f"[LLM] Raw content (first 500): {raw_content[:500]}")
                 return LLMResponse(
                     data={},
                     raw_response=raw_content,
+                    retried=compatibility_retried,
                     error=f"Invalid JSON in response: {e}",
                     model=self.model,
                     prompt_tokens=(
@@ -1083,7 +1252,7 @@ class GeminiLLMClient(BaseLLMClient):
                     finish_reason=finish_reason,
                     provider="gemini",
                 )
-        
+
         except Exception as e:
             duration_ms = (time.perf_counter() - start_time) * 1000
             logger.exception(f"[LLM] Gemini API error after {duration_ms:.0f}ms: {e}")
@@ -1108,9 +1277,9 @@ def get_llm_client(
 ) -> BaseLLMClient:
     """
     Factory function to get the configured LLM client.
-    
+
     Uses LLM_PROVIDER env var: 'dummy', 'openai', 'gemini', or 'yunwu'
-    
+
     Args:
         timeout: Request timeout in seconds (default: 60s)
         max_tokens: Optional max tokens to generate (limits response size)
@@ -1123,12 +1292,12 @@ def get_llm_client(
             for latency-sensitive calls that already have focused retries.
     """
     from app.core.config import settings
-    
+
     provider = settings.llm_provider
     resolved_tier = tier or ("fast" if fast else "balanced")
     if resolved_tier not in {"fast", "balanced", "quality"}:
         raise ValueError(f"Unknown LLM tier: {resolved_tier}")
-    
+
     if provider == "gemini":
         if not settings.gemini_api_key:
             logger.warning(
@@ -1136,7 +1305,7 @@ def get_llm_client(
                 "Falling back to dummy client."
             )
             return DummyLLMClient()
-        
+
         model = {
             "fast": settings.gemini_fast_model,
             "balanced": settings.gemini_model,
@@ -1163,7 +1332,7 @@ def get_llm_client(
                 "Falling back to dummy client."
             )
             return DummyLLMClient()
-        
+
         model = {
             "fast": settings.openai_fast_model,
             "balanced": settings.openai_model,
@@ -1187,13 +1356,11 @@ def get_llm_client(
                 "balanced": settings.gemini_model,
                 "quality": settings.gemini_quality_model,
             }[resolved_tier]
-            fallback_thinking_level, fallback_thinking_budget = (
-                resolve_thinking_config(
-                    model=fallback_model,
-                    tier=resolved_tier,
-                    thinking_level=thinking_level,
-                    thinking_budget=thinking_budget,
-                )
+            fallback_thinking_level, fallback_thinking_budget = resolve_thinking_config(
+                model=fallback_model,
+                tier=resolved_tier,
+                thinking_level=thinking_level,
+                thinking_budget=thinking_budget,
             )
             fallback_client = GeminiLLMClient(
                 model=fallback_model,

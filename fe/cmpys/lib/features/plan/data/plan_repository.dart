@@ -10,6 +10,22 @@ final planRepositoryProvider = Provider<PlanRepository>((ref) {
   return PlanRepository(dioClient: ref.watch(dioClientProvider));
 });
 
+/// A generated guide reached a server-authoritative terminal state. This is
+/// intentionally distinct from a pending null result so readers never keep
+/// describing a rejected or exhausted draft as merely "taking longer".
+class BookGuideUnavailableException implements Exception {
+  const BookGuideUnavailableException({
+    required this.status,
+    required this.message,
+  });
+
+  final String status;
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
 /// API access for the generated 12-week plan: current plan, generation-job
 /// polling, and per-item lesson details.
 class PlanRepository {
@@ -122,6 +138,18 @@ class PlanRepository {
       if (id != null && id.isNotEmpty) {
         _resolvedContentResourceIds[canonicalKey] = id;
         return id;
+      }
+      final resolutionStatus = data['status']?.toString() ?? '';
+      if (resolutionStatus == 'failed_quality' ||
+          resolutionStatus == 'failed') {
+        throw BookGuideUnavailableException(
+          status: resolutionStatus,
+          message: data['message']?.toString().trim().isNotEmpty == true
+              ? data['message'].toString().trim()
+              : resolutionStatus == 'failed_quality'
+              ? 'This guide did not meet the reading-quality standard.'
+              : 'This guide could not be generated after several attempts.',
+        );
       }
       return null;
     } on ApiError catch (error) {

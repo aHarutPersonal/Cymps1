@@ -1,4 +1,5 @@
 """Helpers for deduplicating reusable books, videos, and lessons."""
+
 from __future__ import annotations
 
 import asyncio
@@ -15,7 +16,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.content_resource import ContentResource, ContentResourceKind, LicenseStatus
+from app.models.content_resource import (
+    ContentResource,
+    ContentResourceKind,
+    LicenseStatus,
+)
 from app.models.idol import CatalogStatus
 from app.models.plan import PlanItemContentResource
 from app.services.content_quality import (
@@ -42,6 +47,10 @@ SHARED_BOOK_GOAL = (
     "for a general adult reader. Keep the module reusable across users."
 )
 MAX_BOOK_SOURCE_CONTEXT_CHARS = 60_000
+# Long-form output needs more room than extraction, but a dead provider must
+# not hold a catalog worker for three minutes at every quality stage. The
+# fallback client opens a short circuit after the first operational timeout.
+BOOK_MODULE_PROVIDER_TIMEOUT_SECONDS = 75.0
 
 _YOUTUBE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 
@@ -90,8 +99,7 @@ def _book_core_is_sound(report: Any) -> bool:
         and 5 <= section_count <= 7
         and 6 <= int(metrics.get("idea_count", 0)) <= 10
         and int(metrics.get("heading_count", 0)) == EXPECTED_BOOK_HEADING_COUNT
-        and int(metrics.get("practice_block_count", 0))
-        == EXPECTED_BOOK_PRACTICE_COUNT
+        and int(metrics.get("practice_block_count", 0)) == EXPECTED_BOOK_PRACTICE_COUNT
         and int(metrics.get("closing_synthesis_count", 0)) == 1
         and int(metrics.get("filler_phrase_count", 0)) == 0
         and float(metrics.get("duplicate_paragraph_ratio", 0))
@@ -148,12 +156,11 @@ def _book_identity_score(
         return title_score
     requested_tokens = set(_slug(requested_author).split("_"))
     candidate_tokens = set(
-        token
-        for author in candidate_authors
-        for token in _slug(author).split("_")
+        token for author in candidate_authors for token in _slug(author).split("_")
     )
     author_score = (
-        len(requested_tokens & candidate_tokens) / len(requested_tokens | candidate_tokens)
+        len(requested_tokens & candidate_tokens)
+        / len(requested_tokens | candidate_tokens)
         if requested_tokens and candidate_tokens
         else 0.0
     )
@@ -239,7 +246,11 @@ def material_to_resource_payload(material: dict[str, Any]) -> dict[str, Any] | N
         word_count = len(content_md.split()) if content_md else 0
         if word_count < MIN_BOOK_MODULE_WORDS:
             return None
-        calculated_duration = max(5, round(word_count / 200)) if word_count > 0 else (material.get("duration_minutes") or 15)
+        calculated_duration = (
+            max(5, round(word_count / 200))
+            if word_count > 0
+            else (material.get("duration_minutes") or 15)
+        )
 
         return {
             "kind": ContentResourceKind.LLM_BOOK_SUMMARY,
@@ -263,7 +274,9 @@ def material_to_resource_payload(material: dict[str, Any]) -> dict[str, Any] | N
         # Do not manufacture an in-app resource from title/reason metadata.
         # External recommendations must keep opening their source URL unless
         # the generator supplied an actual lesson body or idea cards.
-        if not (str(material.get("content_markdown") or "").strip() or material.get("ideas")):
+        if not (
+            str(material.get("content_markdown") or "").strip() or material.get("ideas")
+        ):
             return None
         return {
             "kind": ContentResourceKind.IN_APP_LESSON
@@ -363,7 +376,7 @@ async def generate_book_module(
     )
     active_tier = routing_decision.tier
     client = get_llm_client(
-        timeout=180.0,
+        timeout=BOOK_MODULE_PROVIDER_TIMEOUT_SECONDS,
         max_tokens=16000,
         tier=active_tier,
         thinking_level="high" if active_tier == "quality" else "minimal",
@@ -453,7 +466,7 @@ async def generate_book_module(
         if active_tier == "fast":
             active_tier = "balanced"
             client = get_llm_client(
-                timeout=180.0,
+                timeout=BOOK_MODULE_PROVIDER_TIMEOUT_SECONDS,
                 max_tokens=16000,
                 tier="balanced",
                 thinking_level="minimal",
@@ -542,7 +555,9 @@ async def generate_book_module(
         candidate["ideas"] = metadata_response.data.get(
             "ideas", current_data.get("ideas", [])
         )
-        candidate_report = evaluate_book_module(candidate, source_context=source_context)
+        candidate_report = evaluate_book_module(
+            candidate, source_context=source_context
+        )
         generation_calls[-1]["quality_score"] = candidate_report.score
         generation_calls[-1]["result_status"] = (
             "quality_passed" if candidate_report.passed else "quality_failed"
@@ -569,7 +584,7 @@ async def generate_book_module(
         if active_tier == "fast":
             active_tier = "balanced"
             client = get_llm_client(
-                timeout=180.0,
+                timeout=BOOK_MODULE_PROVIDER_TIMEOUT_SECONDS,
                 max_tokens=16000,
                 tier="balanced",
                 thinking_level="minimal",
@@ -609,12 +624,12 @@ async def generate_book_module(
     # without becoming the default cost for every catalog item.
     if not report.passed:
         quality_client = get_llm_client(
-            timeout=180.0,
+            timeout=BOOK_MODULE_PROVIDER_TIMEOUT_SECONDS,
             max_tokens=16000,
             tier="quality",
             thinking_level="high",
             temperature=0.15,
-            allow_fallback=False,
+            allow_fallback=True,
         )
         quality_response = await quality_client.generate_json(
             system_prompt=system_prompt,
@@ -648,11 +663,15 @@ async def generate_book_module(
     report_data = report.to_dict()
     report_data["generation"] = {
         "call_count": len(generation_calls),
-        "prompt_tokens": sum(int(call.get("prompt_tokens") or 0) for call in generation_calls),
+        "prompt_tokens": sum(
+            int(call.get("prompt_tokens") or 0) for call in generation_calls
+        ),
         "completion_tokens": sum(
             int(call.get("completion_tokens") or 0) for call in generation_calls
         ),
-        "total_tokens": sum(int(call.get("total_tokens") or 0) for call in generation_calls),
+        "total_tokens": sum(
+            int(call.get("total_tokens") or 0) for call in generation_calls
+        ),
         "duration_ms": round(
             sum(float(call.get("duration_ms") or 0) for call in generation_calls),
             1,
@@ -924,9 +943,8 @@ async def get_or_create_book_module_resource(
         source_md = source.get("content_markdown", "") or ""
         source_words = len(source_md.split()) if source_md else 0
         source_metadata = source.get("metadata_json") or {}
-        source_external_id = (
-            source_metadata.get("gutenberg_id")
-            or source_metadata.get("google_books_id")
+        source_external_id = source_metadata.get("gutenberg_id") or source_metadata.get(
+            "google_books_id"
         )
         source_license = source.get("license_status")
         license_status = {
@@ -981,7 +999,9 @@ async def get_or_create_book_module_resource(
         module_md = module.get("content_markdown", "") or ""
         module_words = len(module_md.split())
         module_duration = max(5, round(module_words / 200)) if module_words else 5
-        quality_report = module.get("quality_report") or evaluate_book_module(module).to_dict()
+        quality_report = (
+            module.get("quality_report") or evaluate_book_module(module).to_dict()
+        )
         resource = ContentResource(
             kind=ContentResourceKind.PUBLIC_DOMAIN_BOOK
             if license_status == LicenseStatus.PUBLIC_DOMAIN
@@ -989,7 +1009,10 @@ async def get_or_create_book_module_resource(
             canonical_key=canonical_key,
             title=str(module.get("title") or source.get("title") or title),
             author_or_creator=str(
-                module.get("author_or_creator") or source.get("author_or_creator") or author or ""
+                module.get("author_or_creator")
+                or source.get("author_or_creator")
+                or author
+                or ""
             ),
             source_url=source.get("source_url"),
             thumbnail_url=source.get("thumbnail_url") or module.get("thumbnail_url"),
@@ -1039,9 +1062,15 @@ async def get_or_create_book_module_resource(
     # Calculate duration from actual word count (200 wpm reading speed)
     module_md = module.get("content_markdown", "") or ""
     module_words = len(module_md.split()) if module_md else 0
-    module_duration = max(5, round(module_words / 200)) if module_words > 0 else (module.get("duration_minutes") or 15)
+    module_duration = (
+        max(5, round(module_words / 200))
+        if module_words > 0
+        else (module.get("duration_minutes") or 15)
+    )
 
-    quality_report = module.get("quality_report") or evaluate_book_module(module).to_dict()
+    quality_report = (
+        module.get("quality_report") or evaluate_book_module(module).to_dict()
+    )
     resource = ContentResource(
         kind=ContentResourceKind.LLM_BOOK_SUMMARY,
         canonical_key=canonical_key,
@@ -1110,7 +1139,9 @@ async def get_or_create_video_resource(
 
     if canonical_key:
         result = await db.execute(
-            select(ContentResource).where(ContentResource.canonical_key == canonical_key)
+            select(ContentResource).where(
+                ContentResource.canonical_key == canonical_key
+            )
         )
         existing = result.scalar_one_or_none()
         if existing:
@@ -1267,7 +1298,9 @@ async def attach_content_resources_to_materials(
         result = await db.execute(
             select(ContentResource).where(ContentResource.canonical_key.in_(wanted))
         )
-        cached = {resource.canonical_key: resource for resource in result.scalars().all()}
+        cached = {
+            resource.canonical_key: resource for resource in result.scalars().all()
+        }
 
     async def _prepare_book(
         title: str, author: str | None, source_context: str | None
@@ -1283,7 +1316,9 @@ async def attach_content_resources_to_materials(
                 title=str(source.get("title") or title),
                 author=source.get("author_or_creator") or author,
                 user_goal=SHARED_BOOK_GOAL,
-                source_context=source.get("source_context") or source_md or (
+                source_context=source.get("source_context")
+                or source_md
+                or (
                     "Only bibliographic metadata was available. Stay conservative and do not "
                     "invent scenes, quotations, chapter names, or author anecdotes."
                 ),

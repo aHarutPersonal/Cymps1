@@ -80,7 +80,12 @@ void main() {
     expect(draft.comparisonMd, 'Comparison ready.');
     expect(draft.blueprintMd, 'Blueprint ready.');
     expect(draft.planJobId, 'plan-job-1');
-    expect(find.text('Your plan is ready.'), findsOneWidget);
+    expect(
+      find.text(
+        'Your roadmap is ready. Current-week lessons and guides continue preparing.',
+      ),
+      findsOneWidget,
+    );
     expect(find.text('Enter CMPYS'), findsOneWidget);
     expect(tester.takeException(), isNull);
 

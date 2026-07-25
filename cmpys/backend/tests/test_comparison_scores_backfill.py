@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -41,6 +42,11 @@ def _session(**overrides):
     session = MagicMock()
     session.id = "sess-1"
     session.comparison_scores_json = None
+    session.comparison_scores_status = "not_started"
+    session.comparison_scores_attempts = 0
+    session.comparison_scores_error = None
+    session.comparison_scores_last_attempt_at = None
+    session.comparison_scores_next_retry_at = None
     session.comparison_output = "You are behind, but the path is clear."
     session.interview_thread_id = None
     session.idol = MagicMock()
@@ -72,7 +78,10 @@ async def test_backfill_generates_and_replaces_missing_or_stale_scores(
         "app.services.llm.client.get_llm_client", lambda **kwargs: object()
     )
 
-    generated = {"dimensions": [{"id": "capital", "you": 20, "idol": 75}], "milestones": []}
+    generated = {
+        "dimensions": [{"id": "capital", "you": 20, "idol": 75}],
+        "milestones": [],
+    }
     calls = []
 
     async def fake_generate(client, **kwargs):
@@ -87,7 +96,9 @@ async def test_backfill_generates_and_replaces_missing_or_stale_scores(
 
     assert result["status"] == "completed"
     assert session.comparison_scores_json == generated
-    db.commit.assert_awaited_once()
+    assert db.commit.await_count == 2
+    assert session.comparison_scores_status == "ready"
+    assert session.comparison_scores_attempts == 1
     assert calls[0]["idol_name"] == "Benjamin Graham"
     assert calls[0]["comparison_summary"] == session.comparison_output
 
@@ -126,7 +137,7 @@ async def test_backfill_skips_without_comparison_output(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_backfill_leaves_session_untouched_when_scorer_fails(monkeypatch):
+async def test_backfill_persists_retryable_state_when_scorer_fails(monkeypatch):
     session = _session()
     db = AsyncMock()
     db.execute.return_value = ScalarResult(session)
@@ -144,12 +155,17 @@ async def test_backfill_leaves_session_untouched_when_scorer_fails(monkeypatch):
 
     result = await comparison_tasks._backfill_comparison_scores_async("sess-1")
 
-    assert result["status"] == "failed"
+    assert result["status"] == "retry_wait"
     assert session.comparison_scores_json is None
-    db.commit.assert_not_awaited()
+    assert session.comparison_scores_status == "retry_wait"
+    assert session.comparison_scores_attempts == 1
+    assert session.comparison_scores_error
+    assert session.comparison_scores_next_retry_at is not None
+    assert db.commit.await_count == 2
 
 
-def test_maybe_enqueue_scores_backfill_dedupes_and_guards(monkeypatch):
+@pytest.mark.asyncio
+async def test_maybe_enqueue_scores_backfill_dedupes_and_guards(monkeypatch):
     from app.api.v1 import sessions as sessions_api
 
     enqueued = []
@@ -158,17 +174,19 @@ def test_maybe_enqueue_scores_backfill_dedupes_and_guards(monkeypatch):
         "apply_async",
         lambda **kwargs: enqueued.append(kwargs),
     )
-    monkeypatch.setattr(sessions_api, "_scores_backfill_enqueued", set())
+    db = AsyncMock()
+    db.execute.return_value = SimpleNamespace(rowcount=1)
 
     needs_backfill = _session(id="sess-needs")
-    sessions_api._maybe_enqueue_scores_backfill(needs_backfill)
-    sessions_api._maybe_enqueue_scores_backfill(needs_backfill)
+    await sessions_api._maybe_enqueue_scores_backfill(needs_backfill, db)
+    await sessions_api._maybe_enqueue_scores_backfill(needs_backfill, db)
     assert len(enqueued) == 1
     assert enqueued[0]["args"] == ["sess-needs"]
     assert enqueued[0]["queue"] == "low_priority"
+    assert db.execute.await_count == 1
 
     has_scores = _session(id="sess-done", comparison_scores_json=_current_scores())
-    sessions_api._maybe_enqueue_scores_backfill(has_scores)
+    await sessions_api._maybe_enqueue_scores_backfill(has_scores, db)
     no_verdict = _session(id="sess-early", comparison_output=None)
-    sessions_api._maybe_enqueue_scores_backfill(no_verdict)
+    await sessions_api._maybe_enqueue_scores_backfill(no_verdict, db)
     assert len(enqueued) == 1

@@ -157,6 +157,7 @@ async def test_initial_plan_generates_backbone_then_only_week_one(monkeypatch) -
         if item.week_start > 1
     )
     assert len(roadmap.backbone_weeks) == 12
+    assert roadmap.generation_source == "llm"
     assert "RAW INTERVIEW TRANSCRIPT" in rendered_prompts[PlanBackboneResponse]
     assert "Built a compiler" in rendered_prompts[PlanBackboneResponse]
     assert "<<<USER_INPUT" in rendered_prompts[PlanBackboneResponse]
@@ -180,3 +181,24 @@ async def test_initial_plan_generates_backbone_then_only_week_one(monkeypatch) -
             "thinking_level": "medium",
         },
     ]
+
+
+@pytest.mark.asyncio
+async def test_llm_mode_failure_is_not_published_as_deterministic_plan(
+    monkeypatch,
+) -> None:
+    async def fail_backbone(**_kwargs):
+        raise RuntimeError("both providers unavailable")
+
+    monkeypatch.setattr(generator, "_generate_plan_backbone", fail_backbone)
+
+    with pytest.raises(
+        RuntimeError,
+        match="failed across configured providers",
+    ):
+        await generator._generate_llm_items(
+            idol_name="Ada Lovelace",
+            user_goal="learn computational thinking",
+            hours_per_week=5,
+            duration_weeks=12,
+        )

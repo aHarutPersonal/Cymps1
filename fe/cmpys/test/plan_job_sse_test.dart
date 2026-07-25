@@ -300,6 +300,11 @@ class _PlanJobRepository implements AgenticSessionRepository {
   Future<Session?> getLatestSession() async => null;
 
   @override
+  Future<Session> retryComparisonScores(String sessionId) {
+    throw UnimplementedError();
+  }
+
+  @override
   Future<void> abandonCurrentSession() async {}
 
   @override

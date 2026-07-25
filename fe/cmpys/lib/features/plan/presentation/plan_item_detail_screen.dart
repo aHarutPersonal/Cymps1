@@ -1155,6 +1155,16 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
         bookResourceId = await ref
             .read(planRepositoryProvider)
             .waitForContentResourceId(canonicalKey);
+      } on BookGuideUnavailableException catch (error) {
+        if (!mounted) return;
+        setState(() => _preparingBookGuideKeys.remove(canonicalKey));
+        showCmpysToast(
+          context,
+          error.message,
+          icon: PhosphorIconsRegular.warningCircle,
+          tone: AppColors.danger,
+        );
+        return;
       } catch (_) {
         if (!mounted) return;
         setState(() => _preparingBookGuideKeys.remove(canonicalKey));

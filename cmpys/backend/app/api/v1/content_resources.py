@@ -1,4 +1,5 @@
 """Shared content resource and Vault endpoints."""
+
 from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Annotated
@@ -18,6 +19,7 @@ from app.models.content_resource import (
     UserContentSave,
 )
 from app.models.idol import CatalogStatus
+from app.models.ingest_job import IngestJob, IngestKind, IngestState
 from app.models.plan import Plan, PlanItem, PlanItemContentResource
 from app.models.user import User
 from app.schemas.content_resource import (
@@ -30,6 +32,7 @@ from app.schemas.content_resource import (
     ContentProgressUpdate,
     ContentResourceListResponse,
     ContentResourceReferenceResponse,
+    ContentResourceResolutionStatus,
     ContentResourceResponse,
     ContentResourceSaveRequest,
     ContentResourceSaveResponse,
@@ -61,7 +64,9 @@ def _resource_response(
     """
     return ContentResourceResponse(
         id=resource.id,
-        kind=resource.kind.value if hasattr(resource.kind, "value") else str(resource.kind),
+        kind=resource.kind.value
+        if hasattr(resource.kind, "value")
+        else str(resource.kind),
         canonicalKey=resource.canonical_key,
         title=resource.title,
         authorOrCreator=resource.author_or_creator,
@@ -105,7 +110,9 @@ async def _get_resource(db: AsyncSession, resource_id: str) -> ContentResource:
     )
     resource = result.scalar_one_or_none()
     if not resource:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found"
+        )
     return resource
 
 
@@ -156,7 +163,9 @@ async def list_content_resources(
         try:
             parsed_kind = ContentResourceKind(kind)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid resource kind") from exc
+            raise HTTPException(
+                status_code=400, detail="Invalid resource kind"
+            ) from exc
         stmt = stmt.where(ContentResource.kind == parsed_kind)
     if q:
         needle = f"%{q}%"
@@ -186,7 +195,9 @@ async def list_content_resources(
                 UserContentSave.content_resource_id.in_(resource_ids),
             )
         )
-        saves_by_resource = {s.content_resource_id: s for s in save_result.scalars().all()}
+        saves_by_resource = {
+            s.content_resource_id: s for s in save_result.scalars().all()
+        }
 
         progress_result = await db.execute(
             select(UserContentProgress).where(
@@ -222,7 +233,9 @@ async def list_vault_resources(
     """List the current user's saved books, videos, articles, and lessons."""
     total_result = await db.execute(
         select(func.count(UserContentSave.id))
-        .join(ContentResource, UserContentSave.content_resource_id == ContentResource.id)
+        .join(
+            ContentResource, UserContentSave.content_resource_id == ContentResource.id
+        )
         .where(
             UserContentSave.user_id == current_user.id,
             ContentResource.status == CatalogStatus.PUBLISHED,
@@ -233,7 +246,9 @@ async def list_vault_resources(
     result = await db.execute(
         select(ContentResource, UserContentSave, UserContentProgress)
         .options(defer(ContentResource.content_markdown))
-        .join(UserContentSave, UserContentSave.content_resource_id == ContentResource.id)
+        .join(
+            UserContentSave, UserContentSave.content_resource_id == ContentResource.id
+        )
         .outerjoin(
             UserContentProgress,
             and_(
@@ -335,7 +350,9 @@ async def list_library_resources(
         try:
             parsed_kind = ContentResourceKind(kind)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid resource kind") from exc
+            raise HTTPException(
+                status_code=400, detail="Invalid resource kind"
+            ) from exc
         stmt = stmt.where(ContentResource.kind == parsed_kind)
 
     # Apply search filter
@@ -376,7 +393,9 @@ async def list_library_resources(
                 UserContentSave.content_resource_id.in_(resource_id_list),
             )
         )
-        saves_by_resource = {s.content_resource_id: s for s in save_result.scalars().all()}
+        saves_by_resource = {
+            s.content_resource_id: s for s in save_result.scalars().all()
+        }
         progress_result = await db.execute(
             select(UserContentProgress).where(
                 UserContentProgress.user_id == current_user.id,
@@ -444,22 +463,89 @@ async def resolve_content_resource(
 ) -> ContentResourceReferenceResponse:
     """Late-bind a deferred material once its quality-gated module is ready."""
     del current_user  # The authentication dependency is intentional.
-    result = await db.execute(
-        select(ContentResource.id, ContentResource.canonical_key).where(
-            ContentResource.canonical_key == canonicalKey,
-            ContentResource.status == CatalogStatus.PUBLISHED,
+    resource = (
+        await db.execute(
+            select(ContentResource).where(
+                ContentResource.canonical_key == canonicalKey,
+            )
         )
-    )
-    row = result.one_or_none()
-    if row is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Resource is still being prepared",
+    ).scalar_one_or_none()
+    if resource is not None and resource.status == CatalogStatus.PUBLISHED:
+        return ContentResourceReferenceResponse(
+            id=str(resource.id),
+            canonicalKey=str(resource.canonical_key),
+            status=ContentResourceResolutionStatus.READY,
+            message="Book guide is ready.",
+            qualityScore=_content_quality_score(resource),
+        )
+
+    job = (
+        await db.execute(
+            select(IngestJob)
+            .where(
+                IngestJob.external_id == canonicalKey,
+                IngestJob.kind == IngestKind.BOOK,
+            )
+            .order_by(IngestJob.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if job is not None and job.state == IngestState.RUNNING:
+        return ContentResourceReferenceResponse(
+            canonicalKey=canonicalKey,
+            status=ContentResourceResolutionStatus.PROCESSING,
+            message="The book guide is being written and checked.",
+        )
+    if job is not None and job.state == IngestState.QUEUED:
+        waiting_for_retry = job.next_attempt_at is not None
+        return ContentResourceReferenceResponse(
+            canonicalKey=canonicalKey,
+            status=(
+                ContentResourceResolutionStatus.RETRY_WAIT
+                if waiting_for_retry
+                else ContentResourceResolutionStatus.QUEUED
+            ),
+            message=(
+                "The first draft missed the quality bar; a stronger draft is queued."
+                if waiting_for_retry
+                else "The book guide is queued for preparation."
+            ),
+        )
+    if (job is not None and job.state == IngestState.FLAGGED) or (
+        resource is not None and resource.status == CatalogStatus.FLAGGED
+    ):
+        return ContentResourceReferenceResponse(
+            canonicalKey=canonicalKey,
+            status=ContentResourceResolutionStatus.FAILED_QUALITY,
+            retryable=False,
+            message=(
+                "The generated guide did not meet the reading-quality standard. "
+                "Use another recommended resource while it is reviewed."
+            ),
+            qualityScore=_content_quality_score(resource),
+        )
+    if job is not None and job.state == IngestState.FAILED:
+        return ContentResourceReferenceResponse(
+            canonicalKey=canonicalKey,
+            status=ContentResourceResolutionStatus.FAILED,
+            retryable=False,
+            message="The book guide could not be generated after several attempts.",
         )
     return ContentResourceReferenceResponse(
-        id=str(row.id),
-        canonicalKey=str(row.canonical_key),
+        canonicalKey=canonicalKey,
+        status=ContentResourceResolutionStatus.MISSING,
+        message="No generated guide exists for this material.",
     )
+
+
+def _content_quality_score(resource: ContentResource | None) -> float | None:
+    if resource is None:
+        return None
+    raw = ((resource.metadata_json or {}).get("quality_report") or {}).get("score")
+    try:
+        return round(float(raw), 3) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 @router.get("/{resource_id}", response_model=ContentResourceResponse)
@@ -665,5 +751,7 @@ async def delete_content_highlight(
     )
     highlight = result.scalar_one_or_none()
     if not highlight:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Highlight not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Highlight not found"
+        )
     await db.delete(highlight)

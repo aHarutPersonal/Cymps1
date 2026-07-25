@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -13,6 +14,7 @@ import '../../../core/ui/cmpys/cmpys_primitives.dart';
 import '../../../core/ui/motion/entrance.dart';
 import '../../../core/ui/motion/page_transition.dart';
 import '../data/cmpys_seed.dart';
+import '../../session/data/session_repository.dart';
 import '../state/cmpys_backend_sync.dart';
 import '../state/cmpys_store.dart';
 import 'record_screen.dart';
@@ -60,26 +62,35 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
     final ms = st.liveMilestones();
     final cmpAge = st.user.age;
     final hasScores = dims.isNotEmpty;
-    final comparableDims = dims.where((d) =>
-        d.status == 'comparable' && d.you != null && d.idol != null).toList();
+    final comparableDims = dims
+        .where(
+          (d) => d.status == 'comparable' && d.you != null && d.idol != null,
+        )
+        .toList();
     final rawOverall = st.liveComparisonScores?['overall'];
     final overall = rawOverall is Map
         ? rawOverall.cast<String, dynamic>()
         : null;
-    final hasOverall = overall?['status'] == 'estimated' &&
-        comparableDims.length == dims.length && dims.isNotEmpty;
+    final hasOverall =
+        overall?['status'] == 'estimated' &&
+        comparableDims.length == dims.length &&
+        dims.isNotEmpty;
     final youAvg = hasOverall
         ? (comparableDims.map((d) => d.you!).reduce((a, b) => a + b) /
-                comparableDims.length).round()
+                  comparableDims.length)
+              .round()
         : 0;
     final idolAvg = hasOverall
         ? (comparableDims.map((d) => d.idol!).reduce((a, b) => a + b) /
-                comparableDims.length).round()
+                  comparableDims.length)
+              .round()
         : 0;
     final readinessGap = idolAvg - youAvg;
     final hitCount = ms.where((m) => st.milestones[m.id] ?? false).length;
     final pending = st.pendingWins().length;
-    final initial = st.user.name.isNotEmpty ? st.user.name[0].toUpperCase() : 'Y';
+    final initial = st.user.name.isNotEmpty
+        ? st.user.name[0].toUpperCase()
+        : 'Y';
     final strengths = comparableDims.where((d) => d.you! >= d.idol!).toList();
 
     return Scaffold(
@@ -88,59 +99,72 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
         bottom: false,
         child: EntranceScope(
           child: ListView(
-          padding: EdgeInsets.fromLTRB(18, 14, 18, AppShell.bottomNavClearance(context)),
-          children: EntranceGroup.wrap([
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                CmpysKicker(cmpAge > 0 ? 'Both at age $cmpAge' : 'Your comparison'),
-                const SizedBox(height: 4),
-                Text('You vs ${idol.short}',
+            padding: EdgeInsets.fromLTRB(
+              18,
+              14,
+              18,
+              AppShell.bottomNavClearance(context),
+            ),
+            children: EntranceGroup.wrap([
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  CmpysKicker(
+                    cmpAge > 0 ? 'Both at age $cmpAge' : 'Your comparison',
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'You vs ${idol.short}',
                     style: AppTypography.display.copyWith(
-                        fontSize: 30, letterSpacing: -0.5, height: 1.1)),
-              ],
-            ),
-            const SizedBox(height: 16),
-            if (hasScores && hasOverall)
-              _readinessHero(idol, youAvg, idolAvg, readinessGap, initial)
-            else if (hasScores)
-              _insufficientEvidenceHero(overall)
-            else
-              _comparisonScoresStatus(scoresSync),
-            const SizedBox(height: 14),
-            _aiVerdictCard(st, idol),
-            const SizedBox(height: 14),
-            _recordEntry(st, idol, hasScores ? pending : 0),
-            if (hasScores) ...[
-              const SizedBox(height: 18),
-              if (comparableDims.length >= 3) ...[
-                _radarCard(idol, comparableDims),
-                const SizedBox(height: 16),
-              ],
-              _dimensionRows(dims),
-              if (ms.isNotEmpty) ...[
-                const SizedBox(height: 22),
-                _milestonesSection(st, idol, ms, hitCount, cmpAge),
-              ],
-              if (strengths.isNotEmpty) ...[
-                const SizedBox(height: 22),
-                const Padding(
+                      fontSize: 30,
+                      letterSpacing: -0.5,
+                      height: 1.1,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              if (hasScores && hasOverall)
+                _readinessHero(idol, youAvg, idolAvg, readinessGap, initial)
+              else if (hasScores)
+                _insufficientEvidenceHero(overall)
+              else
+                _comparisonScoresStatus(scoresSync),
+              const SizedBox(height: 14),
+              _aiVerdictCard(st, idol),
+              const SizedBox(height: 14),
+              _recordEntry(st, idol, hasScores ? pending : 0),
+              if (hasScores) ...[
+                const SizedBox(height: 18),
+                if (comparableDims.length >= 3) ...[
+                  _radarCard(idol, comparableDims),
+                  const SizedBox(height: 16),
+                ],
+                _dimensionRows(dims),
+                if (ms.isNotEmpty) ...[
+                  const SizedBox(height: 22),
+                  _milestonesSection(st, idol, ms, hitCount, cmpAge),
+                ],
+                if (strengths.isNotEmpty) ...[
+                  const SizedBox(height: 22),
+                  const Padding(
                     padding: EdgeInsets.only(left: 2),
-                    child: CmpysKicker('Where you’re already ahead')),
-                const SizedBox(height: 10),
-                ...strengths.map(_strengthCard),
+                    child: CmpysKicker('Where you’re already ahead'),
+                  ),
+                  const SizedBox(height: 10),
+                  ...strengths.map(_strengthCard),
+                ],
               ],
-            ],
-            const SizedBox(height: 18),
-            CmpysButton(
-              variant: CmpysBtnVariant.primary,
-              size: CmpysBtnSize.lg,
-              full: true,
-              leadingIcon: PhosphorIconsBold.signpost,
-              onTap: () => context.go(AppRoutes.plan),
-              child: const Text('Work the plan to close the gap'),
-            ),
-          ]),
+              const SizedBox(height: 18),
+              CmpysButton(
+                variant: CmpysBtnVariant.primary,
+                size: CmpysBtnSize.lg,
+                full: true,
+                leadingIcon: PhosphorIconsBold.signpost,
+                onTap: () => context.go(AppRoutes.plan),
+                child: const Text('Work the plan to close the gap'),
+              ),
+            ]),
           ),
         ),
       ),
@@ -178,6 +202,13 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
               subtitle: 'Tap to check again now.',
               onRetry: () => ref.invalidate(cmpysComparisonScoresSyncProvider),
             );
+          case ComparisonScoresSyncResult.failed:
+            return _comparisonScoresCard(
+              key: const Key('comparison-scores-failed'),
+              title: 'We couldn’t finish your comparison.',
+              subtitle: 'Tap to start a fresh scoring attempt.',
+              onRetry: () => unawaited(_retryComparisonScores()),
+            );
           case ComparisonScoresSyncResult.ready:
             // A ready result normally rebuilds this screen with dimensions.
             // If a malformed payload slipped through, never show a spinner.
@@ -190,6 +221,30 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
         }
       },
     );
+  }
+
+  Future<void> _retryComparisonScores() async {
+    final sessionId = ref.read(cmpysStoreProvider).sessionId?.trim();
+    if (sessionId == null || sessionId.isEmpty) {
+      ref.invalidate(cmpysComparisonScoresSyncProvider);
+      return;
+    }
+    try {
+      final session = await ref
+          .read(sessionRepositoryProvider)
+          .retryComparisonScores(sessionId);
+      if (!mounted) return;
+      ref.read(cmpysStoreProvider.notifier).syncFromSession(session);
+      ref.invalidate(cmpysComparisonScoresSyncProvider);
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not restart comparison scoring. Try again.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   Widget _comparisonScoresCard({
@@ -211,8 +266,7 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
             child: loading
                 ? const CircularProgressIndicator(
                     strokeWidth: 2,
-                    valueColor:
-                        AlwaysStoppedAnimation<Color>(AppColors.ochre),
+                    valueColor: AlwaysStoppedAnimation<Color>(AppColors.ochre),
                   )
                 : const Icon(
                     PhosphorIconsBold.arrowClockwise,
@@ -225,13 +279,21 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title,
-                    style: AppTypography.bodyMedium
-                        .copyWith(color: AppColors.ink, fontSize: 14.5)),
+                Text(
+                  title,
+                  style: AppTypography.bodyMedium.copyWith(
+                    color: AppColors.ink,
+                    fontSize: 14.5,
+                  ),
+                ),
                 const SizedBox(height: 3),
-                Text(subtitle,
-                    style: AppTypography.caption
-                        .copyWith(color: AppColors.ink3, fontSize: 12.5)),
+                Text(
+                  subtitle,
+                  style: AppTypography.caption.copyWith(
+                    color: AppColors.ink3,
+                    fontSize: 12.5,
+                  ),
+                ),
               ],
             ),
           ),
@@ -240,9 +302,18 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
     );
   }
 
-  Widget _readinessHero(CmpysIdol idol, int youAvg, int idolAvg,
-      int gap, String initial) {
-    final gapText = gap > 0 ? '−$gap' : gap < 0 ? '+${-gap}' : '0';
+  Widget _readinessHero(
+    CmpysIdol idol,
+    int youAvg,
+    int idolAvg,
+    int gap,
+    String initial,
+  ) {
+    final gapText = gap > 0
+        ? '−$gap'
+        : gap < 0
+        ? '+${-gap}'
+        : '0';
     return CmpysCardSurface(
       raised: true,
       pad: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
@@ -252,10 +323,11 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
             children: [
               _gaugeSide(
                 CmpysMonogram(
-                    initials: initial,
-                    size: 56,
-                    color: AppColors.ochre2,
-                    tint: AppColors.ochreSoft),
+                  initials: initial,
+                  size: 56,
+                  color: AppColors.ochre2,
+                  tint: AppColors.ochreSoft,
+                ),
                 'You, now',
                 'READINESS $youAvg',
               ),
@@ -272,14 +344,21 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Text(gapText,
-                            style: AppTypography.display.copyWith(
-                                fontSize: 24,
-                                fontWeight: FontWeight.w800,
-                                height: 1)),
-                        Text('point gap',
-                            style: AppTypography.caption.copyWith(
-                                color: AppColors.ink3, fontSize: 10.5)),
+                        Text(
+                          gapText,
+                          style: AppTypography.display.copyWith(
+                            fontSize: 24,
+                            fontWeight: FontWeight.w800,
+                            height: 1,
+                          ),
+                        ),
+                        Text(
+                          'point gap',
+                          style: AppTypography.caption.copyWith(
+                            color: AppColors.ink3,
+                            fontSize: 10.5,
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -287,32 +366,39 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
               ),
               _gaugeSide(
                 CmpysMentorAvatar(
-                    slug: idol.slug,
-                    initials: idol.initials,
-                    color: idol.color,
-                    tint: idol.tint,
-                    size: 56),
+                  slug: idol.slug,
+                  initials: idol.initials,
+                  color: idol.color,
+                  tint: idol.tint,
+                  size: 56,
+                ),
                 idol.short,
                 'BENCHMARK $idolAvg',
               ),
             ],
           ),
           const SizedBox(height: 14),
-          Text('Evidence-tier estimate · not a percentage of achievements',
-              textAlign: TextAlign.center,
-              style: AppTypography.caption
-                  .copyWith(color: AppColors.ink3, fontSize: 11.5)),
+          Text(
+            'Evidence-tier estimate · not a percentage of achievements',
+            textAlign: TextAlign.center,
+            style: AppTypography.caption.copyWith(
+              color: AppColors.ink3,
+              fontSize: 11.5,
+            ),
+          ),
         ],
       ),
     );
   }
 
   Widget _insufficientEvidenceHero(Map<String, dynamic>? overall) {
-    final comparable = (overall?['comparable_dimensions'] as num?)?.toInt() ?? 0;
+    final comparable =
+        (overall?['comparable_dimensions'] as num?)?.toInt() ?? 0;
     final total = (overall?['total_dimensions'] as num?)?.toInt() ?? 5;
-    final reason = (overall?['reason'] ??
-            'There is not enough like-for-like evidence for an overall score.')
-        .toString();
+    final reason =
+        (overall?['reason'] ??
+                'There is not enough like-for-like evidence for an overall score.')
+            .toString();
     return CmpysCardSurface(
       key: const Key('comparison-overall-insufficient'),
       raised: true,
@@ -329,20 +415,30 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
                   color: AppColors.ochreSoft,
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: const Icon(PhosphorIconsBold.scales,
-                    size: 20, color: AppColors.ochre2),
+                child: const Icon(
+                  PhosphorIconsBold.scales,
+                  size: 20,
+                  color: AppColors.ochre2,
+                ),
               ),
               const SizedBox(width: 12),
               Expanded(
-                child: Text('No honest overall score yet',
-                    style: AppTypography.h4.copyWith(fontSize: 16)),
+                child: Text(
+                  'No honest overall score yet',
+                  style: AppTypography.h4.copyWith(fontSize: 16),
+                ),
               ),
             ],
           ),
           const SizedBox(height: 12),
-          Text(reason,
-              style: AppTypography.caption
-                  .copyWith(color: AppColors.ink2, fontSize: 13, height: 1.45)),
+          Text(
+            reason,
+            style: AppTypography.caption.copyWith(
+              color: AppColors.ink2,
+              fontSize: 13,
+              height: 1.45,
+            ),
+          ),
           const SizedBox(height: 12),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
@@ -350,9 +446,13 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
               color: AppColors.paper2,
               borderRadius: BorderRadius.circular(10),
             ),
-            child: Text('$comparable/$total dimensions are like-for-like',
-                style: AppTypography.monoLabel
-                    .copyWith(color: AppColors.ink3, fontSize: 10.5)),
+            child: Text(
+              '$comparable/$total dimensions are like-for-like',
+              style: AppTypography.monoLabel.copyWith(
+                color: AppColors.ink3,
+                fontSize: 10.5,
+              ),
+            ),
           ),
         ],
       ),
@@ -366,13 +466,21 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
         children: [
           avatar,
           const SizedBox(height: 8),
-          Text(label,
-              textAlign: TextAlign.center,
-              style: AppTypography.captionMedium
-                  .copyWith(fontSize: 12.5, fontWeight: FontWeight.w700)),
-          Text(index,
-              style: AppTypography.monoLabel
-                  .copyWith(color: AppColors.ink3, fontSize: 10)),
+          Text(
+            label,
+            textAlign: TextAlign.center,
+            style: AppTypography.captionMedium.copyWith(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          Text(
+            index,
+            style: AppTypography.monoLabel.copyWith(
+              color: AppColors.ink3,
+              fontSize: 10,
+            ),
+          ),
         ],
       ),
     );
@@ -386,19 +494,25 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
       return Container(
         padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
-            gradient: AppColors.gradInk, borderRadius: AppRadii.card),
+          gradient: AppColors.gradInk,
+          borderRadius: AppRadii.card,
+        ),
         child: Row(
           children: [
-            const Icon(Icons.auto_awesome_rounded,
-                size: 20, color: Color(0xFFFFD166)),
+            const Icon(
+              Icons.auto_awesome_rounded,
+              size: 20,
+              color: Color(0xFFFFD166),
+            ),
             const SizedBox(width: 12),
             Expanded(
               child: Text(
                 'Your verdict from ${idol.short} hasn’t been generated yet — finish the onboarding interview to get it.',
                 style: AppTypography.caption.copyWith(
-                    color: Colors.white.withValues(alpha: 0.85),
-                    fontSize: 13.5,
-                    height: 1.5),
+                  color: Colors.white.withValues(alpha: 0.85),
+                  fontSize: 13.5,
+                  height: 1.5,
+                ),
               ),
             ),
           ],
@@ -408,14 +522,19 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-          gradient: AppColors.gradInk, borderRadius: AppRadii.card),
+        gradient: AppColors.gradInk,
+        borderRadius: AppRadii.card,
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Icon(Icons.auto_awesome_rounded,
-                  size: 14, color: Color(0xFFFFD166)),
+              const Icon(
+                Icons.auto_awesome_rounded,
+                size: 14,
+                color: Color(0xFFFFD166),
+              ),
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
@@ -423,7 +542,8 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: AppTypography.kicker.copyWith(
-                      color: Colors.white.withValues(alpha: 0.6)),
+                    color: Colors.white.withValues(alpha: 0.6),
+                  ),
                 ),
               ),
             ],
@@ -450,28 +570,36 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
           ),
           const SizedBox(height: 10),
           GestureDetector(
-            onTap: () => Navigator.of(context).push(CmpysPageRoute(
-              builder: (_) => CmpysMarkdownScreen(
-                kicker: 'From ${idol.short}',
-                title: 'The verdict',
-                markdown: md,
+            onTap: () => Navigator.of(context).push(
+              CmpysPageRoute(
+                builder: (_) => CmpysMarkdownScreen(
+                  kicker: 'From ${idol.short}',
+                  title: 'The verdict',
+                  markdown: md,
+                ),
               ),
-            )),
+            ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Flexible(
-                  child: Text('Read the full verdict',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppTypography.bodyMedium.copyWith(
-                          color: const Color(0xFFFFD166),
-                          fontWeight: FontWeight.w700,
-                          fontSize: 14)),
+                  child: Text(
+                    'Read the full verdict',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTypography.bodyMedium.copyWith(
+                      color: const Color(0xFFFFD166),
+                      fontWeight: FontWeight.w700,
+                      fontSize: 14,
+                    ),
+                  ),
                 ),
                 const SizedBox(width: 4),
-                const Icon(Icons.arrow_forward_rounded,
-                    size: 16, color: Color(0xFFFFD166)),
+                const Icon(
+                  Icons.arrow_forward_rounded,
+                  size: 16,
+                  color: Color(0xFFFFD166),
+                ),
               ],
             ),
           ),
@@ -487,8 +615,9 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
       child: Column(
         children: [
           GestureDetector(
-            onTap: () => Navigator.of(context).push(
-                CmpysSheetRoute(builder: (_) => const CmpysRecordScreen())),
+            onTap: () => Navigator.of(
+              context,
+            ).push(CmpysSheetRoute(builder: (_) => const CmpysRecordScreen())),
             behavior: HitTestBehavior.opaque,
             child: Padding(
               padding: const EdgeInsets.all(16),
@@ -498,40 +627,59 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
                     width: 40,
                     height: 40,
                     decoration: BoxDecoration(
-                        color: AppColors.ochreSoft,
-                        borderRadius: BorderRadius.circular(13)),
-                    child: const Icon(PhosphorIconsFill.sparkle,
-                        size: 20, color: AppColors.ochre2),
+                      color: AppColors.ochreSoft,
+                      borderRadius: BorderRadius.circular(13),
+                    ),
+                    child: const Icon(
+                      PhosphorIconsFill.sparkle,
+                      size: 20,
+                      color: AppColors.ochre2,
+                    ),
                   ),
                   const SizedBox(width: 13),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Your record',
-                            style: AppTypography.h4.copyWith(fontSize: 15.5)),
+                        Text(
+                          'Your record',
+                          style: AppTypography.h4.copyWith(fontSize: 15.5),
+                        ),
                         const SizedBox(height: 2),
                         Text(
-                            '${st.achievements.length} entries · your side of this story',
-                            style: AppTypography.caption.copyWith(
-                                color: AppColors.ink3, fontSize: 12.5)),
+                          '${st.achievements.length} entries · your side of this story',
+                          style: AppTypography.caption.copyWith(
+                            color: AppColors.ink3,
+                            fontSize: 12.5,
+                          ),
+                        ),
                       ],
                     ),
                   ),
                   if (pending > 0)
                     Container(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 9, vertical: 4),
+                        horizontal: 9,
+                        vertical: 4,
+                      ),
                       decoration: BoxDecoration(
-                          color: AppColors.ochreSoft,
-                          borderRadius: BorderRadius.circular(999)),
-                      child: Text('$pending new',
-                          style: AppTypography.kicker.copyWith(
-                              color: AppColors.ochre2, fontSize: 9.5)),
+                        color: AppColors.ochreSoft,
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        '$pending new',
+                        style: AppTypography.kicker.copyWith(
+                          color: AppColors.ochre2,
+                          fontSize: 9.5,
+                        ),
+                      ),
                     ),
                   const SizedBox(width: 6),
-                  const Icon(Icons.chevron_right_rounded,
-                      size: 18, color: AppColors.hair2),
+                  const Icon(
+                    Icons.chevron_right_rounded,
+                    size: 18,
+                    color: AppColors.hair2,
+                  ),
                 ],
               ),
             ),
@@ -544,21 +692,31 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
                 decoration: const BoxDecoration(
                   color: AppColors.paper,
                   border: Border(top: BorderSide(color: AppColors.hair)),
-                  borderRadius:
-                      BorderRadius.vertical(bottom: Radius.circular(26)),
+                  borderRadius: BorderRadius.vertical(
+                    bottom: Radius.circular(26),
+                  ),
                 ),
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 13,
+                ),
                 child: Row(
                   children: [
-                    const Icon(PhosphorIconsRegular.arrowClockwise,
-                        size: 15, color: AppColors.green2),
+                    const Icon(
+                      PhosphorIconsRegular.arrowClockwise,
+                      size: 15,
+                      color: AppColors.green2,
+                    ),
                     const SizedBox(width: 8),
                     Expanded(
-                      child: Text('Ask ${idol.short} to reassess your indexes',
-                          style: AppTypography.captionMedium.copyWith(
-                              color: AppColors.green2,
-                              fontWeight: FontWeight.w700,
-                              fontSize: 13)),
+                      child: Text(
+                        'Ask ${idol.short} to reassess your indexes',
+                        style: AppTypography.captionMedium.copyWith(
+                          color: AppColors.green2,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 13,
+                        ),
+                      ),
                     ),
                   ],
                 ),
@@ -588,15 +746,25 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
             child: CustomPaint(
               size: const Size.fromHeight(270),
               painter: _RadarPainter(
-                  dims: dims
-                      .map((d) =>
-                          (label: _dimShort[d.id] ?? d.label, you: d.you!, idol: d.idol!))
-                      .toList()),
+                dims: dims
+                    .map(
+                      (d) => (
+                        label: _dimShort[d.id] ?? d.label,
+                        you: d.you!,
+                        idol: d.idol!,
+                      ),
+                    )
+                    .toList(),
+              ),
             ),
           ),
-          Text('Comparable dimensions only · tap below for evidence',
-              style: AppTypography.caption
-                  .copyWith(color: AppColors.ink3, fontSize: 12)),
+          Text(
+            'Comparable dimensions only · tap below for evidence',
+            style: AppTypography.caption.copyWith(
+              color: AppColors.ink3,
+              fontSize: 12,
+            ),
+          ),
         ],
       ),
     );
@@ -607,13 +775,18 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
       mainAxisSize: MainAxisSize.min,
       children: [
         Container(
-            width: 10,
-            height: 10,
-            decoration:
-                BoxDecoration(color: c, borderRadius: BorderRadius.circular(3))),
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(
+            color: c,
+            borderRadius: BorderRadius.circular(3),
+          ),
+        ),
         const SizedBox(width: 6),
-        Text(label,
-            style: AppTypography.captionMedium.copyWith(fontSize: 12.5)),
+        Text(
+          label,
+          style: AppTypography.captionMedium.copyWith(fontSize: 12.5),
+        ),
       ],
     );
   }
@@ -654,34 +827,41 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
                   Row(
                     children: [
                       Expanded(
-                        child: Text(d.label,
-                            style: AppTypography.h4.copyWith(fontSize: 15),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis),
+                        child: Text(
+                          d.label,
+                          style: AppTypography.h4.copyWith(fontSize: 15),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
                       Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 9, vertical: 3),
+                          horizontal: 9,
+                          vertical: 3,
+                        ),
                         decoration: BoxDecoration(
-                            color: !comparable
-                                ? AppColors.paper2
-                                : ahead
-                                ? AppColors.greenSoft
-                                : AppColors.claySoft,
-                            borderRadius: BorderRadius.circular(999)),
+                          color: !comparable
+                              ? AppColors.paper2
+                              : ahead
+                              ? AppColors.greenSoft
+                              : AppColors.claySoft,
+                          borderRadius: BorderRadius.circular(999),
+                        ),
                         child: Text(
-                            comparable
-                                ? ahead
+                          comparable
+                              ? ahead
                                     ? '+${-gap}'
                                     : '−$gap'
-                                : _dimensionStatusLabel(d.status),
-                            style: AppTypography.kicker.copyWith(
-                                color: !comparable
-                                    ? AppColors.ink3
-                                    : ahead
-                                    ? AppColors.green2
-                                    : AppColors.clay,
-                                fontSize: 10.5)),
+                              : _dimensionStatusLabel(d.status),
+                          style: AppTypography.kicker.copyWith(
+                            color: !comparable
+                                ? AppColors.ink3
+                                : ahead
+                                ? AppColors.green2
+                                : AppColors.clay,
+                            fontSize: 10.5,
+                          ),
+                        ),
                       ),
                     ],
                   ),
@@ -694,7 +874,9 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
                     Container(
                       width: double.infinity,
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 9),
+                        horizontal: 10,
+                        vertical: 9,
+                      ),
                       decoration: BoxDecoration(
                         color: AppColors.paper2,
                         borderRadius: BorderRadius.circular(10),
@@ -704,9 +886,10 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
                             ? 'No numeric score · ${d.comparisonBasis}'
                             : 'No numeric score · evidence is not comparable',
                         style: AppTypography.caption.copyWith(
-                            color: AppColors.ink3,
-                            fontSize: 11.5,
-                            height: 1.35),
+                          color: AppColors.ink3,
+                          fontSize: 11.5,
+                          height: 1.35,
+                        ),
                       ),
                     ),
                 ],
@@ -714,12 +897,10 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
             ),
             if (open) ...[
               const SizedBox(height: 12),
-              if (d.youNote.isNotEmpty)
-                _noteLine(AppColors.ochre, d.youNote),
+              if (d.youNote.isNotEmpty) _noteLine(AppColors.ochre, d.youNote),
               if (d.youNote.isNotEmpty && d.idolNote.isNotEmpty)
                 const SizedBox(height: 8),
-              if (d.idolNote.isNotEmpty)
-                _noteLine(AppColors.green, d.idolNote),
+              if (d.idolNote.isNotEmpty) _noteLine(AppColors.green, d.idolNote),
             ],
           ],
         ),
@@ -738,14 +919,20 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
   Widget _barWithVal(int value, Color color, Color valueColor) {
     return Row(
       children: [
-        Expanded(child: CmpysBar(value: value.toDouble(), color: color, height: 9)),
+        Expanded(
+          child: CmpysBar(value: value.toDouble(), color: color, height: 9),
+        ),
         const SizedBox(width: 9),
         SizedBox(
           width: 24,
-          child: Text('$value',
-              textAlign: TextAlign.right,
-              style: AppTypography.monoLabel
-                  .copyWith(color: valueColor, fontSize: 11)),
+          child: Text(
+            '$value',
+            textAlign: TextAlign.right,
+            style: AppTypography.monoLabel.copyWith(
+              color: valueColor,
+              fontSize: 11,
+            ),
+          ),
         ),
       ],
     );
@@ -758,22 +945,35 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
         Padding(
           padding: const EdgeInsets.only(top: 4, right: 9),
           child: Container(
-              width: 9,
-              height: 9,
-              decoration: BoxDecoration(
-                  color: dot, borderRadius: BorderRadius.circular(3))),
+            width: 9,
+            height: 9,
+            decoration: BoxDecoration(
+              color: dot,
+              borderRadius: BorderRadius.circular(3),
+            ),
+          ),
         ),
         Expanded(
-          child: Text(text,
-              style: AppTypography.caption
-                  .copyWith(color: AppColors.ink2, fontSize: 13, height: 1.45)),
+          child: Text(
+            text,
+            style: AppTypography.caption.copyWith(
+              color: AppColors.ink2,
+              fontSize: 13,
+              height: 1.45,
+            ),
+          ),
         ),
       ],
     );
   }
 
   Widget _milestonesSection(
-      CmpysState st, CmpysIdol idol, List<CmpysMilestone> ms, int hitCount, int cmpAge) {
+    CmpysState st,
+    CmpysIdol idol,
+    List<CmpysMilestone> ms,
+    int hitCount,
+    int cmpAge,
+  ) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -783,9 +983,13 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
             children: [
               CmpysKicker('Milestones ${idol.short} hit by $cmpAge'),
               const Spacer(),
-              Text('$hitCount/${ms.length}',
-                  style: AppTypography.captionMedium.copyWith(
-                      color: AppColors.green, fontWeight: FontWeight.w700)),
+              Text(
+                '$hitCount/${ms.length}',
+                style: AppTypography.captionMedium.copyWith(
+                  color: AppColors.green,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
             ],
           ),
         ),
@@ -816,9 +1020,11 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
           if (hit) {
             ref.read(cmpysStoreProvider.notifier).toggleMilestone(m.id);
           } else {
-            showCmpysSheet(context,
-                title: 'Claim this milestone',
-                child: ClaimSheet(milestoneId: m.id, label: m.label));
+            showCmpysSheet(
+              context,
+              title: 'Claim this milestone',
+              child: ClaimSheet(milestoneId: m.id, label: m.label),
+            );
           }
         },
         behavior: HitTestBehavior.opaque,
@@ -834,23 +1040,35 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
                   color: hit ? AppColors.green : Colors.transparent,
                   shape: BoxShape.circle,
                   border: Border.all(
-                      color: hit ? AppColors.green : AppColors.hair2, width: 2),
+                    color: hit ? AppColors.green : AppColors.hair2,
+                    width: 2,
+                  ),
                 ),
                 child: hit
-                    ? const Icon(Icons.check_rounded, size: 14, color: Colors.white)
+                    ? const Icon(
+                        Icons.check_rounded,
+                        size: 14,
+                        color: Colors.white,
+                      )
                     : null,
               ),
               const SizedBox(width: 12),
               Expanded(
-                child: Text(m.label,
-                    style: AppTypography.bodyMedium.copyWith(
-                        fontSize: 14.5,
-                        color: hit ? AppColors.ink3 : AppColors.ink,
-                        decoration: hit ? TextDecoration.lineThrough : null)),
+                child: Text(
+                  m.label,
+                  style: AppTypography.bodyMedium.copyWith(
+                    fontSize: 14.5,
+                    color: hit ? AppColors.ink3 : AppColors.ink,
+                    decoration: hit ? TextDecoration.lineThrough : null,
+                  ),
+                ),
               ),
               if (!hit)
-                const Icon(Icons.chevron_right_rounded,
-                    size: 16, color: AppColors.hair2),
+                const Icon(
+                  Icons.chevron_right_rounded,
+                  size: 16,
+                  color: AppColors.hair2,
+                ),
             ],
           ),
         ),
@@ -867,15 +1085,21 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
         pad: const EdgeInsets.all(14),
         child: Row(
           children: [
-            const Icon(PhosphorIconsFill.sparkle,
-                size: 20, color: AppColors.green),
+            const Icon(
+              PhosphorIconsFill.sparkle,
+              size: 20,
+              color: AppColors.green,
+            ),
             const SizedBox(width: 10),
             Expanded(
-              child: Text('You’re currently ahead in ${dimension.label}.',
-                  style: AppTypography.bodyMedium.copyWith(
-                      color: AppColors.green2,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600)),
+              child: Text(
+                'You’re currently ahead in ${dimension.label}.',
+                style: AppTypography.bodyMedium.copyWith(
+                  color: AppColors.green2,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
             ),
           ],
         ),
@@ -884,11 +1108,13 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
   }
 
   void _openReassess() {
-    Navigator.of(context).push(PageRouteBuilder(
-      opaque: false,
-      barrierColor: Colors.transparent,
-      pageBuilder: (_, _, _) => const ReassessOverlay(),
-    ));
+    Navigator.of(context).push(
+      PageRouteBuilder(
+        opaque: false,
+        barrierColor: Colors.transparent,
+        pageBuilder: (_, _, _) => const ReassessOverlay(),
+      ),
+    );
   }
 }
 
@@ -937,34 +1163,43 @@ class _RadarPainter extends CustomPainter {
     }
 
     final idolPath = poly((i) => dims[i].idol);
-    canvas.drawPath(idolPath, Paint()..color = AppColors.green.withValues(alpha: 0.2));
     canvas.drawPath(
-        idolPath,
-        Paint()
-          ..color = AppColors.green
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 2.5
-          ..strokeJoin = StrokeJoin.round);
+      idolPath,
+      Paint()..color = AppColors.green.withValues(alpha: 0.2),
+    );
+    canvas.drawPath(
+      idolPath,
+      Paint()
+        ..color = AppColors.green
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.5
+        ..strokeJoin = StrokeJoin.round,
+    );
 
     final youPath = poly((i) => dims[i].you);
-    canvas.drawPath(youPath, Paint()..color = AppColors.ochre.withValues(alpha: 0.3));
     canvas.drawPath(
-        youPath,
-        Paint()
-          ..color = AppColors.ochre
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 2.5
-          ..strokeJoin = StrokeJoin.round);
+      youPath,
+      Paint()..color = AppColors.ochre.withValues(alpha: 0.3),
+    );
+    canvas.drawPath(
+      youPath,
+      Paint()
+        ..color = AppColors.ochre
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.5
+        ..strokeJoin = StrokeJoin.round,
+    );
     for (var i = 0; i < n; i++) {
       final o = vertex(i, radius * dims[i].you / 100);
       canvas.drawCircle(o, 3.5, Paint()..color = AppColors.ochre);
       canvas.drawCircle(
-          o,
-          3.5,
-          Paint()
-            ..color = Colors.white
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 1.5);
+        o,
+        3.5,
+        Paint()
+          ..color = Colors.white
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.5,
+      );
     }
 
     // labels
@@ -974,10 +1209,11 @@ class _RadarPainter extends CustomPainter {
       tp.text = TextSpan(
         text: dims[i].label,
         style: TextStyle(
-            fontFamily: AppTypography.label.fontFamily,
-            fontSize: 11.5,
-            fontWeight: FontWeight.w700,
-            color: AppColors.ink2),
+          fontFamily: AppTypography.label.fontFamily,
+          fontSize: 11.5,
+          fontWeight: FontWeight.w700,
+          color: AppColors.ink2,
+        ),
       );
       tp.layout(maxWidth: 90);
       tp.paint(canvas, o.translate(-tp.width / 2, -tp.height / 2));

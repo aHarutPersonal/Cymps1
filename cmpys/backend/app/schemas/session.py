@@ -1,4 +1,5 @@
 """Schemas for agentic session workflow."""
+
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
@@ -9,6 +10,7 @@ from pydantic import BaseModel, Field, model_validator
 
 class SessionPhaseSchema(str, Enum):
     """Session phase for API responses."""
+
     INTAKE = "intake"
     IDOL_SELECTION = "idol_selection"
     INTERVIEW = "interview"
@@ -25,25 +27,24 @@ class SessionPhaseSchema(str, Enum):
 
 class SessionCreate(BaseModel):
     """Create a new agentic session (Phase 1: Intake)."""
-    
+
     age: int = Field(..., ge=1, le=150, description="User's current age")
     financial_status: str = Field(
-        ..., max_length=500,
-        description="User's financial/life status description"
+        ..., max_length=500, description="User's financial/life status description"
     )
     interests: list[str] = Field(
-        ..., min_length=1, max_length=10,
-        description="User's interest keywords"
+        ..., min_length=1, max_length=10, description="User's interest keywords"
     )
     goal: str | None = Field(
-        None, max_length=200,
-        description="The goal the user picked in onboarding (e.g. 'Build wealth')"
+        None,
+        max_length=200,
+        description="The goal the user picked in onboarding (e.g. 'Build wealth')",
     )
 
 
 class SelectIdolRequest(BaseModel):
     """Select an idol for the mentoring session."""
-    
+
     idol_name: str = Field(..., max_length=200)
     wikidata_id: str | None = Field(None, max_length=20)
 
@@ -75,18 +76,30 @@ class InterviewResponseInput(BaseModel):
     placeholder: str | None = Field(default=None, max_length=100)
     options: list[str] = Field(default_factory=list, max_length=6)
     min_value: float | None = Field(
-        default=None, alias="min", ge=-1_000_000, le=1_000_000,
+        default=None,
+        alias="min",
+        ge=-1_000_000,
+        le=1_000_000,
         allow_inf_nan=False,
     )
     max_value: float | None = Field(
-        default=None, alias="max", ge=-1_000_000, le=1_000_000,
+        default=None,
+        alias="max",
+        ge=-1_000_000,
+        le=1_000_000,
         allow_inf_nan=False,
     )
     step: float | None = Field(
-        default=None, gt=0, le=1000, allow_inf_nan=False,
+        default=None,
+        gt=0,
+        le=1000,
+        allow_inf_nan=False,
     )
     initial_value: float | None = Field(
-        default=None, alias="initial", ge=-1_000_000, le=1_000_000,
+        default=None,
+        alias="initial",
+        ge=-1_000_000,
+        le=1_000_000,
         allow_inf_nan=False,
     )
     unit: str | None = Field(default=None, max_length=40)
@@ -94,14 +107,17 @@ class InterviewResponseInput(BaseModel):
     # Server-owned semantic binding for the answer. The model may suggest UI,
     # but the endpoint always overwrites this key with the required next input
     # before persistence, so clients cannot relabel an answer.
-    answer_key: Literal[
-        "achievement_inventory",
-        "current_capability",
-        "weekly_hours",
-        "target_outcome",
-        "constraints_resources",
-        "learning_habits_support",
-    ] | None = None
+    answer_key: (
+        Literal[
+            "achievement_inventory",
+            "current_capability",
+            "weekly_hours",
+            "target_outcome",
+            "constraints_resources",
+            "learning_habits_support",
+        ]
+        | None
+    ) = None
 
     model_config = {"populate_by_name": True}
 
@@ -166,15 +182,18 @@ class InterviewResponseInput(BaseModel):
         self.unit = None
         return self
 
+
 class LearningTopicRequest(BaseModel):
     """Request a Socratic learning session on a topic."""
-    
+
     topic: str = Field(..., max_length=200)
+
 
 class GuidedLearningMessageRequest(BaseModel):
     """Send a message during the guided learning phase."""
-    
+
     content: str = Field(..., max_length=10000)
+
 
 # =============================================================================
 # Response Schemas
@@ -183,7 +202,7 @@ class GuidedLearningMessageRequest(BaseModel):
 
 class SelectedIdolInfo(BaseModel):
     """Idol info embedded in session response."""
-    
+
     id: str
     name: str
     era: str | None = None
@@ -193,7 +212,7 @@ class SelectedIdolInfo(BaseModel):
 
 class SessionResponse(BaseModel):
     """Full session state response."""
-    
+
     id: str
     phase: SessionPhaseSchema
     user_age: int
@@ -212,6 +231,14 @@ class SessionResponse(BaseModel):
         default=None,
         alias="comparisonScores",
     )
+    comparison_scores_status: str = Field(
+        default="not_started",
+        alias="comparisonScoresStatus",
+    )
+    comparison_scores_retryable: bool = Field(
+        default=False,
+        alias="comparisonScoresRetryable",
+    )
     interview_thread_id: str | None = None
     created_at: datetime
     updated_at: datetime
@@ -221,7 +248,7 @@ class SessionResponse(BaseModel):
 
 class IdolSuggestionItem(BaseModel):
     """A single idol suggestion."""
-    
+
     name: str
     era: str
     relevance_summary: str
@@ -233,13 +260,13 @@ class IdolSuggestionItem(BaseModel):
 
 class IdolSuggestionsResponse(BaseModel):
     """Response with 3 idol suggestions."""
-    
+
     suggestions: list[IdolSuggestionItem]
 
 
 class LearningMaterialResponse(BaseModel):
     """A fetched learning resource (article or video)."""
-    
+
     title: str
     url: str
     type: str = Field(description="'article' or 'video'")
@@ -250,15 +277,16 @@ class LearningMaterialResponse(BaseModel):
     thumbnail_url: str | None = None
     duration_minutes: int | None = None
 
+
 class LearningMaterialsResponse(BaseModel):
     """Response for fetching learning materials based on a topic."""
-    
+
     materials: list[LearningMaterialResponse]
 
 
 class DailyInsightResponse(BaseModel):
     """A single bite-sized insight (Idea Card)."""
-    
+
     title: str
     content: str
     category: str
@@ -266,5 +294,5 @@ class DailyInsightResponse(BaseModel):
 
 class DailyFeedResponse(BaseModel):
     """Daily feed of insights."""
-    
+
     insights: list[DailyInsightResponse]

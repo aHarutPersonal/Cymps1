@@ -84,6 +84,28 @@ void main() {
     },
   );
 
+  test('book guide wait stops on a terminal quality failure', () async {
+    final client = _TerminalResolveDioClient();
+    final repository = PlanRepository(dioClient: client);
+
+    await expectLater(
+      repository.waitForContentResourceId(
+        'book:author:title',
+        pollDelays: const [Duration.zero, Duration.zero, Duration.zero],
+      ),
+      throwsA(
+        isA<BookGuideUnavailableException>()
+            .having((error) => error.status, 'status', 'failed_quality')
+            .having(
+              (error) => error.message,
+              'message',
+              contains('quality standard'),
+            ),
+      ),
+    );
+    expect(client.calls, 1);
+  });
+
   test('regeneratePlanItemDetails uses the explicit retry endpoint', () async {
     final client = _RecordingDioClient();
     final repository = PlanRepository(dioClient: client);
@@ -200,6 +222,35 @@ class _EventuallyReadyDioClient extends DioClient {
       data:
           <String, dynamic>{
                 'id': 'resource-123',
+                'canonicalKey': queryParameters?['canonicalKey'],
+              }
+              as T,
+      requestOptions: RequestOptions(path: path),
+    );
+  }
+}
+
+class _TerminalResolveDioClient extends DioClient {
+  _TerminalResolveDioClient() : super(tokenStore: TokenStore());
+
+  int calls = 0;
+
+  @override
+  Future<Response<T>> get<T>(
+    String path, {
+    Map<String, dynamic>? queryParameters,
+    Options? options,
+    bool skipAuth = false,
+    Duration? receiveTimeout,
+  }) async {
+    calls++;
+    return Response<T>(
+      data:
+          <String, dynamic>{
+                'id': null,
+                'status': 'failed_quality',
+                'message':
+                    'This guide did not meet the reading-quality standard.',
                 'canonicalKey': queryParameters?['canonicalKey'],
               }
               as T,

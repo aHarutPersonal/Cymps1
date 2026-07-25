@@ -4,6 +4,7 @@ Celery Beat calls ``catalog_tick``. The tick seeds work from pending catalog
 rows, recovers stale leases, and dispatches a small, daily-capped batch. Heavy
 network/LLM work runs in ``process_catalog_job`` on the dedicated catalog queue.
 """
+
 from __future__ import annotations
 
 import logging
@@ -37,11 +38,32 @@ IDOL_JOB_SOURCE = "idol_profile_v2"
 QUOTE_JOB_SOURCE = "wikiquote_v1"
 QUOTE_VERIFICATION_JOB_SOURCE = "gemini_grounded_quote_v1"
 IDLE_DISCOVERY_ORIGIN = "idle_discovery"
+USER_DEMANDED_BOOK_PRIORITY = 80
 
 
 def retry_delay_seconds(attempts: int) -> int:
     """Five minutes, doubling per failure, capped at six hours."""
     return min(300 * (2 ** max(attempts - 1, 0)), 6 * 60 * 60)
+
+
+def catalog_retry_delay_seconds(job: IngestJob) -> int:
+    """Retry user-requested books promptly; keep autonomous work conservative."""
+    attempts = int(getattr(job, "attempts", 0) or 0)
+    if (
+        getattr(job, "kind", None) == IngestKind.BOOK
+        and int(getattr(job, "priority", 0) or 0) >= USER_DEMANDED_BOOK_PRIORITY
+    ):
+        return min(15 * (2 ** max(attempts - 1, 0)), 2 * 60)
+    return retry_delay_seconds(attempts)
+
+
+def bypasses_background_budget(job: IngestJob) -> bool:
+    """The autonomous spend cap must never block a user's plan material."""
+    return (
+        job.kind == IngestKind.BOOK
+        and job.priority >= USER_DEMANDED_BOOK_PRIORITY
+        and (job.payload_json or {}).get("origin") != IDLE_DISCOVERY_ORIGIN
+    )
 
 
 async def _insert_job(
@@ -117,14 +139,50 @@ async def _enqueue_catalog_book_async(
                 # uses a neutral goal and never bakes this user's goal into cache.
                 "requested_goal": user_goal,
                 "source_context": source_context,
+                "origin": "plan_material",
             },
             priority=priority,
         )
+        reactivated = False
+        if job_id is None:
+            existing = (
+                await db.execute(
+                    select(IngestJob)
+                    .where(
+                        IngestJob.kind == IngestKind.BOOK,
+                        IngestJob.source == BOOK_JOB_SOURCE,
+                        IngestJob.external_id == canonical_key,
+                    )
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if (
+                existing is not None
+                and existing.state in {IngestState.FLAGGED, IngestState.FAILED}
+                and existing.attempts < settings.catalog_max_attempts
+            ):
+                existing.state = IngestState.QUEUED
+                existing.next_attempt_at = datetime.now(timezone.utc)
+                existing.completed_at = None
+                existing.locked_at = None
+                existing.last_error = "Requeued after a failed quality attempt"
+                existing.priority = max(existing.priority, priority)
+                existing.payload_json = {
+                    **(existing.payload_json or {}),
+                    "origin": "plan_material",
+                }
+                job_id = str(existing.id)
+                reactivated = True
         await db.commit()
 
     # Wake the dispatcher immediately; Beat remains the recovery mechanism.
     catalog_tick.apply_async(queue="catalog_control")
-    return {"queued": bool(job_id), "job_id": job_id, "canonical_key": canonical_key}
+    return {
+        "queued": bool(job_id),
+        "reactivated": reactivated,
+        "job_id": job_id,
+        "canonical_key": canonical_key,
+    }
 
 
 @celery_app.task(name="app.tasks.catalog.catalog_tick")
@@ -279,9 +337,11 @@ async def _catalog_tick_async() -> dict:
 
         remaining_seed = max(settings.catalog_seed_per_tick - seeded, 0)
         if remaining_seed:
-            existing_quote = select(VerifiedQuote.id).where(
-                VerifiedQuote.idol_id == Idol.id
-            ).exists()
+            existing_quote = (
+                select(VerifiedQuote.id)
+                .where(VerifiedQuote.idol_id == Idol.id)
+                .exists()
+            )
             quote_idol_result = await db.execute(
                 select(Idol)
                 .where(
@@ -340,7 +400,7 @@ async def _catalog_tick_async() -> dict:
             for job in due_result.scalars().all():
                 if len(dispatched_ids) >= dispatch_limit:
                     break
-                if not budget_allows_job(
+                if not bypasses_background_budget(job) and not budget_allows_job(
                     kind=job.kind,
                     status=budget_status,
                     projected_spend_usd=projected_spend,
@@ -467,9 +527,7 @@ async def _idle_discovery_db_blocker(
             await db.execute(
                 select(func.count(IngestJob.id)).where(
                     IngestJob.created_at >= day_start,
-                    IngestJob.payload_json.contains(
-                        {"origin": IDLE_DISCOVERY_ORIGIN}
-                    ),
+                    IngestJob.payload_json.contains({"origin": IDLE_DISCOVERY_ORIGIN}),
                 )
             )
         ).scalar_one()
@@ -651,8 +709,7 @@ async def _seed_discovered_idol(db, *, candidates: list, bucket: int) -> dict:
 def catalog_discovery_tick() -> dict:
     """Seed exactly one speculative item only while the backend is idle."""
     if not (
-        settings.catalog_scheduler_enabled
-        and settings.catalog_idle_discovery_enabled
+        settings.catalog_scheduler_enabled and settings.catalog_idle_discovery_enabled
     ):
         return {"status": "disabled"}
     return run_async(_catalog_discovery_tick_async())
@@ -797,7 +854,7 @@ async def _process_catalog_job_async(job_id: str) -> dict:
                 db,
                 exclude_running_job_id=job_id,
             )
-            if not budget_allows_job(
+            if not bypasses_background_budget(job) and not budget_allows_job(
                 kind=kind,
                 status=budget_status,
                 projected_spend_usd=budget_status.committed_usd,
@@ -857,21 +914,51 @@ async def _process_book_job(job_id: str, payload: dict) -> dict:
         job = await db.get(IngestJob, job_id)
         if job is None:
             raise RuntimeError("Catalog job disappeared during book generation")
-        job.state = (
-            IngestState.DONE
-            if resource.status == CatalogStatus.PUBLISHED
-            else IngestState.FLAGGED
-        )
-        job.completed_at = datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc)
+        quality = (resource.metadata_json or {}).get("quality_report") or {}
+        retry_in_seconds: int | None = None
+        if resource.status == CatalogStatus.PUBLISHED:
+            job.state = IngestState.DONE
+            job.completed_at = now
+            job.last_error = None
+        elif job.attempts < settings.catalog_max_attempts:
+            job.state = IngestState.QUEUED
+            retry_in_seconds = catalog_retry_delay_seconds(job)
+            job.next_attempt_at = now + timedelta(seconds=retry_in_seconds)
+            job.completed_at = None
+            issues = quality.get("issues") or []
+            job.last_error = (
+                "quality_gate_failed"
+                f" score={quality.get('score', 'unknown')}: "
+                + "; ".join(str(issue) for issue in issues[:8])
+            )[:4000]
+        else:
+            job.state = IngestState.FLAGGED
+            job.completed_at = now
+            issues = quality.get("issues") or []
+            job.last_error = (
+                "quality_gate_exhausted"
+                f" score={quality.get('score', 'unknown')}: "
+                + "; ".join(str(issue) for issue in issues[:8])
+            )[:4000]
         job.locked_at = None
-        job.last_error = None
         await db.commit()
-        return {
+        result = {
             "status": job.state.value,
             "job_id": job_id,
             "content_resource_id": str(resource.id),
             "canonical_key": resource.canonical_key,
+            "attempts": job.attempts,
+            "next_attempt_at": (
+                job.next_attempt_at.isoformat() if job.next_attempt_at else None
+            ),
         }
+    if retry_in_seconds is not None:
+        catalog_tick.apply_async(
+            queue="catalog_control",
+            countdown=retry_in_seconds,
+        )
+    return result
 
 
 async def _resolve_catalog_idol_photo(db, idol: Idol) -> bool:
@@ -1103,7 +1190,9 @@ async def _process_quote_job(job_id: str, payload: dict) -> dict:
         job.state = IngestState.DONE if total_for_idol else IngestState.FLAGGED
         job.completed_at = now
         job.locked_at = None
-        job.last_error = None if total_for_idol else "No source-backed Wikiquote entries found"
+        job.last_error = (
+            None if total_for_idol else "No source-backed Wikiquote entries found"
+        )
         await db.commit()
         return {
             "status": job.state.value,
@@ -1211,7 +1300,9 @@ async def _process_quote_verification_job(job_id: str, payload: dict) -> dict:
                 quote.status = CatalogStatus.FLAGGED
             state_counts[check.state.value] = state_counts.get(check.state.value, 0) + 1
 
-        decisive_count = state_counts.get("verified", 0) + state_counts.get("rejected", 0)
+        decisive_count = state_counts.get("verified", 0) + state_counts.get(
+            "rejected", 0
+        )
         usage_event.quality_score = decisive_count / max(len(run.results), 1)
         usage_event.metadata_json = {
             **(usage_event.metadata_json or {}),
@@ -1250,7 +1341,7 @@ async def _record_failure(job_id: str, error: str) -> dict:
             job.completed_at = now
         else:
             job.state = IngestState.QUEUED
-            retry_in_seconds = retry_delay_seconds(job.attempts)
+            retry_in_seconds = catalog_retry_delay_seconds(job)
             job.next_attempt_at = now + timedelta(seconds=retry_in_seconds)
         await db.commit()
         result = {

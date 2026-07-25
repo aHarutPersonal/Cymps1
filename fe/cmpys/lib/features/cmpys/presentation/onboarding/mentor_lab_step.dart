@@ -300,7 +300,8 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep> {
     setState(() {
       _planReady = true;
       _progress = 100;
-      _status = 'Your plan is ready.';
+      _status =
+          'Your roadmap is ready. Current-week lessons and guides continue preparing.';
       _error = null;
     });
   }

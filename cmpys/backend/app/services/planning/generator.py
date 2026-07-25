@@ -5,8 +5,9 @@ PROMPT MAPPING:
 - generate_plan() -> planner_system.txt + plan_backbone_generate.txt
 - generate_plan_week_from_backbone() -> planner_system.txt + plan_week_generate.txt
 
-When PLAN_GENERATOR_MODE=llm and LLM is configured, uses LLM to generate plan items.
-Otherwise, generates deterministic template-based items.
+When PLAN_GENERATOR_MODE=llm and LLM is configured, uses LLM to generate plan items
+and reports provider failure honestly. Deterministic templates are used only
+when deterministic mode is explicitly configured.
 """
 
 import logging
@@ -61,6 +62,7 @@ class PlanRoadmap:
     anti_goals: list[str] = field(default_factory=list)
     items: list[PlanItemData] = field(default_factory=list)
     backbone_weeks: list[dict] = field(default_factory=list)
+    generation_source: str = "deterministic"
 
 
 # =============================================================================
@@ -747,6 +749,7 @@ def _roadmap_from_backbone(
         anti_goals=backbone.anti_goals,
         items=result_items,
         backbone_weeks=[week.model_dump(mode="json") for week in backbone.weeks],
+        generation_source="llm",
     )
 
 
@@ -775,7 +778,9 @@ async def _generate_llm_items(
     Generates one compact cycle backbone, then expands Week 1 only. Future
     weeks are enriched by the one-week-ahead worker before they unlock.
 
-    Falls back to deterministic if LLM fails.
+    Raises if both configured provider routes fail. Deterministic templates are
+    reserved for explicit deterministic mode; silently publishing one from an
+    LLM-mode outage would mislabel a degraded artifact as a personalized plan.
     """
     try:
         system_prompt = load_prompt("planner_system")
@@ -794,9 +799,7 @@ async def _generate_llm_items(
                 "idol_milestones_json": idol_milestones or [],
                 "gaps_json": gaps or [],
                 "readiness_by_gap_json": readiness_by_gap or {},
-                "learner_baseline_json": sanitize_untrusted_input(
-                    learner_baseline_json
-                )
+                "learner_baseline_json": sanitize_untrusted_input(learner_baseline_json)
                 if learner_baseline_json
                 else "",
                 "interview_transcript_json": interview_transcript_json or "",
@@ -851,18 +854,11 @@ async def _generate_llm_items(
             hours_per_week=hours_per_week,
         )
 
-    except Exception as e:
-        logger.exception(
-            f"LLM plan generation failed: {e}, falling back to deterministic"
-        )
-
-    # Fall back to deterministic
-    return _generate_deterministic_items(
-        hours_per_week,
-        duration_weeks,
-        idol_name=idol_name,
-        user_goal=user_goal,
-    )
+    except Exception as exc:
+        logger.exception("LLM plan generation failed; refusing silent downgrade")
+        raise RuntimeError(
+            "Personalized plan generation failed across configured providers"
+        ) from exc
 
 
 # =============================================================================
@@ -889,7 +885,7 @@ async def generate_plan(
     - User: plan_backbone_generate.txt, then plan_week_generate.txt for Week 1
 
     LLM is used if:
-    - PLAN_GENERATOR_MODE=llm AND LLM_PROVIDER=openai AND API key is set
+    - PLAN_GENERATOR_MODE=llm AND an LLM provider/key is configured
     - OR force_llm=True
 
     Otherwise generates deterministic template-based items.

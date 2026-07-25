@@ -104,6 +104,8 @@ class Session with _$Session {
     String? comparisonOutput,
     String? blueprintOutput,
     Map<String, dynamic>? comparisonScores,
+    @Default('not_started') String comparisonScoresStatus,
+    @Default(false) bool comparisonScoresRetryable,
     String? interviewThreadId,
     DateTime? createdAt,
     DateTime? updatedAt,
@@ -129,6 +131,15 @@ class Session with _$Session {
       comparisonScores: rawComparisonScores is Map
           ? rawComparisonScores.cast<String, dynamic>()
           : null,
+      comparisonScoresStatus:
+          (json['comparisonScoresStatus'] ??
+                  json['comparison_scores_status'] ??
+                  'not_started')
+              .toString(),
+      comparisonScoresRetryable:
+          json['comparisonScoresRetryable'] as bool? ??
+          json['comparison_scores_retryable'] as bool? ??
+          false,
       interviewThreadId: json['interview_thread_id']?.toString(),
       createdAt: _parseDate(json['created_at']),
       updatedAt: _parseDate(json['updated_at']),
@@ -146,6 +157,8 @@ class Session with _$Session {
     if (comparisonOutput != null) 'comparison_output': comparisonOutput,
     if (blueprintOutput != null) 'blueprint_output': blueprintOutput,
     if (comparisonScores != null) 'comparisonScores': comparisonScores,
+    'comparisonScoresStatus': comparisonScoresStatus,
+    'comparisonScoresRetryable': comparisonScoresRetryable,
     if (interviewThreadId != null) 'interview_thread_id': interviewThreadId,
     if (createdAt != null) 'created_at': createdAt!.toIso8601String(),
     if (updatedAt != null) 'updated_at': updatedAt!.toIso8601String(),

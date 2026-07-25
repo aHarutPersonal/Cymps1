@@ -1,6 +1,8 @@
 import asyncio
+from types import SimpleNamespace
 
 import pytest
+from pydantic import BaseModel
 
 from app.core.config import settings
 from app.services.llm.client import (
@@ -12,6 +14,13 @@ from app.services.llm.client import (
     get_llm_client,
 )
 from app.services.llm.gemini_compat import generation_config_kwargs
+
+
+@pytest.fixture(autouse=True)
+def _reset_provider_circuits():
+    FallbackLLMClient.reset_circuits_for_tests()
+    yield
+    FallbackLLMClient.reset_circuits_for_tests()
 
 
 def test_gemini_tiers_route_to_cost_quality_models(monkeypatch):
@@ -201,6 +210,7 @@ class _ResponseClient(BaseLLMClient):
     def __init__(self, response: LLMResponse, model: str):
         self.response = response
         self.model = model
+        self.provider_name = response.provider
         self.calls = 0
 
     async def generate_json(self, *args, **kwargs) -> LLMResponse:
@@ -238,7 +248,9 @@ async def test_provider_failure_uses_fallback_and_records_provenance():
         "gemini-test",
     )
 
-    response = await FallbackLLMClient(primary, fallback).generate_json("system", "user")
+    response = await FallbackLLMClient(primary, fallback).generate_json(
+        "system", "user"
+    )
 
     assert response.data == {"ok": True}
     assert response.provider == "gemini"
@@ -271,3 +283,106 @@ async def test_unexpected_primary_exception_still_uses_fallback():
     assert response.fallback_from_provider == "yunwu"
     assert response.fallback_error == "Primary provider error: transport setup failed"
     assert fallback.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_operational_failure_opens_provider_circuit_for_next_call():
+    failed_primary = _ResponseClient(
+        LLMResponse(data={}, provider="yunwu", error="gateway timed out"),
+        "balanced-test",
+    )
+    first_fallback = _ResponseClient(
+        LLMResponse(data={"attempt": 1}, provider="gemini"),
+        "gemini-test",
+    )
+    first = await FallbackLLMClient(failed_primary, first_fallback).generate_json(
+        "system", "user"
+    )
+
+    healthy_but_skipped_primary = _ResponseClient(
+        LLMResponse(data={"wrong": True}, provider="yunwu"),
+        "quality-test",
+    )
+    second_fallback = _ResponseClient(
+        LLMResponse(data={"attempt": 2}, provider="gemini"),
+        "gemini-test",
+    )
+    second = await FallbackLLMClient(
+        healthy_but_skipped_primary, second_fallback
+    ).generate_json("system", "user")
+
+    assert first.data == {"attempt": 1}
+    assert second.data == {"attempt": 2}
+    assert failed_primary.calls == 1
+    assert healthy_but_skipped_primary.calls == 0
+    assert "circuit open" in str(second.fallback_error).casefold()
+
+
+@pytest.mark.asyncio
+async def test_content_error_does_not_open_provider_circuit():
+    invalid_primary = _ResponseClient(
+        LLMResponse(data={}, provider="yunwu", error="Invalid JSON in response"),
+        "balanced-test",
+    )
+    fallback = _ResponseClient(
+        LLMResponse(data={"fallback": True}, provider="gemini"),
+        "gemini-test",
+    )
+    await FallbackLLMClient(invalid_primary, fallback).generate_json("system", "user")
+
+    next_primary = _ResponseClient(
+        LLMResponse(data={"primary": True}, provider="yunwu"),
+        "quality-test",
+    )
+    response = await FallbackLLMClient(next_primary, fallback).generate_json(
+        "system", "user"
+    )
+
+    assert response.data == {"primary": True}
+    assert next_primary.calls == 1
+
+
+class _CompatibilityOutput(BaseModel):
+    ok: bool
+
+
+@pytest.mark.asyncio
+async def test_gemini_invalid_native_config_retries_without_native_schema(
+    monkeypatch,
+):
+    from app.services import gemini as gemini_service
+
+    calls = []
+
+    class Models:
+        async def generate_content(self, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise RuntimeError("400 INVALID_ARGUMENT: response schema unsupported")
+            return SimpleNamespace(
+                text='{"ok": true}',
+                candidates=[],
+                usage_metadata=None,
+            )
+
+    fake_client = SimpleNamespace(aio=SimpleNamespace(models=Models()))
+    monkeypatch.setattr(settings, "gemini_api_key", "test-key")
+    monkeypatch.setattr(gemini_service, "_gemini_client", lambda: fake_client)
+
+    response = await GeminiLLMClient(
+        model="gemini-3.6-flash",
+        api_key="test-key",
+        timeout=5,
+    ).generate_json(
+        system_prompt="system",
+        user_prompt="return the result",
+        output_model=_CompatibilityOutput,
+    )
+
+    assert response.error is None
+    assert response.data == {"ok": True}
+    assert response.retried is True
+    assert len(calls) == 2
+    assert "COMPATIBILITY MODE" in calls[1]["contents"]
+    assert "response_schema" not in calls[1]["config"].model_dump(exclude_none=True)
+    assert "thinking_config" not in calls[1]["config"].model_dump(exclude_none=True)
