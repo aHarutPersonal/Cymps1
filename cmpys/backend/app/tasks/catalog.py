@@ -39,6 +39,7 @@ QUOTE_JOB_SOURCE = "wikiquote_v1"
 QUOTE_VERIFICATION_JOB_SOURCE = "gemini_grounded_quote_v1"
 IDLE_DISCOVERY_ORIGIN = "idle_discovery"
 USER_DEMANDED_BOOK_PRIORITY = 80
+WORKER_REDELIVERY_COUNT_KEY = "_worker_redelivery_count"
 
 
 def retry_delay_seconds(attempts: int) -> int:
@@ -407,6 +408,12 @@ async def _catalog_tick_async() -> dict:
                 ):
                     budget_deferred += 1
                     continue
+                payload = dict(job.payload_json or {})
+                if payload.pop(WORKER_REDELIVERY_COUNT_KEY, None) is not None:
+                    # The counter is scoped to one catalog attempt. A normal
+                    # retry dispatched by the scheduler gets a fresh bounded
+                    # redelivery allowance.
+                    job.payload_json = payload
                 job.state = IngestState.RUNNING
                 job.attempts += 1
                 job.locked_at = now
@@ -827,13 +834,34 @@ async def _catalog_discovery_tick_async(
     }
 
 
-@celery_app.task(name="app.tasks.catalog.process_catalog_job")
-def process_catalog_job(job_id: str) -> dict:
-    return run_async(_process_catalog_job_async(job_id))
+@celery_app.task(
+    bind=True,
+    name="app.tasks.catalog.process_catalog_job",
+    # Catalog work can spend several minutes waiting on providers.  Keep the
+    # broker delivery unacknowledged until the durable database job reaches a
+    # terminal/retry state so a rolling deploy or lost worker redelivers it
+    # immediately instead of leaving a RUNNING lease stranded for the stale
+    # sweeper.  The database state check below makes redelivery idempotent.
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
+def process_catalog_job(self, job_id: str) -> dict:
+    delivery_info = getattr(self.request, "delivery_info", None) or {}
+    return run_async(
+        _process_catalog_job_async(
+            job_id,
+            redelivered=bool(delivery_info.get("redelivered")),
+        )
+    )
 
 
-async def _process_catalog_job_async(job_id: str) -> dict:
+async def _process_catalog_job_async(
+    job_id: str,
+    *,
+    redelivered: bool = False,
+) -> dict:
     try:
+        repeated_worker_loss = False
         async with async_session_maker() as db:
             job = await db.get(IngestJob, job_id)
             if job is None:
@@ -843,38 +871,64 @@ async def _process_catalog_job_async(job_id: str) -> dict:
             kind = job.kind
             payload = dict(job.payload_json or {})
 
+            if redelivered:
+                prior_redeliveries = int(
+                    payload.get(WORKER_REDELIVERY_COUNT_KEY, 0) or 0
+                )
+                if prior_redeliveries >= 1:
+                    repeated_worker_loss = True
+                else:
+                    payload[WORKER_REDELIVERY_COUNT_KEY] = prior_redeliveries + 1
+                    job.payload_json = payload
+                    job.locked_at = datetime.now(timezone.utc)
+                    await db.commit()
+
             # Second check closes the window between Beat dispatch and worker
             # execution. Source-only quote imports always pass with zero reserve.
-            from app.services.llm.budget import (
-                budget_allows_job,
-                get_daily_background_budget_status,
-            )
-
-            budget_status = await get_daily_background_budget_status(
-                db,
-                exclude_running_job_id=job_id,
-            )
-            if not bypasses_background_budget(job) and not budget_allows_job(
-                kind=kind,
-                status=budget_status,
-                projected_spend_usd=budget_status.committed_usd,
-            ):
-                now = datetime.now(timezone.utc)
-                tomorrow = (now + timedelta(days=1)).replace(
-                    hour=0, minute=1, second=0, microsecond=0
+            if not repeated_worker_loss:
+                from app.services.llm.budget import (
+                    budget_allows_job,
+                    get_daily_background_budget_status,
                 )
-                job.state = IngestState.QUEUED
-                job.attempts = max(job.attempts - 1, 0)
-                job.locked_at = None
-                job.next_attempt_at = tomorrow
-                job.last_error = f"deferred: background_budget_{budget_status.state}"
-                await db.commit()
-                return {
-                    "status": "deferred_budget",
-                    "job_id": job_id,
-                    "budget_state": budget_status.state,
-                    "next_attempt_at": tomorrow.isoformat(),
-                }
+
+                budget_status = await get_daily_background_budget_status(
+                    db,
+                    exclude_running_job_id=job_id,
+                )
+                if not bypasses_background_budget(job) and not budget_allows_job(
+                    kind=kind,
+                    status=budget_status,
+                    projected_spend_usd=budget_status.committed_usd,
+                ):
+                    now = datetime.now(timezone.utc)
+                    tomorrow = (now + timedelta(days=1)).replace(
+                        hour=0, minute=1, second=0, microsecond=0
+                    )
+                    job.state = IngestState.QUEUED
+                    job.attempts = max(job.attempts - 1, 0)
+                    job.locked_at = None
+                    job.next_attempt_at = tomorrow
+                    job.last_error = (
+                        f"deferred: background_budget_{budget_status.state}"
+                    )
+                    await db.commit()
+                    return {
+                        "status": "deferred_budget",
+                        "job_id": job_id,
+                        "budget_state": budget_status.state,
+                        "next_attempt_at": tomorrow.isoformat(),
+                    }
+
+        if repeated_worker_loss:
+            logger.error(
+                "[CATALOG] Job %s lost two worker deliveries in one attempt; "
+                "returning it to the durable retry policy",
+                job_id,
+            )
+            return await _record_failure(
+                job_id,
+                "Catalog worker was lost twice during one generation attempt",
+            )
 
         if kind == IngestKind.BOOK:
             result = await _process_book_job(job_id, payload)

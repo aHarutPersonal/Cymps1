@@ -51,6 +51,19 @@ MAX_BOOK_SOURCE_CONTEXT_CHARS = 60_000
 # not hold a catalog worker for three minutes at every quality stage. The
 # fallback client opens a short circuit after the first operational timeout.
 BOOK_MODULE_PROVIDER_TIMEOUT_SECONDS = 75.0
+# Pro is only used after the economical draft and targeted repairs fail.  Its
+# longer generations routinely need more than the interactive-provider budget,
+# while the catalog task itself has a ten-minute hard limit.
+BOOK_MODULE_QUALITY_TIMEOUT_SECONDS = 120.0
+# Leave enough room below Celery's 600-second hard limit for source lookup,
+# database finalization, failure persistence, and broker acknowledgement.
+BOOK_MODULE_TOTAL_TIMEOUT_SECONDS = 510.0
+
+_GROUNDING_QUOTE_RE = re.compile(r'["“]([^"”\n]{35,400})["”]')
+_GROUNDING_YEAR_RE = re.compile(r"\b(?:1[5-9]\d{2}|20\d{2})\b")
+_GROUNDING_ATTRIBUTION_RE = re.compile(
+    r"\b(author|book|according|argues?|calls?|describes?|said|says|writes?|wrote)\b"
+)
 
 _YOUTUBE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 
@@ -87,6 +100,19 @@ class BookModuleMetadataOutput(BaseModel):
 
     sections: list[BookModuleSectionOutput] = Field(min_length=6, max_length=6)
     ideas: list[BookModuleIdeaOutput] = Field(min_length=7, max_length=9)
+
+
+class BookModuleGroundingPatchOutput(BaseModel):
+    """One exact, bounded substitution for an unsupported factual claim."""
+
+    old_text: str = Field(min_length=1, max_length=600)
+    replacement_text: str = Field(min_length=1, max_length=600)
+
+
+class BookModuleGroundingRepairOutput(BaseModel):
+    """Small patch set that preserves a sound long-form lesson."""
+
+    patches: list[BookModuleGroundingPatchOutput] = Field(min_length=1, max_length=12)
 
 
 def _book_core_is_sound(report: Any) -> bool:
@@ -127,6 +153,107 @@ def _book_report_is_better(candidate: Any, current: Any) -> bool:
     if len(candidate.issues) != len(current.issues):
         return len(candidate.issues) < len(current.issues)
     return float(candidate.score) > float(current.score)
+
+
+def _grounding_issue_count(report: Any) -> int:
+    metrics = report.metrics
+    unmatched_years = int(metrics.get("unmatched_year_count", 0))
+    return int(metrics.get("unmatched_attributed_quote_count", 0)) + (
+        unmatched_years if unmatched_years >= 2 else 0
+    )
+
+
+def _normalize_grounding_text(value: str) -> str:
+    value = value.casefold().replace("’", "'").replace("“", '"').replace("”", '"')
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _unsupported_grounding_markers(
+    markdown: str,
+    source_context: str | None,
+) -> set[str]:
+    """Return exact quote/year spans that the deterministic gate cannot source."""
+    source_text = source_context or ""
+    normalized_source = _normalize_grounding_text(source_text)
+    markers: set[str] = set()
+
+    for match in _GROUNDING_QUOTE_RE.finditer(markdown):
+        quote = match.group(1).strip()
+        if len(quote.split()) < 8:
+            continue
+        nearby = markdown[max(0, match.start() - 120) : match.end() + 120].casefold()
+        if not _GROUNDING_ATTRIBUTION_RE.search(nearby):
+            continue
+        if _normalize_grounding_text(quote) not in normalized_source:
+            markers.add(match.group(0))
+
+    source_years = set(_GROUNDING_YEAR_RE.findall(source_text))
+    markers.update(set(_GROUNDING_YEAR_RE.findall(markdown)) - source_years)
+    return markers
+
+
+def _apply_book_grounding_patches(
+    markdown: str,
+    patches: Any,
+    *,
+    source_context: str | None,
+) -> str | None:
+    """Apply only exact, local substitutions that cannot alter lesson structure."""
+    if not isinstance(patches, list) or not 1 <= len(patches) <= 12:
+        return None
+
+    candidate = markdown
+    unsupported_markers = _unsupported_grounding_markers(markdown, source_context)
+    if not unsupported_markers:
+        return None
+    protected_markers = ("## ", "### Practice This")
+    for patch in patches:
+        if not isinstance(patch, dict):
+            return None
+        old_text = patch.get("old_text")
+        replacement_text = patch.get("replacement_text")
+        if not isinstance(old_text, str) or not isinstance(replacement_text, str):
+            return None
+        if not old_text.strip() or not replacement_text.strip():
+            return None
+        if len(old_text) > 600 or len(replacement_text) > 600:
+            return None
+        if old_text == replacement_text or candidate.count(old_text) != 1:
+            return None
+        # Aggregate score improvement is not enough to authorize arbitrary
+        # model-proposed edits. Every patch must contain at least one exact
+        # marker that is currently unsupported against SOURCE CONTEXT. It may
+        # not also sweep up a supported quote/year or a second paragraph.
+        targeted_markers = {
+            marker for marker in unsupported_markers if marker in old_text
+        }
+        if not targeted_markers or "\n\n" in old_text:
+            return None
+        old_markers = {
+            match.group(0) for match in _GROUNDING_QUOTE_RE.finditer(old_text)
+        }
+        old_markers.update(_GROUNDING_YEAR_RE.findall(old_text))
+        if not old_markers.issubset(unsupported_markers):
+            return None
+        residual_old_text = old_text
+        for marker in targeted_markers:
+            residual_old_text = residual_old_text.replace(marker, "")
+        if any(delimiter in residual_old_text for delimiter in ('"', "“", "”")):
+            return None
+        if _GROUNDING_YEAR_RE.search(residual_old_text):
+            return None
+        if any(delimiter in replacement_text for delimiter in ('"', "“", "”")):
+            return None
+        if _GROUNDING_YEAR_RE.search(replacement_text):
+            return None
+        if any(
+            marker in old_text or marker in replacement_text
+            for marker in protected_markers
+        ):
+            return None
+        candidate = candidate.replace(old_text, replacement_text, 1)
+        unsupported_markers.difference_update(targeted_markers)
+    return candidate
 
 
 def _slug(value: str | None, fallback: str = "unknown") -> str:
@@ -347,6 +474,30 @@ async def generate_book_module(
     user_goal: str,
     source_context: str | None = None,
 ) -> dict[str, Any]:
+    """Generate a book module within one hard, end-to-end provider budget."""
+    try:
+        return await asyncio.wait_for(
+            _generate_book_module_unbounded(
+                title=title,
+                author=author,
+                user_goal=user_goal,
+                source_context=source_context,
+            ),
+            timeout=BOOK_MODULE_TOTAL_TIMEOUT_SECONDS,
+        )
+    except TimeoutError as exc:
+        raise RuntimeError(
+            "Book module generation exceeded its overall provider deadline"
+        ) from exc
+
+
+async def _generate_book_module_unbounded(
+    *,
+    title: str,
+    author: str | None,
+    user_goal: str,
+    source_context: str | None = None,
+) -> dict[str, Any]:
     """Generate a reusable 16+ minute book module via the configured LLM."""
     from app.services.llm.client import get_llm_client
     from app.services.llm.prompt_loader import load_and_render
@@ -503,14 +654,18 @@ async def generate_book_module(
     async def _repair_metadata_if_possible(
         current_data: dict[str, Any], current_report: Any
     ) -> tuple[dict[str, Any], Any]:
-        factual_issue = (
-            int(current_report.metrics.get("unmatched_attributed_quote_count", 0)) > 0
-            or int(current_report.metrics.get("unmatched_year_count", 0)) >= 2
+        metadata_issue = any(
+            int(current_report.metrics.get(metric, 0)) > 0
+            for metric in (
+                "thin_section_summary_count",
+                "thin_section_exercise_count",
+                "thin_idea_count",
+            )
         )
         if (
             current_report.passed
-            or factual_issue
             or not _book_core_is_sound(current_report)
+            or not metadata_issue
         ):
             return current_data, current_report
         metadata_client = get_llm_client(
@@ -566,9 +721,97 @@ async def generate_book_module(
             return candidate, candidate_report
         return current_data, current_report
 
+    async def _repair_grounding_if_possible(
+        current_data: dict[str, Any], current_report: Any
+    ) -> tuple[dict[str, Any], Any]:
+        """Patch unsupported claims without rewriting a sound long-form core."""
+        current_grounding_issues = _grounding_issue_count(current_report)
+        if (
+            current_report.passed
+            or not _book_core_is_sound(current_report)
+            or current_grounding_issues == 0
+        ):
+            return current_data, current_report
+
+        markdown = str(current_data.get("content_markdown") or "")
+        grounding_client = get_llm_client(
+            timeout=60.0,
+            max_tokens=3000,
+            tier="balanced",
+            thinking_level="minimal",
+            temperature=0.1,
+        )
+        grounding_prompt = (
+            "Repair only the unsupported attributed quotation(s) or date claim(s) "
+            "identified below. Return 1-12 exact substitutions. Each old_text must be "
+            "one exact, unique, contiguous substring copied from CURRENT MARKDOWN and "
+            "must include the attribution, quotation, or date being repaired. Each "
+            "replacement_text must be cautious prose supported by SOURCE CONTEXT; when "
+            "support is absent, remove the attribution or specific factual claim and "
+            "state only a conservative practical interpretation. Do not add quotation "
+            "marks, dates, anecdotes, chapter names, headings, or Practice This blocks. "
+            "Do not patch unrelated prose. Return JSON only.\n\n"
+            + json.dumps(
+                {
+                    "quality_failures": [
+                        issue
+                        for issue in current_report.issues
+                        if "quotation" in issue.casefold() or "date" in issue.casefold()
+                    ],
+                    "source_context": source_context
+                    or "No source text supports a direct quotation or specific date.",
+                    "current_markdown": markdown,
+                },
+                ensure_ascii=False,
+            )
+        )
+        grounding_response = await grounding_client.generate_json(
+            system_prompt=system_prompt,
+            user_prompt=grounding_prompt,
+            output_model=BookModuleGroundingRepairOutput,
+        )
+        _record_call(
+            "grounding_repair",
+            grounding_client,
+            grounding_response,
+            selected_tier="balanced",
+            routing_reason="fixed_grounding_repair_tier",
+        )
+        if grounding_response.error:
+            return current_data, current_report
+
+        patched_markdown = _apply_book_grounding_patches(
+            markdown,
+            grounding_response.data.get("patches"),
+            source_context=source_context,
+        )
+        if patched_markdown is None:
+            generation_calls[-1]["result_status"] = "patch_validation_failed"
+            return current_data, current_report
+
+        candidate = dict(current_data)
+        candidate["content_markdown"] = patched_markdown
+        candidate_report = evaluate_book_module(
+            candidate,
+            source_context=source_context,
+        )
+        generation_calls[-1]["quality_score"] = candidate_report.score
+        generation_calls[-1]["result_status"] = (
+            "quality_passed" if candidate_report.passed else "quality_failed"
+        )
+        if (
+            _book_core_is_sound(candidate_report)
+            and _grounding_issue_count(candidate_report) < current_grounding_issues
+            and _book_report_is_better(candidate_report, current_report)
+        ):
+            return candidate, candidate_report
+        generation_calls[-1]["result_status"] = "patch_validation_failed"
+        return current_data, current_report
+
     # A structurally sound long lesson should never be regenerated merely to
     # lengthen compact cards or summaries.
     data, report = await _repair_metadata_if_possible(data, report)
+    data, report = await _repair_grounding_if_possible(data, report)
 
     # Retry once only when a deterministic, user-visible requirement failed.
     # The retry receives the exact failures, which is both cheaper and more
@@ -618,16 +861,17 @@ async def generate_book_module(
                 report = retry_report
 
     data, report = await _repair_metadata_if_possible(data, report)
+    data, report = await _repair_grounding_if_possible(data, report)
 
     # Escalate only drafts that still fail after the economical Flash retry.
     # In a healthy pipeline this is a small minority, so Pro improves the tail
     # without becoming the default cost for every catalog item.
     if not report.passed:
         quality_client = get_llm_client(
-            timeout=BOOK_MODULE_PROVIDER_TIMEOUT_SECONDS,
+            timeout=BOOK_MODULE_QUALITY_TIMEOUT_SECONDS,
             max_tokens=16000,
             tier="quality",
-            thinking_level="high",
+            thinking_level="low",
             temperature=0.15,
             allow_fallback=True,
         )
@@ -654,6 +898,12 @@ async def generate_book_module(
             if _book_report_is_better(quality_report, report):
                 data = quality_response.data
                 report = quality_report
+
+    # Pro can also return a sound long-form core with one compact-card or
+    # grounding defect. Give it the same bounded preservation pass rather than
+    # persisting an avoidably flagged full rewrite.
+    data, report = await _repair_metadata_if_possible(data, report)
+    data, report = await _repair_grounding_if_possible(data, report)
 
     # Recalculate duration from actual word count (200 wpm reading speed)
     md = data.get("content_markdown", "")

@@ -88,6 +88,25 @@ def _expanded_week_one() -> PlanGenerationResponse:
     )
 
 
+def _response(
+    *,
+    model: str,
+    error: str | None = None,
+    finish_reason: str = "STOP",
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        error=error,
+        retried=False,
+        model=model,
+        provider="gemini",
+        prompt_tokens=100,
+        completion_tokens=200,
+        total_tokens=300,
+        duration_ms=10,
+        finish_reason=finish_reason,
+    )
+
+
 @pytest.mark.asyncio
 async def test_initial_plan_generates_backbone_then_only_week_one(monkeypatch) -> None:
     requested_models: list[type] = []
@@ -181,6 +200,173 @@ async def test_initial_plan_generates_backbone_then_only_week_one(monkeypatch) -
             "thinking_level": "medium",
         },
     ]
+
+
+@pytest.mark.asyncio
+async def test_truncated_backbone_escalates_once_to_quality_tier(monkeypatch) -> None:
+    factory_kwargs: list[dict] = []
+    calls: list[dict] = []
+    telemetry: list[dict] = []
+
+    class Client:
+        def __init__(self, tier: str) -> None:
+            self.tier = tier
+            self.model = f"{tier}-test"
+
+        async def generate_and_validate(self, **kwargs):
+            calls.append({"tier": self.tier, **kwargs})
+            if self.tier == "balanced":
+                return None, _response(
+                    model=self.model,
+                    error="Invalid JSON in response",
+                    finish_reason="MAX_TOKENS",
+                )
+            return _backbone(), _response(model=self.model)
+
+    def get_client(**kwargs):
+        factory_kwargs.append(kwargs)
+        return Client(kwargs["tier"])
+
+    async def capture_telemetry(**kwargs) -> None:
+        telemetry.append(kwargs)
+
+    monkeypatch.setattr(generator, "get_llm_client", get_client)
+    monkeypatch.setattr(generator, "record_llm_response", capture_telemetry)
+
+    result = await generator._generate_plan_backbone(
+        system_prompt="planner system",
+        user_prompt="original backbone request",
+        duration_weeks=12,
+        hours_per_week=5,
+        telemetry_context={"plan_job_id": "job-1"},
+    )
+
+    assert result == _backbone()
+    assert [call["tier"] for call in calls] == ["balanced", "quality"]
+    assert all(call["repair_on_failure"] is False for call in calls)
+    assert factory_kwargs == [
+        {
+            "timeout": generator.PLAN_BACKBONE_TIMEOUT_SECONDS,
+            "max_tokens": generator.PLAN_BACKBONE_MAX_TOKENS,
+            "tier": "balanced",
+            "thinking_level": "medium",
+        },
+        {
+            "timeout": generator.PLAN_BACKBONE_RECOVERY_TIMEOUT_SECONDS,
+            "max_tokens": generator.PLAN_BACKBONE_RECOVERY_MAX_TOKENS,
+            "tier": "quality",
+            "thinking_level": "low",
+        },
+    ]
+    assert generator.PLAN_BACKBONE_RECOVERY_MAX_TOKENS > (
+        generator.PLAN_BACKBONE_MAX_TOKENS
+    )
+    recovery_prompt = calls[1]["user_prompt"]
+    assert "BACKBONE QUALITY RECOVERY" in recovery_prompt
+    assert "include every week from 1 through 12" in recovery_prompt
+    assert "keep each text field to one concise sentence" in recovery_prompt
+    assert telemetry[0]["result_status"] == "schema_failed"
+    assert telemetry[0]["metadata"]["recovery_reason"] == "truncated"
+    assert telemetry[0]["metadata"]["recovery_tier"] == "quality"
+    assert telemetry[1]["result_status"] == "schema_valid"
+    assert telemetry[1]["model"] == "quality-test"
+    assert telemetry[1]["response"].retried is True
+
+
+@pytest.mark.asyncio
+async def test_contract_invalid_backbone_is_rewritten_by_quality_tier(
+    monkeypatch,
+) -> None:
+    invalid_backbone = _backbone().model_copy(deep=True)
+    invalid_backbone.weeks[1].tasks[0].title = invalid_backbone.weeks[0].tasks[0].title
+    calls: list[tuple[str, str]] = []
+    telemetry: list[dict] = []
+
+    class Client:
+        def __init__(self, tier: str) -> None:
+            self.tier = tier
+            self.model = f"{tier}-test"
+
+        async def generate_and_validate(self, *, user_prompt: str, **_kwargs):
+            calls.append((self.tier, user_prompt))
+            result = invalid_backbone if self.tier == "balanced" else _backbone()
+            return result, _response(model=self.model)
+
+    monkeypatch.setattr(
+        generator,
+        "get_llm_client",
+        lambda **kwargs: Client(kwargs["tier"]),
+    )
+
+    async def capture_telemetry(**kwargs) -> None:
+        telemetry.append(kwargs)
+
+    monkeypatch.setattr(generator, "record_llm_response", capture_telemetry)
+
+    result = await generator._generate_plan_backbone(
+        system_prompt="planner system",
+        user_prompt="original backbone request",
+        duration_weeks=12,
+        hours_per_week=5,
+    )
+
+    assert result == _backbone()
+    assert [tier for tier, _prompt in calls] == ["balanced", "quality"]
+    assert "duplicate backbone task title" in calls[1][1]
+    assert telemetry[0]["result_status"] == "contract_failed"
+    assert telemetry[0]["metadata"]["recovery_reason"] == "contract_invalid"
+    assert telemetry[1]["result_status"] == "schema_valid"
+
+
+@pytest.mark.asyncio
+async def test_invalid_quality_backbone_fails_without_a_third_generation(
+    monkeypatch,
+) -> None:
+    factory_tiers: list[str] = []
+    calls: list[str] = []
+    telemetry: list[dict] = []
+
+    class Client:
+        def __init__(self, tier: str) -> None:
+            self.tier = tier
+            self.model = f"{tier}-test"
+
+        async def generate_and_validate(self, **_kwargs):
+            calls.append(self.tier)
+            return None, _response(
+                model=self.model,
+                error=f"{self.tier} returned invalid JSON",
+                finish_reason="MAX_TOKENS" if self.tier == "balanced" else "STOP",
+            )
+
+    def get_client(**kwargs):
+        factory_tiers.append(kwargs["tier"])
+        return Client(kwargs["tier"])
+
+    async def capture_telemetry(**kwargs) -> None:
+        telemetry.append(kwargs)
+
+    monkeypatch.setattr(generator, "get_llm_client", get_client)
+    monkeypatch.setattr(generator, "record_llm_response", capture_telemetry)
+
+    with pytest.raises(
+        ValueError,
+        match="Invalid plan backbone: quality returned invalid JSON",
+    ):
+        await generator._generate_plan_backbone(
+            system_prompt="planner system",
+            user_prompt="original backbone request",
+            duration_weeks=12,
+            hours_per_week=5,
+        )
+
+    assert factory_tiers == ["balanced", "quality"]
+    assert calls == ["balanced", "quality"]
+    assert [event["result_status"] for event in telemetry] == [
+        "schema_failed",
+        "failed",
+    ]
+    assert telemetry[-1]["model"] == "quality-test"
 
 
 @pytest.mark.asyncio

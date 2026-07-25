@@ -103,6 +103,8 @@ def test_celery_beat_and_routes_include_catalog_workers():
         celery_app.conf.task_routes["app.tasks.catalog.catalog_discovery_tick"]["queue"]
         == "catalog_control"
     )
+    assert catalog.process_catalog_job.acks_late is True
+    assert catalog.process_catalog_job.reject_on_worker_lost is True
 
 
 def test_catalog_task_entrypoints_reuse_the_worker_event_loop(monkeypatch):
@@ -127,6 +129,41 @@ def test_catalog_task_entrypoints_reuse_the_worker_event_loop(monkeypatch):
         "_catalog_discovery_tick_async",
         "_process_catalog_job_async",
     ]
+
+
+@pytest.mark.asyncio
+async def test_repeated_worker_redelivery_returns_to_durable_retry(monkeypatch):
+    job = SimpleNamespace(
+        state=IngestState.RUNNING,
+        kind=IngestKind.BOOK,
+        payload_json={catalog.WORKER_REDELIVERY_COUNT_KEY: 1},
+    )
+
+    class Database:
+        async def get(self, _model, _job_id):
+            return job
+
+    @asynccontextmanager
+    async def session_maker():
+        yield Database()
+
+    recorded = {}
+
+    async def record_failure(job_id, error):
+        recorded.update(job_id=job_id, error=error)
+        return {"status": "queued", "job_id": job_id}
+
+    monkeypatch.setattr(catalog, "async_session_maker", session_maker)
+    monkeypatch.setattr(catalog, "_record_failure", record_failure)
+
+    result = await catalog._process_catalog_job_async(
+        "job-1",
+        redelivered=True,
+    )
+
+    assert result == {"status": "queued", "job_id": "job-1"}
+    assert recorded["job_id"] == "job-1"
+    assert "lost twice" in recorded["error"]
 
 
 @pytest.mark.asyncio

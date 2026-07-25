@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -6,6 +7,12 @@ import pytest
 from app.models.content_resource import ContentResourceKind, LicenseStatus
 from app.models.idol import CatalogStatus
 from app.services.content_resources import (
+    BOOK_MODULE_QUALITY_TIMEOUT_SECONDS,
+    BOOK_MODULE_TOTAL_TIMEOUT_SECONDS,
+    BookModuleGroundingRepairOutput,
+    BookModuleMetadataOutput,
+    BookModuleOutput,
+    _apply_book_grounding_patches,
     canonical_book_key,
     canonical_video_query_key,
     canonical_youtube_key,
@@ -62,7 +69,9 @@ def _valid_book_module(title: str = "Deep Work", author: str = "Cal Newport") ->
             + " ".join([f"concept{index}"] * 560)
             + "\n\n### Practice This\n1. Apply the framework.\n2. Record the result."
         )
-    markdown_parts.append("## Closing Synthesis\n\nConnect the six frameworks into one practice.")
+    markdown_parts.append(
+        "## Closing Synthesis\n\nConnect the six frameworks into one practice."
+    )
     return {
         "title": title,
         "author_or_creator": author,
@@ -74,6 +83,112 @@ def _valid_book_module(title: str = "Deep Work", author: str = "Cal Newport") ->
         ],
         "content_markdown": f"# {title}\n\n" + "\n\n".join(markdown_parts),
     }
+
+
+@pytest.mark.parametrize(
+    "patches",
+    [
+        [
+            {
+                "old_text": "Unrelated prose that exists exactly once.",
+                "replacement_text": "A model should not be allowed to alter it.",
+            }
+        ],
+        [
+            {
+                "old_text": (
+                    'The author writes, "This unsupported quotation is deliberately '
+                    'long enough for the grounding detector to inspect."'
+                ),
+                "replacement_text": "The framework was introduced in 2025.",
+            }
+        ],
+        [
+            {
+                "old_text": (
+                    'The author writes, "This unsupported quotation is deliberately '
+                    'long enough for the grounding detector to inspect."'
+                ),
+                "replacement_text": 'A supposedly safe but "short" quoted claim.',
+            }
+        ],
+    ],
+)
+def test_grounding_patches_reject_unrelated_targets_or_new_claims(patches):
+    markdown = (
+        "Unrelated prose that exists exactly once.\n\n"
+        'The author writes, "This unsupported quotation is deliberately long enough '
+        'for the grounding detector to inspect."'
+    )
+
+    assert (
+        _apply_book_grounding_patches(
+            markdown,
+            patches,
+            source_context="Publisher metadata with no direct quotations.",
+        )
+        is None
+    )
+
+
+def test_grounding_patches_reject_supported_marker_bundled_with_valid_repair():
+    supported_quote = (
+        '"This supported quotation is deliberately long enough for the grounding '
+        'detector to inspect correctly."'
+    )
+    unsupported_quote = (
+        '"This unsupported quotation is deliberately long enough for the grounding '
+        'detector to require a repair."'
+    )
+    markdown = (
+        f"According to the author, {supported_quote}\n\n"
+        f"The author writes, {unsupported_quote}"
+    )
+    patches = [
+        {
+            "old_text": f"The author writes, {unsupported_quote}",
+            "replacement_text": "A cautious interpretation without attribution.",
+        },
+        {
+            "old_text": f"According to the author, {supported_quote}",
+            "replacement_text": "An unrelated alteration to supported material.",
+        },
+    ]
+
+    assert (
+        _apply_book_grounding_patches(
+            markdown,
+            patches,
+            source_context=supported_quote,
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_book_generation_has_an_end_to_end_deadline(monkeypatch):
+    from app.services import content_resources as service
+
+    cancelled = asyncio.Event()
+
+    async def never_finishes(**_kwargs):
+        try:
+            await asyncio.Future()
+        finally:
+            cancelled.set()
+
+    monkeypatch.setattr(service, "_generate_book_module_unbounded", never_finishes)
+    monkeypatch.setattr(service, "BOOK_MODULE_TOTAL_TIMEOUT_SECONDS", 0.01)
+
+    with pytest.raises(RuntimeError, match="overall provider deadline"):
+        await service.generate_book_module(
+            title="Deep Work",
+            author="Cal Newport",
+            user_goal="focus better",
+        )
+
+    assert cancelled.is_set()
+    assert BOOK_MODULE_TOTAL_TIMEOUT_SECONDS < 600
 
 
 def test_canonical_book_key_is_stable_for_title_and_author_variants():
@@ -124,15 +239,18 @@ def test_material_to_resource_payload_keeps_in_app_lesson_distinct_from_book():
 
 
 def test_material_to_resource_payload_rejects_short_book_summary():
-    assert material_to_resource_payload(
-        {
-            "title": "Deep Work",
-            "type": "book",
-            "author": "Cal Newport",
-            "content_markdown": "short " * 500,
-            "ideas": [{"title": "Depth"}],
-        }
-    ) is None
+    assert (
+        material_to_resource_payload(
+            {
+                "title": "Deep Work",
+                "type": "book",
+                "author": "Cal Newport",
+                "content_markdown": "short " * 500,
+                "ideas": [{"title": "Depth"}],
+            }
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio
@@ -206,7 +324,9 @@ async def test_generate_book_module_prefers_equal_score_passing_rewrite(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_generate_book_module_repairs_metadata_without_regenerating_lesson(monkeypatch):
+async def test_generate_book_module_repairs_metadata_without_regenerating_lesson(
+    monkeypatch,
+):
     draft = _valid_book_module()
     draft["ideas"] = [
         {"title": f"Idea {index + 1}", "content": "Too short.", "category": "Strategy"}
@@ -255,6 +375,334 @@ async def test_generate_book_module_repairs_metadata_without_regenerating_lesson
     assert calls == ["balanced", "fast"]
     assert result["quality_report"]["passed"] is True
     assert result["content_markdown"] == draft["content_markdown"]
+
+
+@pytest.mark.asyncio
+async def test_generate_book_module_repairs_live_shaped_mixed_defects_without_pro(
+    monkeypatch,
+):
+    """Keep a sound long core while fixing thin metadata and eight unsafe quotes."""
+    draft = _valid_book_module(title="The Mom Test", author="Rob Fitzpatrick")
+    draft["sections"][0]["exercise"] = "Too short."
+    for idea in draft["ideas"]:
+        idea["content"] = "Too short."
+
+    unsupported_claims = [
+        (
+            f'Within framework{index}, the author writes, "Unsupported claim number '
+            f"{index} contains enough "
+            'words to trigger the attributed quotation grounding check."'
+        )
+        for index in range(1, 9)
+    ]
+    insertion = "\n\n".join(unsupported_claims) + "\n\n"
+    draft["content_markdown"] = draft["content_markdown"].replace(
+        "## Framework 1\n\n",
+        "## Framework 1\n\n" + insertion,
+        1,
+    )
+
+    repaired_sections = [dict(section) for section in draft["sections"]]
+    repaired_sections[0]["exercise"] = " ".join(["practice"] * 40)
+    repaired_ideas = [
+        {
+            **idea,
+            "content": " ".join([f"application{index}"] * 40),
+            "category": "Strategy",
+        }
+        for index, idea in enumerate(draft["ideas"], start=1)
+    ]
+    replacements = [
+        f"Perspective{index} is applied conservatively without relying on that attribution."
+        for index in range(1, 9)
+    ]
+    client_options = []
+    calls = []
+
+    class Client:
+        def __init__(self, tier):
+            self.tier = tier
+            self.model = f"{tier}-model"
+
+        async def generate_json(self, **kwargs):
+            output_model = kwargs["output_model"]
+            calls.append((self.tier, output_model))
+            if output_model is BookModuleOutput:
+                if self.tier == "quality":
+                    raise AssertionError("targeted repairs should avoid a Pro rewrite")
+                return LLMResponse(draft)
+            if output_model is BookModuleMetadataOutput:
+                return LLMResponse(
+                    {
+                        "sections": repaired_sections,
+                        "ideas": repaired_ideas,
+                    }
+                )
+            if output_model is BookModuleGroundingRepairOutput:
+                return LLMResponse(
+                    {
+                        "patches": [
+                            {
+                                "old_text": old_text,
+                                "replacement_text": replacement_text,
+                            }
+                            for old_text, replacement_text in zip(
+                                unsupported_claims,
+                                replacements,
+                                strict=True,
+                            )
+                        ]
+                    }
+                )
+            raise AssertionError(f"unexpected output model: {output_model}")
+
+    def client_factory(**kwargs):
+        client_options.append(kwargs)
+        return Client(kwargs.get("tier", "balanced"))
+
+    async def choose_balanced(**_kwargs):
+        return SimpleNamespace(tier="balanced", reason="test_balanced")
+
+    monkeypatch.setattr("app.services.llm.client.get_llm_client", client_factory)
+    monkeypatch.setattr(
+        "app.services.llm.routing.choose_llm_tier",
+        choose_balanced,
+    )
+
+    result = await generate_book_module(
+        title="The Mom Test",
+        author="Rob Fitzpatrick",
+        user_goal="ask better customer questions",
+        source_context="Publisher metadata with no direct quotations.",
+    )
+
+    assert result["quality_report"]["passed"] is True
+    assert result["quality_report"]["metrics"]["unmatched_attributed_quote_count"] == 0
+    assert all(claim not in result["content_markdown"] for claim in unsupported_claims)
+    assert all(
+        replacement in result["content_markdown"] for replacement in replacements
+    )
+    assert [output_model for _, output_model in calls] == [
+        BookModuleOutput,
+        BookModuleMetadataOutput,
+        BookModuleGroundingRepairOutput,
+    ]
+    assert [options["tier"] for options in client_options] == [
+        "balanced",
+        "fast",
+        "balanced",
+    ]
+    assert not any(options["tier"] == "quality" for options in client_options)
+
+
+@pytest.mark.asyncio
+async def test_generate_book_module_uses_bounded_quality_fallback_options(monkeypatch):
+    short = _valid_book_module()
+    short["content_markdown"] = "word " * 500
+    valid = _valid_book_module()
+    client_options = []
+    generation_count = 0
+
+    class Client:
+        def __init__(self, tier):
+            self.tier = tier
+
+        async def generate_json(self, **kwargs):
+            nonlocal generation_count
+            assert kwargs["output_model"] is BookModuleOutput
+            generation_count += 1
+            return LLMResponse(valid if self.tier == "quality" else short)
+
+    def client_factory(**kwargs):
+        client_options.append(kwargs)
+        return Client(kwargs.get("tier", "balanced"))
+
+    async def choose_balanced(**_kwargs):
+        return SimpleNamespace(tier="balanced", reason="test_balanced")
+
+    monkeypatch.setattr("app.services.llm.client.get_llm_client", client_factory)
+    monkeypatch.setattr(
+        "app.services.llm.routing.choose_llm_tier",
+        choose_balanced,
+    )
+
+    result = await generate_book_module(
+        title="Deep Work",
+        author="Cal Newport",
+        user_goal="focus better",
+    )
+
+    quality_options = [
+        options for options in client_options if options.get("tier") == "quality"
+    ]
+    assert generation_count == 3
+    assert quality_options == [
+        {
+            "timeout": BOOK_MODULE_QUALITY_TIMEOUT_SECONDS,
+            "max_tokens": 16000,
+            "tier": "quality",
+            "thinking_level": "low",
+            "temperature": 0.15,
+            "allow_fallback": True,
+        }
+    ]
+    assert result["quality_report"]["passed"] is True
+
+
+@pytest.mark.asyncio
+async def test_invalid_grounding_patch_falls_back_to_complete_quality_retry(
+    monkeypatch,
+):
+    draft = _valid_book_module()
+    unsupported_claim = (
+        'The author writes, "This unsupported quotation has enough words to trigger '
+        'the attributed quotation grounding check in production."'
+    )
+    draft["content_markdown"] = draft["content_markdown"].replace(
+        "## Framework 1\n\n",
+        f"## Framework 1\n\n{unsupported_claim}\n\n",
+        1,
+    )
+    valid = _valid_book_module()
+    calls = []
+    book_generation_count = 0
+
+    class Client:
+        async def generate_json(self, **kwargs):
+            nonlocal book_generation_count
+            output_model = kwargs["output_model"]
+            calls.append(output_model)
+            if output_model is BookModuleGroundingRepairOutput:
+                return LLMResponse(
+                    {
+                        "patches": [
+                            {
+                                "old_text": "text that is not present",
+                                "replacement_text": "A cautious replacement.",
+                            }
+                        ]
+                    }
+                )
+            assert output_model is BookModuleOutput
+            book_generation_count += 1
+            return LLMResponse(draft if book_generation_count == 1 else valid)
+
+    async def choose_balanced(**_kwargs):
+        return SimpleNamespace(tier="balanced", reason="test_balanced")
+
+    monkeypatch.setattr(
+        "app.services.llm.client.get_llm_client", lambda **_kwargs: Client()
+    )
+    monkeypatch.setattr(
+        "app.services.llm.routing.choose_llm_tier",
+        choose_balanced,
+    )
+
+    result = await generate_book_module(
+        title="Deep Work",
+        author="Cal Newport",
+        user_goal="focus better",
+        source_context="Publisher metadata with no direct quotations.",
+    )
+
+    assert calls == [
+        BookModuleOutput,
+        BookModuleGroundingRepairOutput,
+        BookModuleOutput,
+    ]
+    assert result["content_markdown"] == valid["content_markdown"]
+    assert result["quality_report"]["passed"] is True
+    grounding_call = result["quality_report"]["generation"]["calls"][1]
+    assert grounding_call["result_status"] == "patch_validation_failed"
+
+
+@pytest.mark.asyncio
+async def test_pro_fallback_receives_same_bounded_preservation_repairs(monkeypatch):
+    short = _valid_book_module()
+    short["content_markdown"] = "word " * 500
+    pro_draft = _valid_book_module()
+    pro_draft["ideas"][0]["content"] = "Too short."
+    unsupported_claim = (
+        'The author writes, "This unsupported quotation has enough words to trigger '
+        'the attributed quotation grounding check after the Pro rewrite."'
+    )
+    replacement = "The framework can be applied without relying on that attribution."
+    pro_draft["content_markdown"] = pro_draft["content_markdown"].replace(
+        "## Framework 1\n\n",
+        f"## Framework 1\n\n{unsupported_claim}\n\n",
+        1,
+    )
+    repaired_ideas = [dict(idea) for idea in pro_draft["ideas"]]
+    repaired_ideas[0]["content"] = " ".join(["application"] * 40)
+    client_options = []
+    book_generation_count = 0
+
+    class Client:
+        def __init__(self, tier):
+            self.tier = tier
+
+        async def generate_json(self, **kwargs):
+            nonlocal book_generation_count
+            output_model = kwargs["output_model"]
+            if output_model is BookModuleMetadataOutput:
+                return LLMResponse(
+                    {
+                        "sections": pro_draft["sections"],
+                        "ideas": repaired_ideas,
+                    }
+                )
+            if output_model is BookModuleGroundingRepairOutput:
+                return LLMResponse(
+                    {
+                        "patches": [
+                            {
+                                "old_text": unsupported_claim,
+                                "replacement_text": replacement,
+                            }
+                        ]
+                    }
+                )
+            assert output_model is BookModuleOutput
+            book_generation_count += 1
+            return LLMResponse(pro_draft if self.tier == "quality" else short)
+
+    def client_factory(**kwargs):
+        client_options.append(kwargs)
+        return Client(kwargs.get("tier", "balanced"))
+
+    async def choose_balanced(**_kwargs):
+        return SimpleNamespace(tier="balanced", reason="test_balanced")
+
+    monkeypatch.setattr("app.services.llm.client.get_llm_client", client_factory)
+    monkeypatch.setattr(
+        "app.services.llm.routing.choose_llm_tier",
+        choose_balanced,
+    )
+
+    result = await generate_book_module(
+        title="Deep Work",
+        author="Cal Newport",
+        user_goal="focus better",
+        source_context="Publisher metadata with no direct quotations.",
+    )
+
+    stages = [call["stage"] for call in result["quality_report"]["generation"]["calls"]]
+    assert stages == [
+        "draft",
+        "quality_retry",
+        "quality_fallback",
+        "metadata_repair",
+        "grounding_repair",
+    ]
+    assert book_generation_count == 3
+    assert result["quality_report"]["passed"] is True
+    assert unsupported_claim not in result["content_markdown"]
+    assert replacement in result["content_markdown"]
+    quality_options = [
+        options for options in client_options if options.get("tier") == "quality"
+    ]
+    assert quality_options[0]["timeout"] == BOOK_MODULE_QUALITY_TIMEOUT_SECONDS
+    assert quality_options[0]["thinking_level"] == "low"
 
 
 @pytest.mark.asyncio
@@ -351,15 +799,18 @@ def test_material_to_resource_payload_converts_article_material():
 
 
 def test_material_to_resource_payload_rejects_metadata_only_external_course():
-    assert material_to_resource_payload(
-        {
-            "title": "Introduction to Business Analytics",
-            "type": "course",
-            "url": "https://www.coursera.org/search?query=business+analytics",
-            "reason": "A useful external course recommendation.",
-            "duration_minutes": 120,
-        }
-    ) is None
+    assert (
+        material_to_resource_payload(
+            {
+                "title": "Introduction to Business Analytics",
+                "type": "course",
+                "url": "https://www.coursera.org/search?query=business+analytics",
+                "reason": "A useful external course recommendation.",
+                "duration_minutes": 120,
+            }
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio
@@ -685,7 +1136,10 @@ async def test_get_or_create_video_resource_resolves_query_and_saves_youtube_res
     assert result.kind == ContentResourceKind.VIDEO
     assert result.source_url == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
     assert result.license_status == LicenseStatus.EXTERNAL_LINK
-    assert result.metadata_json["search_query"] == "Warren Buffett margin of safety interview"
+    assert (
+        result.metadata_json["search_query"]
+        == "Warren Buffett margin of safety interview"
+    )
     db.add.assert_called_once_with(result)
     db.flush.assert_called_once()
 
@@ -766,7 +1220,9 @@ async def test_attach_content_resources_defers_uncached_book_generation(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_attach_content_resources_attaches_cached_book_without_enqueue(monkeypatch):
+async def test_attach_content_resources_attaches_cached_book_without_enqueue(
+    monkeypatch,
+):
     from app.services import content_resources as svc
 
     cached = MagicMock()
@@ -779,7 +1235,11 @@ async def test_attach_content_resources_attaches_cached_book_without_enqueue(mon
         "content_markdown"
     ]
     cached.duration_minutes = 15
-    cached.summary_json = {"ideas": [], "promise": "Small habits compound.", "sections": []}
+    cached.summary_json = {
+        "ideas": [],
+        "promise": "Small habits compound.",
+        "sections": [],
+    }
     cached.status = CatalogStatus.PUBLISHED
 
     db = AsyncMock()
@@ -838,7 +1298,11 @@ async def test_attach_content_resources_runs_independent_book_prep_concurrently(
         db,
         [
             {"title": "Deep Work", "type": "book", "author_or_creator": "Cal Newport"},
-            {"title": "Atomic Habits", "type": "book", "author_or_creator": "James Clear"},
+            {
+                "title": "Atomic Habits",
+                "type": "book",
+                "author_or_creator": "James Clear",
+            },
         ],
         user_goal="focus better",
         book_source_lookup=no_source,
