@@ -1130,6 +1130,11 @@ async def _maybe_enqueue_scores_backfill(
             comparison_scores_last_attempt_at=now,
             comparison_scores_next_retry_at=now + SCORES_QUEUE_LEASE,
         )
+        # The endpoint still needs the already-loaded ORM object to build its
+        # response. SQLAlchemy's default bulk synchronization expires
+        # server-updated fields (notably updated_at), whose implicit reload is
+        # illegal outside an async greenlet after commit.
+        .execution_options(synchronize_session=False)
     )
     await db.commit()
     if claim.rowcount != 1:
@@ -1153,6 +1158,7 @@ async def _maybe_enqueue_scores_backfill(
                 comparison_scores_error="Comparison generation could not be queued.",
                 comparison_scores_next_retry_at=retry_at,
             )
+            .execution_options(synchronize_session=False)
         )
         await db.commit()
         session.comparison_scores_status = "retry_wait"

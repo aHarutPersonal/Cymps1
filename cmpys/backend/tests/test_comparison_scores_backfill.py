@@ -184,6 +184,8 @@ async def test_maybe_enqueue_scores_backfill_dedupes_and_guards(monkeypatch):
     assert enqueued[0]["args"] == ["sess-needs"]
     assert enqueued[0]["queue"] == "low_priority"
     assert db.execute.await_count == 1
+    claim_statement = db.execute.await_args.args[0]
+    assert claim_statement.get_execution_options()["synchronize_session"] is False
 
     has_scores = _session(id="sess-done", comparison_scores_json=_current_scores())
     await sessions_api._maybe_enqueue_scores_backfill(has_scores, db)
