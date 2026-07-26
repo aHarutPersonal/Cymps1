@@ -104,7 +104,7 @@ wait_for_celery_worker() {
       # Solo workers cannot answer Celery remote-control commands while they
       # are executing a task. Inspect the host-visible process arguments for
       # the queue binding and require the worker's startup-ready marker instead.
-      process_output="$(docker top "${container}" -eo args 2>/dev/null || true)"
+      process_output="$(docker top "${container}" -eo pid,args 2>/dev/null || true)"
       log_output="$(docker logs --tail=100 "${container}" 2>&1 || true)"
       if grep -Fq -- "-Q ${expected_queue}" <<<"${process_output}" &&
         grep -q " ready\." <<<"${log_output}"; then

@@ -39,8 +39,8 @@ def test_deploy_scripts_manage_and_verify_every_runtime_service() -> None:
         assert 'wait_for_celery_worker "worker-low" "low_priority"' in script
         assert 'wait_for_celery_worker "catalog-worker" "catalog"' in script
         assert 'wait_for_celery_worker "catalog-control" "catalog_control"' in script
-        assert 'docker top "$container" -eo args' in script or (
-            'docker top "${container}" -eo args' in script
+        assert 'docker top "$container" -eo pid,args' in script or (
+            'docker top "${container}" -eo pid,args' in script
         )
         assert "inspect active_queues" not in script
         assert "rollback_release" in script
