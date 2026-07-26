@@ -96,24 +96,18 @@ service_is_running() {
 wait_for_celery_worker() {
   local service="$1"
   local expected_queue="$2"
-  local container node ping_output queue_output
+  local container process_output log_output
 
   for _ in $(seq 1 15); do
     container="$(service_container "${service}")"
     if [[ -n "${container}" ]] && service_is_running "${service}"; then
-      node="celery@$(docker exec "${container}" hostname 2>/dev/null)"
-      ping_output="$(
-        docker exec "${container}" \
-          celery -A app.core.celery.celery_app inspect ping \
-          --destination "${node}" --timeout=5 2>/dev/null || true
-      )"
-      queue_output="$(
-        docker exec "${container}" \
-          celery -A app.core.celery.celery_app inspect active_queues \
-          --destination "${node}" --timeout=5 2>/dev/null || true
-      )"
-      if grep -q "pong" <<<"${ping_output}" &&
-        grep -q "'name': '${expected_queue}'" <<<"${queue_output}"; then
+      # Solo workers cannot answer Celery remote-control commands while they
+      # are executing a task. Inspect the host-visible process arguments for
+      # the queue binding and require the worker's startup-ready marker instead.
+      process_output="$(docker top "${container}" -eo args 2>/dev/null || true)"
+      log_output="$(docker logs --tail=100 "${container}" 2>&1 || true)"
+      if grep -Fq -- "-Q ${expected_queue}" <<<"${process_output}" &&
+        grep -q " ready\." <<<"${log_output}"; then
         return 0
       fi
     fi
