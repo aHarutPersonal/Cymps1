@@ -11,6 +11,21 @@ APP_DIR="/opt/cmpys"
 ENV_FILE="$APP_DIR/.env"
 COMPOSE="$APP_DIR/docker-compose.prod.yml"
 RELEASE_SERVICES=(web worker worker-high worker-low catalog-worker catalog-control beat)
+
+# Serialize deployments on the host as a second line of defense beyond the CI
+# concurrency group. This also protects against an operator starting a release
+# while CI is already replacing workers.
+exec 9>"$APP_DIR/.deploy.lock"
+if ! flock -n 9; then
+  echo "ERROR: another production deployment is already running" >&2
+  exit 1
+fi
+
+if [[ ! -s "$ENV_FILE" ]]; then
+  echo "ERROR: production environment file is missing or empty" >&2
+  exit 1
+fi
+
 PREVIOUS_TAG="$(sed -n 's/^IMAGE_TAG=//p' "$ENV_FILE" | tail -1)"
 PREVIOUS_TAG="${PREVIOUS_TAG:-latest}"
 ROLLBACK_ARMED=false
@@ -149,16 +164,20 @@ wait_for_celery_worker "worker-low" "low_priority"
 wait_for_celery_worker "catalog-worker" "catalog"
 wait_for_celery_worker "catalog-control" "catalog_control"
 
-# Persist the successful release only after every service and queue consumer
-# has passed its health check. Until this point the previous tag remains the
-# rollback target, and :latest still refers to the previous successful image.
+# Promote :latest only after every service and queue consumer has passed its
+# health check. CI publishes only the immutable release tag, so a failed
+# rollout can never overwrite the last-known-good registry alias.
+docker tag "$ECR_URL:$IMAGE_TAG" "$ECR_URL:latest"
+docker push "$ECR_URL:latest"
+
+# Persist the successful release only after the health checks and registry
+# promotion. Until this point the previous tag remains the rollback target.
 if grep -q '^IMAGE_TAG=' "$ENV_FILE"; then
   sed -i.bak "s/^IMAGE_TAG=.*/IMAGE_TAG=$IMAGE_TAG/" "$ENV_FILE"
   rm -f "$ENV_FILE.bak"
 else
   printf '\nIMAGE_TAG=%s\n' "$IMAGE_TAG" >> "$ENV_FILE"
 fi
-docker tag "$ECR_URL:$IMAGE_TAG" "$ECR_URL:latest"
 ROLLBACK_ARMED=false
 trap - ERR
 

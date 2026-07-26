@@ -11,6 +11,10 @@ on:
 env:
   AWS_REGION: us-east-1
 
+concurrency:
+  group: cmpys-production-deploy
+  cancel-in-progress: false
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -67,7 +71,7 @@ jobs:
           # one step (a cross-platform image can't be `docker push`ed normally).
           docker buildx build --platform linux/arm64 \
             -f cmpys/backend/Dockerfile \
-            -t $ECR_URL:$IMAGE_TAG -t $ECR_URL:latest \
+            -t $ECR_URL:$IMAGE_TAG \
             --push cmpys
 
       - name: Deploy to EC2

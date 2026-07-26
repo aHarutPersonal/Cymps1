@@ -1946,6 +1946,9 @@ async def test_attach_content_resources_attaches_cached_book_without_enqueue(
                 "title": "Atomic Habits",
                 "type": "book",
                 "author_or_creator": "James Clear",
+                "resource_unavailable": True,
+                "quality_status": "flagged",
+                "quality_word_count": 1200,
             }
         ],
         defer_book_generation=True,
@@ -1958,6 +1961,9 @@ async def test_attach_content_resources_attaches_cached_book_without_enqueue(
     assert materials[0]["content_markdown"].startswith("# Atomic Habits")
     assert materials[0]["license_status"] == "llm_summary"
     assert materials[0]["book_quality_gate_version"] == BOOK_MODULE_QUALITY_GATE_VERSION
+    assert "resource_unavailable" not in materials[0]
+    assert "quality_status" not in materials[0]
+    assert "quality_word_count" not in materials[0]
     db.add.assert_not_called()
 
 

@@ -1893,6 +1893,11 @@ def _apply_video_resource(item: dict[str, Any], resource: ContentResource) -> No
 
 
 def _apply_book_resource(item: dict[str, Any], resource: ContentResource) -> None:
+    # A material may have been persisted while the shared book was still
+    # generating or quarantined. Once a current, validated resource exists,
+    # remove those stale failure markers before attaching the ready module.
+    for field in ("resource_unavailable", "quality_status", "quality_word_count"):
+        item.pop(field, None)
     item["content_resource_id"] = resource.id
     item["canonical_key"] = resource.canonical_key
     item["url"] = resource.source_url
