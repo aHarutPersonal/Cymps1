@@ -56,8 +56,12 @@ def test_ci_serializes_deploys_and_promotes_latest_only_after_health() -> None:
     assert "cancel-in-progress: false" in workflow
     assert "-t $ECR_URL:latest" not in workflow
     assert 'flock -n 9' in script
-    assert 'docker push "$ECR_URL:latest"' in script
-    assert script.index('docker push "$ECR_URL:latest"') > script.index(
+    assert 'docker push "$ECR_URL:latest"' not in script
+    assert "docker buildx imagetools create" in workflow
+    assert workflow.index("docker buildx imagetools create") > workflow.index(
+        "/opt/cmpys/deploy.sh $ECR_URL $IMAGE_TAG"
+    )
+    assert script.index("if grep -q '^IMAGE_TAG='") > script.index(
         'wait_for_celery_worker "catalog-control" "catalog_control"'
     )
 

@@ -111,4 +111,11 @@ jobs:
             "chmod +x /opt/cmpys/deploy.sh && \
              /opt/cmpys/deploy.sh $ECR_URL $IMAGE_TAG ${{ env.AWS_REGION }}"
 
+          # The instance role is intentionally pull-only. Promote the stable
+          # alias from CI, using its ECR write credentials, only after the
+          # remote script has passed migrations, readiness, and worker checks.
+          docker buildx imagetools create \
+            --tag $ECR_URL:latest \
+            $ECR_URL:$IMAGE_TAG
+
           rm -f /tmp/deploy_key

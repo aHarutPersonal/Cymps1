@@ -164,14 +164,9 @@ wait_for_celery_worker "worker-low" "low_priority"
 wait_for_celery_worker "catalog-worker" "catalog"
 wait_for_celery_worker "catalog-control" "catalog_control"
 
-# Promote :latest only after every service and queue consumer has passed its
-# health check. CI publishes only the immutable release tag, so a failed
-# rollout can never overwrite the last-known-good registry alias.
-docker tag "$ECR_URL:$IMAGE_TAG" "$ECR_URL:latest"
-docker push "$ECR_URL:latest"
-
-# Persist the successful release only after the health checks and registry
-# promotion. Until this point the previous tag remains the rollback target.
+# Persist the successful release only after every service and queue consumer
+# has passed its health check. CI promotes the registry's :latest alias after
+# this remote script succeeds; the instance role remains pull-only.
 if grep -q '^IMAGE_TAG=' "$ENV_FILE"; then
   sed -i.bak "s/^IMAGE_TAG=.*/IMAGE_TAG=$IMAGE_TAG/" "$ENV_FILE"
   rm -f "$ENV_FILE.bak"
