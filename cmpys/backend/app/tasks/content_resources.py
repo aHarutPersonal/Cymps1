@@ -25,7 +25,9 @@ def generate_book_module_resource(
     logger.info(f"[BOOK_MODULE] Starting background generation for '{title}'")
     try:
         result = run_async(
-            _generate_book_module_resource_async(title, author, user_goal, source_context)
+            _generate_book_module_resource_async(
+                title, author, user_goal, source_context
+            )
         )
         logger.info(f"[BOOK_MODULE] Completed '{title}': {result}")
         return result
@@ -42,13 +44,17 @@ async def _generate_book_module_resource_async(
 ) -> dict:
     from app.services.content_resources import get_or_create_book_module_resource
 
+    # This legacy task was fed plan recommendation prose. Keep it out of the
+    # grounding boundary; canonical lookup inside the service supplies any
+    # evidence that is actually authoritative.
+    del source_context
     async with async_session_maker() as db:
         resource = await get_or_create_book_module_resource(
             db,
             title=title,
             author=author,
             user_goal=user_goal,
-            source_context=source_context,
+            source_context=None,
         )
         await db.commit()
         return {

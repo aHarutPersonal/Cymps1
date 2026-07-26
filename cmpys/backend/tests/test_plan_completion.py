@@ -4,6 +4,7 @@ from datetime import datetime
 
 from app.models.plan import PlanItem, PlanItemCompletion
 from app.api.v1.plans import _compute_item_progress, _parse_item_details
+from app.services.content_quality import BOOK_MODULE_QUALITY_GATE_VERSION
 
 
 class ResultMock:
@@ -171,6 +172,62 @@ class TestPlanCompletionLogic:
 
         parsed = _parse_item_details({})
         assert parsed is None
+
+    async def test_parse_item_details_hides_unvalidated_legacy_book_body(self):
+        parsed = _parse_item_details(
+            {
+                "steps": [],
+                "materials": [
+                    {
+                        "title": "Legacy inline book",
+                        "kind": "book",
+                        "content_resource_id": "stale-resource",
+                        "content_markdown": "Unvalidated inline body",
+                        "duration_minutes": 20,
+                        "ideas": [{"title": "Draft", "content": "Unsafe draft"}],
+                    }
+                ],
+            }
+        )
+
+        assert parsed is not None
+        material = parsed.materials[0]
+        assert material.type == "book"
+        assert material.content_markdown is None
+        assert material.duration_minutes is None
+        assert material.ideas is None
+
+    async def test_parse_item_details_keeps_current_quality_book_resource_body(self):
+        parsed = _parse_item_details(
+            {
+                "steps": [],
+                "materials": [
+                    {
+                        "title": "Validated book",
+                        "type": "book",
+                        "content_resource_id": "current-resource",
+                        "book_quality_gate_version": BOOK_MODULE_QUALITY_GATE_VERSION,
+                        "content_markdown": "Validated resource body",
+                        "duration_minutes": 20,
+                        "ideas": [{"title": "Idea", "content": "Safe content"}],
+                    },
+                    {
+                        "title": "In-app lesson",
+                        "type": "in_app_lesson",
+                        "content_markdown": "Lesson body",
+                        "duration_minutes": 45,
+                    },
+                ],
+            }
+        )
+
+        assert parsed is not None
+        book, lesson = parsed.materials
+        assert book.content_markdown == "Validated resource body"
+        assert book.duration_minutes == 20
+        assert book.ideas[0].title == "Idea"
+        assert lesson.content_markdown == "Lesson body"
+        assert lesson.duration_minutes == 45
 
     async def test_parse_item_details_hides_legacy_search_page_urls(self):
         parsed = _parse_item_details(

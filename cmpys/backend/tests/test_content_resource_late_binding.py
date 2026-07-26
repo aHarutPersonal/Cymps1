@@ -3,10 +3,13 @@ from types import SimpleNamespace
 import pytest
 
 from app.api.v1 import content_resources as api
+from app.models.content_resource import ContentResourceKind, LicenseStatus
 from app.models.idol import CatalogStatus
 from app.models.ingest_job import IngestState
 from app.models.user import User
 from app.schemas.content_resource import ContentResourceResolutionStatus
+from app.services.content_quality import BOOK_MODULE_QUALITY_GATE_VERSION
+from app.services.content_resources import MIN_BOOK_MODULE_WORDS
 
 
 def test_resolve_route_precedes_dynamic_resource_route() -> None:
@@ -25,7 +28,16 @@ async def test_resolve_returns_ready_resource_reference() -> None:
                 id="resource-1",
                 canonical_key="book:author:title",
                 status=CatalogStatus.PUBLISHED,
-                metadata_json={"quality_report": {"score": 0.94}},
+                kind=ContentResourceKind.LLM_BOOK_SUMMARY,
+                license_status=LicenseStatus.LLM_SUMMARY,
+                content_markdown="word " * MIN_BOOK_MODULE_WORDS,
+                metadata_json={
+                    "quality_report": {
+                        "passed": True,
+                        "gate_version": BOOK_MODULE_QUALITY_GATE_VERSION,
+                        "score": 0.94,
+                    }
+                },
             )
 
     class Database:
@@ -43,6 +55,50 @@ async def test_resolve_returns_ready_resource_reference() -> None:
     assert response.id == "resource-1"
     assert response.status == ContentResourceResolutionStatus.READY
     assert response.qualityScore == 0.94
+
+
+@pytest.mark.asyncio
+async def test_resolve_does_not_expose_stale_published_book_as_ready() -> None:
+    stale = SimpleNamespace(
+        id="resource-1",
+        canonical_key="book:author:title",
+        status=CatalogStatus.PUBLISHED,
+        kind=ContentResourceKind.LLM_BOOK_SUMMARY,
+        license_status=LicenseStatus.LLM_SUMMARY,
+        content_markdown="word " * MIN_BOOK_MODULE_WORDS,
+        metadata_json={
+            "quality_report": {
+                "passed": True,
+                "gate_version": BOOK_MODULE_QUALITY_GATE_VERSION - 1,
+                "score": 0.94,
+            }
+        },
+    )
+
+    class Result:
+        def __init__(self, value):
+            self.value = value
+
+        def scalar_one_or_none(self):
+            return self.value
+
+    class Database:
+        def __init__(self):
+            self.results = iter([stale, None])
+
+        async def execute(self, _statement):
+            return Result(next(self.results))
+
+    response = await api.resolve_content_resource(
+        db=Database(),
+        current_user=User(
+            id="user-1", email="reader@example.com", password_hash="hash"
+        ),
+        canonicalKey="book:author:title",
+    )
+
+    assert response.id is None
+    assert response.status == ContentResourceResolutionStatus.MISSING
 
 
 @pytest.mark.asyncio

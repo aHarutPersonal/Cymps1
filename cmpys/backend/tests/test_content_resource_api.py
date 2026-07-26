@@ -7,6 +7,8 @@ from app.api.v1.content_resources import (
     delete_content_highlight,
     prepare_content_narration,
 )
+from app.models.content_resource import ContentResourceKind
+from app.models.idol import CatalogStatus
 from app.schemas.content_resource import ContentNarrationRequest
 from app.services.book_narration import NarrationAsset, NarrationCue
 
@@ -23,8 +25,15 @@ class ScalarResult:
 async def test_delete_content_highlight_removes_only_current_users_resource_note():
     db = AsyncMock()
     db.get.return_value = MagicMock(id="resource-1")
-    highlight = MagicMock(id="highlight-1", user_id="user-1", content_resource_id="resource-1")
-    db.execute.return_value = ScalarResult(highlight)
+    highlight = MagicMock(
+        id="highlight-1", user_id="user-1", content_resource_id="resource-1"
+    )
+    resource = MagicMock(
+        id="resource-1",
+        status=CatalogStatus.PUBLISHED,
+        kind=ContentResourceKind.ARTICLE,
+    )
+    db.execute.side_effect = [ScalarResult(resource), ScalarResult(highlight)]
     current_user = MagicMock(id="user-1")
 
     await delete_content_highlight(
@@ -43,7 +52,11 @@ async def test_delete_content_highlight_removes_only_current_users_resource_note
 async def test_prepare_narration_only_renders_text_from_the_resource(monkeypatch):
     db = AsyncMock()
     db.execute.return_value = ScalarResult(
-        MagicMock(content_markdown="A human voice follows the meaning.")
+        MagicMock(
+            content_markdown="A human voice follows the meaning.",
+            status=CatalogStatus.PUBLISHED,
+            kind=ContentResourceKind.ARTICLE,
+        )
     )
     renderer = AsyncMock(
         return_value=NarrationAsset(
@@ -84,7 +97,11 @@ async def test_prepare_narration_only_renders_text_from_the_resource(monkeypatch
 async def test_prepare_narration_rejects_arbitrary_text(monkeypatch):
     db = AsyncMock()
     db.execute.return_value = ScalarResult(
-        MagicMock(content_markdown="Only this published passage may be spoken.")
+        MagicMock(
+            content_markdown="Only this published passage may be spoken.",
+            status=CatalogStatus.PUBLISHED,
+            kind=ContentResourceKind.ARTICLE,
+        )
     )
     renderer = AsyncMock()
     monkeypatch.setattr(

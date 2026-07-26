@@ -13,7 +13,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, select
+from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.content_resource import (
@@ -26,11 +26,22 @@ from app.models.plan import PlanItemContentResource
 from app.services.content_quality import (
     EXPECTED_BOOK_HEADING_COUNT,
     EXPECTED_BOOK_PRACTICE_COUNT,
+    BOOK_MODULE_QUALITY_GATE_VERSION,
     MAX_BOOK_MODULE_WORDS,
     MAX_DUPLICATE_PARAGRAPH_RATIO,
     MAX_NEAR_DUPLICATE_PARAGRAPH_RATIO,
     MAX_REPEATED_SENTENCE_OPENING_RATIO,
     MIN_BOOK_MODULE_WORDS,
+    _GROUNDING_QUOTE_RE,
+    _GROUNDING_YEAR_RE,
+    _grounding_quote_text,
+    _grounding_quote_is_supported,
+    _has_quote_adjacent_source_attribution,
+    _is_source_attribution_only,
+    _iter_attributed_quote_matches,
+    _iter_grounding_quote_matches,
+    _normalize_source_text,
+    _unsupported_grounding_years,
     build_book_retry_instruction,
     evaluate_book_module,
 )
@@ -46,6 +57,10 @@ SHARED_BOOK_GOAL = (
     "Build an accurate, practical understanding of the book's central frameworks "
     "for a general adult reader. Keep the module reusable across users."
 )
+NO_VERIFIED_BOOK_SOURCE_CONTEXT = (
+    "No verified source text was available. Reject direct quotations and specific "
+    "dates that cannot be verified."
+)
 MAX_BOOK_SOURCE_CONTEXT_CHARS = 60_000
 # Long-form output needs more room than extraction, but a dead provider must
 # not hold a catalog worker for three minutes at every quality stage. The
@@ -59,11 +74,7 @@ BOOK_MODULE_QUALITY_TIMEOUT_SECONDS = 120.0
 # database finalization, failure persistence, and broker acknowledgement.
 BOOK_MODULE_TOTAL_TIMEOUT_SECONDS = 510.0
 
-_GROUNDING_QUOTE_RE = re.compile(r'["“]([^"”\n]{35,400})["”]')
-_GROUNDING_YEAR_RE = re.compile(r"\b(?:1[5-9]\d{2}|20\d{2})\b")
-_GROUNDING_ATTRIBUTION_RE = re.compile(
-    r"\b(author|book|according|argues?|calls?|describes?|said|says|writes?|wrote)\b"
-)
+_MARKDOWN_LINE_PREFIX_RE = re.compile(r"^(\s*(?:(?:#{1,6}|[-*+]|>)\s+|\d+[.)]\s+)?)")
 
 _YOUTUBE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 
@@ -140,6 +151,49 @@ def _book_core_is_sound(report: Any) -> bool:
     )
 
 
+def book_resource_has_current_quality(resource: ContentResource) -> bool:
+    """Return whether a cached generated book is safe to attach or serve."""
+    quality = (resource.metadata_json or {}).get("quality_report") or {}
+    return bool(
+        resource.status == CatalogStatus.PUBLISHED
+        and len((resource.content_markdown or "").split()) >= MIN_BOOK_MODULE_WORDS
+        and quality.get("passed") is True
+        and quality.get("gate_version") == BOOK_MODULE_QUALITY_GATE_VERSION
+    )
+
+
+def servable_content_resource_clause():
+    """SQL predicate matching the same publication contract as the Python guard."""
+    book_kinds = (
+        ContentResourceKind.LLM_BOOK_SUMMARY,
+        ContentResourceKind.PUBLIC_DOMAIN_BOOK,
+    )
+    quality = ContentResource.metadata_json["quality_report"]
+    return and_(
+        ContentResource.status == CatalogStatus.PUBLISHED,
+        or_(
+            ContentResource.kind.not_in(book_kinds),
+            and_(
+                quality["passed"].as_boolean().is_(True),
+                quality["gate_version"].as_integer()
+                == BOOK_MODULE_QUALITY_GATE_VERSION,
+                quality["metrics"]["word_count"].as_integer() >= MIN_BOOK_MODULE_WORDS,
+            ),
+        ),
+    )
+
+
+def content_resource_is_servable(resource: ContentResource) -> bool:
+    if resource.status != CatalogStatus.PUBLISHED:
+        return False
+    if resource.kind in {
+        ContentResourceKind.LLM_BOOK_SUMMARY,
+        ContentResourceKind.PUBLIC_DOMAIN_BOOK,
+    }:
+        return book_resource_has_current_quality(resource)
+    return True
+
+
 def _book_report_is_better(candidate: Any, current: Any) -> bool:
     """Prefer a passing rewrite even when two drafts have the same score.
 
@@ -158,38 +212,256 @@ def _book_report_is_better(candidate: Any, current: Any) -> bool:
 def _grounding_issue_count(report: Any) -> int:
     metrics = report.metrics
     unmatched_years = int(metrics.get("unmatched_year_count", 0))
-    return int(metrics.get("unmatched_attributed_quote_count", 0)) + (
-        unmatched_years if unmatched_years >= 2 else 0
-    )
+    return int(metrics.get("unmatched_attributed_quote_count", 0)) + unmatched_years
 
 
 def _normalize_grounding_text(value: str) -> str:
-    value = value.casefold().replace("’", "'").replace("“", '"').replace("”", '"')
-    return re.sub(r"\s+", " ", value).strip()
+    return _normalize_source_text(value)
 
 
 def _unsupported_grounding_markers(
     markdown: str,
     source_context: str | None,
+    source_credit_names: tuple[str, ...] = (),
 ) -> set[str]:
     """Return exact quote/year spans that the deterministic gate cannot source."""
     source_text = source_context or ""
     normalized_source = _normalize_grounding_text(source_text)
     markers: set[str] = set()
 
-    for match in _GROUNDING_QUOTE_RE.finditer(markdown):
-        quote = match.group(1).strip()
-        if len(quote.split()) < 8:
-            continue
-        nearby = markdown[max(0, match.start() - 120) : match.end() + 120].casefold()
-        if not _GROUNDING_ATTRIBUTION_RE.search(nearby):
-            continue
-        if _normalize_grounding_text(quote) not in normalized_source:
+    for match in _iter_attributed_quote_matches(markdown, source_credit_names):
+        quote = _grounding_quote_text(match).strip()
+        if not _grounding_quote_is_supported(quote, normalized_source):
             markers.add(match.group(0))
 
-    source_years = set(_GROUNDING_YEAR_RE.findall(source_text))
-    markers.update(set(_GROUNDING_YEAR_RE.findall(markdown)) - source_years)
+    markers.update(_unsupported_grounding_years(markdown, source_text))
     return markers
+
+
+def _canonical_grounding_replacement(marker: str) -> str | None:
+    """Return the only safe replacement allowed for one unsupported marker."""
+    quote_match = _GROUNDING_QUOTE_RE.fullmatch(marker)
+    if quote_match is not None:
+        quote_text = _grounding_quote_text(quote_match).strip()
+        if len(quote_text.split()) < 8:
+            return None
+        label = (
+            "Illustrative question (not a sourced quotation)"
+            if quote_text.endswith("?")
+            else "Illustrative example (not a sourced quotation)"
+        )
+        return f"{label}: {quote_text}"
+    if _GROUNDING_YEAR_RE.fullmatch(marker):
+        return "an unspecified year"
+    return None
+
+
+def _is_attribution_only_context(value: str) -> bool:
+    """Allow line replacement only when no independent prose would be removed."""
+    without_prefix = _MARKDOWN_LINE_PREFIX_RE.sub("", value, count=1).strip()
+    return _is_source_attribution_only(without_prefix)
+
+
+def _line_has_unsafe_grounding_structure(value: str) -> bool:
+    """Reject local edits that could alter Markdown structure or executable text."""
+    return bool(
+        re.match(r"\s*#{1,6}\s", value)
+        or re.match(r"\s*\|", value)
+        or re.match(r"\s*[-*+]\s+\[[ xX]\]\s", value)
+        or value.startswith("    ")
+        or value.startswith("\t")
+        or "```" in value
+    )
+
+
+def _fenced_code_line_indexes(markdown: str) -> set[int]:
+    """Return every physical line belonging to a Markdown fenced code block."""
+    indexes: set[int] = set()
+    active_fence: tuple[str, int] | None = None
+    for index, line in enumerate(markdown.splitlines()):
+        if active_fence is not None:
+            indexes.add(index)
+            character, length = active_fence
+            if re.fullmatch(
+                rf"\s{{0,3}}{re.escape(character)}{{{length},}}\s*",
+                line,
+            ):
+                active_fence = None
+            continue
+        opening = re.match(r"^\s{0,3}(`{3,}|~{3,})(?:[^`~].*)?$", line)
+        if opening is not None:
+            indexes.add(index)
+            marker = opening.group(1)
+            active_fence = (marker[0], len(marker))
+    return indexes
+
+
+def _neutralize_unsupported_grounding_markers(
+    markdown: str,
+    *,
+    source_context: str | None,
+    source_credit_names: tuple[str, ...] = (),
+) -> str | None:
+    """Neutralize unsupported markers atomically within each Markdown line."""
+    unsupported_markers = _unsupported_grounding_markers(
+        markdown,
+        source_context,
+        source_credit_names,
+    )
+    if not unsupported_markers:
+        return None
+
+    unsupported_quotes = {
+        marker
+        for marker in unsupported_markers
+        if _GROUNDING_QUOTE_RE.fullmatch(marker)
+    }
+    unsupported_years = {
+        marker for marker in unsupported_markers if _GROUNDING_YEAR_RE.fullmatch(marker)
+    }
+    # A bare year is not enough context for a guaranteed grammatical edit
+    # (for example, "the 2024 plan" cannot become "the an unspecified year
+    # plan"). Dates therefore use the complete quality rewrite path.
+    if unsupported_years:
+        return None
+
+    # The quality detector intentionally inspects a 120-character window that
+    # may cross physical Markdown lines. A line-local edit cannot safely remove
+    # attribution living on an adjacent line without also risking unrelated
+    # structure, so reject that shape and let the complete rewrite handle it.
+    quote_occurrences = list(_iter_grounding_quote_matches(markdown))
+    for occurrence in quote_occurrences:
+        if occurrence.group(0) not in unsupported_quotes:
+            continue
+        line_start = markdown.rfind("\n", 0, occurrence.start()) + 1
+        line_end = markdown.find("\n", occurrence.end())
+        if line_end < 0:
+            line_end = len(markdown)
+        window_start = max(0, occurrence.start() - 120)
+        window_end = min(len(markdown), occurrence.end() + 120)
+        line_context = markdown[line_start:line_end]
+        window_context = markdown[window_start:window_end]
+        line_occurrence = _GROUNDING_QUOTE_RE.match(
+            line_context,
+            occurrence.start() - line_start,
+        )
+        window_occurrence = _GROUNDING_QUOTE_RE.match(
+            window_context,
+            occurrence.start() - window_start,
+        )
+        if line_occurrence is None or window_occurrence is None:
+            return None
+        if _has_quote_adjacent_source_attribution(
+            window_context,
+            window_occurrence,
+            source_credit_names,
+        ) and not _has_quote_adjacent_source_attribution(
+            line_context,
+            line_occurrence,
+            source_credit_names,
+        ):
+            return None
+
+    normalized_source = _normalize_grounding_text(source_context or "")
+    fenced_code_lines = _fenced_code_line_indexes(markdown)
+    rendered_lines: list[str] = []
+    for line_index, line in enumerate(markdown.splitlines(keepends=True)):
+        body = line.rstrip("\r\n")
+        line_ending = line[len(body) :]
+        quote_occurrences = list(_iter_grounding_quote_matches(body))
+        quote_matches = [match.group(0) for match in quote_occurrences]
+        initially_unsupported_quotes = [
+            marker for marker in quote_matches if marker in unsupported_quotes
+        ]
+        unsourced_quotes = [
+            marker
+            for marker, match in zip(quote_matches, quote_occurrences, strict=True)
+            if not _grounding_quote_is_supported(
+                _grounding_quote_text(match),
+                normalized_source,
+            )
+        ]
+        line_years = [
+            year
+            for year in _GROUNDING_YEAR_RE.findall(body)
+            if year in unsupported_years
+        ]
+        if not initially_unsupported_quotes and not line_years:
+            rendered_lines.append(line)
+            continue
+        if line_index in fenced_code_lines or _line_has_unsafe_grounding_structure(
+            body
+        ):
+            return None
+
+        direct_attributed_quotes = [
+            match.group(0)
+            for match in quote_occurrences
+            if match.group(0) in initially_unsupported_quotes
+            and _has_quote_adjacent_source_attribution(
+                body,
+                match,
+                source_credit_names,
+            )
+        ]
+        has_direct_attribution = bool(direct_attributed_quotes)
+
+        surrounding_text = body
+        for marker in sorted(set(unsourced_quotes), key=len, reverse=True):
+            surrounding_text = surrounding_text.replace(marker, "")
+        for year in set(line_years):
+            surrounding_text = surrounding_text.replace(year, "")
+        line_quotes = (
+            unsourced_quotes if has_direct_attribution else initially_unsupported_quotes
+        )
+
+        # Never remove a supported quotation while neutralizing an unsupported
+        # neighbor on the same line. Let the complete quality rewrite handle
+        # that ambiguous mixed-source sentence instead.
+        supported_quotes = [
+            marker for marker in quote_matches if marker not in line_quotes
+        ]
+        if has_direct_attribution and supported_quotes:
+            return None
+        if has_direct_attribution and line_years and not line_quotes:
+            return None
+
+        if line_quotes and has_direct_attribution:
+            if not _is_attribution_only_context(surrounding_text):
+                return None
+            replacements = [
+                _canonical_grounding_replacement(marker) for marker in line_quotes
+            ]
+            if any(replacement is None for replacement in replacements):
+                return None
+            markdown_prefix_match = _MARKDOWN_LINE_PREFIX_RE.match(body)
+            markdown_prefix = (
+                markdown_prefix_match.group(1)
+                if markdown_prefix_match is not None
+                else ""
+            )
+            body = (
+                markdown_prefix
+                + "For illustration, "
+                + " ".join(str(replacement) for replacement in replacements)
+            )
+        else:
+            for marker in sorted(set(line_quotes), key=len, reverse=True):
+                replacement = _canonical_grounding_replacement(marker)
+                if replacement is None:
+                    return None
+                body = body.replace(marker, replacement)
+
+        rendered_lines.append(body + line_ending)
+
+    candidate = "".join(rendered_lines)
+    if _unsupported_grounding_markers(
+        candidate,
+        source_context,
+        source_credit_names,
+    ):
+        return None
+    return candidate if candidate != markdown else None
 
 
 def _apply_book_grounding_patches(
@@ -197,16 +469,23 @@ def _apply_book_grounding_patches(
     patches: Any,
     *,
     source_context: str | None,
+    source_credit_names: tuple[str, ...] = (),
 ) -> str | None:
     """Apply only exact, local substitutions that cannot alter lesson structure."""
     if not isinstance(patches, list) or not 1 <= len(patches) <= 12:
         return None
 
-    candidate = markdown
-    unsupported_markers = _unsupported_grounding_markers(markdown, source_context)
+    unsupported_markers = _unsupported_grounding_markers(
+        markdown,
+        source_context,
+        source_credit_names,
+    )
     if not unsupported_markers:
         return None
-    protected_markers = ("## ", "### Practice This")
+    if len(patches) != len(unsupported_markers):
+        return None
+
+    seen_markers: set[str] = set()
     for patch in patches:
         if not isinstance(patch, dict):
             return None
@@ -218,42 +497,30 @@ def _apply_book_grounding_patches(
             return None
         if len(old_text) > 600 or len(replacement_text) > 600:
             return None
-        if old_text == replacement_text or candidate.count(old_text) != 1:
+        if old_text == replacement_text or markdown.count(old_text) < 1:
             return None
-        # Aggregate score improvement is not enough to authorize arbitrary
-        # model-proposed edits. Every patch must contain at least one exact
-        # marker that is currently unsupported against SOURCE CONTEXT. It may
-        # not also sweep up a supported quote/year or a second paragraph.
-        targeted_markers = {
-            marker for marker in unsupported_markers if marker in old_text
-        }
-        if not targeted_markers or "\n\n" in old_text:
+        # Bind model edits one-to-one to the exact markers produced by the same
+        # deterministic gate. Surrounding attribution and unrelated prose are
+        # never delegated to the model.
+        if old_text not in unsupported_markers or old_text in seen_markers:
             return None
-        old_markers = {
-            match.group(0) for match in _GROUNDING_QUOTE_RE.finditer(old_text)
-        }
-        old_markers.update(_GROUNDING_YEAR_RE.findall(old_text))
-        if not old_markers.issubset(unsupported_markers):
+        expected_replacement = _canonical_grounding_replacement(old_text)
+        if expected_replacement is None:
             return None
-        residual_old_text = old_text
-        for marker in targeted_markers:
-            residual_old_text = residual_old_text.replace(marker, "")
-        if any(delimiter in residual_old_text for delimiter in ('"', "“", "”")):
+        # The model may bind the exact markers, but it may not author any new
+        # factual prose. Only the canonical, marker-derived replacement is
+        # accepted; the deterministic helper performs the actual edit and the
+        # caller re-runs every quality gate.
+        if replacement_text != expected_replacement:
             return None
-        if _GROUNDING_YEAR_RE.search(residual_old_text):
-            return None
-        if any(delimiter in replacement_text for delimiter in ('"', "“", "”")):
-            return None
-        if _GROUNDING_YEAR_RE.search(replacement_text):
-            return None
-        if any(
-            marker in old_text or marker in replacement_text
-            for marker in protected_markers
-        ):
-            return None
-        candidate = candidate.replace(old_text, replacement_text, 1)
-        unsupported_markers.difference_update(targeted_markers)
-    return candidate
+        seen_markers.add(old_text)
+    if seen_markers != unsupported_markers:
+        return None
+    return _neutralize_unsupported_grounding_markers(
+        markdown,
+        source_context=source_context,
+        source_credit_names=source_credit_names,
+    )
 
 
 def _slug(value: str | None, fallback: str = "unknown") -> str:
@@ -334,13 +601,19 @@ def _material_author(material: dict[str, Any]) -> str | None:
     return None
 
 
+def normalized_material_type(material: dict[str, Any]) -> str:
+    """Normalize current `type` and legacy prompt `kind` material shapes."""
+    raw_type = str(material.get("type") or material.get("kind") or "").casefold()
+    return {"search": "article", "link": "article"}.get(raw_type, raw_type)
+
+
 def material_to_resource_payload(material: dict[str, Any]) -> dict[str, Any] | None:
     """Convert a plan material dict into a shared content resource payload."""
     title = str(material.get("title") or "").strip()
     if not title:
         return None
 
-    raw_type = str(material.get("type") or "").lower()
+    raw_type = normalized_material_type(material)
     author = _material_author(material)
     metadata = {
         "reason": material.get("reason"),
@@ -734,6 +1007,23 @@ async def _generate_book_module_unbounded(
             return current_data, current_report
 
         markdown = str(current_data.get("content_markdown") or "")
+        source_credit_names = tuple(
+            str(value)
+            for value in (
+                title,
+                author,
+                current_data.get("title"),
+                current_data.get("author_or_creator"),
+            )
+            if value
+        )
+        unsupported_markers = sorted(
+            _unsupported_grounding_markers(
+                markdown,
+                source_context,
+                source_credit_names,
+            )
+        )
         grounding_client = get_llm_client(
             timeout=60.0,
             max_tokens=3000,
@@ -743,14 +1033,16 @@ async def _generate_book_module_unbounded(
         )
         grounding_prompt = (
             "Repair only the unsupported attributed quotation(s) or date claim(s) "
-            "identified below. Return 1-12 exact substitutions. Each old_text must be "
-            "one exact, unique, contiguous substring copied from CURRENT MARKDOWN and "
-            "must include the attribution, quotation, or date being repaired. Each "
-            "replacement_text must be cautious prose supported by SOURCE CONTEXT; when "
-            "support is absent, remove the attribution or specific factual claim and "
-            "state only a conservative practical interpretation. Do not add quotation "
-            "marks, dates, anecdotes, chapter names, headings, or Practice This blocks. "
-            "Do not patch unrelated prose. Return JSON only.\n\n"
+            "identified below. Return exactly one patch for every entry in "
+            "exact_unsupported_markers, with no missing or extra patches. Set old_text "
+            "equal to that marker verbatim—do not include surrounding attribution, "
+            "punctuation, or prose. For a quotation marker, replacement_text must be "
+            "exactly `Illustrative question/example (not a sourced quotation): "
+            "<the marker's original inner words>`; preserve those words exactly and "
+            "add nothing. For a year marker, replacement_text must be exactly "
+            "`an unspecified year`. Do not add quotation marks, numeric years, "
+            "anecdotes, chapter names, headings, or Practice This blocks. Do not patch "
+            "unrelated prose. Return JSON only.\n\n"
             + json.dumps(
                 {
                     "quality_failures": [
@@ -758,6 +1050,7 @@ async def _generate_book_module_unbounded(
                         for issue in current_report.issues
                         if "quotation" in issue.casefold() or "date" in issue.casefold()
                     ],
+                    "exact_unsupported_markers": unsupported_markers,
                     "source_context": source_context
                     or "No source text supports a direct quotation or specific date.",
                     "current_markdown": markdown,
@@ -777,34 +1070,77 @@ async def _generate_book_module_unbounded(
             selected_tier="balanced",
             routing_reason="fixed_grounding_repair_tier",
         )
-        if grounding_response.error:
-            return current_data, current_report
+        best_data: dict[str, Any] | None = None
+        best_report: Any | None = None
+        if not grounding_response.error:
+            patched_markdown = _apply_book_grounding_patches(
+                markdown,
+                grounding_response.data.get("patches"),
+                source_context=source_context,
+                source_credit_names=source_credit_names,
+            )
+            if patched_markdown is not None:
+                candidate = dict(current_data)
+                candidate["content_markdown"] = patched_markdown
+                candidate_report = evaluate_book_module(
+                    candidate,
+                    source_context=source_context,
+                )
+                if (
+                    _book_core_is_sound(candidate_report)
+                    and _grounding_issue_count(candidate_report)
+                    < current_grounding_issues
+                    and _book_report_is_better(candidate_report, current_report)
+                ):
+                    best_data = candidate
+                    best_report = candidate_report
+                    if _grounding_issue_count(candidate_report) == 0:
+                        generation_calls[-1]["quality_score"] = candidate_report.score
+                        generation_calls[-1]["result_status"] = (
+                            "quality_passed"
+                            if candidate_report.passed
+                            else "quality_failed"
+                        )
+                        generation_calls[-1]["repair_mode"] = "validated_model_patches"
+                        return candidate, candidate_report
 
-        patched_markdown = _apply_book_grounding_patches(
-            markdown,
-            grounding_response.data.get("patches"),
+        deterministic_base = best_data or current_data
+        deterministic_markdown = _neutralize_unsupported_grounding_markers(
+            str(deterministic_base.get("content_markdown") or ""),
             source_context=source_context,
+            source_credit_names=source_credit_names,
         )
-        if patched_markdown is None:
-            generation_calls[-1]["result_status"] = "patch_validation_failed"
-            return current_data, current_report
+        if deterministic_markdown is not None:
+            deterministic_candidate = dict(deterministic_base)
+            deterministic_candidate["content_markdown"] = deterministic_markdown
+            deterministic_report = evaluate_book_module(
+                deterministic_candidate,
+                source_context=source_context,
+            )
+            if (
+                _book_core_is_sound(deterministic_report)
+                and _grounding_issue_count(deterministic_report)
+                < current_grounding_issues
+                and _book_report_is_better(deterministic_report, current_report)
+            ):
+                generation_calls[-1]["quality_score"] = deterministic_report.score
+                generation_calls[-1]["result_status"] = (
+                    "quality_passed"
+                    if deterministic_report.passed
+                    else "quality_failed"
+                )
+                generation_calls[-1]["repair_mode"] = (
+                    "validated_model_patches_then_deterministic_neutralization"
+                    if best_data is not None
+                    else "deterministic_neutralization"
+                )
+                return deterministic_candidate, deterministic_report
 
-        candidate = dict(current_data)
-        candidate["content_markdown"] = patched_markdown
-        candidate_report = evaluate_book_module(
-            candidate,
-            source_context=source_context,
-        )
-        generation_calls[-1]["quality_score"] = candidate_report.score
-        generation_calls[-1]["result_status"] = (
-            "quality_passed" if candidate_report.passed else "quality_failed"
-        )
-        if (
-            _book_core_is_sound(candidate_report)
-            and _grounding_issue_count(candidate_report) < current_grounding_issues
-            and _book_report_is_better(candidate_report, current_report)
-        ):
-            return candidate, candidate_report
+        if best_data is not None and best_report is not None:
+            generation_calls[-1]["quality_score"] = best_report.score
+            generation_calls[-1]["result_status"] = "quality_failed"
+            generation_calls[-1]["repair_mode"] = "validated_partial_model_patches"
+            return best_data, best_report
         generation_calls[-1]["result_status"] = "patch_validation_failed"
         return current_data, current_report
 
@@ -1149,12 +1485,10 @@ async def get_or_create_book_module_resource(
         select(ContentResource).where(ContentResource.canonical_key == canonical_key)
     )
     existing = result.scalar_one_or_none()
+    existing_revalidation_report: Any | None = None
     if existing:
         existing_words = len((existing.content_markdown or "").split())
-        existing_quality = (existing.metadata_json or {}).get("quality_report", {})
-        if existing_words >= MIN_BOOK_MODULE_WORDS and (
-            existing.status == CatalogStatus.PUBLISHED or existing_quality.get("passed")
-        ):
+        if book_resource_has_current_quality(existing):
             return existing
 
     async def _save(resource: ContentResource) -> ContentResource:
@@ -1163,6 +1497,31 @@ async def get_or_create_book_module_resource(
             db.add(resource)
             await db.flush()
             return resource
+        if (
+            existing_words >= MIN_BOOK_MODULE_WORDS
+            and resource.status != CatalogStatus.PUBLISHED
+        ):
+            # A failed recovery must never destroy a substantial cached guide.
+            # Quarantine stale published content, retain it for a later retry,
+            # and persist the current gate report explaining why it is hidden.
+            if existing_revalidation_report is not None:
+                old_metadata = (
+                    existing.metadata_json
+                    if isinstance(existing.metadata_json, dict)
+                    else {}
+                )
+                old_quality = old_metadata.get("quality_report") or {}
+                report_data = existing_revalidation_report.to_dict()
+                if isinstance(old_quality.get("generation"), dict):
+                    report_data["generation"] = old_quality["generation"]
+                existing.metadata_json = {
+                    **old_metadata,
+                    "quality_report": report_data,
+                    "quality_revalidation_failed": True,
+                }
+            existing.status = CatalogStatus.FLAGGED
+            await db.flush()
+            return existing
         for column in (
             "kind",
             "title",
@@ -1187,11 +1546,61 @@ async def get_or_create_book_module_resource(
         await db.flush()
         return existing
 
+    async def _revalidate_existing(
+        effective_source_context: str,
+    ) -> ContentResource | None:
+        """Publish a sound cached module after deterministic gate corrections."""
+        nonlocal existing_revalidation_report
+        if (
+            existing is None
+            or len((existing.content_markdown or "").split()) < MIN_BOOK_MODULE_WORDS
+        ):
+            return None
+        summary = (
+            existing.summary_json if isinstance(existing.summary_json, dict) else {}
+        )
+        candidate = {
+            "title": existing.title or title,
+            "author_or_creator": existing.author_or_creator or author,
+            "content_markdown": existing.content_markdown or "",
+            "sections": summary.get("sections", []),
+            "ideas": summary.get("ideas", []),
+        }
+        report = evaluate_book_module(
+            candidate,
+            source_context=effective_source_context,
+        )
+        existing_revalidation_report = report
+        if not report.passed:
+            return None
+
+        report_data = report.to_dict()
+        old_metadata = (
+            existing.metadata_json if isinstance(existing.metadata_json, dict) else {}
+        )
+        old_quality = old_metadata.get("quality_report")
+        if isinstance(old_quality, dict) and isinstance(
+            old_quality.get("generation"), dict
+        ):
+            report_data["generation"] = old_quality["generation"]
+        existing.metadata_json = {
+            **old_metadata,
+            "quality_report": report_data,
+            "quality_revalidated": True,
+        }
+        existing.status = CatalogStatus.PUBLISHED
+        reading_minutes = max(
+            5, round(len(candidate["content_markdown"].split()) / 200)
+        )
+        existing.duration_minutes = reading_minutes
+        existing.read_minutes = reading_minutes
+        await db.flush()
+        return existing
+
     lookup = source_lookup or lookup_book_source
     source = await lookup(title=title, author=author)
     if source:
         source_md = source.get("content_markdown", "") or ""
-        source_words = len(source_md.split()) if source_md else 0
         source_metadata = source.get("metadata_json") or {}
         source_external_id = source_metadata.get("gutenberg_id") or source_metadata.get(
             "google_books_id"
@@ -1204,54 +1613,38 @@ async def get_or_create_book_module_resource(
             "llm_summary": LicenseStatus.LLM_SUMMARY,
         }.get(source_license, LicenseStatus.UNKNOWN)
 
-        # A provider result may be a complete licensed module, or merely a raw
-        # source. Only complete modules bypass generation. This prevents the old
-        # Gutenberg link stub from masquerading as a long-form reading.
-        if source_words >= MIN_BOOK_MODULE_WORDS:
-            source_duration = max(5, round(source_words / 200))
-            resource = ContentResource(
-                kind=ContentResourceKind.PUBLIC_DOMAIN_BOOK
-                if license_status == LicenseStatus.PUBLIC_DOMAIN
-                else ContentResourceKind.LLM_BOOK_SUMMARY,
-                canonical_key=canonical_key,
-                title=str(source.get("title") or title),
-                author_or_creator=source.get("author_or_creator") or author,
-                source_url=source.get("source_url"),
-                thumbnail_url=source.get("thumbnail_url"),
-                license_status=license_status,
-                content_markdown=source_md,
-                summary_json=source.get("summary_json"),
-                duration_minutes=source_duration,
-                metadata_json=source.get("metadata_json"),
-                status=CatalogStatus.PUBLISHED,
-                is_public_domain=license_status == LicenseStatus.PUBLIC_DOMAIN,
-                source_provider=source_metadata.get("provider"),
-                source_external_id=str(source_external_id or "") or None,
-                read_minutes=source_duration,
+        effective_source_context = (
+            source.get("source_context")
+            or source_md
+            or source_context
+            or (
+                "Only bibliographic metadata was available. Stay conservative and "
+                "do not invent scenes, quotations, chapter names, or author anecdotes."
             )
-            return await _save(resource)
+        )
+        revalidated = await _revalidate_existing(effective_source_context)
+        if revalidated is not None:
+            return revalidated
 
         factory = module_factory or generate_book_module
         module = await factory(
             title=str(source.get("title") or title),
             author=source.get("author_or_creator") or author,
             user_goal=SHARED_BOOK_GOAL,
-            source_context=(
-                source.get("source_context")
-                or source_md
-                or source_context
-                or (
-                    "Only bibliographic metadata was available. Stay conservative and "
-                    "do not invent scenes, quotations, chapter names, or author anecdotes."
-                )
-            ),
+            source_context=effective_source_context,
         )
         module_md = module.get("content_markdown", "") or ""
         module_words = len(module_md.split())
         module_duration = max(5, round(module_words / 200)) if module_words else 5
-        quality_report = (
-            module.get("quality_report") or evaluate_book_module(module).to_dict()
-        )
+        supplied_quality = module.get("quality_report")
+        quality_report = evaluate_book_module(
+            module,
+            source_context=effective_source_context,
+        ).to_dict()
+        if isinstance(supplied_quality, dict) and isinstance(
+            supplied_quality.get("generation"), dict
+        ):
+            quality_report["generation"] = supplied_quality["generation"]
         resource = ContentResource(
             kind=ContentResourceKind.PUBLIC_DOMAIN_BOOK
             if license_status == LicenseStatus.PUBLIC_DOMAIN
@@ -1291,6 +1684,13 @@ async def get_or_create_book_module_resource(
         )
         return await _save(resource)
 
+    # A caller-supplied recommendation, plan reason, or catalog description can
+    # guide the draft, but it is not quote/date evidence. Only context returned
+    # by the source lookup above may satisfy the grounding gate.
+    revalidated = await _revalidate_existing(NO_VERIFIED_BOOK_SOURCE_CONTEXT)
+    if revalidated is not None:
+        return revalidated
+
     factory = module_factory or generate_book_module
     module = await factory(
         title=title,
@@ -1318,9 +1718,15 @@ async def get_or_create_book_module_resource(
         else (module.get("duration_minutes") or 15)
     )
 
-    quality_report = (
-        module.get("quality_report") or evaluate_book_module(module).to_dict()
-    )
+    supplied_quality = module.get("quality_report")
+    quality_report = evaluate_book_module(
+        module,
+        source_context=NO_VERIFIED_BOOK_SOURCE_CONTEXT,
+    ).to_dict()
+    if isinstance(supplied_quality, dict) and isinstance(
+        supplied_quality.get("generation"), dict
+    ):
+        quality_report["generation"] = supplied_quality["generation"]
     resource = ContentResource(
         kind=ContentResourceKind.LLM_BOOK_SUMMARY,
         canonical_key=canonical_key,
@@ -1498,6 +1904,7 @@ def _apply_book_resource(item: dict[str, Any], resource: ContentResource) -> Non
     )
     item["content_markdown"] = resource.content_markdown
     item["duration_minutes"] = resource.duration_minutes
+    item["book_quality_gate_version"] = BOOK_MODULE_QUALITY_GATE_VERSION
     if resource.summary_json:
         item["ideas"] = resource.summary_json.get("ideas", [])
         item["promise"] = resource.summary_json.get("promise")
@@ -1524,18 +1931,43 @@ async def attach_content_resources_to_materials(
     material is returned without a content_resource_id.
     """
     items = [dict(material) for material in materials]
+    for item in items:
+        if normalized_material_type(item) != "book":
+            continue
+        # Planner-authored book bodies are untrusted drafts. A validated cached
+        # resource below may repopulate these fields through _apply_book_resource.
+        for field in (
+            "content_markdown",
+            "contentMarkdown",
+            "ideas",
+            "sections",
+            "promise",
+            "grounding_notes",
+            "groundingNotes",
+            "duration_minutes",
+            "durationMinutes",
+            "book_quality_gate_version",
+            "bookQualityGateVersion",
+        ):
+            item.pop(field, None)
 
     payloads: dict[int, dict[str, Any]] = {}
     kinds: list[str] = []
     cache_keys: list[str | None] = []
     for index, item in enumerate(items):
         payload = material_to_resource_payload(item)
-        material_type = str(item.get("type") or "").lower()
-        if payload:
+        material_type = normalized_material_type(item)
+        # Every book, including a long inline planner payload, must pass through
+        # the dedicated source lookup, current quality gate, and cache lifecycle.
+        # Generic payload insertion has no safe way to validate a book module.
+        if material_type == "book":
+            kinds.append("book")
+            cache_keys.append(_material_cache_key(item, material_type))
+        elif payload:
             payloads[index] = payload
             kinds.append("payload")
             cache_keys.append(payload["canonical_key"])
-        elif material_type in {"video", "book"}:
+        elif material_type == "video":
             kinds.append(material_type)
             cache_keys.append(_material_cache_key(item, material_type))
         else:
@@ -1551,6 +1983,16 @@ async def attach_content_resources_to_materials(
         cached = {
             resource.canonical_key: resource for resource in result.scalars().all()
         }
+        stale_book_keys = {
+            key
+            for key, kind in zip(cache_keys, kinds, strict=True)
+            if key
+            and kind == "book"
+            and key in cached
+            and not book_resource_has_current_quality(cached[key])
+        }
+        for key in stale_book_keys:
+            cached.pop(key, None)
 
     async def _prepare_book(
         title: str, author: str | None, source_context: str | None
@@ -1559,8 +2001,6 @@ async def attach_content_resources_to_materials(
         source = await lookup(title=title, author=author)
         if source is not None:
             source_md = source.get("content_markdown", "") or ""
-            if len(source_md.split()) >= MIN_BOOK_MODULE_WORDS:
-                return {"source": source, "module": None}
             factory = book_module_factory or generate_book_module
             module = await factory(
                 title=str(source.get("title") or title),
@@ -1600,7 +2040,7 @@ async def attach_content_resources_to_materials(
             prep_coros[key] = _prepare_book(
                 str(item.get("title") or ""),
                 _material_author(item),
-                item.get("source_context") or item.get("reason"),
+                None,
             )
 
     prepared: dict[str, Any] = {}
@@ -1650,7 +2090,7 @@ async def attach_content_resources_to_materials(
                     title=str(item.get("title") or ""),
                     author=_material_author(item),
                     user_goal=user_goal,
-                    source_context=item.get("source_context") or item.get("reason"),
+                    source_context=None,
                 )
                 continue
             if resource is None:
@@ -1671,16 +2111,13 @@ async def attach_content_resources_to_materials(
                     title=str(item.get("title") or ""),
                     author=_material_author(item),
                     user_goal=user_goal,
-                    source_context=item.get("source_context") or item.get("reason"),
+                    source_context=None,
                     source_lookup=_prepared_lookup,
                     module_factory=_prepared_factory,
                 )
                 cached[resource.canonical_key] = resource
             resource_words = len((resource.content_markdown or "").split())
-            if (
-                resource.status != CatalogStatus.PUBLISHED
-                or resource_words < MIN_BOOK_MODULE_WORDS
-            ):
+            if not book_resource_has_current_quality(resource):
                 # Keep the recommendation, but never attach/serve a module that
                 # still failed quality gates after the selective Pro fallback.
                 item["canonical_key"] = resource.canonical_key

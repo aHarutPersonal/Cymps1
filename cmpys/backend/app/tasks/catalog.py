@@ -30,6 +30,7 @@ from app.models.item_detail_job import PlanItemDetailJob
 from app.models.llm_usage_event import LLMUsageEvent
 from app.models.plan_job import PlanGenerationJob
 from app.models.verified_quote import QuoteVerificationState, VerifiedQuote
+from app.services.content_quality import BOOK_MODULE_QUALITY_GATE_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -124,9 +125,16 @@ async def _enqueue_catalog_book_async(
     source_context: str | None,
     priority: int,
 ) -> dict:
-    from app.services.content_resources import canonical_book_key
+    from app.services.content_resources import (
+        BOOK_MODULE_QUALITY_GATE_VERSION,
+        book_resource_has_current_quality,
+        canonical_book_key,
+    )
 
     canonical_key = canonical_book_key(title, author)
+    # Plan prose is useful for recommendation UX, but it is not primary-source
+    # evidence for quotations or dates in a shared book guide.
+    del source_context
     async with async_session_maker() as db:
         job_id = await _insert_job(
             db,
@@ -139,13 +147,31 @@ async def _enqueue_catalog_book_async(
                 # Stored for audit only. The shared module generator deliberately
                 # uses a neutral goal and never bakes this user's goal into cache.
                 "requested_goal": user_goal,
-                "source_context": source_context,
+                "source_context": None,
                 "origin": "plan_material",
             },
             priority=priority,
         )
         reactivated = False
         if job_id is None:
+            resource = (
+                await db.execute(
+                    select(ContentResource).where(
+                        ContentResource.canonical_key == canonical_key
+                    )
+                )
+            ).scalar_one_or_none()
+            resource_needs_revalidation = resource is None or not (
+                book_resource_has_current_quality(resource)
+            )
+            resource_quality = (
+                ((resource.metadata_json or {}).get("quality_report") or {})
+                if resource is not None
+                else {}
+            )
+            resource_gate_is_stale = (
+                resource_quality.get("gate_version") != BOOK_MODULE_QUALITY_GATE_VERSION
+            )
             existing = (
                 await db.execute(
                     select(IngestJob)
@@ -157,21 +183,44 @@ async def _enqueue_catalog_book_async(
                     .with_for_update()
                 )
             ).scalar_one_or_none()
-            if (
+            retry_exhausted_failure = bool(
                 existing is not None
                 and existing.state in {IngestState.FLAGGED, IngestState.FAILED}
-                and existing.attempts < settings.catalog_max_attempts
-            ):
+                and existing.attempts >= settings.catalog_max_attempts
+            )
+            should_reactivate = bool(
+                existing is not None
+                and (
+                    (
+                        existing.state in {IngestState.FLAGGED, IngestState.FAILED}
+                        and (not retry_exhausted_failure or resource_gate_is_stale)
+                    )
+                    or (
+                        existing.state == IngestState.DONE
+                        and resource_needs_revalidation
+                    )
+                )
+            )
+            if should_reactivate and existing is not None:
+                was_done = existing.state == IngestState.DONE
                 existing.state = IngestState.QUEUED
                 existing.next_attempt_at = datetime.now(timezone.utc)
                 existing.completed_at = None
                 existing.locked_at = None
-                existing.last_error = "Requeued after a failed quality attempt"
+                if was_done or resource_gate_is_stale:
+                    existing.attempts = 0
+                existing.last_error = "Requeued for current book-quality validation"
                 existing.priority = max(existing.priority, priority)
                 existing.payload_json = {
                     **(existing.payload_json or {}),
+                    "title": title,
+                    "author": author,
+                    "requested_goal": user_goal,
+                    "source_context": None,
                     "origin": "plan_material",
                 }
+                if resource is not None and resource_needs_revalidation:
+                    resource.status = CatalogStatus.FLAGGED
                 job_id = str(existing.id)
                 reactivated = True
         await db.commit()
@@ -184,6 +233,105 @@ async def _enqueue_catalog_book_async(
         "job_id": job_id,
         "canonical_key": canonical_key,
     }
+
+
+async def _recover_obsolete_book_quality_jobs(
+    db,
+    *,
+    now: datetime,
+    limit: int,
+) -> int:
+    """Quarantine and requeue books evaluated by an obsolete gate version."""
+    if limit <= 0:
+        return 0
+    quality_gate = ContentResource.metadata_json["quality_report"][
+        "gate_version"
+    ].as_integer()
+    stale_book_result = await db.execute(
+        select(ContentResource)
+        .where(
+            ContentResource.kind.in_(
+                [
+                    ContentResourceKind.PUBLIC_DOMAIN_BOOK,
+                    ContentResourceKind.LLM_BOOK_SUMMARY,
+                ]
+            ),
+            ContentResource.status.in_(
+                [
+                    CatalogStatus.PENDING,
+                    CatalogStatus.PUBLISHED,
+                    CatalogStatus.FLAGGED,
+                ]
+            ),
+            or_(
+                quality_gate.is_(None),
+                quality_gate != BOOK_MODULE_QUALITY_GATE_VERSION,
+            ),
+        )
+        .order_by(ContentResource.updated_at.asc())
+        .limit(limit)
+        .with_for_update(skip_locked=True)
+    )
+    recovered = 0
+    for resource in stale_book_result.scalars().all():
+        resource.status = CatalogStatus.FLAGGED
+        payload = {
+            "content_resource_id": str(resource.id),
+            "title": resource.title,
+            "author": resource.author_or_creator,
+            "origin": "quality_gate_upgrade",
+            "source_context": None,
+        }
+        inserted = await _insert_job(
+            db,
+            kind=IngestKind.BOOK,
+            source=BOOK_JOB_SOURCE,
+            external_id=resource.canonical_key,
+            payload=payload,
+            priority=USER_DEMANDED_BOOK_PRIORITY,
+        )
+        if inserted:
+            recovered += 1
+            continue
+
+        existing_job = (
+            await db.execute(
+                select(IngestJob)
+                .where(
+                    IngestJob.kind == IngestKind.BOOK,
+                    IngestJob.source == BOOK_JOB_SOURCE,
+                    IngestJob.external_id == resource.canonical_key,
+                )
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if existing_job is None or existing_job.state in {
+            IngestState.QUEUED,
+            IngestState.RUNNING,
+        }:
+            continue
+        existing_job.state = IngestState.QUEUED
+        existing_job.attempts = 0
+        existing_job.next_attempt_at = now
+        existing_job.completed_at = None
+        existing_job.locked_at = None
+        existing_job.last_error = "Requeued after book quality-gate upgrade"
+        existing_job.priority = max(
+            existing_job.priority,
+            USER_DEMANDED_BOOK_PRIORITY,
+        )
+        old_payload = existing_job.payload_json or {}
+        existing_job.payload_json = {
+            **old_payload,
+            **payload,
+            "source_context": (
+                None
+                if old_payload.get("origin") == "plan_material"
+                else old_payload.get("source_context")
+            ),
+        }
+        recovered += 1
+    return recovered
 
 
 @celery_app.task(name="app.tasks.catalog.catalog_tick")
@@ -226,26 +374,39 @@ async def _catalog_tick_async() -> dict:
                 job.next_attempt_at = now
             recovered += 1
 
-        idol_result = await db.execute(
-            select(Idol)
-            .outerjoin(IdolProfile, IdolProfile.idol_id == Idol.id)
-            .where(
-                Idol.status == CatalogStatus.PENDING,
-                IdolProfile.id.is_(None),
-            )
-            .order_by(Idol.created_at.asc())
-            .limit(settings.catalog_seed_per_tick)
+        # A gate upgrade invalidates old PUBLISHED/FLAGGED books even when
+        # their unique catalog job is already DONE or exhausted. Quarantine
+        # and requeue a bounded batch before seeding new autonomous content.
+        book_recoveries = await _recover_obsolete_book_quality_jobs(
+            db,
+            now=now,
+            limit=settings.catalog_seed_per_tick,
         )
-        for idol in idol_result.scalars().all():
-            inserted = await _insert_job(
-                db,
-                kind=IngestKind.IDOL,
-                source=IDOL_JOB_SOURCE,
-                external_id=str(idol.id),
-                payload={"idol_id": str(idol.id), "name": idol.name},
-                priority=100,
+        seeded += book_recoveries
+        recovered += book_recoveries
+
+        remaining_seed = max(settings.catalog_seed_per_tick - seeded, 0)
+        if remaining_seed:
+            idol_result = await db.execute(
+                select(Idol)
+                .outerjoin(IdolProfile, IdolProfile.idol_id == Idol.id)
+                .where(
+                    Idol.status == CatalogStatus.PENDING,
+                    IdolProfile.id.is_(None),
+                )
+                .order_by(Idol.created_at.asc())
+                .limit(remaining_seed)
             )
-            seeded += int(bool(inserted))
+            for idol in idol_result.scalars().all():
+                inserted = await _insert_job(
+                    db,
+                    kind=IngestKind.IDOL,
+                    source=IDOL_JOB_SOURCE,
+                    external_id=str(idol.id),
+                    payload={"idol_id": str(idol.id), "name": idol.name},
+                    priority=100,
+                )
+                seeded += int(bool(inserted))
 
         remaining_seed = max(settings.catalog_seed_per_tick - seeded, 0)
         if remaining_seed:
@@ -963,7 +1124,11 @@ async def _process_book_job(job_id: str, payload: dict) -> dict:
             title=title,
             author=str(author) if author else None,
             user_goal=SHARED_BOOK_GOAL,
-            source_context=(str(payload.get("source_context") or "").strip() or None),
+            source_context=(
+                None
+                if payload.get("origin") == "plan_material"
+                else (str(payload.get("source_context") or "").strip() or None)
+            ),
         )
         job = await db.get(IngestJob, job_id)
         if job is None:

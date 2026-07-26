@@ -43,6 +43,10 @@ from app.services.book_narration import (
     narration_text_belongs_to_resource,
     render_book_narration,
 )
+from app.services.content_resources import (
+    content_resource_is_servable,
+    servable_content_resource_clause,
+)
 
 router = APIRouter(prefix="/content-resources", tags=["content-resources"])
 
@@ -105,11 +109,15 @@ async def _get_resource(db: AsyncSession, resource_id: str) -> ContentResource:
     result = await db.execute(
         select(ContentResource).where(
             ContentResource.id == resource_id,
-            ContentResource.status == CatalogStatus.PUBLISHED,
+            servable_content_resource_clause(),
         )
     )
     resource = result.scalar_one_or_none()
     if not resource:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found"
+        )
+    if not content_resource_is_servable(resource):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found"
         )
@@ -157,7 +165,7 @@ async def list_content_resources(
     stmt = (
         select(ContentResource)
         .options(defer(ContentResource.content_markdown))
-        .where(ContentResource.status == CatalogStatus.PUBLISHED)
+        .where(servable_content_resource_clause())
     )
     if kind:
         try:
@@ -238,7 +246,7 @@ async def list_vault_resources(
         )
         .where(
             UserContentSave.user_id == current_user.id,
-            ContentResource.status == CatalogStatus.PUBLISHED,
+            servable_content_resource_clause(),
         )
     )
     total = total_result.scalar() or 0
@@ -258,7 +266,7 @@ async def list_vault_resources(
         )
         .where(
             UserContentSave.user_id == current_user.id,
-            ContentResource.status == CatalogStatus.PUBLISHED,
+            servable_content_resource_clause(),
         )
         .order_by(UserContentSave.created_at.desc())
         .offset(offset)
@@ -327,7 +335,7 @@ async def list_library_resources(
                     ContentResourceKind.LLM_BOOK_SUMMARY,
                 ]
             ),
-            ContentResource.status == CatalogStatus.PUBLISHED,
+            servable_content_resource_clause(),
         )
     )
     resource_ids.update(row[0] for row in pd_result.fetchall())
@@ -341,7 +349,7 @@ async def list_library_resources(
         .options(defer(ContentResource.content_markdown))
         .where(
             ContentResource.id.in_(resource_ids),
-            ContentResource.status == CatalogStatus.PUBLISHED,
+            servable_content_resource_clause(),
         )
     )
 
@@ -440,7 +448,7 @@ async def get_continue_reading(
             UserContentProgress.user_id == current_user.id,
             UserContentProgress.progress_percent > 0,
             UserContentProgress.progress_percent < 100,
-            ContentResource.status == CatalogStatus.PUBLISHED,
+            servable_content_resource_clause(),
         )
         .order_by(UserContentProgress.updated_at.desc())
         .limit(1)
@@ -470,7 +478,7 @@ async def resolve_content_resource(
             )
         )
     ).scalar_one_or_none()
-    if resource is not None and resource.status == CatalogStatus.PUBLISHED:
+    if resource is not None and content_resource_is_servable(resource):
         return ContentResourceReferenceResponse(
             id=str(resource.id),
             canonicalKey=str(resource.canonical_key),

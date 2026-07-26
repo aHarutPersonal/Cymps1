@@ -1,4 +1,5 @@
 import asyncio
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -7,12 +8,15 @@ import pytest
 from app.models.content_resource import ContentResourceKind, LicenseStatus
 from app.models.idol import CatalogStatus
 from app.services.content_resources import (
+    BOOK_MODULE_QUALITY_GATE_VERSION,
     BOOK_MODULE_QUALITY_TIMEOUT_SECONDS,
     BOOK_MODULE_TOTAL_TIMEOUT_SECONDS,
     BookModuleGroundingRepairOutput,
     BookModuleMetadataOutput,
     BookModuleOutput,
     _apply_book_grounding_patches,
+    _neutralize_unsupported_grounding_markers,
+    _unsupported_grounding_markers,
     canonical_book_key,
     canonical_video_query_key,
     canonical_youtube_key,
@@ -112,6 +116,15 @@ def _valid_book_module(title: str = "Deep Work", author: str = "Cal Newport") ->
                 "replacement_text": 'A supposedly safe but "short" quoted claim.',
             }
         ],
+        [
+            {
+                "old_text": (
+                    '"This unsupported quotation is deliberately long enough for the '
+                    'grounding detector to inspect."'
+                ),
+                "replacement_text": "A cautious interpretation without attribution.",
+            }
+        ],
     ],
 )
 def test_grounding_patches_reject_unrelated_targets_or_new_claims(patches):
@@ -163,6 +176,391 @@ def test_grounding_patches_reject_supported_marker_bundled_with_valid_repair():
         )
         is None
     )
+
+
+def test_grounding_patches_are_atomic_and_cannot_modify_headings():
+    unsupported_quote = (
+        '"This unsupported quotation is deliberately long enough for the grounding '
+        'detector to require a repair."'
+    )
+    markdown = f"## Protected Heading\n\nThe author writes, {unsupported_quote}"
+    patches = [
+        {
+            "old_text": unsupported_quote,
+            "replacement_text": (
+                "Illustrative example (not a sourced quotation): A cautious practical "
+                "interpretation."
+            ),
+        },
+        {
+            "old_text": "## Protected Heading",
+            "replacement_text": "## Altered Heading",
+        },
+    ]
+
+    assert (
+        _apply_book_grounding_patches(
+            markdown,
+            patches,
+            source_context="Publisher metadata with no direct quotations.",
+        )
+        is None
+    )
+    assert markdown.startswith("## Protected Heading")
+
+
+def test_deterministic_grounding_neutralization_changes_only_unsupported_markers():
+    supported_quote = (
+        '"This supported quotation is deliberately long enough for the grounding '
+        'detector to verify against source text."'
+    )
+    unsupported_quote = (
+        '"This unsupported quotation is deliberately long enough for the grounding '
+        'detector to neutralize without claiming support."'
+    )
+    markdown = (
+        "## Framework\n\n"
+        f"According to the author, {supported_quote}\n\n"
+        f"The book says, {unsupported_quote}\n\n"
+        "### Practice This\n1. Preserve the structure."
+    )
+
+    neutralized = _neutralize_unsupported_grounding_markers(
+        markdown,
+        source_context=supported_quote,
+    )
+
+    assert neutralized is not None
+    assert supported_quote in neutralized
+    assert unsupported_quote not in neutralized
+    assert "Illustrative example (not a sourced quotation):" in neutralized
+    assert neutralized.startswith("## Framework\n\n")
+    assert "### Practice This" in neutralized
+
+
+def test_grounding_neutralization_removes_direct_source_attribution_only():
+    direct_quote = (
+        '"This alleged author quotation is deliberately long enough for the grounding '
+        'detector to require transparent neutralization."'
+    )
+    scenario_quote = (
+        '"This hypothetical customer statement is deliberately long enough for the '
+        'grounding detector to inspect as an illustrative scenario."'
+    )
+    suffix_quote = (
+        '"This alleged trailing quotation is deliberately long enough for the '
+        'grounding detector to require transparent neutralization."'
+    )
+    markdown = (
+        f"The author writes, {direct_quote}\n\n"
+        f"When a customer says, {scenario_quote}\n\n"
+        f"{suffix_quote}, the book argues."
+    )
+
+    neutralized = _neutralize_unsupported_grounding_markers(
+        markdown,
+        source_context="Publisher metadata with no direct quotations.",
+    )
+
+    assert neutralized is not None
+    assert "The author writes" not in neutralized
+    assert "the book argues" not in neutralized
+    assert "When a customer says" in neutralized
+    assert scenario_quote in neutralized
+    assert neutralized.count("not a sourced quotation") == 2
+    assert "For illustration," in neutralized
+
+
+@pytest.mark.parametrize(
+    "attributed_template",
+    [
+        "According to Rob Fitzpatrick, {quote}",
+        "Rob Fitzpatrick said, {quote}",
+        "The author writes in the book, {quote}",
+        "{quote}, writes the author",
+        "{quote}, according to Rob Fitzpatrick",
+        "In the book, the author writes, {quote}",
+        "According to research by Rob Fitzpatrick, {quote}",
+        "According to McKinsey & Company, {quote}",
+        "Rob Fitzpatrick famously writes, {quote}",
+        "As the book clearly argues, {quote}",
+    ],
+)
+def test_grounding_neutralization_covers_common_direct_source_forms(
+    attributed_template,
+):
+    unsupported_quote = (
+        '"This alleged source quotation is deliberately long enough for the grounding '
+        'detector to require honest neutralization."'
+    )
+    markdown = attributed_template.format(quote=unsupported_quote)
+
+    neutralized = _neutralize_unsupported_grounding_markers(
+        markdown,
+        source_context="Publisher metadata with no direct quotations.",
+    )
+
+    assert neutralized is not None
+    assert unsupported_quote not in neutralized
+    assert "not a sourced quotation" in neutralized
+    assert "Rob Fitzpatrick" not in neutralized
+    assert "author writes" not in neutralized.casefold()
+    assert "writes the author" not in neutralized.casefold()
+    assert "according to" not in neutralized.casefold()
+    assert "the book" not in neutralized.casefold()
+    assert "famously writes" not in neutralized.casefold()
+
+
+def test_grounding_patch_rejects_arbitrary_fact_behind_transparency_label():
+    unsupported_quote = (
+        '"This unsupported quotation is deliberately long enough for the grounding '
+        'detector to reject an invented replacement fact."'
+    )
+    markdown = f"The author writes, {unsupported_quote}"
+
+    assert (
+        _apply_book_grounding_patches(
+            markdown,
+            [
+                {
+                    "old_text": unsupported_quote,
+                    "replacement_text": (
+                        "*Illustrative example (not a sourced quotation): Paris is "
+                        "the capital of Mars according to a definitive study.*"
+                    ),
+                }
+            ],
+            source_context="Publisher metadata with no direct quotations.",
+        )
+        is None
+    )
+
+
+def test_grounding_neutralization_handles_duplicate_and_overlapping_markers():
+    repeated_quote = (
+        '"This repeated unsupported quotation is deliberately long enough for the grounding '
+        'detector to test duplicate and overlapping markers."'
+    )
+    markdown = (
+        f"The author writes, {repeated_quote}\n\nWhen a customer says, {repeated_quote}"
+    )
+
+    neutralized = _neutralize_unsupported_grounding_markers(
+        markdown,
+        source_context="Publisher metadata with no direct quotations.",
+    )
+
+    assert neutralized is not None
+    assert repeated_quote not in neutralized
+    assert neutralized.count("not a sourced quotation") == 2
+    assert "The author writes" not in neutralized
+    assert "When a customer says" in neutralized
+
+
+def test_grounding_neutralization_handles_two_quotes_in_one_attributed_line_atomically():
+    first_quote = (
+        '"This first unsupported quotation is deliberately long enough for the '
+        'grounding detector to exercise atomic line handling."'
+    )
+    second_quote = (
+        '"This second unsupported quotation is deliberately long enough for the '
+        'grounding detector to preserve every marker without corruption."'
+    )
+    markdown = (
+        f"According to research by Rob Fitzpatrick, {first_quote} while "
+        f"{second_quote} illustrates the contrast."
+    )
+
+    neutralized = _neutralize_unsupported_grounding_markers(
+        markdown,
+        source_context="Publisher metadata with no direct quotations.",
+    )
+
+    assert neutralized is None
+    assert "while" in markdown
+    assert "illustrates the contrast." in markdown
+    assert first_quote in markdown
+    assert second_quote in markdown
+
+
+@pytest.mark.parametrize(
+    "markdown",
+    [
+        (
+            "According to Rob Fitzpatrick,\n"
+            '"This hard-wrapped unsupported quotation is deliberately long enough '
+            'for the grounding detector to reject safely."'
+        ),
+        (
+            '"This hard-wrapped unsupported quotation is deliberately long enough '
+            'for the grounding detector to reject safely."\n'
+            "according to Rob Fitzpatrick"
+        ),
+    ],
+)
+def test_grounding_neutralization_rejects_cross_line_attribution(markdown):
+    assert (
+        _neutralize_unsupported_grounding_markers(
+            markdown,
+            source_context="Publisher metadata with no direct quotations.",
+        )
+        is None
+    )
+
+
+def test_grounding_neutralization_rejects_attributed_line_with_unrelated_prose():
+    unsupported_quote = (
+        '"This unsupported quotation is deliberately long enough for the grounding '
+        'detector to protect neighboring instructions."'
+    )
+    markdown = (
+        "1. Keep this safety instruction. According to the author, "
+        f"{unsupported_quote} Never skip verification."
+    )
+
+    neutralized = _neutralize_unsupported_grounding_markers(
+        markdown,
+        source_context="Publisher metadata with no direct quotations.",
+    )
+
+    assert neutralized is None
+    assert markdown.startswith("1. Keep this safety instruction.")
+    assert markdown.endswith("Never skip verification.")
+
+
+def test_grounding_neutralization_preserves_markdown_prefix_for_pure_attribution():
+    unsupported_quote = (
+        '"This unsupported quotation is deliberately long enough for the grounding '
+        'detector to preserve its list structure."'
+    )
+    markdown = f"1. According to the author, {unsupported_quote}"
+
+    neutralized = _neutralize_unsupported_grounding_markers(
+        markdown,
+        source_context="Publisher metadata with no direct quotations.",
+    )
+
+    assert neutralized is not None
+    assert neutralized.startswith("1. For illustration, ")
+    assert "not a sourced quotation" in neutralized
+
+
+def test_grounding_neutralization_preserves_inner_markdown_without_outer_emphasis():
+    unsupported_quote = (
+        '"This unsupported quotation is deliberately long enough and ends with an '
+        'emphasized *warning*"'
+    )
+    markdown = f"The author writes, {unsupported_quote}"
+
+    neutralized = _neutralize_unsupported_grounding_markers(
+        markdown,
+        source_context="Publisher metadata with no direct quotations.",
+    )
+
+    assert neutralized is not None
+    assert neutralized.endswith("emphasized *warning*")
+    assert neutralized.count("*") == 2
+
+
+def test_grounding_neutralization_rejects_ambiguous_curly_single_quote_prose():
+    markdown = (
+        "The author writes, ‘This unsupported quotation has enough words and ends "
+        "with customers’ says the editor, who calls it ‘wrong’."
+    )
+
+    assert (
+        _neutralize_unsupported_grounding_markers(
+            markdown,
+            source_context="Publisher metadata with no direct quotations.",
+        )
+        is None
+    )
+    assert "says the editor" in markdown
+    assert "calls it ‘wrong’" in markdown
+
+
+def test_grounding_markers_use_exact_known_book_title_credit():
+    unsupported_quote = (
+        '"This unsupported title-attributed quotation is deliberately long enough for '
+        'the grounding detector to require source support."'
+    )
+    markdown = f"Good to Great: {unsupported_quote}"
+
+    markers = _unsupported_grounding_markers(
+        markdown,
+        "Publisher metadata with no direct quotations.",
+        ("Good to Great", "Jim Collins"),
+    )
+
+    assert markers == {unsupported_quote}
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "**Important Safety Rule:** According to the author, {quote}",
+        "CRM Checklist: According to the author, {quote}",
+        "Never Skip Verification: According to the author, {quote}",
+        "Practice Note: According to the author, {quote}",
+        "Never Skip Verification: {quote}",
+        "CRM Checklist: {quote}",
+        "- [ ] According to the author, {quote}",
+        "| According to the author, {quote} |",
+        "## According to the author, {quote}",
+        "> - According to the author, {quote}",
+    ],
+)
+def test_grounding_neutralization_rejects_structured_or_titled_attribution(template):
+    unsupported_quote = (
+        '"This unsupported quotation is deliberately long enough for the grounding '
+        'detector to preserve all surrounding structure."'
+    )
+    markdown = template.format(quote=unsupported_quote)
+
+    assert (
+        _neutralize_unsupported_grounding_markers(
+            markdown,
+            source_context="Publisher metadata with no direct quotations.",
+        )
+        is None
+    )
+    assert unsupported_quote in markdown
+
+
+@pytest.mark.parametrize(
+    "markdown",
+    [
+        (
+            "See [the 2024 report](https://example.com/reports/2024/summary) and "
+            "[the 2023 archive](https://example.com/2023/archive)."
+        ),
+        "Compare SKU-2024 with SKU-2023 before changing inventory records.",
+        "Keep `release-2024` distinct from `release-2023` in the command.",
+        "<meta data-start=2024 data-end=2023>",
+        "```text\nrelease 2024 follows release 2023\n```",
+        "[2024]: https://example.com/report\n[2023]: https://example.com/archive",
+        "Compare report.2024.pdf with archive.2023.pdf before publishing.",
+        "Contact 2024@example.com or 2023@example.com for the archives.",
+        "Compare case:2024 with case:2023 before changing identifiers.",
+        "\trelease 2024 follows release 2023",
+        "````text\n```\nrelease 2024 follows release 2023\n````",
+        "The 2024 plan superseded the 2023 plan.",
+        "A 2024 study updated a 2023 report.",
+        "Its 2024 version replaced its 2023 version.",
+    ],
+)
+def test_grounding_neutralization_never_rewrites_link_code_or_identifier_years(
+    markdown,
+):
+    assert (
+        _neutralize_unsupported_grounding_markers(
+            markdown,
+            source_context="Publisher metadata without dates.",
+        )
+        is None
+    )
+    assert "2024" in markdown
+    assert "2023" in markdown
 
 
 @pytest.mark.asyncio
@@ -389,12 +787,13 @@ async def test_generate_book_module_repairs_live_shaped_mixed_defects_without_pr
 
     unsupported_claims = [
         (
-            f'Within framework{index}, the author writes, "Unsupported claim number '
+            f'The author writes, "Unsupported claim number '
             f"{index} contains enough "
             'words to trigger the attributed quotation grounding check."'
         )
         for index in range(1, 9)
     ]
+    unsupported_markers = [claim[claim.index('"') :] for claim in unsupported_claims]
     insertion = "\n\n".join(unsupported_claims) + "\n\n"
     draft["content_markdown"] = draft["content_markdown"].replace(
         "## Framework 1\n\n",
@@ -413,8 +812,8 @@ async def test_generate_book_module_repairs_live_shaped_mixed_defects_without_pr
         for index, idea in enumerate(draft["ideas"], start=1)
     ]
     replacements = [
-        f"Perspective{index} is applied conservatively without relying on that attribution."
-        for index in range(1, 9)
+        f"Illustrative example (not a sourced quotation): {marker[1:-1]}"
+        for marker in unsupported_markers
     ]
     client_options = []
     calls = []
@@ -439,6 +838,10 @@ async def test_generate_book_module_repairs_live_shaped_mixed_defects_without_pr
                     }
                 )
             if output_model is BookModuleGroundingRepairOutput:
+                prompt_payload = json.loads(kwargs["user_prompt"].split("\n\n", 1)[1])
+                assert set(prompt_payload["exact_unsupported_markers"]) == set(
+                    unsupported_markers
+                )
                 return LLMResponse(
                     {
                         "patches": [
@@ -447,7 +850,7 @@ async def test_generate_book_module_repairs_live_shaped_mixed_defects_without_pr
                                 "replacement_text": replacement_text,
                             }
                             for old_text, replacement_text in zip(
-                                unsupported_claims,
+                                unsupported_markers,
                                 replacements,
                                 strict=True,
                             )
@@ -550,7 +953,7 @@ async def test_generate_book_module_uses_bounded_quality_fallback_options(monkey
 
 
 @pytest.mark.asyncio
-async def test_invalid_grounding_patch_falls_back_to_complete_quality_retry(
+async def test_invalid_grounding_patch_uses_exact_deterministic_neutralization(
     monkeypatch,
 ):
     draft = _valid_book_module()
@@ -563,7 +966,6 @@ async def test_invalid_grounding_patch_falls_back_to_complete_quality_retry(
         f"## Framework 1\n\n{unsupported_claim}\n\n",
         1,
     )
-    valid = _valid_book_module()
     calls = []
     book_generation_count = 0
 
@@ -579,6 +981,88 @@ async def test_invalid_grounding_patch_falls_back_to_complete_quality_retry(
                             {
                                 "old_text": "text that is not present",
                                 "replacement_text": "A cautious replacement.",
+                            }
+                        ]
+                    }
+                )
+            assert output_model is BookModuleOutput
+            book_generation_count += 1
+            return LLMResponse(draft)
+
+    async def choose_balanced(**_kwargs):
+        return SimpleNamespace(tier="balanced", reason="test_balanced")
+
+    monkeypatch.setattr(
+        "app.services.llm.client.get_llm_client", lambda **_kwargs: Client()
+    )
+    monkeypatch.setattr(
+        "app.services.llm.routing.choose_llm_tier",
+        choose_balanced,
+    )
+
+    result = await generate_book_module(
+        title="Deep Work",
+        author="Cal Newport",
+        user_goal="focus better",
+        source_context="Publisher metadata with no direct quotations.",
+    )
+
+    assert calls == [
+        BookModuleOutput,
+        BookModuleGroundingRepairOutput,
+    ]
+    assert book_generation_count == 1
+    assert unsupported_claim not in result["content_markdown"]
+    assert (
+        "Illustrative example (not a sourced quotation):" in result["content_markdown"]
+    )
+    assert result["quality_report"]["passed"] is True
+    grounding_call = result["quality_report"]["generation"]["calls"][1]
+    assert grounding_call["result_status"] == "quality_passed"
+    assert grounding_call["repair_mode"] == "deterministic_neutralization"
+
+
+@pytest.mark.asyncio
+async def test_deterministic_neutralization_cannot_bypass_maximum_word_gate(
+    monkeypatch,
+):
+    draft = _valid_book_module()
+    unsupported_claim = (
+        'The author writes, "This unsupported quotation has enough words to trigger '
+        'the attributed quotation grounding check near the maximum length."'
+    )
+    draft["content_markdown"] = draft["content_markdown"].replace(
+        "## Framework 1\n\n",
+        f"## Framework 1\n\n{unsupported_claim}\n\n",
+        1,
+    )
+    filler_count = 4499 - len(draft["content_markdown"].split())
+    assert filler_count > 0
+    draft["content_markdown"] = draft["content_markdown"].replace(
+        "\n\n## Closing Synthesis",
+        "\n\n" + " ".join(["boundaryword"] * filler_count) + "\n\n## Closing Synthesis",
+        1,
+    )
+    assert len(draft["content_markdown"].split()) == 4499
+    valid = _valid_book_module()
+    calls = []
+    book_generation_count = 0
+
+    class Client:
+        async def generate_json(self, **kwargs):
+            nonlocal book_generation_count
+            output_model = kwargs["output_model"]
+            calls.append(output_model)
+            if output_model is BookModuleGroundingRepairOutput:
+                return LLMResponse(
+                    {
+                        "patches": [
+                            {
+                                "old_text": "not an exact marker",
+                                "replacement_text": (
+                                    "Illustrative example (not a sourced quotation): "
+                                    "A cautious interpretation."
+                                ),
                             }
                         ]
                     }
@@ -626,7 +1110,10 @@ async def test_pro_fallback_receives_same_bounded_preservation_repairs(monkeypat
         'The author writes, "This unsupported quotation has enough words to trigger '
         'the attributed quotation grounding check after the Pro rewrite."'
     )
-    replacement = "The framework can be applied without relying on that attribution."
+    unsupported_marker = unsupported_claim[unsupported_claim.index('"') :]
+    replacement = (
+        f"Illustrative example (not a sourced quotation): {unsupported_marker[1:-1]}"
+    )
     pro_draft["content_markdown"] = pro_draft["content_markdown"].replace(
         "## Framework 1\n\n",
         f"## Framework 1\n\n{unsupported_claim}\n\n",
@@ -656,7 +1143,7 @@ async def test_pro_fallback_receives_same_bounded_preservation_repairs(monkeypat
                     {
                         "patches": [
                             {
-                                "old_text": unsupported_claim,
+                                "old_text": unsupported_marker,
                                 "replacement_text": replacement,
                             }
                         ]
@@ -839,7 +1326,12 @@ async def test_get_or_create_book_module_resource_reuses_existing_without_genera
     existing.id = "book-resource-1"
     existing.content_markdown = "word " * 3400
     existing.status = CatalogStatus.PUBLISHED
-    existing.metadata_json = {"quality_report": {"passed": True}}
+    existing.metadata_json = {
+        "quality_report": {
+            "passed": True,
+            "gate_version": BOOK_MODULE_QUALITY_GATE_VERSION,
+        }
+    }
     db = AsyncMock()
     db.execute.return_value = ScalarResult(existing)
 
@@ -857,6 +1349,119 @@ async def test_get_or_create_book_module_resource_reuses_existing_without_genera
     assert result is existing
     db.add.assert_not_called()
     db.flush.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("old_passed", [False, True])
+async def test_get_or_create_book_module_resource_revalidates_sound_flagged_cache(
+    old_passed,
+):
+    module = _valid_book_module("The Mom Test", "Rob Fitzpatrick")
+    existing = MagicMock()
+    existing.id = "book-resource-1"
+    existing.title = "The Mom Test"
+    existing.author_or_creator = "Rob Fitzpatrick"
+    existing.content_markdown = module["content_markdown"]
+    existing.summary_json = {
+        "sections": module["sections"],
+        "ideas": module["ideas"],
+    }
+    existing.metadata_json = {
+        "quality_report": {
+            "passed": old_passed,
+            "generation": {"call_count": 3},
+        }
+    }
+    existing.status = CatalogStatus.FLAGGED
+    db = AsyncMock()
+    db.execute.return_value = ScalarResult(existing)
+
+    async def source_lookup(**_kwargs):
+        return {
+            "title": "The Mom Test",
+            "author_or_creator": "Rob Fitzpatrick",
+            "source_context": "Verified catalog metadata without direct quotations.",
+            "metadata_json": {"provider": "catalog"},
+        }
+
+    async def factory(**_kwargs):
+        raise AssertionError("a sound cached module should not be regenerated")
+
+    result = await get_or_create_book_module_resource(
+        db,
+        title="The Mom Test",
+        author="Rob Fitzpatrick",
+        user_goal="ask better customer questions",
+        source_lookup=source_lookup,
+        module_factory=factory,
+    )
+
+    assert result is existing
+    assert existing.status == CatalogStatus.PUBLISHED
+    assert existing.metadata_json["quality_report"]["passed"] is True
+    assert existing.metadata_json["quality_report"]["score"] == 1.0
+    assert existing.metadata_json["quality_report"]["generation"] == {"call_count": 3}
+    assert existing.metadata_json["quality_revalidated"] is True
+    db.flush.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_book_module_resource_revalidates_stale_published_cache():
+    stale = _valid_book_module("The Mom Test", "Rob Fitzpatrick")
+    unsupported_claim = (
+        'The author writes, "This stale unsupported quotation contains enough words '
+        'for the current grounding gate to reject it safely."'
+    )
+    stale["content_markdown"] = stale["content_markdown"].replace(
+        "## Framework 1\n\n",
+        f"## Framework 1\n\n{unsupported_claim}\n\n",
+        1,
+    )
+    replacement = _valid_book_module("The Mom Test", "Rob Fitzpatrick")
+    existing = MagicMock()
+    existing.id = "book-resource-1"
+    existing.title = stale["title"]
+    existing.author_or_creator = stale["author_or_creator"]
+    existing.content_markdown = stale["content_markdown"]
+    existing.summary_json = {
+        "sections": stale["sections"],
+        "ideas": stale["ideas"],
+    }
+    existing.metadata_json = {"quality_report": {"passed": True}}
+    existing.status = CatalogStatus.PUBLISHED
+    db = AsyncMock()
+    db.execute.return_value = ScalarResult(existing)
+    factory_calls = []
+
+    async def source_lookup(**_kwargs):
+        return {
+            "title": "The Mom Test",
+            "author_or_creator": "Rob Fitzpatrick",
+            "source_context": "Verified catalog metadata without direct quotations.",
+            "metadata_json": {"provider": "catalog"},
+        }
+
+    async def factory(**kwargs):
+        factory_calls.append(kwargs)
+        return replacement
+
+    result = await get_or_create_book_module_resource(
+        db,
+        title="The Mom Test",
+        author="Rob Fitzpatrick",
+        user_goal="ask better customer questions",
+        source_lookup=source_lookup,
+        module_factory=factory,
+    )
+
+    assert result is existing
+    assert len(factory_calls) == 1
+    assert unsupported_claim not in existing.content_markdown
+    assert existing.status == CatalogStatus.PUBLISHED
+    assert (
+        existing.metadata_json["quality_report"]["gate_version"]
+        == BOOK_MODULE_QUALITY_GATE_VERSION
+    )
 
 
 @pytest.mark.asyncio
@@ -898,6 +1503,82 @@ async def test_get_or_create_book_module_resource_generates_and_saves_once_when_
     assert result.summary_json["ideas"][0]["title"] == "Idea 1"
     db.add.assert_called_once_with(result)
     db.flush.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_caller_plan_prose_cannot_serve_as_book_grounding_evidence():
+    db = AsyncMock()
+    db.add = MagicMock()
+    db.execute.return_value = ScalarResult(None)
+    quotation = "A fabricated quotation copied from recommendation prose"
+    module = _valid_book_module("Deep Work", "Cal Newport")
+    module["content_markdown"] = module["content_markdown"].replace(
+        "## Framework 1\n\n",
+        f'## Framework 1\n\nThe author writes, "{quotation}."\n\n',
+        1,
+    )
+
+    async def no_source(**_kwargs):
+        return None
+
+    async def factory(**kwargs):
+        assert quotation in kwargs["source_context"]
+        return module
+
+    resource = await get_or_create_book_module_resource(
+        db,
+        title="Deep Work",
+        author="Cal Newport",
+        user_goal="focus better",
+        source_context=f'Recommendation reason: "{quotation}."',
+        source_lookup=no_source,
+        module_factory=factory,
+    )
+
+    quality = resource.metadata_json["quality_report"]
+    assert resource.status == CatalogStatus.FLAGGED
+    assert quality["passed"] is False
+    assert quality["metrics"]["unmatched_attributed_quote_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_long_source_text_still_requires_a_quality_checked_book_module():
+    db = AsyncMock()
+    db.add = MagicMock()
+    db.execute.return_value = ScalarResult(None)
+    factory_calls = []
+
+    async def source_lookup(**_kwargs):
+        return {
+            "title": "Meditations",
+            "author_or_creator": "Marcus Aurelius",
+            "source_url": "https://www.gutenberg.org/ebooks/2680",
+            "license_status": "public_domain",
+            "content_markdown": "raw source word " * 1200,
+            "metadata_json": {"provider": "gutenberg"},
+        }
+
+    async def factory(**kwargs):
+        factory_calls.append(kwargs)
+        return _valid_book_module("Meditations", "Marcus Aurelius")
+
+    resource = await get_or_create_book_module_resource(
+        db,
+        title="Meditations",
+        author="Marcus Aurelius",
+        user_goal="practice resilience",
+        source_lookup=source_lookup,
+        module_factory=factory,
+    )
+
+    assert len(factory_calls) == 1
+    assert resource.content_markdown.startswith("# Meditations")
+    assert resource.content_markdown != "raw source word " * 1200
+    assert resource.metadata_json["quality_report"]["passed"] is True
+    assert (
+        resource.metadata_json["quality_report"]["gate_version"]
+        == BOOK_MODULE_QUALITY_GATE_VERSION
+    )
 
 
 @pytest.mark.asyncio
@@ -991,7 +1672,7 @@ async def test_attach_content_resources_generates_missing_book_module():
         [
             {
                 "title": "Atomic Habits",
-                "type": "book",
+                "kind": "book",
                 "author_or_creator": "James Clear",
                 "search_query": "Atomic Habits James Clear",
             }
@@ -1213,7 +1894,7 @@ async def test_attach_content_resources_defers_uncached_book_generation(monkeypa
             "title": "Atomic Habits",
             "author": "James Clear",
             "user_goal": "build better routines",
-            "source_context": "Habit design.",
+            "source_context": None,
         }
     ]
     db.add.assert_not_called()
@@ -1241,6 +1922,13 @@ async def test_attach_content_resources_attaches_cached_book_without_enqueue(
         "sections": [],
     }
     cached.status = CatalogStatus.PUBLISHED
+    cached.kind = ContentResourceKind.LLM_BOOK_SUMMARY
+    cached.metadata_json = {
+        "quality_report": {
+            "passed": True,
+            "gate_version": BOOK_MODULE_QUALITY_GATE_VERSION,
+        }
+    }
 
     db = AsyncMock()
     db.add = MagicMock()
@@ -1269,7 +1957,56 @@ async def test_attach_content_resources_attaches_cached_book_without_enqueue(
     assert materials[0]["canonical_key"] == "book:james_clear:atomic_habits"
     assert materials[0]["content_markdown"].startswith("# Atomic Habits")
     assert materials[0]["license_status"] == "llm_summary"
+    assert materials[0]["book_quality_gate_version"] == BOOK_MODULE_QUALITY_GATE_VERSION
     db.add.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_inline_long_book_payload_cannot_reuse_stale_generic_cache(monkeypatch):
+    from app.services import content_resources as svc
+
+    stale = MagicMock()
+    stale.id = "stale-inline"
+    stale.canonical_key = "book:james_clear:atomic_habits"
+    stale.kind = ContentResourceKind.LLM_BOOK_SUMMARY
+    stale.status = CatalogStatus.PUBLISHED
+    stale.license_status = LicenseStatus.LLM_SUMMARY
+    stale.content_markdown = _valid_book_module("Atomic Habits", "James Clear")[
+        "content_markdown"
+    ]
+    stale.metadata_json = {"quality_report": {"passed": True}}
+    db = AsyncMock()
+    db.execute.return_value = ScalarResult([stale])
+    enqueued = []
+    monkeypatch.setattr(
+        svc,
+        "enqueue_book_module_generation",
+        lambda **kwargs: enqueued.append(kwargs),
+    )
+
+    inline = _valid_book_module("Atomic Habits", "James Clear")
+    materials = await svc.attach_content_resources_to_materials(
+        db,
+        [
+            {
+                "title": "Atomic Habits",
+                "kind": "book",
+                "author_or_creator": "James Clear",
+                "content_markdown": inline["content_markdown"],
+                "sections": inline["sections"],
+                "ideas": inline["ideas"],
+            }
+        ],
+        defer_book_generation=True,
+    )
+
+    assert "content_resource_id" not in materials[0]
+    assert materials[0]["canonical_key"] == stale.canonical_key
+    assert "content_markdown" not in materials[0]
+    assert "ideas" not in materials[0]
+    assert "sections" not in materials[0]
+    assert len(enqueued) == 1
+    assert enqueued[0]["source_context"] is None
 
 
 @pytest.mark.asyncio

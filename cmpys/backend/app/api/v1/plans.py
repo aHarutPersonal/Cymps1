@@ -38,7 +38,11 @@ from app.models.plan import (
 from app.models.plan_job import PlanGenerationJob
 from app.models.user import User
 from app.models.user_achievement import UserAchievement
-from app.services.content_quality import MIN_PLAN_DETAIL_LESSON_WORDS
+from app.services.content_quality import (
+    BOOK_MODULE_QUALITY_GATE_VERSION,
+    MIN_PLAN_DETAIL_LESSON_WORDS,
+)
+from app.services.content_resources import normalized_material_type
 from app.services.interview_inputs import (
     INTERVIEW_ANSWER_KEYS,
     build_interview_plan_inputs,
@@ -386,8 +390,7 @@ async def generate_plan_endpoint(
         uses_semantic_intake = any(
             message.role == MessageRole.ASSISTANT
             and isinstance(message.response_ui_json, dict)
-            and message.response_ui_json.get("answer_key")
-            in INTERVIEW_ANSWER_KEYS
+            and message.response_ui_json.get("answer_key") in INTERVIEW_ANSWER_KEYS
             for message in messages
         )
         if uses_semantic_intake:
@@ -471,10 +474,7 @@ async def generate_plan_endpoint(
                 status=existing.status,
             )
         if existing and existing.status in {"pending", "running"}:
-            if (
-                existing.status == "pending"
-                and existing.step == "waiting_for_strategy"
-            ):
+            if existing.status == "pending" and existing.step == "waiting_for_strategy":
                 # generate-results stages this row before writing strategy. If
                 # its terminal dispatch was lost, publish the same durable job
                 # now that both required artifacts are confirmed above.
@@ -880,6 +880,64 @@ async def _compute_item_progress(
     return progress, is_completed
 
 
+def _parse_material_detail(material: dict) -> MaterialDetail:
+    raw_type = normalized_material_type(material)
+    content_resource_id = material.get("content_resource_id") or material.get(
+        "contentResourceId"
+    )
+    gate_version = material.get("book_quality_gate_version") or material.get(
+        "bookQualityGateVersion"
+    )
+    validated_book_body = bool(
+        raw_type == "book"
+        and content_resource_id
+        and gate_version == BOOK_MODULE_QUALITY_GATE_VERSION
+    )
+    body_is_safe = raw_type != "book" or validated_book_body
+    ideas = material.get("ideas") if body_is_safe else None
+    return MaterialDetail(
+        title=material.get("title", ""),
+        url=(
+            material.get("url") if is_direct_resource_url(material.get("url")) else None
+        ),
+        type=raw_type or None,
+        content_resource_id=content_resource_id,
+        canonical_key=material.get("canonical_key") or material.get("canonicalKey"),
+        author_or_creator=material.get("author_or_creator")
+        or material.get("authorOrCreator"),
+        thumbnail_url=material.get("thumbnail_url") or material.get("thumbnailUrl"),
+        license_status=material.get("license_status") or material.get("licenseStatus"),
+        search_query=material.get("search_query") or material.get("searchQuery"),
+        url_resolution_status=(
+            material.get("url_resolution_status")
+            or material.get("urlResolutionStatus")
+            or (
+                "resolved"
+                if is_direct_resource_url(material.get("url"))
+                else "unresolved"
+                if material.get("url")
+                else None
+            )
+        ),
+        url_provider=material.get("url_provider") or material.get("urlProvider"),
+        content_markdown=(material.get("content_markdown") if body_is_safe else None),
+        duration_minutes=(material.get("duration_minutes") if body_is_safe else None),
+        reason=material.get("reason"),
+        ideas=(
+            [
+                BookIdeaDetail(
+                    title=idea.get("title", ""),
+                    content=idea.get("content", ""),
+                    category=idea.get("category", "Mindset"),
+                )
+                for idea in ideas
+            ]
+            if ideas
+            else None
+        ),
+    )
+
+
 def _parse_item_details(details_json: dict | None) -> ItemDetails | None:
     """Parse details_json into ItemDetails schema."""
     if not details_json:
@@ -903,44 +961,8 @@ def _parse_item_details(details_json: dict | None) -> ItemDetails | None:
     ]
 
     materials = [
-        MaterialDetail(
-            title=m.get("title", ""),
-            url=(m.get("url") if is_direct_resource_url(m.get("url")) else None),
-            type=m.get("type"),
-            content_resource_id=m.get("content_resource_id")
-            or m.get("contentResourceId"),
-            canonical_key=m.get("canonical_key") or m.get("canonicalKey"),
-            author_or_creator=m.get("author_or_creator") or m.get("authorOrCreator"),
-            thumbnail_url=m.get("thumbnail_url") or m.get("thumbnailUrl"),
-            license_status=m.get("license_status") or m.get("licenseStatus"),
-            search_query=m.get("search_query") or m.get("searchQuery"),
-            url_resolution_status=(
-                m.get("url_resolution_status")
-                or m.get("urlResolutionStatus")
-                or (
-                    "resolved"
-                    if is_direct_resource_url(m.get("url"))
-                    else "unresolved"
-                    if m.get("url")
-                    else None
-                )
-            ),
-            url_provider=m.get("url_provider") or m.get("urlProvider"),
-            content_markdown=m.get("content_markdown"),
-            duration_minutes=m.get("duration_minutes"),
-            reason=m.get("reason"),
-            ideas=[
-                BookIdeaDetail(
-                    title=idea.get("title", ""),
-                    content=idea.get("content", ""),
-                    category=idea.get("category", "Mindset"),
-                )
-                for idea in m.get("ideas", [])
-            ]
-            if m.get("ideas")
-            else None,
-        )
-        for m in details_json.get("materials", [])
+        _parse_material_detail(material)
+        for material in details_json.get("materials", [])
     ]
 
     return ItemDetails(

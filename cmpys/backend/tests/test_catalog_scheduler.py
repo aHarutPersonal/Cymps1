@@ -1,14 +1,18 @@
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
 
 from app.core.celery import celery_app
+from app.models.content_resource import ContentResourceKind, LicenseStatus
 from app.models.idol import CatalogStatus
 from app.tasks import catalog
 from app.tasks.catalog import catalog_retry_delay_seconds, retry_delay_seconds
 from app.tasks.ingestion import _idol_catalog_quality
 from app.models.ingest_job import IngestKind, IngestState
+from app.services.content_quality import BOOK_MODULE_QUALITY_GATE_VERSION
+from app.services.content_resources import MIN_BOOK_MODULE_WORDS
 
 
 def test_catalog_retry_backoff_is_bounded():
@@ -129,6 +133,169 @@ def test_catalog_task_entrypoints_reuse_the_worker_event_loop(monkeypatch):
         "_catalog_discovery_tick_async",
         "_process_catalog_job_async",
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("job_state", [IngestState.DONE, IngestState.FLAGGED])
+async def test_user_enqueue_reactivates_obsolete_book_job_even_when_exhausted(
+    monkeypatch,
+    job_state,
+):
+    resource = SimpleNamespace(
+        id="resource-1",
+        canonical_key="book:author:title",
+        title="Title",
+        author_or_creator="Author",
+        kind=ContentResourceKind.LLM_BOOK_SUMMARY,
+        license_status=LicenseStatus.LLM_SUMMARY,
+        status=CatalogStatus.PUBLISHED,
+        content_markdown="word " * MIN_BOOK_MODULE_WORDS,
+        metadata_json={
+            "quality_report": {
+                "passed": True,
+                "gate_version": BOOK_MODULE_QUALITY_GATE_VERSION - 1,
+            }
+        },
+    )
+    job = SimpleNamespace(
+        id="job-1",
+        state=job_state,
+        attempts=3,
+        next_attempt_at=None,
+        completed_at=object(),
+        locked_at=object(),
+        last_error="old failure",
+        priority=50,
+        payload_json={
+            "origin": "plan_material",
+            "source_context": 'Recommendation reason: "fabricated evidence"',
+        },
+    )
+
+    class Result:
+        def __init__(self, value):
+            self.value = value
+
+        def scalar_one_or_none(self):
+            return self.value
+
+    class Database:
+        def __init__(self):
+            self.results = iter([resource, job])
+            self.committed = False
+
+        async def execute(self, _statement):
+            return Result(next(self.results))
+
+        async def commit(self):
+            self.committed = True
+
+    database = Database()
+
+    @asynccontextmanager
+    async def session_maker():
+        yield database
+
+    async def conflict(*_args, **_kwargs):
+        return None
+
+    scheduled = {}
+    monkeypatch.setattr(catalog, "async_session_maker", session_maker)
+    monkeypatch.setattr(catalog, "_insert_job", conflict)
+    monkeypatch.setattr(
+        catalog.catalog_tick,
+        "apply_async",
+        lambda **kwargs: scheduled.update(kwargs),
+    )
+    monkeypatch.setattr(catalog.settings, "catalog_max_attempts", 3)
+
+    result = await catalog._enqueue_catalog_book_async(
+        title="Title",
+        author="Author",
+        user_goal="Learn it",
+        source_context='Recommendation reason: "fabricated evidence"',
+        priority=80,
+    )
+
+    assert result["queued"] is True
+    assert result["reactivated"] is True
+    assert job.state == IngestState.QUEUED
+    assert job.attempts == 0
+    assert job.payload_json["source_context"] is None
+    assert resource.status == CatalogStatus.FLAGGED
+    assert database.committed is True
+    assert scheduled == {"queue": "catalog_control"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "resource_status",
+    [CatalogStatus.PENDING, CatalogStatus.PUBLISHED],
+)
+async def test_catalog_sweep_recovers_obsolete_done_book_job(
+    monkeypatch,
+    resource_status,
+):
+    resource = SimpleNamespace(
+        id="resource-1",
+        canonical_key="book:author:title",
+        title="Title",
+        author_or_creator="Author",
+        status=resource_status,
+    )
+    job = SimpleNamespace(
+        state=IngestState.DONE,
+        attempts=3,
+        next_attempt_at=None,
+        completed_at=object(),
+        locked_at=object(),
+        last_error=None,
+        priority=50,
+        payload_json={
+            "origin": "plan_material",
+            "source_context": 'Recommendation reason: "fabricated evidence"',
+        },
+    )
+
+    class Result:
+        def __init__(self, value):
+            self.value = value
+
+        def scalars(self):
+            return self
+
+        def all(self):
+            return self.value if isinstance(self.value, list) else [self.value]
+
+        def scalar_one_or_none(self):
+            return self.value
+
+    class Database:
+        def __init__(self):
+            self.results = iter([[resource], job])
+
+        async def execute(self, _statement):
+            return Result(next(self.results))
+
+    async def conflict(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(catalog, "_insert_job", conflict)
+    now = datetime.now(timezone.utc)
+
+    recovered = await catalog._recover_obsolete_book_quality_jobs(
+        Database(),
+        now=now,
+        limit=3,
+    )
+
+    assert recovered == 1
+    assert resource.status == CatalogStatus.FLAGGED
+    assert job.state == IngestState.QUEUED
+    assert job.attempts == 0
+    assert job.next_attempt_at == now
+    assert job.payload_json["source_context"] is None
+    assert job.payload_json["origin"] == "quality_gate_upgrade"
 
 
 @pytest.mark.asyncio
