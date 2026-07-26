@@ -97,6 +97,12 @@ wait_for_celery_worker() {
 aws ecr get-login-password --region "$AWS_REGION" | \
   docker login --username AWS --password-stdin "$ECR_URL"
 
+# Release images are large enough that accumulated, unused revisions can fill
+# the small production root volume before the next image finishes extracting.
+# Prune only images that are not referenced by a container. The currently
+# running release (and therefore the rollback target) remains protected.
+docker image prune -a -f
+
 # Pull the new image
 docker pull "$ECR_URL:$IMAGE_TAG"
 
