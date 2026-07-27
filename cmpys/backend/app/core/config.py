@@ -29,7 +29,7 @@ class Settings(BaseSettings):
 
     # Extraction
     extractor_mode: str = "deterministic"  # "deterministic" or "llm"
-    
+
     # LLM Configuration
     llm_provider: str = "dummy"  # "dummy", "openai", "gemini", or "yunwu"
     openai_api_key: str | None = None
@@ -37,16 +37,26 @@ class Settings(BaseSettings):
     openai_fast_model: str = "gpt-4o-mini"  # Lightweight model for thinking/discovery
     openai_quality_model: str = "gpt-4.1"  # Selective fallback for failed quality gates
 
-    # Expressive in-reader narration. Speech is generated once per unique
-    # sentence/style and cached in ``media``; Whisper word timing keeps the
-    # visual reader synchronized with the recording. The dated speech model is
-    # pinned so narration does not change character unexpectedly between app
-    # releases.
+    # Expressive in-reader narration. MiniMax returns audio and its own timed
+    # source ranges in one synthesis operation, avoiding a lossy ASR pass. The
+    # client groups complete sentences into larger playback chunks, while the
+    # backend content-addresses and persists each generated recording.
     book_narration_enabled: bool = True
-    book_narration_tts_model: str = "gpt-4o-mini-tts-2025-12-15"
-    book_narration_alignment_model: str = "whisper-1"
+    book_narration_provider: str = "yunwu"
+    book_narration_api_base_url: str = "https://api.yunwu.ai/minimax/v1"
+    book_narration_tts_model: str = "speech-2.8-hd"
+    book_narration_voice_id: str = "English_expressive_narrator"
+    book_narration_mentor_voice_id: str = "English_Steadymentor"
     book_narration_media_dir: str = "media"
     book_narration_timeout_seconds: float = 60.0
+    book_narration_subtitle_timeout_seconds: float = 10.0
+    book_narration_max_audio_bytes: int = 20_000_000
+    book_narration_max_subtitle_bytes: int = 1_000_000
+    # Exact hostname observed from the provider's signed subtitle URLs. Keep
+    # this an exact allowlist rather than trusting arbitrary upstream URLs.
+    book_narration_subtitle_allowed_hosts: str = (
+        "minimax-algeng-chat-tts.oss-cn-wulanchabu.aliyuncs.com"
+    )
 
     # Yunwu's OpenAI-compatible gateway routes the current Gemini family.
     # Flash-Lite handles bounded work, Flash handles visible generation, and
@@ -62,25 +72,27 @@ class Settings(BaseSettings):
     yunwu_group_ratio: float = 6.0
     yunwu_quota_price_cny: float = 0.5
     yunwu_usd_exchange_rate: float = 7.3
-    
+
     # Tavily (real-time web search for material URL resolution)
     tavily_api_key: str | None = None
-    
+
     # Google Gemini (search grounding + LearnLM tutoring + structured extraction)
     gemini_api_key: str | None = None
     # Current GA models. Flash handles user-visible planning/writing while
     # Flash-Lite handles bounded extraction, routing, and metadata work.
     gemini_model: str = "gemini-3.6-flash"
     gemini_fast_model: str = "gemini-3.5-flash-lite"
-    gemini_quality_model: str = "gemini-3.1-pro-preview"  # Selective quality fallback, never the default
-    
+    gemini_quality_model: str = (
+        "gemini-3.1-pro-preview"  # Selective quality fallback, never the default
+    )
+
     # Plan generation
     plan_generator_mode: str = "deterministic"  # "deterministic" or "llm"
 
     # Local LLM (Spec 2 — inert until then)
-    local_llm_base_url: str | None = None   # e.g. http://gpu-box:8000/v1 (Spec 2)
-    local_llm_model: str | None = None       # e.g. qwen2.5-32b-instruct (Spec 2)
-    embedding_model: str = "bge-m3"           # used by Spec 2 ingestion
+    local_llm_base_url: str | None = None  # e.g. http://gpu-box:8000/v1 (Spec 2)
+    local_llm_model: str | None = None  # e.g. qwen2.5-32b-instruct (Spec 2)
+    embedding_model: str = "bge-m3"  # used by Spec 2 ingestion
 
     # 24/7 catalog scheduler. Conservative defaults keep a small deployment
     # within a predictable LLM budget while still draining demand continuously.
@@ -135,7 +147,7 @@ class Settings(BaseSettings):
     adaptive_routing_canary_percent: int = 10
     adaptive_routing_min_success_rate: float = 0.90
     adaptive_routing_min_quality_score: float = 0.90
-    
+
     @property
     def llm_configured(self) -> bool:
         """Check if LLM is properly configured."""

@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/design_tokens.dart';
 import '../../../core/ui/cmpys/cmpys_markdown.dart';
 import '../../../core/ui/cmpys/cmpys_primitives.dart';
+import '../../cmpys/state/cmpys_store.dart';
 import '../../session/data/content_resources_repository.dart';
 import '../../session/models/content_resource.dart';
 import '../models/plan_models.dart';
@@ -53,9 +54,11 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
   bool _narrationPreparing = false;
   bool _narrationFinished = false;
   bool _narratorReady = false;
+  bool _narrationTrackReady = false;
   bool _narrationChangingChapter = false;
   bool _deviceFallbackAnnounced = false;
   int _narrationRun = 0;
+  int? _narrationTrackSessionId;
   int? _narrationSegmentIndex;
   int _narrationWordStart = 0;
   int _narrationWordEnd = 0;
@@ -64,6 +67,13 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
   double _narrationSpeed = 1;
   BookNarrationStyle _narrationStyle = BookNarrationStyle.expressive;
   BookNarrationVoiceKind _narrationVoice = BookNarrationVoiceKind.expressiveAi;
+  BookNarrationAlignmentGranularity _narrationAlignmentGranularity =
+      BookNarrationAlignmentGranularity.none;
+  String _narrationProvider = '';
+  String _narrationModel = '';
+  String _narrationVoiceLabel = 'Expressive narrator';
+  String _narrationDisclosure = 'AI-generated voice · not the real person';
+  String _activeIdolName = '';
   final Map<String, GlobalKey> _narrationBlockKeys = {};
 
   ContentResourcesRepository get _repository =>
@@ -87,17 +97,34 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
   @override
   void initState() {
     super.initState();
+    final idol = ref.read(cmpysStoreProvider).idol;
+    _activeIdolName = idol.id == 'mentor-placeholder' ? '' : idol.name.trim();
+    final narratorProfile =
+        idol.id == 'buffett' ||
+            idol.name.trim().toLowerCase() == 'warren buffett'
+        ? 'seasoned_mentor'
+        : 'expressive_narrator';
+    if (narratorProfile == 'seasoned_mentor') {
+      _narrationVoiceLabel = 'Seasoned mentor';
+    }
+    _narrationDisclosure = _activeIdolName.isEmpty
+        ? 'AI-generated voice · not the real person'
+        : 'AI voice · not $_activeIdolName';
     _narrator =
         widget.narrator ??
         AdaptiveBookNarrator(
           expressive: ExpressiveBookNarrator(
             repository: _repository,
             resourceId: widget.resourceId,
+            narratorProfile: narratorProfile,
           ),
           device: SystemBookNarrator(),
         );
     _narrator.setProgressHandler(_onNarrationProgress);
     _narrator.setErrorHandler(_onNarrationError);
+    if (_narrator case final BookNarrationTrackController controller) {
+      controller.setTrackHandler(_onNarrationTrackEvent);
+    }
     if (_narrator case final BookNarrationStyleController controller) {
       _narrationStyle = controller.style;
       _narrationVoice = controller.voiceKind;
@@ -111,6 +138,9 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
     _narrationRun++;
     _narrator.setProgressHandler(null);
     _narrator.setErrorHandler(null);
+    if (_narrator case final BookNarrationTrackController controller) {
+      controller.setTrackHandler(null);
+    }
     if (_narrator case final BookNarrationStyleController controller) {
       controller.setVoiceHandler(null);
     }
@@ -253,13 +283,112 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
     });
   }
 
+  void _onNarrationTrackEvent(BookNarrationTrackEvent event) {
+    if (!mounted || event.sessionId != _narrationTrackSessionId) return;
+    if (event.chapterIndex < 0 ||
+        event.chapterIndex >= _narrationDocuments.length) {
+      return;
+    }
+    final document = _narrationDocuments[event.chapterIndex];
+    if (event.segmentIndex < 0 ||
+        event.segmentIndex >= document.segments.length) {
+      return;
+    }
+
+    final chapterChanged = event.chapterIndex != _chapterIndex;
+    final segmentChanged =
+        chapterChanged || event.segmentIndex != _narrationSegmentIndex;
+    final audio = event.audio;
+    setState(() {
+      _chapterIndex = event.chapterIndex;
+      _narrationSegmentIndex = event.segmentIndex;
+      if (event.alignmentGranularity !=
+          BookNarrationAlignmentGranularity.none) {
+        _narrationAlignmentGranularity = event.alignmentGranularity;
+      }
+      if (audio != null) {
+        if (audio.alignmentGranularity !=
+            BookNarrationAlignmentGranularity.none) {
+          _narrationAlignmentGranularity = audio.alignmentGranularity;
+        }
+        _narrationProvider = audio.provider;
+        _narrationModel = audio.model;
+        final profileLabel = audio.narratorProfileLabel.trim();
+        final voiceLabel = audio.voiceDisplayName.trim();
+        if (profileLabel.isNotEmpty) {
+          _narrationVoiceLabel = profileLabel;
+        } else if (audio.narratorProfile == 'seasoned_mentor') {
+          _narrationVoiceLabel = 'Seasoned mentor';
+        } else if (voiceLabel.isNotEmpty) {
+          _narrationVoiceLabel = voiceLabel;
+        }
+        if (_activeIdolName.isEmpty && audio.disclosure.trim().isNotEmpty) {
+          _narrationDisclosure = audio.disclosure.trim();
+        }
+      }
+
+      switch (event.phase) {
+        case BookNarrationPlaybackPhase.preparing:
+        case BookNarrationPlaybackPhase.buffering:
+          _narrationPreparing = true;
+          _narrationWordStart = 0;
+          _narrationWordEnd = 0;
+          break;
+        case BookNarrationPlaybackPhase.playing:
+          _narrationPreparing = false;
+          _narrationPlaying = true;
+          _narrationFinished = false;
+          _narrationWordStart = event.highlightStart ?? 0;
+          _narrationWordEnd = event.highlightEnd ?? 0;
+          break;
+        case BookNarrationPlaybackPhase.paused:
+          _narrationPreparing = false;
+          _narrationPlaying = false;
+          _narrationWordStart = 0;
+          _narrationWordEnd = 0;
+          break;
+        case BookNarrationPlaybackPhase.completed:
+          _narrationPreparing = false;
+          _narrationPlaying = false;
+          _narrationFinished = true;
+          _narrationTrackReady = false;
+          _narrationWordStart = 0;
+          _narrationWordEnd = 0;
+          break;
+      }
+    });
+
+    if (chapterChanged) {
+      _narrationChangingChapter = true;
+      unawaited(
+        _pageController
+            .animateToPage(
+              event.chapterIndex,
+              duration: const Duration(milliseconds: 280),
+              curve: Curves.easeOutCubic,
+            )
+            .whenComplete(() => _narrationChangingChapter = false),
+      );
+      unawaited(_persistProgress());
+    }
+    if (segmentChanged) _revealNarrationSegment();
+    if (event.phase == BookNarrationPlaybackPhase.completed) {
+      _toast('You’ve reached the end of the book.');
+    }
+  }
+
   void _onNarrationError(Object _) {
     if (!mounted || (!_narrationPlaying && !_narrationPreparing)) return;
     _narrationRun++;
+    _narrationTrackSessionId = null;
+    _narrationTrackReady = false;
     setState(() {
       _narrationPlaying = false;
       _narrationPreparing = false;
     });
+    if (_narrator case final BookNarrationTrackController controller) {
+      unawaited(controller.pauseTrack().catchError((_) {}));
+    }
     _toast('Narration paused. Try playing it again.');
   }
 
@@ -287,7 +416,18 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
       return;
     }
 
-    final run = ++_narrationRun;
+    final trackController = _narrator is BookNarrationTrackController
+        ? _narrator as BookNarrationTrackController
+        : null;
+    final resumeLoadedTrack =
+        trackController != null &&
+        _narrationTrackReady &&
+        _narrationTrackSessionId != null &&
+        !_narrationFinished;
+    final run = resumeLoadedTrack ? _narrationTrackSessionId! : ++_narrationRun;
+    if (!resumeLoadedTrack && trackController != null) {
+      _narrationTrackSessionId = run;
+    }
     var segmentIndex = _narrationSegmentIndex;
     if (_narrationFinished ||
         segmentIndex == null ||
@@ -317,6 +457,35 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
     }
 
     if (!mounted || run != _narrationRun) return;
+    if (trackController != null) {
+      try {
+        if (!resumeLoadedTrack) {
+          await trackController.loadTrack(
+            sessionId: run,
+            chapters: _narrationDocuments,
+            initialChapterIndex: _chapterIndex,
+            initialSegmentIndex: segmentIndex,
+          );
+          if (!mounted || run != _narrationTrackSessionId) return;
+          _narrationTrackReady = true;
+        }
+        setState(() {
+          _narrationPreparing = false;
+          _narrationPlaying = true;
+          _narrationFinished = false;
+        });
+        await trackController.playTrack();
+      } catch (_) {
+        if (!mounted || run != _narrationTrackSessionId) return;
+        _narrationTrackReady = false;
+        setState(() {
+          _narrationPlaying = false;
+          _narrationPreparing = false;
+        });
+        _toast('Narration paused. Check your connection and try again.');
+      }
+      return;
+    }
     setState(() {
       _narrationPreparing = false;
       _narrationPlaying = true;
@@ -418,6 +587,21 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
   }
 
   Future<void> _pauseNarration() async {
+    if (_narrator case final BookNarrationTrackController controller
+        when _narrationTrackReady) {
+      if (mounted) {
+        setState(() {
+          _narrationPlaying = false;
+          _narrationPreparing = false;
+          _narrationWordStart = 0;
+          _narrationWordEnd = 0;
+        });
+      }
+      try {
+        await controller.pauseTrack();
+      } catch (_) {}
+      return;
+    }
     _narrationRun++;
     if (mounted) {
       setState(() {
@@ -435,6 +619,8 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
 
   Future<void> _closeNarration() async {
     _narrationRun++;
+    _narrationTrackSessionId = null;
+    _narrationTrackReady = false;
     if (mounted) {
       setState(() {
         _narrationVisible = false;
@@ -445,6 +631,7 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
         _narrationResumeOffset = 0;
         _narrationWordStart = 0;
         _narrationWordEnd = 0;
+        _narrationAlignmentGranularity = BookNarrationAlignmentGranularity.none;
       });
     }
     try {
@@ -456,16 +643,6 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
     final currentDocument = _currentNarrationDocument;
     if (currentDocument == null || currentDocument.segments.isEmpty) return;
     final continuePlaying = _narrationPlaying;
-    _narrationRun++;
-    setState(() {
-      _narrationPlaying = false;
-      _narrationPreparing = false;
-      _narrationFinished = false;
-    });
-    try {
-      await _narrator.stop();
-    } catch (_) {}
-
     var chapter = _chapterIndex;
     var segment = (_narrationSegmentIndex ?? 0) + direction;
     if (segment < 0 && chapter > 0) {
@@ -479,6 +656,71 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
     final targetDocument = _narrationDocuments[chapter];
     if (targetDocument.segments.isEmpty) return;
     segment = segment.clamp(0, targetDocument.segments.length - 1).toInt();
+
+    if (_narrator case final BookNarrationTrackController controller
+        when _narrationTrackReady) {
+      if (!mounted) return;
+      setState(() {
+        _narrationVisible = true;
+        _narrationFinished = false;
+        _narrationSegmentIndex = segment;
+        _narrationWordStart = 0;
+        _narrationWordEnd = 0;
+      });
+      try {
+        await controller.seekToSentence(
+          chapterIndex: chapter,
+          segmentIndex: segment,
+        );
+      } on RangeError {
+        final sessionId = ++_narrationRun;
+        _narrationTrackSessionId = sessionId;
+        _narrationTrackReady = false;
+        setState(() => _narrationPreparing = true);
+        await controller.loadTrack(
+          sessionId: sessionId,
+          chapters: _narrationDocuments,
+          initialChapterIndex: chapter,
+          initialSegmentIndex: segment,
+        );
+        if (!mounted || sessionId != _narrationTrackSessionId) return;
+        _narrationTrackReady = true;
+        if (continuePlaying) await controller.playTrack();
+      } catch (_) {
+        if (!mounted) return;
+        setState(() {
+          _narrationPreparing = false;
+          _narrationPlaying = false;
+          _narrationTrackReady = false;
+        });
+        _toast('Couldn’t move the narration. Try again.');
+        return;
+      }
+      if (chapter != _chapterIndex) {
+        _narrationChangingChapter = true;
+        unawaited(
+          _pageController
+              .animateToPage(
+                chapter,
+                duration: const Duration(milliseconds: 280),
+                curve: Curves.easeOutCubic,
+              )
+              .whenComplete(() => _narrationChangingChapter = false),
+        );
+      }
+      _revealNarrationSegment();
+      return;
+    }
+
+    _narrationRun++;
+    setState(() {
+      _narrationPlaying = false;
+      _narrationPreparing = false;
+      _narrationFinished = false;
+    });
+    try {
+      await _narrator.stop();
+    } catch (_) {}
 
     if (chapter != _chapterIndex) {
       _narrationChangingChapter = true;
@@ -506,8 +748,20 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
 
   Future<void> _changeNarrationSpeed(double speed) async {
     if (_narrationSpeed == speed) return;
+    if (_narrator is BookNarrationTrackController) {
+      setState(() => _narrationSpeed = speed);
+      try {
+        await _narrator.setSpeed(speed);
+      } catch (_) {
+        if (mounted) _toast('Couldn’t change the listening speed.');
+      }
+      unawaited(_persistProgress());
+      return;
+    }
     final continuePlaying = _narrationPlaying;
     _narrationRun++;
+    _narrationTrackSessionId = null;
+    _narrationTrackReady = false;
     setState(() {
       _narrationSpeed = speed;
       _narrationPlaying = false;
@@ -529,6 +783,8 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
     final controller = _narrator as BookNarrationStyleController;
     final continuePlaying = _narrationPlaying;
     _narrationRun++;
+    _narrationTrackSessionId = null;
+    _narrationTrackReady = false;
     setState(() {
       _narrationStyle = style;
       _narrationVoice = BookNarrationVoiceKind.expressiveAi;
@@ -608,6 +864,8 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
     });
     if (!narrationControlled && _narrationVisible) {
       _narrationRun++;
+      _narrationTrackSessionId = null;
+      _narrationTrackReady = false;
       unawaited(_restartNarrationAfterChapterChange(continuePlaying));
     }
     unawaited(_persistProgress());
@@ -1343,6 +1601,26 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
     final speedLabel = _narrationSpeed == _narrationSpeed.roundToDouble()
         ? '${_narrationSpeed.toInt()}×'
         : '${_narrationSpeed.toStringAsFixed(2).replaceFirst(RegExp(r'0$'), '')}×';
+    final modelLabel = switch (_narrationModel.toLowerCase()) {
+      'speech-2.8-hd' => 'Speech 2.8 HD',
+      'speech-2.8-turbo' => 'Speech 2.8 Turbo',
+      final value when value.isNotEmpty => value.replaceAll('-', ' '),
+      _ => 'AI narration',
+    };
+    final trackingLabel = switch (_narrationAlignmentGranularity) {
+      BookNarrationAlignmentGranularity.word => 'Word synced',
+      BookNarrationAlignmentGranularity.phrase => 'Phrase synced',
+      BookNarrationAlignmentGranularity.sentence => 'Sentence synced',
+      BookNarrationAlignmentGranularity.none => null,
+    };
+    final narratorMetadata = [
+      _narrationVoiceLabel,
+      modelLabel,
+      if (trackingLabel != null) trackingLabel,
+    ].join(' · ');
+    final providerSemantics = _narrationProvider.trim().isEmpty
+        ? ''
+        : ' Provider ${_narrationProvider.trim()}.';
 
     return Container(
       key: const Key('book-narration-player'),
@@ -1403,6 +1681,41 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
                             fontSize: 12.5,
                             height: 1.3,
                           ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Semantics(
+                      label:
+                          'AI narrator. $narratorMetadata. '
+                          '$_narrationDisclosure.$providerSemantics',
+                      child: ExcludeSemantics(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              narratorMetadata,
+                              key: const Key('book-narration-metadata'),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppTypography.captionMedium.copyWith(
+                                color: AppColors.green,
+                                fontSize: 10.5,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 1),
+                            Text(
+                              _narrationDisclosure,
+                              key: const Key('book-narration-disclosure'),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppTypography.caption.copyWith(
+                                color: _muted,
+                                fontSize: 10,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ),

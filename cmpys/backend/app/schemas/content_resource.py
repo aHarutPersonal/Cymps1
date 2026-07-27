@@ -92,11 +92,19 @@ class ContentNarrationStyle(str, Enum):
     GROUNDED = "grounded"
 
 
+class ContentNarratorProfile(str, Enum):
+    """Server-approved AI narrators; arbitrary provider voice IDs are forbidden."""
+
+    EXPRESSIVE_NARRATOR = "expressive_narrator"
+    SEASONED_MENTOR = "seasoned_mentor"
+
+
 class ContentNarrationRequest(BaseModel):
     """A short, verified passage to render for synchronized playback."""
 
     text: str = Field(..., min_length=1, max_length=4096)
     style: ContentNarrationStyle = ContentNarrationStyle.EXPRESSIVE
+    narratorProfile: ContentNarratorProfile = ContentNarratorProfile.EXPRESSIVE_NARRATOR
 
 
 class ContentNarrationCue(BaseModel):
@@ -106,6 +114,7 @@ class ContentNarrationCue(BaseModel):
     end: int = Field(..., ge=0)
     startMs: int = Field(..., ge=0)
     endMs: int = Field(..., ge=0)
+    text: str | None = None
 
 
 class ContentNarrationResponse(BaseModel):
@@ -114,10 +123,19 @@ class ContentNarrationResponse(BaseModel):
     audioUrl: str
     style: ContentNarrationStyle
     voice: str
+    voiceDisplayName: str
+    narratorProfile: ContentNarratorProfile
+    narratorProfileLabel: str
     provider: str
+    model: str
     isAiGenerated: bool = True
     durationMs: int | None = Field(default=None, ge=0)
     alignment: list[ContentNarrationCue] = Field(default_factory=list)
+    alignmentSource: str
+    alignmentGranularity: str
+    offsetEncoding: str
+    sourceTextHash: str
+    disclosure: str
     cached: bool = False
 
 

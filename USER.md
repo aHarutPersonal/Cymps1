@@ -22,6 +22,7 @@ _Learn about the person you're helping. Update this as you go._
 - **Notes:** Prefers the LLM to right-size lesson and resource counts within workload guardrails, and wants resources to use exact direct links rather than search-result pages.
 - **Notes:** Wants CMPYS intake to capture exact weekly learning capacity and a thorough, reusable achievement/current-capability baseline before generating a personal plan.
 - **Notes:** Wants comparisons to use like-for-like evidence and show no precise score when evidence is missing or measured on incompatible bases.
+- **Notes:** Prefers pricing comparisons and cost estimates in US dollars.
 
 ## Context
 

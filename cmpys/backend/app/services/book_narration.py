@@ -1,21 +1,25 @@
-"""Expressive, cached audiobook narration with word-level alignment."""
+"""Expressive, cached audiobook narration with provider-native timing."""
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
 import html
+import ipaddress
 import json
 import logging
+import math
 import os
 import re
+import socket
 import unicodedata
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
+from urllib.parse import urlsplit
 from uuid import uuid4
 
-from openai import AsyncOpenAI
+import httpx
 
 from app.core.config import settings
 
@@ -28,10 +32,13 @@ class BookNarrationUnavailableError(RuntimeError):
 
 @dataclass(frozen=True)
 class NarrationCue:
+    """One provider-timed source range using UTF-16 offsets for Flutter."""
+
     start: int
     end: int
     startMs: int
     endMs: int
+    text: str
 
 
 @dataclass(frozen=True)
@@ -39,57 +46,64 @@ class NarrationAsset:
     audio_url: str
     style: str
     voice: str
+    voice_display_name: str
+    narrator_profile: str
+    provider: str
+    model: str
     duration_ms: int | None
     alignment: tuple[NarrationCue, ...]
+    alignment_source: str
+    alignment_granularity: str
+    offset_encoding: str
+    source_text_hash: str
+    disclosure: str
     cached: bool
 
 
 @dataclass(frozen=True)
 class _StylePreset:
-    voice: str
-    instructions: str
+    speed: float
+    pitch: int
+
+
+@dataclass(frozen=True)
+class _NarratorProfile:
+    voice_id: str
+    display_name: str
+
+
+@dataclass(frozen=True)
+class _MiniMaxSynthesis:
+    audio_bytes: bytes
+    duration_ms: int
+    subtitle_url: str
 
 
 _STYLE_PRESETS: dict[str, _StylePreset] = {
-    "expressive": _StylePreset(
-        voice="marin",
-        instructions=(
-            "Read the supplied text exactly as written, without adding, omitting, "
-            "or paraphrasing any words. Perform it like an emotionally intelligent "
-            "human audiobook narrator: use natural rises and falls, meaningful "
-            "emphasis, varied but unhurried pacing, and restrained authentic emotion "
-            "that follows the meaning. Let questions lift naturally and important "
-            "ideas land with warmth. Respect every punctuation pause. Never sound "
-            "theatrical, promotional, or like a voice assistant."
-        ),
-    ),
-    "warm": _StylePreset(
-        voice="marin",
-        instructions=(
-            "Read the supplied text exactly as written, without adding, omitting, "
-            "or paraphrasing any words. Sound like a warm, attentive human reading "
-            "to one person: intimate, encouraging, softly expressive, and naturally "
-            "paced. Use subtle emphasis and comfortable pauses while avoiding a "
-            "sales tone or exaggerated performance."
-        ),
-    ),
-    "grounded": _StylePreset(
-        voice="cedar",
-        instructions=(
-            "Read the supplied text exactly as written, without adding, omitting, "
-            "or paraphrasing any words. Use a grounded, thoughtful audiobook style "
-            "with a calm human presence, clear phrasing, gentle emotional variation, "
-            "and deliberate pauses at punctuation. Keep it natural rather than flat, "
-            "dramatic, or instructional."
-        ),
-    ),
+    # MiniMax Speech 2.8 follows punctuation and meaning without an explicit
+    # emotion. Avoid forcing one emotion across passages with different moods.
+    "expressive": _StylePreset(speed=1.0, pitch=0),
+    "warm": _StylePreset(speed=0.96, pitch=0),
+    "grounded": _StylePreset(speed=0.93, pitch=-1),
 }
 
-_CACHE_VERSION = "expressive-narration-v1"
+_CACHE_VERSION = "minimax-narration-v3"
+_PROVIDER = "yunwu"
+_OFFSET_ENCODING = "utf16"
+_DISCLOSURE = "AI-generated voice; not the real person."
 _locks: dict[str, asyncio.Lock] = {}
 _markdown_image = re.compile(r"!\[([^]]*)\]\([^)]*\)")
 _markdown_link = re.compile(r"\[([^]]+)\]\([^)]*\)")
 _source_word = re.compile(r"\w+(?:[\u2019'\-]\w+)*", re.UNICODE)
+_subtitle_content_types = frozenset(
+    {
+        "application/json",
+        "text/json",
+        "text/plain",
+        "application/octet-stream",
+        "binary/octet-stream",
+    }
+)
 
 
 def narration_text_belongs_to_resource(text: str, markdown: str) -> bool:
@@ -107,118 +121,40 @@ def narration_text_belongs_to_resource(text: str, markdown: str) -> bool:
     return requested in source
 
 
-def align_transcribed_words(
+async def render_book_narration(
     text: str,
-    words: Iterable[Any],
-    duration_seconds: float | None,
-) -> tuple[NarrationCue, ...]:
-    """Map provider word timestamps back to exact source character ranges.
-
-    Whisper can occasionally omit a tiny word or normalize a contraction. Any
-    unmatched source words are interpolated between their timed neighbors so
-    the reader never stops highlighting midway through a sentence.
-    """
-
-    source_tokens = [
-        (match.start(), match.end(), _normalize_word(match.group(0)))
-        for match in _source_word.finditer(text)
-    ]
-    if not source_tokens:
-        return ()
-
-    timed: list[tuple[float, float] | None] = [None] * len(source_tokens)
-    cursor = 0
-    last_end = 0.0
-    for raw_word in words:
-        spoken = _word_field(raw_word, "word", "")
-        normalized = _normalize_word(str(spoken))
-        if not normalized:
-            continue
-        match_index: int | None = None
-        for index in range(cursor, min(cursor + 8, len(source_tokens))):
-            candidate = source_tokens[index][2]
-            if (
-                candidate == normalized
-                or candidate.startswith(normalized)
-                or normalized.startswith(candidate)
-            ):
-                match_index = index
-                break
-        if match_index is None:
-            continue
-        start = max(float(_word_field(raw_word, "start", last_end)), last_end)
-        end = max(float(_word_field(raw_word, "end", start)), start)
-        timed[match_index] = (start, end)
-        cursor = match_index + 1
-        last_end = end
-
-    known_duration = max(
-        float(duration_seconds or 0),
-        max((value[1] for value in timed if value is not None), default=0.0),
-    )
-    if not any(value is not None for value in timed):
-        return ()
-
-    index = 0
-    while index < len(timed):
-        if timed[index] is not None:
-            index += 1
-            continue
-        run_start = index
-        while index < len(timed) and timed[index] is None:
-            index += 1
-        run_end = index
-        left = timed[run_start - 1][1] if run_start > 0 and timed[run_start - 1] else 0.0
-        right = timed[run_end][0] if run_end < len(timed) and timed[run_end] else known_duration
-        right = max(right, left)
-        weights = [
-            max(len(source_tokens[token_index][2]), 1)
-            for token_index in range(run_start, run_end)
-        ]
-        total_weight = max(sum(weights), 1)
-        elapsed = left
-        for token_index, weight in zip(range(run_start, run_end), weights, strict=True):
-            token_end = elapsed + ((right - left) * weight / total_weight)
-            timed[token_index] = (elapsed, token_end)
-            elapsed = token_end
-
-    cues: list[NarrationCue] = []
-    previous_end_ms = 0
-    for (start_char, end_char, _), timing in zip(source_tokens, timed, strict=True):
-        assert timing is not None
-        start_ms = max(round(timing[0] * 1000), previous_end_ms)
-        end_ms = max(round(timing[1] * 1000), start_ms + 1)
-        cues.append(
-            NarrationCue(
-                start=start_char,
-                end=end_char,
-                startMs=start_ms,
-                endMs=end_ms,
-            )
-        )
-        previous_end_ms = end_ms
-    return tuple(cues)
-
-
-async def render_book_narration(text: str, style: str) -> NarrationAsset:
+    style: str,
+    narrator_profile: str = "expressive_narrator",
+) -> NarrationAsset:
     """Render or retrieve one expressive narration passage."""
 
-    if not settings.book_narration_enabled or not settings.openai_api_key:
+    if (
+        not settings.book_narration_enabled
+        or settings.book_narration_provider.casefold() != _PROVIDER
+        or not settings.yunwu_api_key
+    ):
         raise BookNarrationUnavailableError("Expressive narration is not configured")
     preset = _STYLE_PRESETS.get(style)
     if preset is None:
         raise ValueError(f"Unsupported narration style: {style}")
+    profile = _narrator_profile(narrator_profile)
 
     cleaned_text = text.strip()
+    source_text_hash = _source_text_hash(cleaned_text)
     digest = hashlib.sha256(
         "\n".join(
             (
                 _CACHE_VERSION,
+                _PROVIDER,
+                settings.book_narration_api_base_url.rstrip("/"),
                 settings.book_narration_tts_model,
-                settings.book_narration_alignment_model,
+                narrator_profile,
+                profile.voice_id,
                 style,
-                preset.voice,
-                cleaned_text,
+                str(preset.speed),
+                str(preset.pitch),
+                "provider-subtitle-word-request",
+                source_text_hash,
             )
         ).encode("utf-8")
     ).hexdigest()
@@ -228,83 +164,477 @@ async def render_book_narration(text: str, style: str) -> NarrationAsset:
     metadata_path = media_dir / f"book_narration_{digest}.json"
 
     lock = _locks.setdefault(digest, asyncio.Lock())
-    async with lock:
-        cached = await _read_cached_asset(
-            audio_path=audio_path,
-            metadata_path=metadata_path,
-            filename=filename,
-        )
-        if cached is not None:
-            return cached
-
-        await asyncio.to_thread(media_dir.mkdir, parents=True, exist_ok=True)
-        client = AsyncOpenAI(api_key=settings.openai_api_key)
-        try:
-            try:
-                response = await client.audio.speech.create(
-                    model=settings.book_narration_tts_model,
-                    voice=preset.voice,
-                    input=cleaned_text,
-                    instructions=preset.instructions,
-                    response_format="mp3",
-                    timeout=settings.book_narration_timeout_seconds,
+    try:
+        async with lock:
+            cached = await _read_cached_asset(
+                audio_path=audio_path,
+                metadata_path=metadata_path,
+                filename=filename,
+            )
+            if cached is not None:
+                logger.info(
+                    "Book narration cache hit provider=%s model=%s chars=%d",
+                    _PROVIDER,
+                    settings.book_narration_tts_model,
+                    len(cleaned_text),
                 )
-                audio_bytes = await response.aread()
+                return cached
+
+            await asyncio.to_thread(media_dir.mkdir, parents=True, exist_ok=True)
+            started = asyncio.get_running_loop().time()
+            try:
+                synthesis = await _synthesize_with_minimax(
+                    cleaned_text,
+                    preset=preset,
+                    profile=profile,
+                )
+            except BookNarrationUnavailableError:
+                raise
             except Exception as exc:
                 logger.warning(
                     "Expressive book narration generation failed: %s",
                     type(exc).__name__,
                 )
-                raise BookNarrationUnavailableError("Narration generation failed") from exc
-            if len(audio_bytes) < 128:
-                raise BookNarrationUnavailableError("Narration provider returned empty audio")
+                raise BookNarrationUnavailableError(
+                    "Narration generation failed"
+                ) from exc
+            generation_ms = round((asyncio.get_running_loop().time() - started) * 1000)
 
             alignment: tuple[NarrationCue, ...] = ()
-            duration_ms: int | None = None
+            alignment_source = "none"
+            alignment_granularity = "none"
+            subtitle_started = asyncio.get_running_loop().time()
             try:
-                transcript = await client.audio.transcriptions.create(
-                    file=(filename, audio_bytes, "audio/mpeg"),
-                    model=settings.book_narration_alignment_model,
-                    response_format="verbose_json",
-                    timestamp_granularities=["word"],
-                    temperature=0,
-                    timeout=settings.book_narration_timeout_seconds,
+                subtitle_document = await _fetch_subtitle_document(
+                    synthesis.subtitle_url
                 )
-                duration = float(getattr(transcript, "duration", 0) or 0)
-                duration_ms = round(duration * 1000) if duration > 0 else None
-                alignment = align_transcribed_words(
+                alignment, alignment_granularity = _alignment_from_provider_segments(
                     cleaned_text,
-                    getattr(transcript, "words", None) or (),
-                    duration,
+                    subtitle_document,
+                    duration_ms=synthesis.duration_ms,
                 )
+                if alignment:
+                    alignment_source = "provider"
             except Exception as exc:
-                # Playback quality is more important than perfect highlighting.
-                # The Flutter player estimates word positions from media duration
-                # when alignment is unavailable.
-                logger.warning("Book narration alignment failed: %s", type(exc).__name__)
-        finally:
-            await client.close()
+                # Preserve the expressive recording, but never invent exact word
+                # timing. The response explicitly reports that timing is absent.
+                logger.warning(
+                    "Book narration provider timing unavailable: %s",
+                    type(exc).__name__,
+                )
+            subtitle_ms = round(
+                (asyncio.get_running_loop().time() - subtitle_started) * 1000
+            )
 
-        metadata = {
-            "style": style,
-            "voice": preset.voice,
-            "durationMs": duration_ms,
-            "alignment": [asdict(cue) for cue in alignment],
-        }
-        await _write_cache_atomically(
-            audio_path=audio_path,
-            metadata_path=metadata_path,
-            audio_bytes=audio_bytes,
-            metadata=metadata,
+            metadata = {
+                "style": style,
+                "voice": profile.voice_id,
+                "voiceDisplayName": profile.display_name,
+                "narratorProfile": narrator_profile,
+                "provider": _PROVIDER,
+                "model": settings.book_narration_tts_model,
+                "durationMs": synthesis.duration_ms,
+                "alignment": [asdict(cue) for cue in alignment],
+                "alignmentSource": alignment_source,
+                "alignmentGranularity": alignment_granularity,
+                "offsetEncoding": _OFFSET_ENCODING,
+                "sourceTextHash": source_text_hash,
+                "disclosure": _DISCLOSURE,
+            }
+            await _write_cache_atomically(
+                audio_path=audio_path,
+                metadata_path=metadata_path,
+                audio_bytes=synthesis.audio_bytes,
+                metadata=metadata,
+            )
+            logger.info(
+                "Book narration generated provider=%s model=%s chars=%d "
+                "duration_ms=%d generation_ms=%d subtitle_ms=%d granularity=%s",
+                _PROVIDER,
+                settings.book_narration_tts_model,
+                len(cleaned_text),
+                synthesis.duration_ms,
+                generation_ms,
+                subtitle_ms,
+                alignment_granularity,
+            )
+            return NarrationAsset(
+                audio_url=f"/media/{filename}",
+                style=style,
+                voice=profile.voice_id,
+                voice_display_name=profile.display_name,
+                narrator_profile=narrator_profile,
+                provider=_PROVIDER,
+                model=settings.book_narration_tts_model,
+                duration_ms=synthesis.duration_ms,
+                alignment=alignment,
+                alignment_source=alignment_source,
+                alignment_granularity=alignment_granularity,
+                offset_encoding=_OFFSET_ENCODING,
+                source_text_hash=source_text_hash,
+                disclosure=_DISCLOSURE,
+                cached=False,
+            )
+    finally:
+        # Avoid retaining one asyncio.Lock for every passage ever requested.
+        if _locks.get(digest) is lock and not lock.locked():
+            _locks.pop(digest, None)
+
+
+def _narrator_profile(profile: str) -> _NarratorProfile:
+    """Resolve only server-approved voices; clients never submit a voice ID."""
+
+    if profile == "expressive_narrator":
+        return _NarratorProfile(
+            voice_id=settings.book_narration_voice_id,
+            display_name="Expressive narrator",
         )
-        return NarrationAsset(
-            audio_url=f"/media/{filename}",
-            style=style,
-            voice=preset.voice,
-            duration_ms=duration_ms,
-            alignment=alignment,
-            cached=False,
+    if profile == "seasoned_mentor":
+        return _NarratorProfile(
+            voice_id=settings.book_narration_mentor_voice_id,
+            display_name="Seasoned mentor",
         )
+    raise ValueError(f"Unsupported narrator profile: {profile}")
+
+
+def _minimax_request_payload(
+    text: str,
+    *,
+    preset: _StylePreset,
+    profile: _NarratorProfile,
+) -> dict[str, Any]:
+    return {
+        "model": settings.book_narration_tts_model,
+        "text": text,
+        "stream": False,
+        "language_boost": "auto",
+        "output_format": "hex",
+        "subtitle_enable": True,
+        # Yunwu currently returns provider segments even when word timing is
+        # requested. We preserve that actual granularity in the API response.
+        "subtitle_type": "word",
+        "voice_setting": {
+            "voice_id": profile.voice_id,
+            "speed": preset.speed,
+            "vol": 1.0,
+            "pitch": preset.pitch,
+        },
+        "audio_setting": {
+            "sample_rate": 32000,
+            "bitrate": 128000,
+            "format": "mp3",
+            "channel": 1,
+        },
+    }
+
+
+async def _synthesize_with_minimax(
+    text: str,
+    *,
+    preset: _StylePreset,
+    profile: _NarratorProfile,
+    client: httpx.AsyncClient | None = None,
+) -> _MiniMaxSynthesis:
+    """Generate one non-streaming MP3 through Yunwu's native MiniMax route."""
+
+    endpoint = f"{settings.book_narration_api_base_url.rstrip('/')}/t2a_v2"
+    timeout = httpx.Timeout(
+        settings.book_narration_timeout_seconds,
+        connect=min(settings.book_narration_timeout_seconds, 10.0),
+    )
+    owns_client = client is None
+    if client is None:
+        client = httpx.AsyncClient(
+            timeout=timeout,
+            follow_redirects=False,
+            trust_env=False,
+        )
+    try:
+        response = await client.post(
+            endpoint,
+            headers={
+                "Authorization": f"Bearer {settings.yunwu_api_key}",
+                "Content-Type": "application/json",
+            },
+            json=_minimax_request_payload(text, preset=preset, profile=profile),
+        )
+        response.raise_for_status()
+        try:
+            payload = response.json()
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise BookNarrationUnavailableError(
+                "Narration provider returned invalid JSON"
+            ) from exc
+        return _parse_minimax_response(payload)
+    except httpx.HTTPError as exc:
+        raise BookNarrationUnavailableError(
+            "Narration provider request failed"
+        ) from exc
+    finally:
+        if owns_client:
+            await client.aclose()
+
+
+def _parse_minimax_response(payload: Any) -> _MiniMaxSynthesis:
+    if not isinstance(payload, dict):
+        raise BookNarrationUnavailableError("Narration provider response was invalid")
+    base_response = payload.get("base_resp")
+    if not isinstance(base_response, dict) or base_response.get("status_code") != 0:
+        raise BookNarrationUnavailableError("Narration provider rejected the request")
+    data = payload.get("data")
+    extra_info = payload.get("extra_info")
+    if not isinstance(data, dict) or not isinstance(extra_info, dict):
+        raise BookNarrationUnavailableError("Narration provider returned no audio")
+    if data.get("status") != 2:
+        raise BookNarrationUnavailableError(
+            "Narration provider did not complete the audio"
+        )
+
+    raw_audio = data.get("audio")
+    subtitle_url = data.get("subtitle_file")
+    duration_ms = extra_info.get("audio_length")
+    if not isinstance(raw_audio, str) or len(raw_audio) % 2:
+        raise BookNarrationUnavailableError("Narration provider returned invalid audio")
+    if len(raw_audio) > settings.book_narration_max_audio_bytes * 2:
+        raise BookNarrationUnavailableError("Narration provider audio was too large")
+    try:
+        audio_bytes = bytes.fromhex(raw_audio)
+    except ValueError as exc:
+        raise BookNarrationUnavailableError(
+            "Narration provider returned invalid audio"
+        ) from exc
+    if len(audio_bytes) < 128:
+        raise BookNarrationUnavailableError("Narration provider returned empty audio")
+    if not isinstance(duration_ms, (int, float)) or isinstance(duration_ms, bool):
+        raise BookNarrationUnavailableError("Narration provider returned no duration")
+    duration_ms = round(float(duration_ms))
+    if duration_ms <= 0:
+        raise BookNarrationUnavailableError("Narration provider returned no duration")
+    if not isinstance(subtitle_url, str) or not subtitle_url:
+        raise BookNarrationUnavailableError("Narration provider returned no timing")
+    return _MiniMaxSynthesis(
+        audio_bytes=audio_bytes,
+        duration_ms=duration_ms,
+        subtitle_url=subtitle_url,
+    )
+
+
+async def _fetch_subtitle_document(
+    url: str,
+    *,
+    client: httpx.AsyncClient | None = None,
+) -> list[dict[str, Any]]:
+    """Download a bounded subtitle JSON file from an approved public host."""
+
+    await _assert_safe_subtitle_url(url)
+    timeout = httpx.Timeout(
+        settings.book_narration_subtitle_timeout_seconds,
+        connect=min(settings.book_narration_subtitle_timeout_seconds, 5.0),
+    )
+    owns_client = client is None
+    if client is None:
+        client = httpx.AsyncClient(
+            timeout=timeout,
+            follow_redirects=False,
+            trust_env=False,
+        )
+    try:
+        async with client.stream("GET", url) as response:
+            response.raise_for_status()
+            if response.is_redirect:
+                raise BookNarrationUnavailableError(
+                    "Narration timing redirect was rejected"
+                )
+            content_type = response.headers.get("content-type", "")
+            media_type = content_type.partition(";")[0].strip().lower()
+            if media_type not in _subtitle_content_types:
+                raise BookNarrationUnavailableError(
+                    "Narration timing content type was rejected"
+                )
+            content_length = response.headers.get("content-length")
+            if content_length:
+                try:
+                    declared_size = int(content_length)
+                except ValueError as exc:
+                    raise BookNarrationUnavailableError(
+                        "Narration timing size was invalid"
+                    ) from exc
+                if declared_size > settings.book_narration_max_subtitle_bytes:
+                    raise BookNarrationUnavailableError(
+                        "Narration timing file was too large"
+                    )
+
+            body = bytearray()
+            async for chunk in response.aiter_bytes():
+                body.extend(chunk)
+                if len(body) > settings.book_narration_max_subtitle_bytes:
+                    raise BookNarrationUnavailableError(
+                        "Narration timing file was too large"
+                    )
+    except httpx.HTTPError as exc:
+        raise BookNarrationUnavailableError("Narration timing request failed") from exc
+    finally:
+        if owns_client:
+            await client.aclose()
+
+    try:
+        document = json.loads(bytes(body).decode("utf-8-sig"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise BookNarrationUnavailableError(
+            "Narration timing file was invalid"
+        ) from exc
+    if not isinstance(document, list) or not all(
+        isinstance(item, dict) for item in document
+    ):
+        raise BookNarrationUnavailableError("Narration timing file was invalid")
+    return document
+
+
+async def _assert_safe_subtitle_url(url: str) -> None:
+    parsed = urlsplit(url)
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise BookNarrationUnavailableError(
+            "Narration timing URL was rejected"
+        ) from exc
+    if (
+        parsed.scheme.lower() != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in (None, 443)
+    ):
+        raise BookNarrationUnavailableError("Narration timing URL was rejected")
+
+    hostname = parsed.hostname.rstrip(".").lower()
+    allowed_hosts = {
+        item.strip().rstrip(".").lower()
+        for item in settings.book_narration_subtitle_allowed_hosts.split(",")
+        if item.strip()
+    }
+    if hostname not in allowed_hosts:
+        raise BookNarrationUnavailableError("Narration timing host was rejected")
+
+    try:
+        addresses = await asyncio.to_thread(
+            socket.getaddrinfo,
+            hostname,
+            443,
+            0,
+            socket.SOCK_STREAM,
+        )
+    except OSError as exc:
+        raise BookNarrationUnavailableError(
+            "Narration timing host could not be resolved"
+        ) from exc
+    if not addresses:
+        raise BookNarrationUnavailableError(
+            "Narration timing host could not be resolved"
+        )
+    for address in addresses:
+        raw_ip = address[4][0].split("%", 1)[0]
+        try:
+            resolved = ipaddress.ip_address(raw_ip)
+        except ValueError as exc:
+            raise BookNarrationUnavailableError(
+                "Narration timing host resolved unexpectedly"
+            ) from exc
+        if not resolved.is_global:
+            raise BookNarrationUnavailableError(
+                "Narration timing host resolved to a non-public address"
+            )
+
+
+def _alignment_from_provider_segments(
+    text: str,
+    document: list[dict[str, Any]],
+    *,
+    duration_ms: int,
+) -> tuple[tuple[NarrationCue, ...], str]:
+    """Convert MiniMax code-point ranges into validated Flutter UTF-16 cues."""
+
+    if not document:
+        return (), "none"
+    utf16_offsets = _utf16_prefix_offsets(text)
+    cues: list[NarrationCue] = []
+    codepoint_ranges: list[tuple[int, int]] = []
+    previous_text_end = 0
+    previous_time_end = 0
+
+    for item in document:
+        start = _strict_int(item.get("text_begin"))
+        end = _strict_int(item.get("text_end"))
+        start_time = _strict_number(item.get("time_begin"))
+        end_time = _strict_number(item.get("time_end"))
+        segment_text = item.get("text")
+        if (
+            start is None
+            or end is None
+            or start_time is None
+            or end_time is None
+            or not isinstance(segment_text, str)
+            or start < previous_text_end
+            or start < 0
+            or end <= start
+            or end > len(text)
+            or start_time < previous_time_end
+            or start_time < 0
+            or end_time <= start_time
+            or end_time > duration_ms + 1000
+            or text[start:end] != segment_text
+        ):
+            raise BookNarrationUnavailableError(
+                "Narration provider timing was inconsistent"
+            )
+
+        start_ms = round(start_time)
+        end_ms = min(round(end_time), duration_ms)
+        if end_ms <= start_ms:
+            raise BookNarrationUnavailableError(
+                "Narration provider timing was inconsistent"
+            )
+        cues.append(
+            NarrationCue(
+                start=utf16_offsets[start],
+                end=utf16_offsets[end],
+                startMs=start_ms,
+                endMs=end_ms,
+                text=segment_text,
+            )
+        )
+        codepoint_ranges.append((start, end))
+        previous_text_end = end
+        previous_time_end = end_ms
+
+    source_words = list(_source_word.finditer(text))
+    is_word_granularity = len(source_words) == len(codepoint_ranges) and all(
+        len(list(_source_word.finditer(text[start:end]))) == 1
+        for start, end in codepoint_ranges
+    )
+    return tuple(cues), "word" if is_word_granularity else "phrase"
+
+
+def _utf16_prefix_offsets(text: str) -> list[int]:
+    offsets = [0]
+    current = 0
+    for character in text:
+        current += 2 if ord(character) > 0xFFFF else 1
+        offsets.append(current)
+    return offsets
+
+
+def _strict_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def _strict_number(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    result = float(value)
+    return result if math.isfinite(result) else None
 
 
 async def _read_cached_asset(
@@ -316,19 +646,58 @@ async def _read_cached_asset(
     if not audio_path.is_file() or not metadata_path.is_file():
         return None
     try:
+        if audio_path.stat().st_size < 128:
+            return None
         raw = await asyncio.to_thread(metadata_path.read_text, encoding="utf-8")
         metadata = json.loads(raw)
-        alignment = tuple(NarrationCue(**item) for item in metadata.get("alignment", []))
+        alignment = tuple(
+            NarrationCue(**item) for item in metadata.get("alignment", [])
+        )
+        duration_ms = metadata.get("durationMs")
+        if not isinstance(duration_ms, int) or duration_ms <= 0:
+            return None
+        if not _cached_alignment_is_valid(alignment, duration_ms):
+            return None
         return NarrationAsset(
             audio_url=f"/media/{filename}",
             style=str(metadata["style"]),
             voice=str(metadata["voice"]),
-            duration_ms=metadata.get("durationMs"),
+            voice_display_name=str(metadata["voiceDisplayName"]),
+            narrator_profile=str(metadata["narratorProfile"]),
+            provider=str(metadata["provider"]),
+            model=str(metadata["model"]),
+            duration_ms=duration_ms,
             alignment=alignment,
+            alignment_source=str(metadata["alignmentSource"]),
+            alignment_granularity=str(metadata["alignmentGranularity"]),
+            offset_encoding=str(metadata["offsetEncoding"]),
+            source_text_hash=str(metadata["sourceTextHash"]),
+            disclosure=str(metadata["disclosure"]),
             cached=True,
         )
     except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
         return None
+
+
+def _cached_alignment_is_valid(
+    alignment: tuple[NarrationCue, ...],
+    duration_ms: int,
+) -> bool:
+    previous_text_end = 0
+    previous_time_end = 0
+    for cue in alignment:
+        if (
+            cue.start < previous_text_end
+            or cue.end <= cue.start
+            or cue.startMs < previous_time_end
+            or cue.endMs <= cue.startMs
+            or cue.endMs > duration_ms
+            or not cue.text
+        ):
+            return False
+        previous_text_end = cue.end
+        previous_time_end = cue.endMs
+    return True
 
 
 async def _write_cache_atomically(
@@ -343,15 +712,23 @@ async def _write_cache_atomically(
     metadata_temp = metadata_path.with_name(f"{metadata_path.name}.{suffix}.tmp")
 
     def write() -> None:
-        audio_temp.write_bytes(audio_bytes)
-        metadata_temp.write_text(
-            json.dumps(metadata, separators=(",", ":")),
-            encoding="utf-8",
-        )
-        os.replace(audio_temp, audio_path)
-        os.replace(metadata_temp, metadata_path)
+        try:
+            audio_temp.write_bytes(audio_bytes)
+            metadata_temp.write_text(
+                json.dumps(metadata, separators=(",", ":")),
+                encoding="utf-8",
+            )
+            os.replace(audio_temp, audio_path)
+            os.replace(metadata_temp, metadata_path)
+        finally:
+            audio_temp.unlink(missing_ok=True)
+            metadata_temp.unlink(missing_ok=True)
 
     await asyncio.to_thread(write)
+
+
+def _source_text_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _markdown_to_visible_text(markdown: str) -> str:
@@ -363,14 +740,3 @@ def _markdown_to_visible_text(markdown: str) -> str:
 def _compact_for_membership(value: str) -> str:
     normalized = unicodedata.normalize("NFKC", value).casefold()
     return "".join(character for character in normalized if character.isalnum())
-
-
-def _normalize_word(value: str) -> str:
-    normalized = unicodedata.normalize("NFKC", value).casefold()
-    return "".join(character for character in normalized if character.isalnum())
-
-
-def _word_field(value: Any, field: str, default: Any) -> Any:
-    if isinstance(value, dict):
-        return value.get(field, default)
-    return getattr(value, field, default)

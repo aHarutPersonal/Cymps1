@@ -595,7 +595,11 @@ async def prepare_content_narration(
     # Release the read transaction before provider/network work.
     await db.commit()
     try:
-        asset = await render_book_narration(text, data.style.value)
+        asset = await render_book_narration(
+            text,
+            data.style.value,
+            data.narratorProfile.value,
+        )
     except BookNarrationUnavailableError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -606,10 +610,19 @@ async def prepare_content_narration(
         audioUrl=asset.audio_url,
         style=data.style,
         voice=asset.voice,
-        provider="openai",
+        voiceDisplayName=asset.voice_display_name,
+        narratorProfile=asset.narrator_profile,
+        narratorProfileLabel=asset.voice_display_name,
+        provider=asset.provider,
+        model=asset.model,
         isAiGenerated=True,
         durationMs=asset.duration_ms,
         alignment=[ContentNarrationCue(**asdict(cue)) for cue in asset.alignment],
+        alignmentSource=asset.alignment_source,
+        alignmentGranularity=asset.alignment_granularity,
+        offsetEncoding=asset.offset_encoding,
+        sourceTextHash=asset.source_text_hash,
+        disclosure=asset.disclosure,
         cached=asset.cached,
     )
 

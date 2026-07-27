@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from app.api.v1.content_resources import (
     delete_content_highlight,
@@ -19,6 +20,14 @@ class ScalarResult:
 
     def scalar_one_or_none(self):
         return self._value
+
+
+def test_narration_request_rejects_unregistered_voice_profile():
+    with pytest.raises(ValidationError):
+        ContentNarrationRequest(
+            text="Read this passage.",
+            narratorProfile="warren_buffett_clone",
+        )
 
 
 @pytest.mark.asyncio
@@ -62,9 +71,18 @@ async def test_prepare_narration_only_renders_text_from_the_resource(monkeypatch
         return_value=NarrationAsset(
             audio_url="/media/book_narration_example.mp3",
             style="expressive",
-            voice="marin",
+            voice="English_expressive_narrator",
+            voice_display_name="Expressive narrator",
+            narrator_profile="expressive_narrator",
+            provider="yunwu",
+            model="speech-2.8-hd",
             duration_ms=2100,
-            alignment=(NarrationCue(start=0, end=1, startMs=0, endMs=100),),
+            alignment=(NarrationCue(start=0, end=1, startMs=0, endMs=100, text="A"),),
+            alignment_source="provider",
+            alignment_granularity="phrase",
+            offset_encoding="utf16",
+            source_text_hash="example-hash",
+            disclosure="AI-generated voice; not the real person.",
             cached=False,
         )
     )
@@ -86,10 +104,20 @@ async def test_prepare_narration_only_renders_text_from_the_resource(monkeypatch
     renderer.assert_awaited_once_with(
         "A human voice follows the meaning.",
         "expressive",
+        "expressive_narrator",
     )
     db.commit.assert_awaited_once()
     assert response.audioUrl == "/media/book_narration_example.mp3"
-    assert response.voice == "marin"
+    assert response.voice == "English_expressive_narrator"
+    assert response.voiceDisplayName == "Expressive narrator"
+    assert response.narratorProfile.value == "expressive_narrator"
+    assert response.narratorProfileLabel == "Expressive narrator"
+    assert response.provider == "yunwu"
+    assert response.model == "speech-2.8-hd"
+    assert response.alignmentSource == "provider"
+    assert response.alignmentGranularity == "phrase"
+    assert response.offsetEncoding == "utf16"
+    assert response.sourceTextHash == "example-hash"
     assert response.isAiGenerated is True
 
 
