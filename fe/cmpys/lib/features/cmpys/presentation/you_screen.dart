@@ -147,7 +147,7 @@ class CmpysYouScreen extends ConsumerWidget {
                       PhosphorIconsRegular.bookOpen,
                       'Reading',
                       null,
-                      () => Navigator.of(context, rootNavigator: true).push(
+                      () => Navigator.of(context).push(
                         CmpysPageRoute(
                           builder: (_) => const ReadingLibraryScreen(),
                         ),

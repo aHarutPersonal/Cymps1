@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,6 +9,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../app/router.dart';
+import '../../plan/presentation/book_narration_checkpoint.dart';
 import '../controllers/session_controller.dart';
 
 const _splashSeenKey = 'cmpys_has_seen_splash';
@@ -42,6 +44,43 @@ Future<void> waitForSplashGate({
   Future<void> Function(Duration) delay = Future<void>.delayed,
 }) async {
   await Future.wait<void>([initialization, delay(minimumDelay)]);
+}
+
+/// Reads the current account's active book and consumes the prior-playing bit
+/// before the caller navigates. If the one-shot write fails, the book can still
+/// be restored, but autoplay is conservatively disabled.
+@visibleForTesting
+Future<ActiveBookNarrationResume?> consumeActiveBookNarrationResume({
+  required ActiveBookNarrationResumeStore store,
+  required String ownerId,
+}) async {
+  final resume = await store.read(ownerId);
+  if (resume == null || !resume.wasPlaying) return resume;
+
+  try {
+    await store.write(resume.copyWith(wasPlaying: false));
+    return resume;
+  } catch (error) {
+    debugPrint('🚀 narration autoplay consumption error: $error');
+    return resume.copyWith(wasPlaying: false);
+  }
+}
+
+/// Chooses the ready-session destination without coupling route policy to the
+/// splash animation. Browser restores are always manual because cold-start
+/// autoplay is commonly blocked and should never surprise the listener.
+@visibleForTesting
+String splashRouteForReadySession({
+  required ActiveBookNarrationResume? resume,
+  required bool isWeb,
+}) {
+  if (resume == null) return AppRoutes.home;
+  return AppRoutes.bookReaderLocation(
+    branchIndex: resume.branchIndex,
+    resourceId: resume.resourceId,
+    fallbackTitle: resume.fallbackTitle,
+    autoplayOnRestore: resume.wasPlaying && !isWeb,
+  );
 }
 
 /// CMPYS splash — the green "Who were they, at your age?" intro from the
@@ -111,11 +150,25 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
     }
     if (!mounted) return;
 
-    final route = switch (ref.read(sessionControllerProvider)) {
+    final session = ref.read(sessionControllerProvider);
+    var route = switch (session) {
       SessionReady() => AppRoutes.home,
       SessionNeedsOnboarding() => AppRoutes.cmpysOnboarding,
       _ => AppRoutes.auth,
     };
+    if (session case SessionReady(:final user)) {
+      try {
+        final resume = await consumeActiveBookNarrationResume(
+          store: const SharedPreferencesActiveBookNarrationResumeStore(),
+          ownerId: user.id,
+        );
+        route = splashRouteForReadySession(resume: resume, isWeb: kIsWeb);
+      } catch (error) {
+        // A damaged/unavailable preference must not block a valid session.
+        debugPrint('🚀 narration resume preference error: $error');
+      }
+    }
+    if (!mounted) return;
     context.go(route);
   }
 

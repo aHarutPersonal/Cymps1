@@ -1066,7 +1066,7 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
     int index,
   ) async {
     final completed = detailed.isStepCompleted(step.id);
-    final changed = await Navigator.of(context, rootNavigator: true).push<bool>(
+    final changed = await Navigator.of(context).push<bool>(
       CmpysPageRoute<bool>(
         builder: (_) => LessonReaderScreen(
           itemId: detailed.item.id,
@@ -1200,6 +1200,7 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
       screen = BookReaderScreen(
         resourceId: bookResourceId,
         fallbackTitle: m.title,
+        shellBranchIndex: 1,
       );
     } else if (m.prefersExternalLink) {
       screen = MaterialWebScreen(title: m.title, url: m.directUrl!);
@@ -1210,9 +1211,13 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
     }
     if (screen == null) return;
     final route = CmpysPageRoute<void>(builder: (_) => screen!);
-    // Material players/readers own their bottom controls. Present them above
-    // AppShell so the floating five-tab bar cannot cover those controls.
-    Navigator.of(context, rootNavigator: true).push(route);
+    // Books remain inside the state-preserving Plan branch so narration keeps
+    // playing when another tab is selected. Other material viewers still own
+    // the whole display above the shell.
+    final navigator = screen is BookReaderScreen
+        ? Navigator.of(context)
+        : Navigator.of(context, rootNavigator: true);
+    navigator.push(route);
   }
 
   String? _bookResourceId(PlanMaterialDetail material) {

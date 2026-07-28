@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../features/auth/controllers/session_controller.dart';
+import '../features/plan/presentation/book_narration_checkpoint.dart';
 import 'router.dart';
 import 'design_tokens.dart';
 import 'theme.dart';
@@ -18,6 +21,15 @@ class App extends ConsumerWidget {
 
     ref.listen(sessionControllerProvider, (previous, next) {
       if (next is SessionUnauthenticated) {
+        if (previous case SessionReady(
+          :final user,
+        ) when user.id.trim().isNotEmpty) {
+          unawaited(
+            const SharedPreferencesActiveBookNarrationResumeStore()
+                .clear(user.id)
+                .catchError((_) {}),
+          );
+        }
         WidgetsBinding.instance.addPostFrameCallback((_) {
           router.go(AppRoutes.auth);
         });

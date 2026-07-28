@@ -25,9 +25,59 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+_MAX_ALIGNMENT_DIAGNOSTIC_VALUE = 4096
+_MAX_ALIGNMENT_DIAGNOSTIC_SCAN = 8192
+_ALIGNMENT_VALIDATION_CATEGORIES = frozenset(
+    {
+        "provider_offset_length",
+        "provider_offset_non_contiguous",
+        "provider_offset_order",
+        "provider_offset_type",
+        "segment_document_empty",
+        "segment_text_invalid",
+        "source_gap_non_whitespace",
+        "source_segment_not_found",
+        "source_trailing_non_whitespace",
+        "time_non_monotonic",
+        "time_order",
+        "time_out_of_bounds",
+        "time_rounding_invalid",
+        "time_type",
+    }
+)
+
+
+@dataclass(frozen=True)
+class _SafeAlignmentDiagnostics:
+    segment_index: int
+    segment_count: int
+    source_length: int
+    provider_length: int
+    validation_category: str
+    first_mismatch_offset: int
+    source_unicode_class: str
+    provider_unicode_class: str
+    nfc_equivalent: bool
+    whitespace_collapse_equivalent: bool
+    punctuation_normalization_equivalent: bool
+    values_truncated: bool
+
 
 class BookNarrationUnavailableError(RuntimeError):
     """The configured expressive narration provider could not be used."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason_code: str = "narration_unavailable",
+        retryable: bool = False,
+        alignment_diagnostics: _SafeAlignmentDiagnostics | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.reason_code = reason_code
+        self.retryable = retryable
+        self.alignment_diagnostics = alignment_diagnostics
 
 
 @dataclass(frozen=True)
@@ -87,13 +137,16 @@ _STYLE_PRESETS: dict[str, _StylePreset] = {
     "grounded": _StylePreset(speed=0.93, pitch=-1),
 }
 
-_CACHE_VERSION = "minimax-narration-v3"
+_CACHE_VERSION = "minimax-narration-v4"
 _PROVIDER = "yunwu"
 _OFFSET_ENCODING = "utf16"
 _DISCLOSURE = "AI-generated voice; not the real person."
 _locks: dict[str, asyncio.Lock] = {}
 _markdown_image = re.compile(r"!\[([^]]*)\]\([^)]*\)")
 _markdown_link = re.compile(r"\[([^]]+)\]\([^)]*\)")
+_markdown_ordered_list_marker = re.compile(
+    r"(?m)^[ \t]{0,3}(?:>[ \t]{0,3})*\d{1,9}[.)][ \t]+"
+)
 _source_word = re.compile(r"\w+(?:[\u2019'\-]\w+)*", re.UNICODE)
 _subtitle_content_types = frozenset(
     {
@@ -104,6 +157,61 @@ _subtitle_content_types = frozenset(
         "binary/octet-stream",
     }
 )
+_punctuation_diagnostic_translation = str.maketrans(
+    {
+        "\u2018": "'",
+        "\u2019": "'",
+        "\u201b": "'",
+        "\u201c": '"',
+        "\u201d": '"',
+        "\u201f": '"',
+        "\u2010": "-",
+        "\u2011": "-",
+        "\u2012": "-",
+        "\u2013": "-",
+        "\u2014": "-",
+        "\u2212": "-",
+        "\u2026": "...",
+    }
+)
+
+
+def _log_timing_failure(exc: Exception) -> None:
+    diagnostics = getattr(exc, "alignment_diagnostics", None)
+    if not isinstance(diagnostics, _SafeAlignmentDiagnostics):
+        logger.warning(
+            "Book narration provider timing unavailable reason=%s error_type=%s",
+            getattr(exc, "reason_code", "timing_unexpected"),
+            type(exc).__name__,
+        )
+        return
+    logger.warning(
+        "Book narration provider timing unavailable "
+        "reason=%s error_type=%s "
+        "alignment_segment_index=%d alignment_segment_count=%d "
+        "alignment_source_length=%d alignment_provider_length=%d "
+        "alignment_validation=%s alignment_first_mismatch_offset=%d "
+        "alignment_source_unicode_class=%s "
+        "alignment_provider_unicode_class=%s "
+        "alignment_nfc_equivalent=%s "
+        "alignment_whitespace_collapse_equivalent=%s "
+        "alignment_punctuation_normalization_equivalent=%s "
+        "alignment_values_truncated=%s",
+        getattr(exc, "reason_code", "timing_unexpected"),
+        type(exc).__name__,
+        diagnostics.segment_index,
+        diagnostics.segment_count,
+        diagnostics.source_length,
+        diagnostics.provider_length,
+        diagnostics.validation_category,
+        diagnostics.first_mismatch_offset,
+        diagnostics.source_unicode_class,
+        diagnostics.provider_unicode_class,
+        diagnostics.nfc_equivalent,
+        diagnostics.whitespace_collapse_equivalent,
+        diagnostics.punctuation_normalization_equivalent,
+        diagnostics.values_truncated,
+    )
 
 
 def narration_text_belongs_to_resource(text: str, markdown: str) -> bool:
@@ -205,8 +313,8 @@ async def render_book_narration(
             alignment_granularity = "none"
             subtitle_started = asyncio.get_running_loop().time()
             try:
-                subtitle_document = await _fetch_subtitle_document(
-                    synthesis.subtitle_url
+                subtitle_document = await _fetch_subtitle_with_retry(
+                    synthesis.subtitle_url,
                 )
                 alignment, alignment_granularity = _alignment_from_provider_segments(
                     cleaned_text,
@@ -218,10 +326,7 @@ async def render_book_narration(
             except Exception as exc:
                 # Preserve the expressive recording, but never invent exact word
                 # timing. The response explicitly reports that timing is absent.
-                logger.warning(
-                    "Book narration provider timing unavailable: %s",
-                    type(exc).__name__,
-                )
+                _log_timing_failure(exc)
             subtitle_ms = round(
                 (asyncio.get_running_loop().time() - subtitle_started) * 1000
             )
@@ -443,13 +548,15 @@ async def _fetch_subtitle_document(
             response.raise_for_status()
             if response.is_redirect:
                 raise BookNarrationUnavailableError(
-                    "Narration timing redirect was rejected"
+                    "Narration timing redirect was rejected",
+                    reason_code="subtitle_redirect_rejected",
                 )
             content_type = response.headers.get("content-type", "")
             media_type = content_type.partition(";")[0].strip().lower()
             if media_type not in _subtitle_content_types:
                 raise BookNarrationUnavailableError(
-                    "Narration timing content type was rejected"
+                    "Narration timing content type was rejected",
+                    reason_code="subtitle_content_type_rejected",
                 )
             content_length = response.headers.get("content-length")
             if content_length:
@@ -457,11 +564,13 @@ async def _fetch_subtitle_document(
                     declared_size = int(content_length)
                 except ValueError as exc:
                     raise BookNarrationUnavailableError(
-                        "Narration timing size was invalid"
+                        "Narration timing size was invalid",
+                        reason_code="subtitle_size_invalid",
                     ) from exc
                 if declared_size > settings.book_narration_max_subtitle_bytes:
                     raise BookNarrationUnavailableError(
-                        "Narration timing file was too large"
+                        "Narration timing file was too large",
+                        reason_code="subtitle_too_large",
                     )
 
             body = bytearray()
@@ -469,10 +578,30 @@ async def _fetch_subtitle_document(
                 body.extend(chunk)
                 if len(body) > settings.book_narration_max_subtitle_bytes:
                     raise BookNarrationUnavailableError(
-                        "Narration timing file was too large"
+                        "Narration timing file was too large",
+                        reason_code="subtitle_too_large",
                     )
+    except httpx.HTTPStatusError as exc:
+        status_code = exc.response.status_code
+        transient = status_code in {408, 425, 429} or status_code >= 500
+        raise BookNarrationUnavailableError(
+            "Narration timing request failed",
+            reason_code=(
+                "subtitle_http_transient" if transient else "subtitle_http_rejected"
+            ),
+            retryable=transient,
+        ) from exc
+    except httpx.TransportError as exc:
+        raise BookNarrationUnavailableError(
+            "Narration timing request failed",
+            reason_code="subtitle_transport_error",
+            retryable=True,
+        ) from exc
     except httpx.HTTPError as exc:
-        raise BookNarrationUnavailableError("Narration timing request failed") from exc
+        raise BookNarrationUnavailableError(
+            "Narration timing request failed",
+            reason_code="subtitle_http_error",
+        ) from exc
     finally:
         if owns_client:
             await client.aclose()
@@ -481,13 +610,30 @@ async def _fetch_subtitle_document(
         document = json.loads(bytes(body).decode("utf-8-sig"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise BookNarrationUnavailableError(
-            "Narration timing file was invalid"
+            "Narration timing file was invalid",
+            reason_code="subtitle_document_invalid",
         ) from exc
     if not isinstance(document, list) or not all(
         isinstance(item, dict) for item in document
     ):
-        raise BookNarrationUnavailableError("Narration timing file was invalid")
+        raise BookNarrationUnavailableError(
+            "Narration timing file was invalid",
+            reason_code="subtitle_document_invalid",
+        )
     return document
+
+
+async def _fetch_subtitle_with_retry(url: str) -> list[dict[str, Any]]:
+    """Retry one transient subtitle transport/DNS failure, and nothing else."""
+
+    try:
+        return await _fetch_subtitle_document(url)
+    except BookNarrationUnavailableError as exc:
+        if not exc.retryable:
+            raise
+        logger.info("Retrying narration timing reason=%s", exc.reason_code)
+        await asyncio.sleep(0.2)
+        return await _fetch_subtitle_document(url)
 
 
 async def _assert_safe_subtitle_url(url: str) -> None:
@@ -496,7 +642,8 @@ async def _assert_safe_subtitle_url(url: str) -> None:
         port = parsed.port
     except ValueError as exc:
         raise BookNarrationUnavailableError(
-            "Narration timing URL was rejected"
+            "Narration timing URL was rejected",
+            reason_code="subtitle_url_rejected",
         ) from exc
     if (
         parsed.scheme.lower() != "https"
@@ -505,7 +652,10 @@ async def _assert_safe_subtitle_url(url: str) -> None:
         or parsed.password is not None
         or port not in (None, 443)
     ):
-        raise BookNarrationUnavailableError("Narration timing URL was rejected")
+        raise BookNarrationUnavailableError(
+            "Narration timing URL was rejected",
+            reason_code="subtitle_url_rejected",
+        )
 
     hostname = parsed.hostname.rstrip(".").lower()
     allowed_hosts = {
@@ -514,7 +664,10 @@ async def _assert_safe_subtitle_url(url: str) -> None:
         if item.strip()
     }
     if hostname not in allowed_hosts:
-        raise BookNarrationUnavailableError("Narration timing host was rejected")
+        raise BookNarrationUnavailableError(
+            "Narration timing host was rejected",
+            reason_code="subtitle_host_rejected",
+        )
 
     try:
         addresses = await asyncio.to_thread(
@@ -526,11 +679,15 @@ async def _assert_safe_subtitle_url(url: str) -> None:
         )
     except OSError as exc:
         raise BookNarrationUnavailableError(
-            "Narration timing host could not be resolved"
+            "Narration timing host could not be resolved",
+            reason_code="subtitle_dns_error",
+            retryable=True,
         ) from exc
     if not addresses:
         raise BookNarrationUnavailableError(
-            "Narration timing host could not be resolved"
+            "Narration timing host could not be resolved",
+            reason_code="subtitle_dns_error",
+            retryable=True,
         )
     for address in addresses:
         raw_ip = address[4][0].split("%", 1)[0]
@@ -538,11 +695,13 @@ async def _assert_safe_subtitle_url(url: str) -> None:
             resolved = ipaddress.ip_address(raw_ip)
         except ValueError as exc:
             raise BookNarrationUnavailableError(
-                "Narration timing host resolved unexpectedly"
+                "Narration timing host resolved unexpectedly",
+                reason_code="subtitle_dns_invalid",
             ) from exc
         if not resolved.is_global:
             raise BookNarrationUnavailableError(
-                "Narration timing host resolved to a non-public address"
+                "Narration timing host resolved to a non-public address",
+                reason_code="subtitle_host_non_public",
             )
 
 
@@ -552,60 +711,106 @@ def _alignment_from_provider_segments(
     *,
     duration_ms: int,
 ) -> tuple[tuple[NarrationCue, ...], str]:
-    """Convert MiniMax code-point ranges into validated Flutter UTF-16 cues."""
+    """Map MiniMax segments back to exact source ranges and Flutter UTF-16.
+
+    MiniMax trims whitespace at subtitle segment boundaries and reports
+    ``text_begin``/``text_end`` against the concatenated segment text, not the
+    original input. Map each exact segment sequentially into the source while
+    allowing only omitted whitespace. Any omitted non-whitespace would make
+    the timing ambiguous and is rejected rather than guessed.
+    """
 
     if not document:
-        return (), "none"
+        raise _alignment_failure(text, document, "segment_document_empty", -1)
     utf16_offsets = _utf16_prefix_offsets(text)
     cues: list[NarrationCue] = []
     codepoint_ranges: list[tuple[int, int]] = []
-    previous_text_end = 0
-    previous_time_end = 0
+    source_cursor = 0
+    previous_provider_text_end = 0
+    previous_time_end = 0.0
+    previous_end_ms = 0
 
-    for item in document:
-        start = _strict_int(item.get("text_begin"))
-        end = _strict_int(item.get("text_end"))
+    for segment_index, item in enumerate(document):
+        provider_start = _strict_int(item.get("text_begin"))
+        provider_end = _strict_int(item.get("text_end"))
         start_time = _strict_number(item.get("time_begin"))
         end_time = _strict_number(item.get("time_end"))
         segment_text = item.get("text")
-        if (
-            start is None
-            or end is None
-            or start_time is None
-            or end_time is None
-            or not isinstance(segment_text, str)
-            or start < previous_text_end
-            or start < 0
-            or end <= start
-            or end > len(text)
-            or start_time < previous_time_end
-            or start_time < 0
-            or end_time <= start_time
-            or end_time > duration_ms + 1000
-            or text[start:end] != segment_text
-        ):
-            raise BookNarrationUnavailableError(
-                "Narration provider timing was inconsistent"
+        if not isinstance(segment_text, str) or not segment_text:
+            raise _alignment_failure(
+                text, document, "segment_text_invalid", segment_index
+            )
+        if provider_start is None or provider_end is None:
+            raise _alignment_failure(
+                text, document, "provider_offset_type", segment_index
+            )
+        if provider_start != previous_provider_text_end:
+            raise _alignment_failure(
+                text, document, "provider_offset_non_contiguous", segment_index
+            )
+        if provider_end <= provider_start:
+            raise _alignment_failure(
+                text, document, "provider_offset_order", segment_index
+            )
+        if provider_end - provider_start != len(segment_text):
+            raise _alignment_failure(
+                text, document, "provider_offset_length", segment_index
+            )
+        if start_time is None or end_time is None:
+            raise _alignment_failure(text, document, "time_type", segment_index)
+        if start_time < previous_time_end:
+            raise _alignment_failure(
+                text, document, "time_non_monotonic", segment_index
+            )
+        if start_time < 0 or end_time <= start_time:
+            raise _alignment_failure(text, document, "time_order", segment_index)
+        if end_time > duration_ms + 1000:
+            raise _alignment_failure(
+                text, document, "time_out_of_bounds", segment_index
             )
 
-        start_ms = round(start_time)
+        source_start = text.find(segment_text, source_cursor)
+        if source_start < 0:
+            raise _alignment_failure(
+                text, document, "source_segment_not_found", segment_index
+            )
+        if not _is_whitespace_only(text[source_cursor:source_start]):
+            raise _alignment_failure(
+                text,
+                document,
+                "source_gap_non_whitespace",
+                segment_index,
+            )
+        source_end = source_start + len(segment_text)
+
+        start_ms = max(round(start_time), previous_end_ms)
         end_ms = min(round(end_time), duration_ms)
         if end_ms <= start_ms:
-            raise BookNarrationUnavailableError(
-                "Narration provider timing was inconsistent"
+            raise _alignment_failure(
+                text, document, "time_rounding_invalid", segment_index
             )
         cues.append(
             NarrationCue(
-                start=utf16_offsets[start],
-                end=utf16_offsets[end],
+                start=utf16_offsets[source_start],
+                end=utf16_offsets[source_end],
                 startMs=start_ms,
                 endMs=end_ms,
                 text=segment_text,
             )
         )
-        codepoint_ranges.append((start, end))
-        previous_text_end = end
-        previous_time_end = end_ms
+        codepoint_ranges.append((source_start, source_end))
+        source_cursor = source_end
+        previous_provider_text_end = provider_end
+        previous_time_end = end_time
+        previous_end_ms = end_ms
+
+    if not _is_whitespace_only(text[source_cursor:]):
+        raise _alignment_failure(
+            text,
+            document,
+            "source_trailing_non_whitespace",
+            len(document) - 1,
+        )
 
     source_words = list(_source_word.finditer(text))
     is_word_granularity = len(source_words) == len(codepoint_ranges) and all(
@@ -613,6 +818,112 @@ def _alignment_from_provider_segments(
         for start, end in codepoint_ranges
     )
     return tuple(cues), "word" if is_word_granularity else "phrase"
+
+
+def _alignment_failure(
+    text: str,
+    document: list[dict[str, Any]],
+    validation_category: str,
+    segment_index: int,
+) -> BookNarrationUnavailableError:
+    return BookNarrationUnavailableError(
+        "Narration provider timing was inconsistent",
+        reason_code="subtitle_alignment_inconsistent",
+        alignment_diagnostics=_safe_alignment_diagnostics(
+            text,
+            document,
+            validation_category=validation_category,
+            segment_index=segment_index,
+        ),
+    )
+
+
+def _safe_alignment_diagnostics(
+    text: str,
+    document: list[dict[str, Any]],
+    *,
+    validation_category: str,
+    segment_index: int,
+) -> _SafeAlignmentDiagnostics:
+    provider_parts: list[str] = []
+    provider_length = 0
+    provider_sample_length = 0
+    provider_text_valid = True
+    for item in document:
+        value = item.get("text")
+        if not isinstance(value, str):
+            provider_text_valid = False
+            continue
+        provider_length += len(value)
+        if provider_sample_length < _MAX_ALIGNMENT_DIAGNOSTIC_SCAN:
+            remaining = _MAX_ALIGNMENT_DIAGNOSTIC_SCAN - provider_sample_length
+            sample = value[:remaining]
+            provider_parts.append(sample)
+            provider_sample_length += len(sample)
+
+    provider_sample = "".join(provider_parts)
+    source_sample = text[:_MAX_ALIGNMENT_DIAGNOSTIC_SCAN]
+    values_truncated = (
+        len(text) > _MAX_ALIGNMENT_DIAGNOSTIC_SCAN
+        or provider_length > _MAX_ALIGNMENT_DIAGNOSTIC_SCAN
+        or not provider_text_valid
+    )
+    first_mismatch = _first_mismatch_offset(source_sample, provider_sample)
+    source_class = _unicode_class_at(source_sample, first_mismatch)
+    provider_class = _unicode_class_at(provider_sample, first_mismatch)
+    comparisons_complete = not values_truncated
+
+    return _SafeAlignmentDiagnostics(
+        segment_index=_bounded_alignment_value(segment_index),
+        segment_count=_bounded_alignment_value(len(document)),
+        source_length=_bounded_alignment_value(len(text)),
+        provider_length=_bounded_alignment_value(provider_length),
+        validation_category=(
+            validation_category
+            if validation_category in _ALIGNMENT_VALIDATION_CATEGORIES
+            else "unknown"
+        ),
+        first_mismatch_offset=_bounded_alignment_value(first_mismatch),
+        source_unicode_class=source_class,
+        provider_unicode_class=provider_class,
+        nfc_equivalent=(
+            comparisons_complete
+            and unicodedata.normalize("NFC", source_sample)
+            == unicodedata.normalize("NFC", provider_sample)
+        ),
+        whitespace_collapse_equivalent=(
+            comparisons_complete
+            and "".join(source_sample.split()) == "".join(provider_sample.split())
+        ),
+        punctuation_normalization_equivalent=(
+            comparisons_complete
+            and source_sample.translate(_punctuation_diagnostic_translation)
+            == provider_sample.translate(_punctuation_diagnostic_translation)
+        ),
+        values_truncated=values_truncated,
+    )
+
+
+def _first_mismatch_offset(source: str, provider: str) -> int:
+    shared_length = min(len(source), len(provider))
+    for index in range(shared_length):
+        if source[index] != provider[index]:
+            return index
+    return -1 if len(source) == len(provider) else shared_length
+
+
+def _unicode_class_at(value: str, offset: int) -> str:
+    if offset < 0 or offset >= len(value):
+        return "none"
+    return unicodedata.category(value[offset])
+
+
+def _bounded_alignment_value(value: int) -> int:
+    return max(-1, min(value, _MAX_ALIGNMENT_DIAGNOSTIC_VALUE))
+
+
+def _is_whitespace_only(value: str) -> bool:
+    return not value or value.isspace()
 
 
 def _utf16_prefix_offsets(text: str) -> list[int]:
@@ -655,6 +966,14 @@ async def _read_cached_asset(
         )
         duration_ms = metadata.get("durationMs")
         if not isinstance(duration_ms, int) or duration_ms <= 0:
+            return None
+        if (
+            metadata.get("alignmentSource") != "provider"
+            or metadata.get("alignmentGranularity") not in {"word", "phrase"}
+            or not alignment
+        ):
+            # Audio is still served to the request that generated it, but an
+            # incomplete timing result must not become a permanent cache hit.
             return None
         if not _cached_alignment_is_valid(alignment, duration_ms):
             return None
@@ -732,7 +1051,11 @@ def _source_text_hash(text: str) -> str:
 
 
 def _markdown_to_visible_text(markdown: str) -> str:
-    text = _markdown_image.sub(r"\1", markdown)
+    # Markdown parsers render an ordered-list item's body without its source
+    # marker. Remove only syntactically plausible, line-anchored markers; digits
+    # elsewhere remain part of the authorization text.
+    text = _markdown_ordered_list_marker.sub("", markdown)
+    text = _markdown_image.sub(r"\1", text)
     text = _markdown_link.sub(r"\1", text)
     return html.unescape(re.sub(r"[`*_~>#|]", "", text))
 

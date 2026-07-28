@@ -4,13 +4,18 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/design_tokens.dart';
+import '../../../core/ui/app_shell.dart';
 import '../../../core/ui/cmpys/cmpys_markdown.dart';
 import '../../../core/ui/cmpys/cmpys_primitives.dart';
+import '../../auth/controllers/session_controller.dart';
 import '../../cmpys/state/cmpys_store.dart';
 import '../../session/data/content_resources_repository.dart';
 import '../../session/models/content_resource.dart';
 import '../models/plan_models.dart';
+import '../state/book_narration_remote_controller.dart';
 import 'book_narration.dart';
+import 'book_narration_checkpoint.dart';
+import 'book_narration_dock.dart';
 
 /// Full-screen, chaptered reading experience for shared book resources.
 ///
@@ -24,19 +29,36 @@ class BookReaderScreen extends ConsumerStatefulWidget {
     required this.resourceId,
     required this.fallbackTitle,
     this.narrator,
+    this.checkpointStore,
+    this.activeResumeStore,
+    this.autoplayOnRestore = false,
+    this.shellBranchIndex = 1,
   });
 
   final String resourceId;
   final String fallbackTitle;
   final BookNarrator? narrator;
+  final BookNarrationCheckpointStore? checkpointStore;
+  final ActiveBookNarrationResumeStore? activeResumeStore;
+
+  /// One-shot intent supplied only by the authenticated cold-start route.
+  final bool autoplayOnRestore;
+
+  /// Stateful-shell branch that owns this reader (Plan by default).
+  final int shellBranchIndex;
 
   @override
   ConsumerState<BookReaderScreen> createState() => _BookReaderScreenState();
 }
 
-class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
+class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
+    with WidgetsBindingObserver {
   PageController _pageController = PageController();
   late final BookNarrator _narrator;
+  late final BookNarrationCheckpointStore _checkpointStore;
+  late final ActiveBookNarrationResumeStore _activeResumeStore;
+  late final String _resumeOwnerId;
+  late final String _checkpointStorageId;
   ContentResource? _resource;
   List<BookChapter> _chapters = const [];
   List<BookNarrationDocument> _narrationDocuments = const [];
@@ -75,6 +97,16 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
   String _narrationDisclosure = 'AI-generated voice · not the real person';
   String _activeIdolName = '';
   final Map<String, GlobalKey> _narrationBlockKeys = {};
+  Timer? _narrationCheckpointTimer;
+  BookNarrationCheckpoint? _lastNarrationCheckpoint;
+  Future<void> _checkpointWrite = Future<void>.value();
+  Future<void> _progressWrite = Future<void>.value();
+  final Object _remoteDockOwner = Object();
+  bool _remoteDockAttached = false;
+  late final BookNarrationRemoteController _remoteDockController;
+  bool _autoplayOnRestoreConsumed = false;
+  bool _allowPop = false;
+  bool _leavingReader = false;
 
   ContentResourcesRepository get _repository =>
       ref.read(contentResourcesRepositoryProvider);
@@ -97,6 +129,21 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _checkpointStore =
+        widget.checkpointStore ??
+        const SharedPreferencesBookNarrationCheckpointStore();
+    final authenticatedOwnerId = ref.read(currentUserProvider)?.id.trim() ?? '';
+    _resumeOwnerId = authenticatedOwnerId.isEmpty
+        ? 'local'
+        : authenticatedOwnerId;
+    _checkpointStorageId = authenticatedOwnerId.isEmpty
+        ? widget.resourceId
+        : '$authenticatedOwnerId::${widget.resourceId}';
+    _activeResumeStore =
+        widget.activeResumeStore ??
+        const SharedPreferencesActiveBookNarrationResumeStore();
+    _remoteDockController = ref.read(bookNarrationRemoteControllerProvider);
     final idol = ref.read(cmpysStoreProvider).idol;
     _activeIdolName = idol.id == 'mentor-placeholder' ? '' : idol.name.trim();
     final narratorProfile =
@@ -135,6 +182,16 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    if (_remoteDockAttached) {
+      _remoteDockController.release(_remoteDockOwner);
+      _remoteDockAttached = false;
+    }
+    _narrationCheckpointTimer?.cancel();
+    final finalCheckpoint = _captureNarrationCheckpoint();
+    if (finalCheckpoint != null) {
+      unawaited(_queueNarrationCheckpointWrite(finalCheckpoint));
+    }
     _narrationRun++;
     _narrator.setProgressHandler(null);
     _narrator.setErrorHandler(null);
@@ -149,6 +206,16 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
     super.dispose();
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached ||
+        state == AppLifecycleState.hidden) {
+      unawaited(_flushNarrationCheckpoint());
+    }
+  }
+
   Future<void> _load() async {
     setState(() {
       _loading = true;
@@ -160,10 +227,23 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
         _repository
             .listHighlights(widget.resourceId)
             .catchError((_) => <ContentHighlight>[]),
+        _readNarrationCheckpoint(),
+        _readActiveResume(),
       ]);
       final resource = results[0] as ContentResource;
       final notes = results[1] as List<ContentHighlight>;
+      final localCheckpoint = results[2] as BookNarrationCheckpoint?;
+      final activeResume = results[3] as ActiveBookNarrationResume?;
       final cursor = resource.cursorJson;
+      final serverCheckpoint = _checkpointFromCursor(cursor);
+      final activeCheckpoint = activeResume?.resourceId == widget.resourceId
+          ? activeResume?.checkpoint
+          : null;
+      final savedCheckpoint = _newestCheckpoint([
+        localCheckpoint,
+        serverCheckpoint,
+        activeCheckpoint,
+      ]);
       final savedStyle = BookNarrationStyle.values.where(
         (style) => style.apiName == cursor?['narrationStyle']?.toString(),
       );
@@ -188,7 +268,9 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
             (chapter) => BookNarrationDocument.fromMarkdown(chapter.markdown),
           )
           .toList(growable: false);
-      var initialChapter = (resource.cursorJson?['chapter'] as num?)?.toInt();
+      var initialChapter =
+          savedCheckpoint?.chapterIndex ??
+          (resource.cursorJson?['chapter'] as num?)?.toInt();
       if (initialChapter == null && chapters.isNotEmpty) {
         initialChapter = ((resource.progressPercent / 100) * chapters.length)
             .floor();
@@ -196,6 +278,13 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
       initialChapter = chapters.isEmpty
           ? 0
           : (initialChapter ?? 0).clamp(0, chapters.length - 1).toInt();
+      final restoredCheckpoint = _validatedCheckpoint(
+        savedCheckpoint,
+        documents: narrationDocuments,
+      );
+      if (restoredCheckpoint != null) {
+        initialChapter = restoredCheckpoint.chapterIndex;
+      }
 
       if (!mounted) return;
       _pageController.dispose();
@@ -209,8 +298,23 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
         _chapterIndex = initialChapter!;
         _narrationStyle = narrationStyle;
         _narrationSpeed = narrationSpeed;
+        _lastNarrationCheckpoint = restoredCheckpoint;
+        _narrationVisible = restoredCheckpoint != null;
+        _narrationSegmentIndex = restoredCheckpoint?.segmentIndex;
+        _narrationResumeOffset = restoredCheckpoint?.characterOffset ?? 0;
         _loading = false;
       });
+      _syncRemoteDock();
+      if (widget.autoplayOnRestore &&
+          restoredCheckpoint != null &&
+          !_autoplayOnRestoreConsumed) {
+        _autoplayOnRestoreConsumed = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && !_narrationPlaying && !_narrationPreparing) {
+            unawaited(_playNarration());
+          }
+        });
+      }
     } catch (_) {
       if (!mounted) return;
       setState(() {
@@ -221,6 +325,171 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
     }
   }
 
+  Future<BookNarrationCheckpoint?> _readNarrationCheckpoint() async {
+    try {
+      return await _checkpointStore.read(_checkpointStorageId);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<ActiveBookNarrationResume?> _readActiveResume() async {
+    try {
+      return await _activeResumeStore.read(_resumeOwnerId);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  BookNarrationCheckpoint? _newestCheckpoint(
+    Iterable<BookNarrationCheckpoint?> checkpoints,
+  ) {
+    BookNarrationCheckpoint? newest;
+    for (final checkpoint in checkpoints) {
+      if (checkpoint != null &&
+          (newest == null ||
+              checkpoint.updatedAtEpochMs >= newest.updatedAtEpochMs)) {
+        newest = checkpoint;
+      }
+    }
+    return newest;
+  }
+
+  BookNarrationCheckpoint? _checkpointFromCursor(Map<String, dynamic>? cursor) {
+    if (cursor == null) return null;
+    return BookNarrationCheckpoint.tryFromJson({
+      'chapterIndex': cursor['narrationChapter'],
+      'segmentIndex': cursor['narrationSegment'],
+      'characterOffset': cursor['narrationCharacterOffset'],
+      'updatedAtEpochMs': cursor['narrationUpdatedAtEpochMs'],
+    });
+  }
+
+  BookNarrationCheckpoint? _validatedCheckpoint(
+    BookNarrationCheckpoint? checkpoint, {
+    required List<BookNarrationDocument> documents,
+  }) {
+    if (checkpoint == null || documents.isEmpty) return null;
+    final chapterIndex = checkpoint.chapterIndex
+        .clamp(0, documents.length - 1)
+        .toInt();
+    final document = documents[chapterIndex];
+    if (document.segments.isEmpty) return null;
+    final segmentIndex = checkpoint.segmentIndex
+        .clamp(0, document.segments.length - 1)
+        .toInt();
+    final segment = document.segments[segmentIndex];
+    return BookNarrationCheckpoint(
+      chapterIndex: chapterIndex,
+      segmentIndex: segmentIndex,
+      characterOffset: checkpoint.characterOffset
+          .clamp(0, segment.text.length)
+          .toInt(),
+      updatedAtEpochMs: checkpoint.updatedAtEpochMs,
+    );
+  }
+
+  double get _narrationOverallProgress {
+    if (_narrationDocuments.isEmpty) return 0;
+    final totalSegments = _narrationDocuments.fold<int>(
+      0,
+      (total, document) => total + document.segments.length,
+    );
+    if (totalSegments == 0) return 0;
+    final chapterIndex = _chapterIndex
+        .clamp(0, _narrationDocuments.length - 1)
+        .toInt();
+    var completedSegments = 0;
+    for (var index = 0; index < chapterIndex; index++) {
+      completedSegments += _narrationDocuments[index].segments.length;
+    }
+    final document = _narrationDocuments[chapterIndex];
+    if (document.segments.isEmpty) {
+      return (completedSegments / totalSegments).clamp(0.0, 1.0);
+    }
+    final segmentIndex = (_narrationSegmentIndex ?? 0)
+        .clamp(0, document.segments.length - 1)
+        .toInt();
+    final segment = document.segments[segmentIndex];
+    final withinSegment = segment.text.isEmpty
+        ? 0.0
+        : (_narrationResumeOffset / segment.text.length).clamp(0.0, 1.0);
+    return ((completedSegments + segmentIndex + withinSegment) / totalSegments)
+        .clamp(0.0, 1.0);
+  }
+
+  String get _narrationSemanticText {
+    final segmentText = _currentNarrationSegment?.text.trim();
+    final status = _narrationPreparing
+        ? 'Preparing narration.'
+        : _narrationPlaying
+        ? 'Playing.'
+        : 'Paused.';
+    final passage = segmentText == null || segmentText.isEmpty
+        ? ''
+        : ' Current passage: $segmentText';
+    final provider = _narrationProvider.trim().isEmpty
+        ? ''
+        : ' Provider: ${_narrationProvider.trim()}.';
+    final model = _narrationModel.trim().isEmpty
+        ? ''
+        : ' Model: ${_narrationModel.trim()}.';
+    final tracking = switch (_narrationAlignmentGranularity) {
+      BookNarrationAlignmentGranularity.word => ' Word synchronized.',
+      BookNarrationAlignmentGranularity.phrase => ' Phrase synchronized.',
+      BookNarrationAlignmentGranularity.sentence => ' Sentence synchronized.',
+      BookNarrationAlignmentGranularity.none => '',
+    };
+    return '$status$passage Voice: $_narrationVoiceLabel. '
+        '$_narrationDisclosure.$provider$model$tracking';
+  }
+
+  void _syncRemoteDock() {
+    if (!mounted) return;
+    final remote = _remoteDockController;
+    if (!_narrationVisible || _chapters.isEmpty) {
+      if (_remoteDockAttached) {
+        remote.release(_remoteDockOwner);
+        _remoteDockAttached = false;
+      }
+      return;
+    }
+    if (!_remoteDockAttached) {
+      remote.attach(
+        ownerToken: _remoteDockOwner,
+        onToggle: _toggleNarration,
+        onPrevious: () => _skipNarration(-1),
+        onNext: () => _skipNarration(1),
+        onSeek: _seekNarrationProgress,
+        onStyleChanged: _changeNarrationStyle,
+        onSpeedChanged: _changeNarrationSpeed,
+        onStop: _closeNarration,
+        onReplaced: _retireNarration,
+        active: true,
+        playing: _narrationPlaying,
+        preparing: _narrationPreparing,
+        progress: _narrationOverallProgress,
+        semanticText: _narrationSemanticText,
+        style: _narrationStyle,
+        speed: _narrationSpeed,
+        branchIndex: widget.shellBranchIndex,
+      );
+      _remoteDockAttached = true;
+      return;
+    }
+    remote.update(
+      ownerToken: _remoteDockOwner,
+      active: true,
+      playing: _narrationPlaying,
+      preparing: _narrationPreparing,
+      progress: _narrationOverallProgress,
+      semanticText: _narrationSemanticText,
+      style: _narrationStyle,
+      speed: _narrationSpeed,
+      branchIndex: widget.shellBranchIndex,
+    );
+  }
+
   int get _progressPercent {
     if (_chapters.isEmpty) return 0;
     return ((_chapterIndex / _chapters.length) * 100).round();
@@ -229,21 +498,141 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
   Future<void> _persistProgress({bool completed = false}) async {
     if (_chapters.isEmpty) return;
     final progress = completed ? 100 : _progressPercent;
-    try {
-      await _repository.updateProgress(
-        widget.resourceId,
-        progressPercent: progress,
-        completed: completed,
-        cursorJson: {
-          'chapter': _chapterIndex,
-          'chapterTitle': _chapters[_chapterIndex].title,
-          'narrationStyle': _narrationStyle.apiName,
-          'narrationSpeed': _narrationSpeed,
-        },
-      );
-    } catch (_) {
-      // Reading must remain uninterrupted when a background sync misses.
-    }
+    final chapterIndex = _chapterIndex.clamp(0, _chapters.length - 1).toInt();
+    final checkpoint =
+        _lastNarrationCheckpoint ?? _captureNarrationCheckpoint();
+    final cursor = <String, dynamic>{
+      ...?_resource?.cursorJson,
+      'chapter': chapterIndex,
+      'chapterTitle': _chapters[chapterIndex].title,
+      'narrationStyle': _narrationStyle.apiName,
+      'narrationSpeed': _narrationSpeed,
+      if (checkpoint != null) ...{
+        'narrationChapter': checkpoint.chapterIndex,
+        'narrationSegment': checkpoint.segmentIndex,
+        'narrationCharacterOffset': checkpoint.characterOffset,
+        'narrationUpdatedAtEpochMs': checkpoint.updatedAtEpochMs,
+      },
+    };
+    _progressWrite = _progressWrite.then((_) async {
+      try {
+        await _repository.updateProgress(
+          widget.resourceId,
+          progressPercent: progress,
+          completed: completed,
+          cursorJson: cursor,
+        );
+      } catch (_) {
+        // Reading must remain uninterrupted when a background sync misses.
+      }
+    });
+    await _progressWrite;
+  }
+
+  BookNarrationCheckpoint? _captureNarrationCheckpoint() {
+    if (_narrationDocuments.isEmpty) return null;
+    final chapterIndex = _chapterIndex
+        .clamp(0, _narrationDocuments.length - 1)
+        .toInt();
+    final document = _narrationDocuments[chapterIndex];
+    final currentSegment = _narrationSegmentIndex;
+    if (document.segments.isEmpty || currentSegment == null) return null;
+    final segmentIndex = currentSegment
+        .clamp(0, document.segments.length - 1)
+        .toInt();
+    final segment = document.segments[segmentIndex];
+    return BookNarrationCheckpoint(
+      chapterIndex: chapterIndex,
+      segmentIndex: segmentIndex,
+      characterOffset: _narrationResumeOffset
+          .clamp(0, segment.text.length)
+          .toInt(),
+      updatedAtEpochMs: DateTime.now().millisecondsSinceEpoch,
+    );
+  }
+
+  void _scheduleNarrationCheckpoint() {
+    // Throttle instead of debounce: word-level progress can arrive faster than
+    // the persistence interval, but continuous playback must still reach disk.
+    if (_narrationCheckpointTimer?.isActive ?? false) return;
+    _narrationCheckpointTimer = Timer(const Duration(milliseconds: 600), () {
+      _narrationCheckpointTimer = null;
+      unawaited(_flushNarrationCheckpoint());
+    });
+  }
+
+  Future<void> _queueNarrationCheckpointWrite(
+    BookNarrationCheckpoint checkpoint, {
+    bool includeActiveResume = true,
+    bool? wasPlaying,
+  }) {
+    final activeResume =
+        includeActiveResume &&
+            !_leavingReader &&
+            _narrationVisible &&
+            !_narrationFinished
+        ? ActiveBookNarrationResume(
+            ownerId: _resumeOwnerId,
+            resourceId: widget.resourceId,
+            fallbackTitle: (_resource?.title.trim().isNotEmpty ?? false)
+                ? _resource!.title
+                : widget.fallbackTitle,
+            branchIndex: widget.shellBranchIndex,
+            checkpoint: checkpoint,
+            wasPlaying:
+                wasPlaying ?? (_narrationPlaying || _narrationPreparing),
+            updatedAtEpochMs: checkpoint.updatedAtEpochMs,
+          )
+        : null;
+    _checkpointWrite = _checkpointWrite.then((_) async {
+      try {
+        await _checkpointStore.write(_checkpointStorageId, checkpoint);
+      } catch (_) {
+        // Backend sync remains a fallback when local persistence is unavailable.
+      }
+      if (activeResume != null) {
+        try {
+          await _activeResumeStore.write(activeResume);
+        } catch (_) {
+          // The per-book checkpoint remains usable when active routing fails.
+        }
+      }
+    });
+    return _checkpointWrite;
+  }
+
+  Future<void> _clearActiveResume() {
+    _checkpointWrite = _checkpointWrite.then((_) async {
+      try {
+        await _activeResumeStore.clear(_resumeOwnerId);
+      } catch (_) {
+        // Explicit stop still ends audio even if local route cleanup fails.
+      }
+    });
+    return _checkpointWrite;
+  }
+
+  Future<void> _finishNarrationResume() async {
+    await _flushNarrationCheckpoint(includeActiveResume: false);
+    await _clearActiveResume();
+  }
+
+  Future<void> _flushNarrationCheckpoint({
+    bool syncRemote = false,
+    bool includeActiveResume = true,
+    bool? wasPlaying,
+  }) async {
+    _narrationCheckpointTimer?.cancel();
+    _narrationCheckpointTimer = null;
+    final checkpoint = _captureNarrationCheckpoint();
+    if (checkpoint == null) return;
+    _lastNarrationCheckpoint = checkpoint;
+    await _queueNarrationCheckpointWrite(
+      checkpoint,
+      includeActiveResume: includeActiveResume,
+      wasPlaying: wasPlaying,
+    );
+    if (syncRemote) unawaited(_persistProgress());
   }
 
   BookNarrationDocument? get _currentNarrationDocument {
@@ -281,6 +670,8 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
       // Pause/resume repeats the current word instead of dropping a syllable.
       _narrationResumeOffset = wordStart;
     });
+    _scheduleNarrationCheckpoint();
+    _syncRemoteDock();
   }
 
   void _onNarrationTrackEvent(BookNarrationTrackEvent event) {
@@ -302,6 +693,7 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
     setState(() {
       _chapterIndex = event.chapterIndex;
       _narrationSegmentIndex = event.segmentIndex;
+      if (segmentChanged) _narrationResumeOffset = 0;
       if (event.alignmentGranularity !=
           BookNarrationAlignmentGranularity.none) {
         _narrationAlignmentGranularity = event.alignmentGranularity;
@@ -340,6 +732,9 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
           _narrationFinished = false;
           _narrationWordStart = event.highlightStart ?? 0;
           _narrationWordEnd = event.highlightEnd ?? 0;
+          if (event.highlightStart != null) {
+            _narrationResumeOffset = event.highlightStart!;
+          }
           break;
         case BookNarrationPlaybackPhase.paused:
           _narrationPreparing = false;
@@ -357,6 +752,8 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
           break;
       }
     });
+    _scheduleNarrationCheckpoint();
+    _syncRemoteDock();
 
     if (chapterChanged) {
       _narrationChangingChapter = true;
@@ -373,11 +770,12 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
     }
     if (segmentChanged) _revealNarrationSegment();
     if (event.phase == BookNarrationPlaybackPhase.completed) {
+      unawaited(_finishNarrationResume());
       _toast('You’ve reached the end of the book.');
     }
   }
 
-  void _onNarrationError(Object _) {
+  void _onNarrationError(Object error) {
     if (!mounted || (!_narrationPlaying && !_narrationPreparing)) return;
     _narrationRun++;
     _narrationTrackSessionId = null;
@@ -389,7 +787,30 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
     if (_narrator case final BookNarrationTrackController controller) {
       unawaited(controller.pauseTrack().catchError((_) {}));
     }
-    _toast('Narration paused. Try playing it again.');
+    _syncRemoteDock();
+    unawaited(_flushNarrationCheckpoint(wasPlaying: false));
+    _toast(_narrationFailureMessage(error));
+  }
+
+  String _narrationFailureMessage(Object error) {
+    return switch (classifyBookNarrationFailure(error)) {
+      BookNarrationFailureKind.network || BookNarrationFailureKind.timeout =>
+        'Narration paused. Check your connection and try again.',
+      BookNarrationFailureKind.rateLimited =>
+        'Narration is busy right now. Try again in a moment.',
+      BookNarrationFailureKind.service =>
+        'Expressive narration is temporarily unavailable. Try again shortly.',
+      BookNarrationFailureKind.authentication =>
+        'Your session expired. Sign in again to listen.',
+      BookNarrationFailureKind.content =>
+        'This passage couldn’t be prepared for narration.',
+      BookNarrationFailureKind.audio =>
+        'Narration audio couldn’t be loaded. Try again.',
+      BookNarrationFailureKind.invalidResponse =>
+        'Narration returned an invalid audio response. Try again.',
+      BookNarrationFailureKind.unknown =>
+        'Narration couldn’t start. Try again.',
+    };
   }
 
   void _onNarrationVoiceChanged(BookNarrationVoiceKind voice) {
@@ -441,6 +862,8 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
       _narrationFinished = false;
       _narrationSegmentIndex = segmentIndex;
     });
+    _syncRemoteDock();
+    unawaited(_flushNarrationCheckpoint(wasPlaying: false));
 
     try {
       if (!_narratorReady) {
@@ -452,6 +875,7 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
     } catch (_) {
       if (!mounted || run != _narrationRun) return;
       setState(() => _narrationPreparing = false);
+      _syncRemoteDock();
       _toast('Narration isn’t available on this device.');
       return;
     }
@@ -465,6 +889,7 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
             chapters: _narrationDocuments,
             initialChapterIndex: _chapterIndex,
             initialSegmentIndex: segmentIndex,
+            initialCharacterOffset: _narrationResumeOffset,
           );
           if (!mounted || run != _narrationTrackSessionId) return;
           _narrationTrackReady = true;
@@ -474,15 +899,19 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
           _narrationPlaying = true;
           _narrationFinished = false;
         });
+        _syncRemoteDock();
+        unawaited(_flushNarrationCheckpoint(wasPlaying: true));
         await trackController.playTrack();
-      } catch (_) {
+      } catch (error) {
         if (!mounted || run != _narrationTrackSessionId) return;
         _narrationTrackReady = false;
         setState(() {
           _narrationPlaying = false;
           _narrationPreparing = false;
         });
-        _toast('Narration paused. Check your connection and try again.');
+        _syncRemoteDock();
+        unawaited(_flushNarrationCheckpoint(wasPlaying: false));
+        _toast(_narrationFailureMessage(error));
       }
       return;
     }
@@ -490,6 +919,8 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
       _narrationPreparing = false;
       _narrationPlaying = true;
     });
+    _syncRemoteDock();
+    unawaited(_flushNarrationCheckpoint(wasPlaying: true));
     await _runNarration(run);
   }
 
@@ -535,6 +966,8 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
       } catch (_) {
         if (!mounted || run != _narrationRun) return;
         setState(() => _narrationPlaying = false);
+        _syncRemoteDock();
+        unawaited(_flushNarrationCheckpoint(wasPlaying: false));
         _toast('Narration paused. Try playing it again.');
         return;
       }
@@ -563,6 +996,8 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
             : lastDocument.segments.length - 1;
         _narrationResumeOffset = 0;
       });
+      _syncRemoteDock();
+      unawaited(_finishNarrationResume());
       _toast('You’ve reached the end of the book.');
       return false;
     }
@@ -596,10 +1031,12 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
           _narrationWordStart = 0;
           _narrationWordEnd = 0;
         });
+        _syncRemoteDock();
       }
       try {
         await controller.pauseTrack();
       } catch (_) {}
+      await _flushNarrationCheckpoint(syncRemote: true);
       return;
     }
     _narrationRun++;
@@ -611,13 +1048,19 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
           _narrationResumeOffset = _narrationWordStart;
         }
       });
+      _syncRemoteDock();
     }
     try {
       await _narrator.stop();
     } catch (_) {}
+    await _flushNarrationCheckpoint(syncRemote: true);
   }
 
   Future<void> _closeNarration() async {
+    _narrationCheckpointTimer?.cancel();
+    _narrationCheckpointTimer = null;
+    final checkpoint = _captureNarrationCheckpoint();
+    if (checkpoint != null) _lastNarrationCheckpoint = checkpoint;
     _narrationRun++;
     _narrationTrackSessionId = null;
     _narrationTrackReady = false;
@@ -633,16 +1076,54 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
         _narrationWordEnd = 0;
         _narrationAlignmentGranularity = BookNarrationAlignmentGranularity.none;
       });
+      _syncRemoteDock();
     }
-    try {
-      await _narrator.stop();
-    } catch (_) {}
+    final stop = _narrator.stop().catchError((_) {});
+    if (checkpoint != null) {
+      await _queueNarrationCheckpointWrite(
+        checkpoint,
+        includeActiveResume: false,
+      );
+      unawaited(_persistProgress());
+    }
+    await _clearActiveResume();
+    await stop;
+  }
+
+  Future<void> _retireNarration() async {
+    _narrationCheckpointTimer?.cancel();
+    _narrationCheckpointTimer = null;
+    final checkpoint = _captureNarrationCheckpoint();
+    if (checkpoint != null) _lastNarrationCheckpoint = checkpoint;
+    _narrationRun++;
+    _narrationTrackSessionId = null;
+    _narrationTrackReady = false;
+    if (mounted) {
+      setState(() {
+        _narrationVisible = false;
+        _narrationPlaying = false;
+        _narrationPreparing = false;
+        _narrationFinished = false;
+        _narrationSegmentIndex = null;
+        _narrationResumeOffset = 0;
+        _narrationWordStart = 0;
+        _narrationWordEnd = 0;
+      });
+      _syncRemoteDock();
+    }
+    final stop = _narrator.stop().catchError((_) {});
+    if (checkpoint != null) {
+      await _queueNarrationCheckpointWrite(
+        checkpoint,
+        includeActiveResume: false,
+      );
+    }
+    await stop;
   }
 
   Future<void> _skipNarration(int direction) async {
     final currentDocument = _currentNarrationDocument;
     if (currentDocument == null || currentDocument.segments.isEmpty) return;
-    final continuePlaying = _narrationPlaying;
     var chapter = _chapterIndex;
     var segment = (_narrationSegmentIndex ?? 0) + direction;
     if (segment < 0 && chapter > 0) {
@@ -653,9 +1134,34 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
       chapter++;
       segment = 0;
     }
+    await _seekNarrationTo(chapter, segment);
+  }
+
+  Future<void> _seekNarrationProgress(double progress) async {
+    final totalSegments = _narrationDocuments.fold<int>(
+      0,
+      (total, document) => total + document.segments.length,
+    );
+    if (totalSegments == 0) return;
+    var targetOrdinal = (progress.clamp(0.0, 1.0) * (totalSegments - 1))
+        .round();
+    for (var chapter = 0; chapter < _narrationDocuments.length; chapter++) {
+      final segmentCount = _narrationDocuments[chapter].segments.length;
+      if (targetOrdinal < segmentCount) {
+        await _seekNarrationTo(chapter, targetOrdinal);
+        return;
+      }
+      targetOrdinal -= segmentCount;
+    }
+  }
+
+  Future<void> _seekNarrationTo(int chapter, int segment) async {
+    if (_narrationDocuments.isEmpty) return;
+    chapter = chapter.clamp(0, _narrationDocuments.length - 1).toInt();
     final targetDocument = _narrationDocuments[chapter];
     if (targetDocument.segments.isEmpty) return;
     segment = segment.clamp(0, targetDocument.segments.length - 1).toInt();
+    final continuePlaying = _narrationPlaying;
 
     if (_narrator case final BookNarrationTrackController controller
         when _narrationTrackReady) {
@@ -664,9 +1170,11 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
         _narrationVisible = true;
         _narrationFinished = false;
         _narrationSegmentIndex = segment;
+        _narrationResumeOffset = 0;
         _narrationWordStart = 0;
         _narrationWordEnd = 0;
       });
+      _syncRemoteDock();
       try {
         await controller.seekToSentence(
           chapterIndex: chapter,
@@ -677,11 +1185,13 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
         _narrationTrackSessionId = sessionId;
         _narrationTrackReady = false;
         setState(() => _narrationPreparing = true);
+        _syncRemoteDock();
         await controller.loadTrack(
           sessionId: sessionId,
           chapters: _narrationDocuments,
           initialChapterIndex: chapter,
           initialSegmentIndex: segment,
+          initialCharacterOffset: 0,
         );
         if (!mounted || sessionId != _narrationTrackSessionId) return;
         _narrationTrackReady = true;
@@ -693,6 +1203,8 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
           _narrationPlaying = false;
           _narrationTrackReady = false;
         });
+        _syncRemoteDock();
+        unawaited(_flushNarrationCheckpoint(wasPlaying: false));
         _toast('Couldn’t move the narration. Try again.');
         return;
       }
@@ -709,6 +1221,7 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
         );
       }
       _revealNarrationSegment();
+      _scheduleNarrationCheckpoint();
       return;
     }
 
@@ -718,6 +1231,7 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
       _narrationPreparing = false;
       _narrationFinished = false;
     });
+    _syncRemoteDock();
     try {
       await _narrator.stop();
     } catch (_) {}
@@ -742,7 +1256,9 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
       _narrationWordStart = 0;
       _narrationWordEnd = 0;
     });
+    _syncRemoteDock();
     _revealNarrationSegment();
+    _scheduleNarrationCheckpoint();
     if (continuePlaying) unawaited(_playNarration());
   }
 
@@ -750,6 +1266,7 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
     if (_narrationSpeed == speed) return;
     if (_narrator is BookNarrationTrackController) {
       setState(() => _narrationSpeed = speed);
+      _syncRemoteDock();
       try {
         await _narrator.setSpeed(speed);
       } catch (_) {
@@ -767,6 +1284,7 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
       _narrationPlaying = false;
       _narrationPreparing = false;
     });
+    _syncRemoteDock();
     try {
       await _narrator.stop();
       if (_narratorReady) await _narrator.setSpeed(speed);
@@ -791,6 +1309,7 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
       _narrationPlaying = false;
       _narrationPreparing = continuePlaying;
     });
+    _syncRemoteDock();
     try {
       await _narrator.stop();
       await controller.setStyle(style);
@@ -799,6 +1318,7 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
     }
     if (!mounted) return;
     setState(() => _narrationPreparing = false);
+    _syncRemoteDock();
     unawaited(_persistProgress());
     if (continuePlaying) unawaited(_playNarration());
   }
@@ -867,7 +1387,9 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
       _narrationTrackSessionId = null;
       _narrationTrackReady = false;
       unawaited(_restartNarrationAfterChapterChange(continuePlaying));
+      _scheduleNarrationCheckpoint();
     }
+    _syncRemoteDock();
     unawaited(_persistProgress());
   }
 
@@ -1365,7 +1887,40 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
     await _persistProgress(completed: true);
     if (!mounted) return;
     _toast('Book completed');
-    Navigator.of(context).maybePop();
+    _leavingReader = true;
+    setState(() => _allowPop = true);
+    Navigator.of(context).pop();
+  }
+
+  Future<void> _leaveReader({Object? result}) async {
+    if (_leavingReader) return;
+    _leavingReader = true;
+    _narrationCheckpointTimer?.cancel();
+    _narrationCheckpointTimer = null;
+    final checkpoint = _captureNarrationCheckpoint();
+    if (checkpoint != null) _lastNarrationCheckpoint = checkpoint;
+    _narrationRun++;
+    if (mounted) {
+      setState(() {
+        _narrationVisible = false;
+        _narrationPlaying = false;
+        _narrationPreparing = false;
+      });
+      _syncRemoteDock();
+    }
+    final stop = _narrator.stop().catchError((_) {});
+    if (checkpoint != null) {
+      await _queueNarrationCheckpointWrite(
+        checkpoint,
+        includeActiveResume: false,
+      );
+      unawaited(_persistProgress());
+    }
+    await _clearActiveResume();
+    await stop;
+    if (!mounted) return;
+    setState(() => _allowPop = true);
+    Navigator.of(context).pop(result);
   }
 
   @override
@@ -1373,50 +1928,62 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
     final title = (_resource?.title.trim().isNotEmpty ?? false)
         ? _resource!.title
         : widget.fallbackTitle;
-    return Scaffold(
-      backgroundColor: _background,
-      body: SafeArea(
-        child: _loading
-            ? const Center(
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: AppColors.green,
-                ),
-              )
-            : _error != null
-            ? _errorState()
-            : Column(
-                children: [
-                  _topBar(title),
-                  LinearProgressIndicator(
-                    value: _progressPercent / 100,
-                    minHeight: 3,
-                    backgroundColor: _muted.withValues(alpha: .12),
-                    valueColor: const AlwaysStoppedAnimation<Color>(
-                      AppColors.green,
+    return PopScope<Object?>(
+      canPop: _allowPop,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) unawaited(_leaveReader(result: result));
+      },
+      child: Scaffold(
+        backgroundColor: _background,
+        body: SafeArea(
+          child: _loading
+              ? const Center(
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: AppColors.green,
+                  ),
+                )
+              : _error != null
+              ? _errorState()
+              : Column(
+                  children: [
+                    _topBar(title),
+                    LinearProgressIndicator(
+                      value: _progressPercent / 100,
+                      minHeight: 3,
+                      backgroundColor: _muted.withValues(alpha: .12),
+                      valueColor: const AlwaysStoppedAnimation<Color>(
+                        AppColors.green,
+                      ),
                     ),
-                  ),
-                  Expanded(
-                    child: _chapters.isEmpty
-                        ? Center(
-                            child: Text(
-                              'This book has no readable material yet.',
-                              style: AppTypography.body.copyWith(color: _muted),
+                    Expanded(
+                      child: _chapters.isEmpty
+                          ? Center(
+                              child: Text(
+                                'This book has no readable material yet.',
+                                style: AppTypography.body.copyWith(
+                                  color: _muted,
+                                ),
+                              ),
+                            )
+                          : PageView.builder(
+                              controller: _pageController,
+                              itemCount: _chapters.length,
+                              onPageChanged: _onChapterChanged,
+                              itemBuilder: (_, index) =>
+                                  _chapterPage(_chapters[index], index),
                             ),
-                          )
-                        : PageView.builder(
-                            controller: _pageController,
-                            itemCount: _chapters.length,
-                            onPageChanged: _onChapterChanged,
-                            itemBuilder: (_, index) =>
-                                _chapterPage(_chapters[index], index),
-                          ),
-                  ),
-                  if (_chapters.isNotEmpty && _narrationVisible)
-                    _narrationPlayer(),
-                  if (_chapters.isNotEmpty) _bottomBar(),
-                ],
-              ),
+                    ),
+                    if (_chapters.isNotEmpty &&
+                        _narrationVisible &&
+                        !AppShell.isWithinShell(context))
+                      _narrationPlayer(),
+                    if (_chapters.isNotEmpty) _bottomBar(),
+                    if (_chapters.isNotEmpty && AppShell.isWithinShell(context))
+                      SizedBox(height: AppShell.bottomNavClearance(context)),
+                  ],
+                ),
+        ),
       ),
     );
   }
@@ -1429,11 +1996,10 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
       padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
       child: Row(
         children: [
-          _circleButton(Icons.chevron_left_rounded, () {
-            _narrationRun++;
-            unawaited(_narrator.stop());
-            Navigator.of(context).maybePop();
-          }),
+          _circleButton(
+            Icons.chevron_left_rounded,
+            () => unawaited(_leaveReader()),
+          ),
           const SizedBox(width: 8),
           Expanded(
             child: Column(
@@ -1579,380 +2145,10 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen> {
   }
 
   Widget _narrationPlayer() {
-    final compactControls =
-        MediaQuery.sizeOf(context).width < 360 ||
-        MediaQuery.textScalerOf(context).scale(14) > 17;
-    final document = _currentNarrationDocument;
-    final segment = _currentNarrationSegment;
-    final segmentCount = document?.segments.length ?? 0;
-    final segmentIndex = (_narrationSegmentIndex ?? 0)
-        .clamp(0, segmentCount == 0 ? 0 : segmentCount - 1)
-        .toInt();
-    final progress = segmentCount == 0
-        ? 0.0
-        : ((segmentIndex + 1) / segmentCount).clamp(0.0, 1.0);
-    final currentText =
-        segment?.text ??
-        (_narrationPreparing
-            ? _narrationVoice == BookNarrationVoiceKind.device
-                  ? 'Preparing the device voice…'
-                  : 'Preparing expressive narration…'
-            : 'Ready to listen');
-    final speedLabel = _narrationSpeed == _narrationSpeed.roundToDouble()
-        ? '${_narrationSpeed.toInt()}×'
-        : '${_narrationSpeed.toStringAsFixed(2).replaceFirst(RegExp(r'0$'), '')}×';
-    final modelLabel = switch (_narrationModel.toLowerCase()) {
-      'speech-2.8-hd' => 'Speech 2.8 HD',
-      'speech-2.8-turbo' => 'Speech 2.8 Turbo',
-      final value when value.isNotEmpty => value.replaceAll('-', ' '),
-      _ => 'AI narration',
-    };
-    final trackingLabel = switch (_narrationAlignmentGranularity) {
-      BookNarrationAlignmentGranularity.word => 'Word synced',
-      BookNarrationAlignmentGranularity.phrase => 'Phrase synced',
-      BookNarrationAlignmentGranularity.sentence => 'Sentence synced',
-      BookNarrationAlignmentGranularity.none => null,
-    };
-    final narratorMetadata = [
-      _narrationVoiceLabel,
-      modelLabel,
-      if (trackingLabel != null) trackingLabel,
-    ].join(' · ');
-    final providerSemantics = _narrationProvider.trim().isEmpty
-        ? ''
-        : ' Provider ${_narrationProvider.trim()}.';
-
-    return Container(
-      key: const Key('book-narration-player'),
-      decoration: BoxDecoration(
-        color: _chrome,
-        border: Border(top: BorderSide(color: _muted.withValues(alpha: .13))),
-      ),
-      padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                width: 34,
-                height: 34,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: AppColors.greenSoft.withValues(
-                    alpha: _readingTheme == 2 ? .16 : .8,
-                  ),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  _narrationPlaying
-                      ? Icons.graphic_eq_rounded
-                      : Icons.headphones_rounded,
-                  color: AppColors.green,
-                  size: 19,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'LISTENING · ${_narrationVoice == BookNarrationVoiceKind.device ? 'DEVICE VOICE' : '${_narrationStyle.label.toUpperCase()} AI'} · CHAPTER ${_chapterIndex + 1} OF ${_chapters.length}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppTypography.kicker.copyWith(
-                        color: AppColors.green,
-                        fontSize: 9.5,
-                      ),
-                    ),
-                    const SizedBox(height: 3),
-                    Semantics(
-                      liveRegion: true,
-                      label: 'Now reading: $currentText',
-                      child: ExcludeSemantics(
-                        child: Text(
-                          currentText,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: AppTypography.captionMedium.copyWith(
-                            color: _ink,
-                            fontSize: 12.5,
-                            height: 1.3,
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Semantics(
-                      label:
-                          'AI narrator. $narratorMetadata. '
-                          '$_narrationDisclosure.$providerSemantics',
-                      child: ExcludeSemantics(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              narratorMetadata,
-                              key: const Key('book-narration-metadata'),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: AppTypography.captionMedium.copyWith(
-                                color: AppColors.green,
-                                fontSize: 10.5,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                            const SizedBox(height: 1),
-                            Text(
-                              _narrationDisclosure,
-                              key: const Key('book-narration-disclosure'),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: AppTypography.caption.copyWith(
-                                color: _muted,
-                                fontSize: 10,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              IconButton(
-                key: const Key('book-narration-close'),
-                tooltip: 'Close listening controls',
-                onPressed: () => unawaited(_closeNarration()),
-                visualDensity: VisualDensity.compact,
-                icon: Icon(Icons.close_rounded, color: _muted, size: 19),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              PopupMenuButton<BookNarrationStyle>(
-                key: const Key('book-narration-style'),
-                tooltip: 'Narration style',
-                initialValue: _narrationStyle,
-                onSelected: (style) => unawaited(_changeNarrationStyle(style)),
-                color: _chrome,
-                itemBuilder: (context) => [
-                  for (final style in BookNarrationStyle.values)
-                    PopupMenuItem<BookNarrationStyle>(
-                      value: style,
-                      height: 64,
-                      child: Row(
-                        children: [
-                          SizedBox(
-                            width: 26,
-                            child: style == _narrationStyle
-                                ? const Icon(
-                                    Icons.check_rounded,
-                                    size: 18,
-                                    color: AppColors.green,
-                                  )
-                                : null,
-                          ),
-                          Expanded(
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  style.label,
-                                  style: AppTypography.bodyMedium.copyWith(
-                                    color: _ink,
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  style.description,
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: AppTypography.caption.copyWith(
-                                    color: _muted,
-                                    fontSize: 11,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                ],
-                child: Container(
-                  height: 34,
-                  padding: EdgeInsets.symmetric(
-                    horizontal: compactControls ? 8 : 10,
-                  ),
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: _background,
-                    borderRadius: AppRadii.brFull,
-                    border: Border.all(color: _muted.withValues(alpha: .16)),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        _narrationVoice == BookNarrationVoiceKind.device
-                            ? Icons.phone_iphone_rounded
-                            : Icons.auto_awesome_rounded,
-                        size: 14,
-                        color: _narrationVoice == BookNarrationVoiceKind.device
-                            ? _muted
-                            : AppColors.green,
-                      ),
-                      if (!compactControls) ...[
-                        const SizedBox(width: 5),
-                        Text(
-                          _narrationVoice == BookNarrationVoiceKind.device
-                              ? 'Device'
-                              : _narrationStyle.label,
-                          style: AppTypography.captionMedium.copyWith(
-                            color: _ink,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              PopupMenuButton<double>(
-                key: const Key('book-narration-speed'),
-                tooltip: 'Listening speed',
-                initialValue: _narrationSpeed,
-                onSelected: (speed) => unawaited(_changeNarrationSpeed(speed)),
-                color: _chrome,
-                itemBuilder: (context) => [
-                  for (final speed in const [0.75, 1.0, 1.25, 1.5, 2.0])
-                    PopupMenuItem<double>(
-                      value: speed,
-                      child: Row(
-                        children: [
-                          SizedBox(
-                            width: 24,
-                            child: speed == _narrationSpeed
-                                ? const Icon(
-                                    Icons.check_rounded,
-                                    size: 18,
-                                    color: AppColors.green,
-                                  )
-                                : null,
-                          ),
-                          Text(
-                            '${speed == speed.roundToDouble() ? speed.toInt() : speed}×',
-                            style: AppTypography.bodyMedium.copyWith(
-                              color: _ink,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                ],
-                child: Container(
-                  height: 34,
-                  padding: const EdgeInsets.symmetric(horizontal: 10),
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: _background,
-                    borderRadius: AppRadii.brFull,
-                    border: Border.all(color: _muted.withValues(alpha: .16)),
-                  ),
-                  child: Text(
-                    speedLabel,
-                    style: AppTypography.captionMedium.copyWith(
-                      color: _ink,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: ClipRRect(
-                  borderRadius: AppRadii.brFull,
-                  child: LinearProgressIndicator(
-                    value: progress,
-                    minHeight: 4,
-                    backgroundColor: _muted.withValues(alpha: .12),
-                    valueColor: const AlwaysStoppedAnimation<Color>(
-                      AppColors.green,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                segmentCount == 0 ? '—' : '${segmentIndex + 1}/$segmentCount',
-                style: AppTypography.kicker.copyWith(
-                  color: _muted,
-                  fontSize: 9.5,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              IconButton(
-                key: const Key('book-narration-previous'),
-                tooltip: 'Previous sentence',
-                onPressed: segmentCount == 0
-                    ? null
-                    : () => unawaited(_skipNarration(-1)),
-                visualDensity: VisualDensity.compact,
-                icon: Icon(Icons.skip_previous_rounded, color: _ink, size: 23),
-              ),
-              SizedBox(
-                width: 42,
-                height: 42,
-                child: IconButton.filled(
-                  key: const Key('book-narration-play-pause'),
-                  tooltip: _narrationPlaying ? 'Pause' : 'Play',
-                  onPressed: () => unawaited(_toggleNarration()),
-                  style: IconButton.styleFrom(
-                    backgroundColor: AppColors.green,
-                    foregroundColor: Colors.white,
-                  ),
-                  icon: _narrationPreparing
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : Icon(
-                          _narrationPlaying
-                              ? Icons.pause_rounded
-                              : Icons.play_arrow_rounded,
-                          size: 24,
-                        ),
-                ),
-              ),
-              IconButton(
-                key: const Key('book-narration-next'),
-                tooltip: 'Next sentence',
-                onPressed: segmentCount == 0
-                    ? null
-                    : () => unawaited(_skipNarration(1)),
-                visualDensity: VisualDensity.compact,
-                icon: Icon(Icons.skip_next_rounded, color: _ink, size: 23),
-              ),
-            ],
-          ),
-        ],
-      ),
+    return BookNarrationDock(
+      controller: _remoteDockController,
+      backgroundColor: _chrome,
+      foregroundColor: _ink,
     );
   }
 

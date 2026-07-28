@@ -15,13 +15,15 @@ import '../features/cmpys/presentation/plan_screen.dart';
 import '../features/cmpys/presentation/reels_screen.dart';
 import '../features/cmpys/presentation/today_screen.dart';
 import '../features/cmpys/presentation/you_screen.dart';
+import '../features/plan/presentation/book_narration_checkpoint.dart';
+import '../features/plan/presentation/book_reader_screen.dart';
 
 /// Route paths for the CMPYS app.
 ///
 /// The whole experience is: splash → auth → AI onboarding → the five-tab
-/// shell. Detail screens (record, readers, notes, settings, etc.) are pushed
-/// with `CmpysPageRoute` from within their tabs, so they don't need route
-/// entries here.
+/// shell. Most detail screens are pushed within their tabs. Book readers also
+/// have nested declarative routes so a durable narration session can reopen in
+/// its original shell branch on cold start.
 abstract final class AppRoutes {
   static const String splash = '/splash';
   static const String auth = '/auth';
@@ -40,9 +42,71 @@ abstract final class AppRoutes {
   static const String chat = '/chat';
   static const String vault = '/vault'; // Compare tab
   static const String profile = '/profile'; // You tab
+
+  static const String bookRouteSegment = 'book/:resourceId';
+  static const String planBook = '/plan/book/:resourceId';
+  static const String profileBook = '/profile/book/:resourceId';
+
+  /// Builds a declarative reader location inside its owning shell branch.
+  static String bookReaderLocation({
+    required int branchIndex,
+    required String resourceId,
+    required String fallbackTitle,
+    required bool autoplayOnRestore,
+  }) {
+    final normalizedResourceId = resourceId.trim();
+    final normalizedTitle = fallbackTitle.trim();
+    if (normalizedResourceId.isEmpty) {
+      throw ArgumentError.value(resourceId, 'resourceId', 'must not be empty');
+    }
+    if (normalizedTitle.isEmpty) {
+      throw ArgumentError.value(
+        fallbackTitle,
+        'fallbackTitle',
+        'must not be empty',
+      );
+    }
+
+    final branchSegment = switch (branchIndex) {
+      ActiveBookNarrationResume.planBranchIndex => 'plan',
+      ActiveBookNarrationResume.profileBranchIndex => 'profile',
+      _ => throw ArgumentError.value(
+        branchIndex,
+        'branchIndex',
+        'must identify the Plan or Profile shell branch',
+      ),
+    };
+    return Uri(
+      pathSegments: ['', branchSegment, 'book', normalizedResourceId],
+      queryParameters: {
+        'title': normalizedTitle,
+        if (autoplayOnRestore) 'autoplay': '1',
+      },
+    ).toString();
+  }
 }
 
 final _rootNavigatorKey = GlobalKey<NavigatorState>();
+
+GoRoute _bookReaderRoute({required int branchIndex}) {
+  return GoRoute(
+    path: AppRoutes.bookRouteSegment,
+    pageBuilder: (context, state) {
+      final fallbackTitle = state.uri.queryParameters['title']?.trim();
+      return CmpysPageTransition.page(
+        key: state.pageKey,
+        child: BookReaderScreen(
+          resourceId: state.pathParameters['resourceId']!,
+          fallbackTitle: fallbackTitle == null || fallbackTitle.isEmpty
+              ? 'Book'
+              : fallbackTitle,
+          shellBranchIndex: branchIndex,
+          autoplayOnRestore: state.uri.queryParameters['autoplay'] == '1',
+        ),
+      );
+    },
+  );
+}
 
 /// Router provider. Navigation is driven explicitly by screens (no global
 /// redirects); the splash decides the first destination from session state.
@@ -114,6 +178,11 @@ final routerProvider = Provider<GoRouter>((ref) {
                   key: state.pageKey,
                   child: const CmpysPlanScreen(),
                 ),
+                routes: [
+                  _bookReaderRoute(
+                    branchIndex: ActiveBookNarrationResume.planBranchIndex,
+                  ),
+                ],
               ),
             ],
           ),
@@ -147,6 +216,11 @@ final routerProvider = Provider<GoRouter>((ref) {
                   key: state.pageKey,
                   child: const CmpysYouScreen(),
                 ),
+                routes: [
+                  _bookReaderRoute(
+                    branchIndex: ActiveBookNarrationResume.profileBranchIndex,
+                  ),
+                ],
               ),
             ],
           ),

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/design_tokens.dart';
+import '../../../core/ui/app_shell.dart';
 import '../../../core/ui/cmpys/cmpys_primitives.dart';
 import '../../../core/ui/motion/page_transition.dart';
 import '../../session/data/content_resources_repository.dart';
@@ -84,10 +85,13 @@ class _ReadingLibraryScreenState extends ConsumerState<ReadingLibraryScreen> {
   }
 
   Future<void> _open(ContentResource book) async {
-    await Navigator.of(context, rootNavigator: true).push(
+    await Navigator.of(context).push(
       CmpysPageRoute<void>(
-        builder: (_) =>
-            BookReaderScreen(resourceId: book.id, fallbackTitle: book.title),
+        builder: (_) => BookReaderScreen(
+          resourceId: book.id,
+          fallbackTitle: book.title,
+          shellBranchIndex: 4,
+        ),
       ),
     );
     if (mounted) await _load();
@@ -188,7 +192,14 @@ class _ReadingLibraryScreenState extends ConsumerState<ReadingLibraryScreen> {
     final books = _visibleBooks;
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(18, 8, 18, 36),
+      padding: EdgeInsets.fromLTRB(
+        18,
+        8,
+        18,
+        AppShell.isWithinShell(context)
+            ? AppShell.bottomNavClearance(context)
+            : 36,
+      ),
       children: [
         if (_continueReading != null) ...[
           const CmpysKicker('Continue reading'),

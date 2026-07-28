@@ -2,11 +2,13 @@ import 'dart:async';
 import 'dart:collection';
 
 import 'package:audio_session/audio_session.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:markdown/markdown.dart' as md;
 
+import '../../../core/network/api_error.dart';
 import '../../session/data/content_resources_repository.dart';
 
 typedef BookNarrationProgressHandler =
@@ -15,6 +17,8 @@ typedef BookNarrationErrorHandler = void Function(Object error);
 typedef BookNarrationVoiceHandler = void Function(BookNarrationVoiceKind voice);
 typedef BookNarrationTrackHandler =
     void Function(BookNarrationTrackEvent event);
+
+const _bookNarrationRetryDelay = Duration(milliseconds: 350);
 
 enum BookNarrationStyle {
   expressive(
@@ -53,6 +57,91 @@ enum BookNarrationPlaybackPhase {
   paused,
   completed,
 }
+
+enum BookNarrationFailureKind {
+  network,
+  timeout,
+  rateLimited,
+  service,
+  authentication,
+  content,
+  audio,
+  invalidResponse,
+  unknown,
+}
+
+BookNarrationFailureKind classifyBookNarrationFailure(Object error) {
+  if (error is DioException) {
+    final nested = error.error;
+    if (nested != null && !identical(nested, error)) {
+      final nestedKind = classifyBookNarrationFailure(nested);
+      if (nestedKind != BookNarrationFailureKind.unknown) return nestedKind;
+    }
+    switch (error.type) {
+      case DioExceptionType.connectionTimeout:
+      case DioExceptionType.sendTimeout:
+      case DioExceptionType.receiveTimeout:
+        return BookNarrationFailureKind.timeout;
+      case DioExceptionType.connectionError:
+        return BookNarrationFailureKind.network;
+      default:
+        break;
+    }
+    final status = error.response?.statusCode;
+    if (status == 408) return BookNarrationFailureKind.timeout;
+    if (status == 429) return BookNarrationFailureKind.rateLimited;
+    if (status != null && status >= 500) {
+      return BookNarrationFailureKind.service;
+    }
+    if (status == 401 || status == 403) {
+      return BookNarrationFailureKind.authentication;
+    }
+    if (status == 404 || status == 422) {
+      return BookNarrationFailureKind.content;
+    }
+  }
+  if (error is NetworkError) return BookNarrationFailureKind.network;
+  if (error is TimeoutError) return BookNarrationFailureKind.timeout;
+  if (error is ApiError) {
+    final status = error.statusCode;
+    if (status == 408) return BookNarrationFailureKind.timeout;
+    if (status == 429) return BookNarrationFailureKind.rateLimited;
+    if (status != null && status >= 500) {
+      return BookNarrationFailureKind.service;
+    }
+    if (status == 401 || status == 403) {
+      return BookNarrationFailureKind.authentication;
+    }
+    if (status == 404 || status == 422) {
+      return BookNarrationFailureKind.content;
+    }
+  }
+  if (error is PlayerException || error is PlayerInterruptedException) {
+    return BookNarrationFailureKind.audio;
+  }
+  if (error is FormatException || error is TypeError) {
+    return BookNarrationFailureKind.invalidResponse;
+  }
+  return BookNarrationFailureKind.unknown;
+}
+
+@visibleForTesting
+bool isTransientBookNarrationLoadError(Object error) {
+  return switch (classifyBookNarrationFailure(error)) {
+    BookNarrationFailureKind.network ||
+    BookNarrationFailureKind.timeout ||
+    BookNarrationFailureKind.rateLimited ||
+    BookNarrationFailureKind.service => true,
+    _ => false,
+  };
+}
+
+@visibleForTesting
+bool shouldSurfaceBookNarrationAppendError({
+  required bool hasError,
+  required bool wantsPlayback,
+  required bool queueIsExhausted,
+}) => hasError && wantsPlayback && queueIsExhausted;
 
 @immutable
 class BookNarrationTrackEvent {
@@ -110,6 +199,7 @@ abstract interface class BookNarrationTrackController {
     required List<BookNarrationDocument> chapters,
     required int initialChapterIndex,
     required int initialSegmentIndex,
+    int initialCharacterOffset = 0,
   });
 
   Future<void> playTrack();
@@ -175,10 +265,13 @@ final class ExpressiveBookNarrator
   int _trackQueueIndex = 0;
   int _trackSegmentIndex = 0;
   bool _trackWantsPlayback = false;
+  Object? _trackAppendError;
+  bool _trackAppendErrorReported = false;
   String _lastTrackEventKey = '';
   List<_NarrationTrackEntry> _trackEntries = const [];
   final List<BookNarrationAudio> _trackAssets = [];
-  final List<Completer<void>> _queuedChunks = [];
+  final List<Future<BookNarrationAudio>?> _trackChunkLoads = [];
+  final List<Completer<Object?>> _queuedChunks = [];
 
   BookNarrationStyle get style => _style;
 
@@ -251,12 +344,40 @@ final class ExpressiveBookNarrator
     return request;
   }
 
+  Future<BookNarrationAudio> _requestTrackChunk(int index, {required int run}) {
+    final existing = _trackChunkLoads[index];
+    if (existing != null) return existing;
+    final request = _loadTrackChunkWithRetry(
+      _trackEntries[index].chunk.text,
+      run: run,
+    );
+    _trackChunkLoads[index] = request;
+    return request;
+  }
+
+  Future<BookNarrationAudio> _loadTrackChunkWithRetry(
+    String text, {
+    required int run,
+  }) async {
+    try {
+      return await _load(text);
+    } catch (error, stackTrace) {
+      if (!isTransientBookNarrationLoadError(error)) rethrow;
+      // One short, bounded retry keeps a temporary transport/provider miss
+      // from breaking the track without multiplying paid synthesis requests.
+      await Future<void>.delayed(_bookNarrationRetryDelay);
+      if (run != _trackRun) Error.throwWithStackTrace(error, stackTrace);
+      return _load(text);
+    }
+  }
+
   @override
   Future<void> loadTrack({
     required int sessionId,
     required List<BookNarrationDocument> chapters,
     required int initialChapterIndex,
     required int initialSegmentIndex,
+    int initialCharacterOffset = 0,
   }) async {
     if (_player == null) await initialize(speed: _speed);
     final run = ++_trackRun;
@@ -274,20 +395,27 @@ final class ExpressiveBookNarrator
     _trackSessionId = sessionId;
     _trackQueueIndex = 0;
     _trackSegmentIndex = initialSegmentIndex;
+    _trackAppendError = null;
+    _trackAppendErrorReported = false;
     _lastTrackEventKey = '';
     _trackAssets.clear();
+    _trackChunkLoads.clear();
     _trackEntries = _buildTrackEntries(
       chapters: chapters,
       initialChapterIndex: initialChapterIndex,
       initialSegmentIndex: initialSegmentIndex,
+      initialCharacterOffset: initialCharacterOffset,
     );
     if (_trackEntries.isEmpty) {
       throw StateError('Narration track has no readable chunks');
     }
+    _trackChunkLoads.addAll(
+      List<Future<BookNarrationAudio>?>.filled(_trackEntries.length, null),
+    );
     _queuedChunks.addAll(
-      List<Completer<void>>.generate(
+      List<Completer<Object?>>.generate(
         _trackEntries.length,
-        (_) => Completer<void>(),
+        (_) => Completer<Object?>(),
       ),
     );
     _emitTrackEvent(
@@ -296,8 +424,8 @@ final class ExpressiveBookNarrator
       segmentIndex: initialSegmentIndex,
     );
 
-    _warmTrackAhead(0);
-    final firstAudio = await _load(_trackEntries.first.chunk.text);
+    _warmTrackAhead(0, run: run);
+    final firstAudio = await _requestTrackChunk(0, run: run);
     if (run != _trackRun) return;
     final player = _player!;
     await player.setAudioSources([
@@ -305,7 +433,7 @@ final class ExpressiveBookNarrator
     ]);
     if (run != _trackRun) return;
     _trackAssets.add(firstAudio);
-    _queuedChunks.first.complete();
+    _queuedChunks.first.complete(null);
     await player.setSpeed(_speed);
 
     _trackIndexSubscription = player.currentIndexStream.listen((index) {
@@ -348,6 +476,7 @@ final class ExpressiveBookNarrator
       firstAudio,
       _trackEntries.first.chunk,
       initialSegmentIndex,
+      characterOffset: initialCharacterOffset,
     );
     if (initialPosition > Duration.zero) {
       await player.seek(initialPosition, index: 0);
@@ -369,6 +498,8 @@ final class ExpressiveBookNarrator
     }
     _trackWantsPlayback = true;
     final run = _trackRun;
+    _reportTrackAppendErrorIfExhausted(run: run);
+    if (_trackAppendErrorReported) return;
     unawaited(
       _player!.play().catchError((Object error, StackTrace _) {
         if (run == _trackRun) _errorHandler?.call(error);
@@ -404,7 +535,8 @@ final class ExpressiveBookNarrator
       throw RangeError('Sentence is outside the loaded narration track');
     }
     final run = _trackRun;
-    if (!_queuedChunks[targetIndex].isCompleted) {
+    final targetAvailability = _queuedChunks[targetIndex];
+    if (!targetAvailability.isCompleted) {
       final entry = _trackEntries[targetIndex];
       await _player?.pause();
       _emitTrackEvent(
@@ -412,9 +544,13 @@ final class ExpressiveBookNarrator
         chapterIndex: entry.chapterIndex,
         segmentIndex: segmentIndex,
       );
-      await _queuedChunks[targetIndex].future;
     }
-    if (run != _trackRun || targetIndex >= _trackAssets.length) return;
+    final loadError = await targetAvailability.future;
+    if (run != _trackRun) return;
+    if (loadError != null) throw loadError;
+    if (targetIndex >= _trackAssets.length) {
+      throw StateError('Narration chunk finished without a playable asset');
+    }
     final asset = _trackAssets[targetIndex];
     final entry = _trackEntries[targetIndex];
     _trackQueueIndex = targetIndex;
@@ -440,22 +576,29 @@ final class ExpressiveBookNarrator
     }
   }
 
-  void _warmTrackAhead(int index) {
+  void _warmTrackAhead(int index, {required int run}) {
     for (
       var candidate = index;
       candidate < _trackEntries.length && candidate <= index + 2;
       candidate++
     ) {
-      unawaited(_load(_trackEntries[candidate].chunk.text));
+      // Attach an error listener immediately: this is speculative work, and
+      // the sequential appender remains responsible for terminal handling.
+      unawaited(
+        _requestTrackChunk(
+          candidate,
+          run: run,
+        ).then<void>((_) {}, onError: (Object _, StackTrace _) {}),
+      );
     }
   }
 
   Future<void> _appendRemainingTrack(int run) async {
-    try {
-      for (var index = 1; index < _trackEntries.length; index++) {
-        if (run != _trackRun) return;
-        _warmTrackAhead(index);
-        final audio = await _load(_trackEntries[index].chunk.text);
+    for (var index = 1; index < _trackEntries.length; index++) {
+      if (run != _trackRun) return;
+      try {
+        _warmTrackAhead(index, run: run);
+        final audio = await _requestTrackChunk(index, run: run);
         if (run != _trackRun) return;
         final player = _player!;
         final resumeFromExhaustedQueue =
@@ -467,7 +610,7 @@ final class ExpressiveBookNarrator
         if (run != _trackRun) return;
         _trackAssets.add(audio);
         if (!_queuedChunks[index].isCompleted) {
-          _queuedChunks[index].complete();
+          _queuedChunks[index].complete(null);
         }
         if (resumeFromExhaustedQueue) {
           _trackQueueIndex = index;
@@ -477,15 +620,39 @@ final class ExpressiveBookNarrator
           if (run != _trackRun) return;
           unawaited(player.play());
         }
+      } catch (error) {
+        if (run != _trackRun) return;
+        _trackAppendError = error;
+        for (
+          var pendingIndex = index;
+          pendingIndex < _queuedChunks.length;
+          pendingIndex++
+        ) {
+          final waiter = _queuedChunks[pendingIndex];
+          if (!waiter.isCompleted) waiter.complete(error);
+        }
+        // Already-loaded audio remains playable. The terminal error is shown
+        // only after playback reaches the end of that contiguous queue.
+        _reportTrackAppendErrorIfExhausted(run: run);
+        return;
       }
-    } catch (error) {
-      if (run != _trackRun) return;
-      final pending = _queuedChunks.where((waiter) => !waiter.isCompleted);
-      for (final waiter in pending) {
-        waiter.complete();
-      }
-      _errorHandler?.call(error);
     }
+  }
+
+  void _reportTrackAppendErrorIfExhausted({required int run}) {
+    final player = _player;
+    if (run != _trackRun || player == null || _trackAppendErrorReported) {
+      return;
+    }
+    if (!shouldSurfaceBookNarrationAppendError(
+      hasError: _trackAppendError != null,
+      wantsPlayback: _trackWantsPlayback,
+      queueIsExhausted: player.processingState == ProcessingState.completed,
+    )) {
+      return;
+    }
+    _trackAppendErrorReported = true;
+    _errorHandler?.call(_trackAppendError!);
   }
 
   void _handleTrackPlayerState(PlayerState state, {required int run}) {
@@ -502,6 +669,10 @@ final class ExpressiveBookNarrator
         );
         return;
       case ProcessingState.completed:
+        if (_trackAppendError != null) {
+          _reportTrackAppendErrorIfExhausted(run: run);
+          return;
+        }
         if (_trackAssets.length < _trackEntries.length) {
           _emitTrackEvent(
             phase: BookNarrationPlaybackPhase.buffering,
@@ -556,6 +727,26 @@ final class ExpressiveBookNarrator
     if (audio == null) return;
     final cue = activeBookNarrationCueAt(audio.alignment, position);
     if (cue == null) {
+      if (audio.alignment.isEmpty) {
+        final estimate = estimateBookNarrationTrackHighlight(
+          chunk: entry.chunk,
+          position: position,
+          duration: audio.duration ?? _player?.duration,
+        );
+        if (estimate != null) {
+          _trackSegmentIndex = estimate.segmentIndex;
+          _emitTrackEvent(
+            phase: BookNarrationPlaybackPhase.playing,
+            chapterIndex: entry.chapterIndex,
+            segmentIndex: estimate.segmentIndex,
+            highlightStart: estimate.highlightStart,
+            highlightEnd: estimate.highlightEnd,
+            audio: audio,
+            force: force,
+          );
+          return;
+        }
+      }
       _emitTrackEvent(
         phase: BookNarrationPlaybackPhase.playing,
         chapterIndex: entry.chapterIndex,
@@ -631,27 +822,18 @@ final class ExpressiveBookNarrator
   Duration _positionForSegment(
     BookNarrationAudio audio,
     BookNarrationChunk chunk,
-    int segmentIndex,
-  ) {
-    final slice = chunk.segments.firstWhere(
-      (candidate) => candidate.segmentIndex == segmentIndex,
-      orElse: () => chunk.segments.first,
-    );
-    for (final cue in audio.alignment) {
-      if (cue.end > slice.start && cue.start < slice.end) {
-        return cue.startTime;
-      }
-    }
-    final duration = audio.duration;
-    if (duration == null || chunk.text.isEmpty) return Duration.zero;
-    return Duration(
-      microseconds: duration.inMicroseconds * slice.start ~/ chunk.text.length,
-    );
-  }
+    int segmentIndex, {
+    int characterOffset = 0,
+  }) => bookNarrationPositionForCharacterOffset(
+    audio: audio,
+    chunk: chunk,
+    segmentIndex: segmentIndex,
+    characterOffset: characterOffset,
+  );
 
   void _releaseQueuedChunks() {
     for (final waiter in _queuedChunks) {
-      if (!waiter.isCompleted) waiter.complete();
+      if (!waiter.isCompleted) waiter.complete(null);
     }
     _queuedChunks.clear();
   }
@@ -750,31 +932,7 @@ final class ExpressiveBookNarrator
     String text,
     Duration position,
     Duration? duration,
-  ) {
-    if (duration == null || duration <= Duration.zero) return null;
-    final words = RegExp(r'\S+').allMatches(text).toList(growable: false);
-    if (words.isEmpty) return null;
-    final total = duration.inMicroseconds;
-    final current = position.inMicroseconds.clamp(0, total);
-    var totalWeight = 0;
-    final weights = <int>[];
-    for (final word in words) {
-      final value = word.group(0)!;
-      var weight = value.length.clamp(1, 14);
-      if (RegExp(r'[,;:]$').hasMatch(value)) weight += 3;
-      if (RegExp(r'[.!?]$').hasMatch(value)) weight += 6;
-      weights.add(weight);
-      totalWeight += weight;
-    }
-    var elapsedWeight = 0;
-    for (var index = 0; index < words.length; index++) {
-      elapsedWeight += weights[index];
-      if (current * totalWeight <= total * elapsedWeight) {
-        return _LocalNarrationCue(words[index].start, words[index].end);
-      }
-    }
-    return _LocalNarrationCue(words.last.start, words.last.end);
-  }
+  ) => _estimatedBookNarrationCue(text, position, duration);
 
   @override
   Future<void> stop() async {
@@ -790,6 +948,9 @@ final class ExpressiveBookNarrator
     _trackStateSubscription = null;
     _trackEntries = const [];
     _trackAssets.clear();
+    _trackChunkLoads.clear();
+    _trackAppendError = null;
+    _trackAppendErrorReported = false;
     await _player?.stop();
   }
 
@@ -908,6 +1069,7 @@ final class AdaptiveBookNarrator
     required List<BookNarrationDocument> chapters,
     required int initialChapterIndex,
     required int initialSegmentIndex,
+    int initialCharacterOffset = 0,
   }) async {
     _trackActive = true;
     if (!_expressiveReady) {
@@ -923,6 +1085,7 @@ final class AdaptiveBookNarrator
       chapters: chapters,
       initialChapterIndex: initialChapterIndex,
       initialSegmentIndex: initialSegmentIndex,
+      initialCharacterOffset: initialCharacterOffset,
     );
   }
 
@@ -1005,6 +1168,122 @@ final class _LocalNarrationCue {
   final int end;
 }
 
+_LocalNarrationCue? _estimatedBookNarrationCue(
+  String text,
+  Duration position,
+  Duration? duration,
+) {
+  if (duration == null || duration <= Duration.zero) return null;
+  final words = RegExp(r'\S+').allMatches(text).toList(growable: false);
+  if (words.isEmpty) return null;
+
+  final totalDuration = duration.inMicroseconds;
+  final currentPosition = position.inMicroseconds
+      .clamp(0, totalDuration)
+      .toInt();
+  var totalWeight = 0;
+  final weights = <int>[];
+  for (final word in words) {
+    final value = word.group(0)!;
+    var weight = value.length.clamp(1, 14).toInt();
+    if (RegExp(r'[,;:]$').hasMatch(value)) weight += 3;
+    if (RegExp(r'[.!?]$').hasMatch(value)) weight += 6;
+    weights.add(weight);
+    totalWeight += weight;
+  }
+
+  var elapsedWeight = 0;
+  for (var index = 0; index < words.length; index++) {
+    elapsedWeight += weights[index];
+    if (currentPosition * totalWeight <= totalDuration * elapsedWeight) {
+      return _LocalNarrationCue(words[index].start, words[index].end);
+    }
+  }
+  return _LocalNarrationCue(words.last.start, words.last.end);
+}
+
+@immutable
+class BookNarrationTrackHighlight {
+  const BookNarrationTrackHighlight({
+    required this.segmentIndex,
+    required this.highlightStart,
+    required this.highlightEnd,
+  });
+
+  final int segmentIndex;
+  final int highlightStart;
+  final int highlightEnd;
+}
+
+/// Estimates the visible, segment-relative word for audio without alignment.
+///
+/// The estimated cue begins in generated-chunk coordinates. Narration chunks
+/// can contain several sentence segments (or part of a split long segment), so
+/// the cue is translated through its owning slice before it reaches the reader.
+@visibleForTesting
+BookNarrationTrackHighlight? estimateBookNarrationTrackHighlight({
+  required BookNarrationChunk chunk,
+  required Duration position,
+  required Duration? duration,
+}) {
+  if (chunk.segments.isEmpty) return null;
+  final cue = _estimatedBookNarrationCue(chunk.text, position, duration);
+  if (cue == null) return null;
+
+  BookNarrationChunkSegment? slice;
+  for (final candidate in chunk.segments) {
+    if (cue.start < candidate.end && cue.end > candidate.start) {
+      slice = candidate;
+      break;
+    }
+  }
+  // Speech chunks normally contain only whitespace between slices. If a
+  // provider counts a source-only separator as a word, use the closest slice
+  // so progress remains monotonic instead of dropping the highlight entirely.
+  if (slice == null) {
+    var closestDistance = 0;
+    for (final candidate in chunk.segments) {
+      final distance = _distanceFromCharacterRange(
+        cue.start,
+        candidate.start,
+        candidate.end,
+      );
+      if (slice == null || distance < closestDistance) {
+        slice = candidate;
+        closestDistance = distance;
+      }
+    }
+  }
+  if (slice == null || slice.segmentEnd <= slice.segmentStart) return null;
+
+  final cueLength = (cue.end - cue.start).clamp(1, slice.end - slice.start);
+  final int chunkStart;
+  final int chunkEnd;
+  if (cue.end <= slice.start) {
+    chunkStart = slice.start;
+    chunkEnd = (slice.start + cueLength).clamp(slice.start, slice.end).toInt();
+  } else if (cue.start >= slice.end) {
+    chunkEnd = slice.end;
+    chunkStart = (slice.end - cueLength).clamp(slice.start, slice.end).toInt();
+  } else {
+    chunkStart = cue.start.clamp(slice.start, slice.end).toInt();
+    chunkEnd = cue.end.clamp(chunkStart, slice.end).toInt();
+  }
+  final highlightStart = (slice.segmentStart + chunkStart - slice.start)
+      .clamp(slice.segmentStart, slice.segmentEnd)
+      .toInt();
+  final highlightEnd = (slice.segmentStart + chunkEnd - slice.start)
+      .clamp(highlightStart, slice.segmentEnd)
+      .toInt();
+  if (highlightEnd <= highlightStart) return null;
+
+  return BookNarrationTrackHighlight(
+    segmentIndex: slice.segmentIndex,
+    highlightStart: highlightStart,
+    highlightEnd: highlightEnd,
+  );
+}
+
 /// Returns a cue only while media time is inside that cue. Natural pauses,
 /// initial buffering silence, and trailing silence deliberately return null so
 /// the UI never pretends a word or phrase is being spoken.
@@ -1029,6 +1308,79 @@ BookNarrationCue? activeBookNarrationCueAt(
     }
   }
   return null;
+}
+
+/// Resolves a segment-relative character checkpoint to media time.
+///
+/// Provider timing is preferred so resumption starts at a real spoken cue. If
+/// timing is unavailable, the offset is projected proportionally across the
+/// generated chunk rather than falling back to the start of the sentence.
+@visibleForTesting
+Duration bookNarrationPositionForCharacterOffset({
+  required BookNarrationAudio audio,
+  required BookNarrationChunk chunk,
+  required int segmentIndex,
+  required int characterOffset,
+}) {
+  if (chunk.segments.isEmpty || chunk.text.isEmpty) return Duration.zero;
+
+  final matchingSlices = chunk.segments
+      .where((slice) => slice.segmentIndex == segmentIndex)
+      .toList(growable: false);
+  final candidates = matchingSlices.isEmpty ? chunk.segments : matchingSlices;
+  var slice = candidates.first;
+  var sliceDistance = _distanceFromCharacterRange(
+    characterOffset,
+    slice.segmentStart,
+    slice.segmentEnd,
+  );
+  for (final candidate in candidates.skip(1)) {
+    final distance = _distanceFromCharacterRange(
+      characterOffset,
+      candidate.segmentStart,
+      candidate.segmentEnd,
+    );
+    if (distance < sliceDistance) {
+      slice = candidate;
+      sliceDistance = distance;
+    }
+  }
+
+  final boundedCharacterOffset = characterOffset
+      .clamp(slice.segmentStart, slice.segmentEnd)
+      .toInt();
+  final chunkOffset =
+      (slice.start + boundedCharacterOffset - slice.segmentStart)
+          .clamp(slice.start, slice.end)
+          .toInt();
+
+  BookNarrationCue? nearestCue;
+  var nearestDistance = 0;
+  for (final cue in audio.alignment) {
+    if (cue.end <= slice.start || cue.start >= slice.end) continue;
+    final distance = _distanceFromCharacterRange(
+      chunkOffset,
+      cue.start,
+      cue.end,
+    );
+    if (nearestCue == null || distance < nearestDistance) {
+      nearestCue = cue;
+      nearestDistance = distance;
+    }
+  }
+  if (nearestCue != null) return nearestCue.startTime;
+
+  final duration = audio.duration;
+  if (duration == null || duration <= Duration.zero) return Duration.zero;
+  return Duration(
+    microseconds: duration.inMicroseconds * chunkOffset ~/ chunk.text.length,
+  );
+}
+
+int _distanceFromCharacterRange(int value, int start, int end) {
+  if (value < start) return start - value;
+  if (value > end) return value - end;
+  return 0;
 }
 
 /// Device-local narration using the installed system voices. No network or
@@ -1461,9 +1813,13 @@ List<BookNarrationChunk> _buildNarrationChunks(
     final beginsNewBlock =
         previous != null &&
         previous!.segment.blockIndex != part.segment.blockIndex;
+    // Never synthesize across rendered Markdown blocks. A rendered block can
+    // omit source-only syntax (for example an ordered-list marker), so joining
+    // two blocks can produce text that is not one contiguous source passage.
+    // Long blocks still use the preferred and hard size boundaries below.
     final shouldPreferBoundary =
-        buffer.length >= _narrationChunkMinCharacters &&
-        (beginsNewBlock ||
+        beginsNewBlock ||
+        (buffer.length >= _narrationChunkMinCharacters &&
             candidateLength > _narrationChunkPreferredMaxCharacters);
     if (buffer.isNotEmpty &&
         (shouldPreferBoundary ||
@@ -1495,6 +1851,7 @@ List<_NarrationTrackEntry> _buildTrackEntries({
   required List<BookNarrationDocument> chapters,
   required int initialChapterIndex,
   required int initialSegmentIndex,
+  required int initialCharacterOffset,
 }) {
   final entries = <_NarrationTrackEntry>[];
   for (
@@ -1505,8 +1862,10 @@ List<_NarrationTrackEntry> _buildTrackEntries({
     final document = chapters[chapterIndex];
     var firstChunk = 0;
     if (chapterIndex == initialChapterIndex) {
-      final located = document.chunks.indexWhere(
-        (chunk) => chunk.containsSegment(initialSegmentIndex),
+      final located = bookNarrationInitialChunkIndex(
+        document: document,
+        segmentIndex: initialSegmentIndex,
+        characterOffset: initialCharacterOffset,
       );
       if (located >= 0) firstChunk = located;
     }
@@ -1524,6 +1883,53 @@ List<_NarrationTrackEntry> _buildTrackEntries({
     }
   }
   return List.unmodifiable(entries);
+}
+
+/// Finds the exact synthesis chunk that owns a segment-relative checkpoint.
+/// Long sentences can span multiple chunks, so the segment index alone is not
+/// enough to restore their latter portions.
+@visibleForTesting
+int bookNarrationInitialChunkIndex({
+  required BookNarrationDocument document,
+  required int segmentIndex,
+  required int characterOffset,
+}) {
+  final segmentLength =
+      segmentIndex >= 0 && segmentIndex < document.segments.length
+      ? document.segments[segmentIndex].text.length
+      : null;
+  final boundedOffset = segmentLength == null
+      ? characterOffset
+      : characterOffset.clamp(0, segmentLength).toInt();
+  final located = document.chunks.indexWhere(
+    (chunk) => chunk.segments.any(
+      (slice) =>
+          slice.segmentIndex == segmentIndex &&
+          _characterOffsetBelongsToSlice(
+            boundedOffset,
+            slice,
+            segmentLength: segmentLength,
+          ),
+    ),
+  );
+  if (located >= 0) return located;
+  return document.chunks.indexWhere(
+    (chunk) => chunk.containsSegment(segmentIndex),
+  );
+}
+
+bool _characterOffsetBelongsToSlice(
+  int characterOffset,
+  BookNarrationChunkSegment slice, {
+  required int? segmentLength,
+}) {
+  if (characterOffset < slice.segmentStart) return false;
+  if (characterOffset < slice.segmentEnd) return true;
+  // An end-of-segment checkpoint belongs to its final chunk rather than the
+  // first chunk that happens to contain another part of the same long segment.
+  return characterOffset == slice.segmentEnd &&
+      segmentLength != null &&
+      slice.segmentEnd >= segmentLength;
 }
 
 final class _NarrationSegmentPart {

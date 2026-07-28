@@ -5,6 +5,8 @@ import 'package:go_router/go_router.dart';
 
 import '../../app/design_tokens.dart';
 import '../../features/cmpys/state/cmpys_backend_sync.dart';
+import '../../features/plan/presentation/book_narration_dock.dart';
+import '../../features/plan/state/book_narration_remote_controller.dart';
 import 'cmpys/cmpys_nav_icons.dart';
 import 'motion/motion_config.dart';
 
@@ -64,8 +66,23 @@ class AppShell extends ConsumerWidget {
     // The floating nav is hidden while the keyboard is open. Keeping its full
     // clearance would leave a large dead zone above text fields/composers.
     if (MediaQuery.viewInsetsOf(context).bottom > 0) return 12.0 + extra;
-    return _pillHeight + _bottomMargin(context) + 22.0 + extra;
+    final scope = context.dependOnInheritedWidgetOfExactType<_AppShellScope>();
+    final listeningDockClearance = scope?.listeningDockVisible == true
+        ? _AppShellScope.listeningDockHeight + _AppShellScope.listeningDockGap
+        : 0.0;
+    return _pillHeight +
+        _bottomMargin(context) +
+        22.0 +
+        listeningDockClearance +
+        extra;
   }
+
+  /// Whether [context] belongs to one of the state-preserving shell branches.
+  ///
+  /// Full-screen readers use this to leave room for the floating tab bar while
+  /// remaining mounted when another tab is selected.
+  static bool isWithinShell(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<_AppShellScope>() != null;
 
   @visibleForTesting
   static bool useIconOnlyNavigation(double width, double scaledLabelSize) =>
@@ -76,53 +93,87 @@ class AppShell extends ConsumerWidget {
     // Hydrate mentor + AI results from the backend on app entry, regardless
     // of which tab the user lands on first.
     ref.watch(cmpysBackendSyncProvider);
+    final narrationRemote = ref.watch(bookNarrationRemoteControllerProvider);
 
     final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
+    final listeningDockVisible = narrationRemote.active && !keyboardOpen;
 
-    return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: const SystemUiOverlayStyle(
-        statusBarColor: Colors.transparent,
-        statusBarBrightness: Brightness.light,
-        statusBarIconBrightness: Brightness.dark,
-        systemNavigationBarColor: AppColors.paper,
-        systemNavigationBarIconBrightness: Brightness.dark,
-        systemNavigationBarDividerColor: AppColors.paper,
-      ),
-      child: Scaffold(
-        // Each branch owns its keyboard inset. Resizing this outer scaffold as
-        // well would apply the same inset twice to nested branch Scaffolds and
-        // create a large blank band above the keyboard.
-        resizeToAvoidBottomInset: false,
-        backgroundColor: AppColors.paper,
-        body: Stack(
-          children: [
-            Positioned.fill(
-              child: _TabFade(
-                index: navigationShell.currentIndex,
-                child: navigationShell,
-              ),
-            ),
-            if (!keyboardOpen)
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 0,
-                child: _FloatingPillNav(
-                  currentIndex: navigationShell.currentIndex,
-                  onTap: (index) {
-                    HapticFeedback.selectionClick();
-                    navigationShell.goBranch(
-                      index,
-                      initialLocation: index == navigationShell.currentIndex,
-                    );
-                  },
+    return _AppShellScope(
+      listeningDockVisible: listeningDockVisible,
+      child: AnnotatedRegion<SystemUiOverlayStyle>(
+        value: const SystemUiOverlayStyle(
+          statusBarColor: Colors.transparent,
+          statusBarBrightness: Brightness.light,
+          statusBarIconBrightness: Brightness.dark,
+          systemNavigationBarColor: AppColors.paper,
+          systemNavigationBarIconBrightness: Brightness.dark,
+          systemNavigationBarDividerColor: AppColors.paper,
+        ),
+        child: Scaffold(
+          // Each branch owns its keyboard inset. Resizing this outer scaffold as
+          // well would apply the same inset twice to nested branch Scaffolds and
+          // create a large blank band above the keyboard.
+          resizeToAvoidBottomInset: false,
+          backgroundColor: AppColors.paper,
+          body: Stack(
+            children: [
+              Positioned.fill(
+                child: _TabFade(
+                  index: navigationShell.currentIndex,
+                  child: navigationShell,
                 ),
               ),
-          ],
+              if (!keyboardOpen)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: _FloatingPillNav(
+                    currentIndex: navigationShell.currentIndex,
+                    onTap: (index) {
+                      HapticFeedback.selectionClick();
+                      navigationShell.goBranch(
+                        index,
+                        initialLocation: index == navigationShell.currentIndex,
+                      );
+                    },
+                  ),
+                ),
+              if (listeningDockVisible)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom:
+                      _pillHeight +
+                      _bottomMargin(context) +
+                      _AppShellScope.listeningDockGap,
+                  child: BookNarrationDock(
+                    controller: narrationRemote,
+                    margin: const EdgeInsets.symmetric(horizontal: 12),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );
   }
+}
+
+class _AppShellScope extends InheritedWidget {
+  const _AppShellScope({
+    required this.listeningDockVisible,
+    required super.child,
+  });
+
+  static const double listeningDockHeight = BookNarrationDock.preferredHeight;
+  static const double listeningDockGap = 10;
+
+  final bool listeningDockVisible;
+
+  @override
+  bool updateShouldNotify(_AppShellScope oldWidget) =>
+      listeningDockVisible != oldWidget.listeningDockVisible;
 }
 
 class _FloatingPillNav extends StatefulWidget {

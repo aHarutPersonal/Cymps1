@@ -13,6 +13,7 @@ from app.services.book_narration import (
     _alignment_from_provider_segments,
     _assert_safe_subtitle_url,
     _fetch_subtitle_document,
+    _fetch_subtitle_with_retry,
     _narrator_profile,
     _parse_minimax_response,
     _STYLE_PRESETS,
@@ -34,6 +35,33 @@ Read **one small step**, then visit [the guide](https://example.com/guide).
         markdown,
     )
     assert not narration_text_belongs_to_resource("Read an unrelated script.", markdown)
+
+
+def test_ordered_list_markers_are_not_required_in_spoken_chunk_membership():
+    markdown = """
+1. Observe the business carefully.
+2. Wait for a durable advantage.
+3. Act with a margin of safety.
+"""
+
+    assert narration_text_belongs_to_resource(
+        "Observe the business carefully. Wait for a durable advantage.",
+        markdown,
+    )
+    assert not narration_text_belongs_to_resource(
+        "Observe the business carelessly. Wait for a durable advantage.",
+        markdown,
+    )
+
+
+def test_membership_keeps_digits_that_are_not_markdown_list_markers():
+    markdown = "Version 2 preserves the 80/20 rule. Step 3 remains important."
+
+    assert narration_text_belongs_to_resource(markdown, markdown)
+    assert not narration_text_belongs_to_resource(
+        "Version preserves the rule. Step remains important.",
+        markdown,
+    )
 
 
 def test_provider_phrase_timing_uses_utf16_source_offsets():
@@ -68,6 +96,48 @@ def test_provider_phrase_timing_uses_utf16_source_offsets():
     assert cues[0].text == text
 
 
+def test_provider_segments_remap_trimmed_whitespace_and_unicode_to_source():
+    text = "  Hello 😊 world.  Calm choices matter. \n"
+    first = "Hello 😊 world."
+    second = "Calm choices matter."
+    document = [
+        {
+            "text": first,
+            "text_begin": 0,
+            "text_end": len(first),
+            "time_begin": 0.0,
+            "time_end": 1200.0,
+        },
+        {
+            "text": second,
+            "text_begin": len(first),
+            "text_end": len(first) + len(second),
+            "time_begin": 1350.0,
+            "time_end": 2800.0,
+        },
+    ]
+
+    cues, granularity = _alignment_from_provider_segments(
+        text,
+        document,
+        duration_ms=3000,
+    )
+
+    first_start = text.index(first)
+    second_start = text.index(second)
+    assert granularity == "phrase"
+    assert [(cue.text, cue.startMs, cue.endMs) for cue in cues] == [
+        (first, 0, 1200),
+        (second, 1350, 2800),
+    ]
+    assert cues[0].start == len(text[:first_start].encode("utf-16-le")) // 2
+    assert cues[0].end == len(text[: first_start + len(first)].encode("utf-16-le")) // 2
+    assert cues[1].start == len(text[:second_start].encode("utf-16-le")) // 2
+    assert (
+        cues[1].end == len(text[: second_start + len(second)].encode("utf-16-le")) // 2
+    )
+
+
 def test_inconsistent_provider_text_range_is_rejected():
     with pytest.raises(BookNarrationUnavailableError):
         _alignment_from_provider_segments(
@@ -80,6 +150,145 @@ def test_inconsistent_provider_text_range_is_rejected():
                     "time_begin": 0.0,
                     "time_end": 900.0,
                 }
+            ],
+            duration_ms=1000,
+        )
+
+
+def test_alignment_diagnostics_report_only_bounded_structural_differences():
+    source = "Alpha — Beta"
+    provider = "Alpha - Beta"
+    with pytest.raises(BookNarrationUnavailableError) as failure:
+        _alignment_from_provider_segments(
+            source,
+            [
+                {
+                    "text": provider,
+                    "text_begin": 0,
+                    "text_end": len(provider),
+                    "time_begin": 0.0,
+                    "time_end": 900.0,
+                }
+            ],
+            duration_ms=1000,
+        )
+
+    diagnostics = failure.value.alignment_diagnostics
+    assert diagnostics is not None
+    assert diagnostics.segment_index == 0
+    assert diagnostics.segment_count == 1
+    assert diagnostics.source_length == len(source)
+    assert diagnostics.provider_length == len(provider)
+    assert diagnostics.validation_category == "source_segment_not_found"
+    assert diagnostics.first_mismatch_offset == 6
+    assert diagnostics.source_unicode_class == "Pd"
+    assert diagnostics.provider_unicode_class == "Pd"
+    assert diagnostics.nfc_equivalent is False
+    assert diagnostics.whitespace_collapse_equivalent is False
+    assert diagnostics.punctuation_normalization_equivalent is True
+    assert diagnostics.values_truncated is False
+
+    oversized_source = "a" * 5000
+    oversized_provider = "b" * 9000
+    with pytest.raises(BookNarrationUnavailableError) as oversized_failure:
+        _alignment_from_provider_segments(
+            oversized_source,
+            [
+                {
+                    "text": oversized_provider,
+                    "text_begin": 0,
+                    "text_end": len(oversized_provider),
+                    "time_begin": 0.0,
+                    "time_end": 900.0,
+                }
+            ],
+            duration_ms=1000,
+        )
+    oversized = oversized_failure.value.alignment_diagnostics
+    assert oversized is not None
+    assert oversized.source_length == 4096
+    assert oversized.provider_length == 4096
+    assert oversized.first_mismatch_offset == 0
+    assert oversized.values_truncated is True
+
+
+def test_alignment_diagnostics_classify_whitespace_only_difference():
+    with pytest.raises(BookNarrationUnavailableError) as failure:
+        _alignment_from_provider_segments(
+            "Alpha Beta",
+            [
+                {
+                    "text": "Alpha",
+                    "text_begin": 0,
+                    "text_end": 5,
+                    "time_begin": 0.0,
+                    "time_end": 400.0,
+                },
+                {
+                    "text": "Beta",
+                    "text_begin": 5,
+                    "text_end": 9,
+                    "time_begin": 300.0,
+                    "time_end": 900.0,
+                },
+            ],
+            duration_ms=1000,
+        )
+
+    diagnostics = failure.value.alignment_diagnostics
+    assert diagnostics is not None
+    assert diagnostics.validation_category == "time_non_monotonic"
+    assert diagnostics.first_mismatch_offset == 5
+    assert diagnostics.source_unicode_class == "Zs"
+    assert diagnostics.provider_unicode_class == "Lu"
+    assert diagnostics.whitespace_collapse_equivalent is True
+    assert diagnostics.punctuation_normalization_equivalent is False
+
+
+@pytest.mark.parametrize("second_begin", [4, 6])
+def test_non_contiguous_provider_ranges_are_rejected(second_begin):
+    with pytest.raises(BookNarrationUnavailableError):
+        _alignment_from_provider_segments(
+            "Alpha Beta",
+            [
+                {
+                    "text": "Alpha",
+                    "text_begin": 0,
+                    "text_end": 5,
+                    "time_begin": 0.0,
+                    "time_end": 400.0,
+                },
+                {
+                    "text": "Beta",
+                    "text_begin": second_begin,
+                    "text_end": second_begin + 4,
+                    "time_begin": 450.0,
+                    "time_end": 900.0,
+                },
+            ],
+            duration_ms=1000,
+        )
+
+
+def test_provider_segments_may_not_skip_non_whitespace_source_text():
+    with pytest.raises(BookNarrationUnavailableError):
+        _alignment_from_provider_segments(
+            "Alpha hidden Beta",
+            [
+                {
+                    "text": "Alpha",
+                    "text_begin": 0,
+                    "text_end": 5,
+                    "time_begin": 0.0,
+                    "time_end": 400.0,
+                },
+                {
+                    "text": "Beta",
+                    "text_begin": 5,
+                    "text_end": 9,
+                    "time_begin": 450.0,
+                    "time_end": 900.0,
+                },
             ],
             duration_ms=1000,
         )
@@ -250,6 +459,57 @@ async def test_subtitle_download_is_json_and_size_bounded(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_subtitle_transport_error_is_classified_as_retryable(monkeypatch):
+    monkeypatch.setattr(
+        book_narration,
+        "_assert_safe_subtitle_url",
+        AsyncMock(return_value=None),
+    )
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("offline", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(BookNarrationUnavailableError) as failure:
+            await _fetch_subtitle_document(
+                "https://provider.example/subtitle.json",
+                client=client,
+            )
+
+    assert failure.value.reason_code == "subtitle_transport_error"
+    assert failure.value.retryable is True
+
+
+@pytest.mark.asyncio
+async def test_subtitle_retry_is_bounded_and_only_for_transient_errors(monkeypatch):
+    document = [{"text": "Ready"}]
+    transient = BookNarrationUnavailableError(
+        "temporary",
+        reason_code="subtitle_transport_error",
+        retryable=True,
+    )
+    fetch = AsyncMock(side_effect=[transient, document])
+    sleep = AsyncMock()
+    monkeypatch.setattr(book_narration, "_fetch_subtitle_document", fetch)
+    monkeypatch.setattr(book_narration.asyncio, "sleep", sleep)
+
+    assert await _fetch_subtitle_with_retry("https://provider.example") == document
+    assert fetch.await_count == 2
+    sleep.assert_awaited_once_with(0.2)
+
+    rejected = BookNarrationUnavailableError(
+        "rejected",
+        reason_code="subtitle_host_rejected",
+    )
+    fetch.reset_mock(side_effect=True)
+    fetch.side_effect = rejected
+    with pytest.raises(BookNarrationUnavailableError) as failure:
+        await _fetch_subtitle_with_retry("https://provider.example")
+    assert failure.value is rejected
+    assert fetch.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_render_uses_provider_timing_and_persistent_cache(monkeypatch, tmp_path):
     text = "Hello 😊 world."
     synthesis = _MiniMaxSynthesis(
@@ -305,3 +565,121 @@ async def test_render_uses_provider_timing_and_persistent_cache(monkeypatch, tmp
     assert len(list(tmp_path.glob("book_narration_*.mp3"))) == 1
     assert len(list(tmp_path.glob("book_narration_*.json"))) == 1
     assert book_narration._locks == {}
+
+
+@pytest.mark.asyncio
+async def test_render_logs_alignment_structure_without_source_or_provider_text(
+    monkeypatch,
+    tmp_path,
+    caplog,
+):
+    source = "Alpha — Beta"
+    provider = "Alpha - Beta"
+    synthesis = _MiniMaxSynthesis(
+        audio_bytes=b"\xff\xfb" + (b"a" * 256),
+        duration_ms=1600,
+        subtitle_url="https://provider.example/private-signed-subtitle.json",
+    )
+    monkeypatch.setattr(settings, "book_narration_enabled", True)
+    monkeypatch.setattr(settings, "yunwu_api_key", "test-key")
+    monkeypatch.setattr(settings, "book_narration_media_dir", str(tmp_path))
+    monkeypatch.setattr(
+        book_narration,
+        "_synthesize_with_minimax",
+        AsyncMock(return_value=synthesis),
+    )
+    monkeypatch.setattr(
+        book_narration,
+        "_fetch_subtitle_with_retry",
+        AsyncMock(
+            return_value=[
+                {
+                    "text": provider,
+                    "text_begin": 0,
+                    "text_end": len(provider),
+                    "time_begin": 0.0,
+                    "time_end": 1500.0,
+                }
+            ]
+        ),
+    )
+    book_narration._locks.clear()
+
+    asset = await render_book_narration(source, "expressive")
+
+    assert asset.alignment_source == "none"
+    assert "alignment_segment_index=0" in caplog.text
+    assert "alignment_segment_count=1" in caplog.text
+    assert "alignment_source_length=12" in caplog.text
+    assert "alignment_provider_length=12" in caplog.text
+    assert "alignment_validation=source_segment_not_found" in caplog.text
+    assert "alignment_first_mismatch_offset=6" in caplog.text
+    assert "alignment_source_unicode_class=Pd" in caplog.text
+    assert "alignment_provider_unicode_class=Pd" in caplog.text
+    assert "alignment_nfc_equivalent=False" in caplog.text
+    assert "alignment_whitespace_collapse_equivalent=False" in caplog.text
+    assert "alignment_punctuation_normalization_equivalent=True" in caplog.text
+    assert "alignment_values_truncated=False" in caplog.text
+    assert source not in caplog.text
+    assert provider not in caplog.text
+    assert synthesis.subtitle_url not in caplog.text
+    assert "test-key" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_render_retries_a_cache_entry_with_missing_provider_timing(
+    monkeypatch,
+    tmp_path,
+    caplog,
+):
+    text = "Timing should recover."
+    synthesis = _MiniMaxSynthesis(
+        audio_bytes=b"\xff\xfb" + (b"a" * 256),
+        duration_ms=1600,
+        subtitle_url="https://provider.example/subtitle.json",
+    )
+    synthesize = AsyncMock(return_value=synthesis)
+    fetch_subtitle = AsyncMock(
+        side_effect=[
+            BookNarrationUnavailableError(
+                "temporary timing failure",
+                reason_code="subtitle_alignment_inconsistent",
+            ),
+            [
+                {
+                    "text": text,
+                    "text_begin": 0,
+                    "text_end": len(text),
+                    "time_begin": 0.0,
+                    "time_end": 1500.0,
+                }
+            ],
+        ]
+    )
+    monkeypatch.setattr(settings, "book_narration_enabled", True)
+    monkeypatch.setattr(settings, "yunwu_api_key", "test-key")
+    monkeypatch.setattr(settings, "book_narration_media_dir", str(tmp_path))
+    monkeypatch.setattr(
+        book_narration,
+        "_synthesize_with_minimax",
+        synthesize,
+    )
+    monkeypatch.setattr(
+        book_narration,
+        "_fetch_subtitle_document",
+        fetch_subtitle,
+    )
+    book_narration._locks.clear()
+
+    first = await render_book_narration(text, "expressive")
+    second = await render_book_narration(text, "expressive")
+
+    assert first.alignment_source == "none"
+    assert first.alignment == ()
+    assert second.alignment_source == "provider"
+    assert len(second.alignment) == 1
+    assert synthesize.await_count == 2
+    assert fetch_subtitle.await_count == 2
+    assert "reason=subtitle_alignment_inconsistent" in caplog.text
+    assert text not in caplog.text
+    assert synthesis.subtitle_url not in caplog.text

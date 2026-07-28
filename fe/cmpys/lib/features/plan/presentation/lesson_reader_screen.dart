@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:phosphor_flutter/phosphor_flutter.dart';
 
 import '../../../app/design_tokens.dart';
+import '../../../core/ui/app_shell.dart';
 import '../../../core/ui/cmpys/cmpys_markdown.dart';
 import '../../../core/ui/cmpys/cmpys_primitives.dart';
 import '../../../core/ui/motion/page_transition.dart';
@@ -191,6 +192,8 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
               ),
             ),
             _bottomBar(),
+            if (AppShell.isWithinShell(context))
+              SizedBox(height: AppShell.bottomNavClearance(context)),
           ],
         ),
       ),
@@ -553,6 +556,7 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
       screen = BookReaderScreen(
         resourceId: bookResourceId,
         fallbackTitle: material.title,
+        shellBranchIndex: 1,
       );
     } else if (videoId != null) {
       screen = MaterialVideoScreen(material: material, videoId: videoId);
@@ -570,10 +574,10 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
       );
     }
     if (screen == null) return;
-    Navigator.of(
-      context,
-      rootNavigator: true,
-    ).push(CmpysPageRoute<void>(builder: (_) => screen!));
+    final navigator = screen is BookReaderScreen
+        ? Navigator.of(context)
+        : Navigator.of(context, rootNavigator: true);
+    navigator.push(CmpysPageRoute<void>(builder: (_) => screen!));
   }
 
   String? _bookResourceId(PlanMaterialDetail material) {
