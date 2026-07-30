@@ -590,16 +590,24 @@ def render_prompt(
         else:
             str_variables[key] = str(value)
     
-    result = template
-    
-    # Track used and unused variables
-    used_keys = set()
-    
-    for key, value in str_variables.items():
-        placeholder = "{" + key + "}"
-        if placeholder in result:
-            result = result.replace(placeholder, value)
-            used_keys.add(key)
+    template_placeholders = set(extract_placeholders(template))
+    used_keys: set[str] = set()
+
+    def replace_template_placeholder(match: re.Match[str]) -> str:
+        key = match.group(1)
+        if key not in str_variables:
+            return match.group(0)
+        used_keys.add(key)
+        return str_variables[key]
+
+    # Render the original template in one pass. Values are opaque data: braces
+    # inside grounded text or JSON must never become new placeholders or cause
+    # a later variable to be substituted recursively into untrusted content.
+    result = re.sub(
+        r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}",
+        replace_template_placeholder,
+        template,
+    )
     
     # Warn about unused variables
     unused = set(str_variables.keys()) - used_keys
@@ -607,7 +615,7 @@ def render_prompt(
         logger.debug(f"Unused variables in prompt render: {unused}")
 
     if strict:
-        unresolved = extract_placeholders(result)
+        unresolved = template_placeholders - used_keys
         if unresolved:
             logger.error(f"PROMPT_PARAMS_MISSING: {prompt_name or '<inline>'} unresolved: {unresolved}")
             raise PromptRenderError(prompt_name or "<inline>", sorted(unresolved))
