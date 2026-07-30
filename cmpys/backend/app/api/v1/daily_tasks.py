@@ -16,6 +16,9 @@ from app.api.dependencies import get_current_user
 from app.core.db import get_db
 from app.models.daily_task_completion import DailyTaskCompletion
 from app.models.plan import Plan, PlanItem, PlanItemCompletion, PlanItemType
+from app.services.planning.artifact_identity import (
+    current_item_completion_query_predicates,
+)
 from app.models.user import User
 
 logger = logging.getLogger(__name__)
@@ -153,10 +156,13 @@ async def _items_and_execution_week(
     completed_item_ids: set[str] = set()
     if mission_ids:
         completion_result = await db.execute(
-            select(PlanItemCompletion.plan_item_id).where(
-                PlanItemCompletion.user_id == user_id,
-                PlanItemCompletion.plan_item_id.in_(mission_ids),
-                PlanItemCompletion.completed_at.isnot(None),
+            select(PlanItemCompletion.plan_item_id)
+            .join(PlanItem, PlanItemCompletion.plan_item_id == PlanItem.id)
+            .where(
+                *current_item_completion_query_predicates(
+                    user_id=user_id,
+                    item_ids=mission_ids,
+                )
             )
         )
         completed_item_ids = {

@@ -50,7 +50,7 @@ INCOMING_COMPOSE="/tmp/cmpys-compose-${TAG}.yml"
 ARCHIVE="/tmp/cmpys-backend-${TAG}.tar.gz"
 ROLLBACK_ARMED=false
 COMPOSE_REPLACED=false
-RELEASE_SERVICES=(web worker worker-high worker-low catalog-worker catalog-control beat)
+RELEASE_SERVICES=(web worker worker-high worker-low catalog-worker catalog-control curriculum-worker curriculum-control beat)
 
 compose() {
   docker compose -p cmpys --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" "$@"
@@ -76,7 +76,15 @@ rollback_release() {
   if [[ "${ROLLBACK_ARMED}" == "true" ]]; then
     mapfile -t rollback_services < <(configured_release_services)
     IMAGE_TAG="${PREVIOUS_TAG}" compose up -d --force-recreate \
-      "${rollback_services[@]}" || true
+      "${rollback_services[@]}"
+    wait_for_web
+    for service in "${rollback_services[@]}"; do
+      if ! service_is_running "${service}"; then
+        echo "  ERROR: rollback service ${service} is not running" >&2
+        return 1
+      fi
+    done
+    verify_configured_workers "${rollback_services[@]}"
   fi
 }
 
@@ -119,10 +127,44 @@ wait_for_celery_worker() {
   return 1
 }
 
+wait_for_web() {
+  local ready=false
+  for _ in $(seq 1 30); do
+    if curl -sf http://localhost:8000/ready >/dev/null 2>&1; then
+      ready=true
+      break
+    fi
+    sleep 2
+  done
+  if [[ "${ready}" != "true" ]]; then
+    echo "  ERROR: readiness check failed after 60s" >&2
+    docker logs --tail 60 cmpys-web-1 2>/dev/null || true
+    return 1
+  fi
+}
+
+verify_configured_workers() {
+  local service
+  for service in "$@"; do
+    case "${service}" in
+      worker) wait_for_celery_worker "${service}" "default" ;;
+      worker-high) wait_for_celery_worker "${service}" "high_priority" ;;
+      worker-low) wait_for_celery_worker "${service}" "low_priority" ;;
+      catalog-worker) wait_for_celery_worker "${service}" "catalog" ;;
+      catalog-control) wait_for_celery_worker "${service}" "catalog_control" ;;
+      curriculum-worker) wait_for_celery_worker "${service}" "curriculum" ;;
+      curriculum-control) wait_for_celery_worker "${service}" "curriculum_control" ;;
+    esac
+  done
+}
+
 on_deploy_error() {
   EXIT_CODE=$?
   if [[ "${COMPOSE_REPLACED}" == "true" ]]; then
-    rollback_release
+    if ! rollback_release; then
+      echo "  ERROR: automatic rollback failed; operator recovery is required" >&2
+      exit 70
+    fi
   fi
   rm -f "${ARCHIVE}" "${INCOMING_COMPOSE}"
   exit "${EXIT_CODE}"
@@ -159,27 +201,19 @@ docker tag "${IMAGE}:${TAG}" "${REMOTE_IMAGE}:${TAG}"
 echo "  Validating Compose configuration..."
 IMAGE_TAG="${TAG}" compose config --quiet
 
-echo "  Running migrations before switching traffic..."
+echo "  Stopping old writers before migration..."
+ROLLBACK_ARMED=true
+mapfile -t CURRENT_RELEASE_SERVICES < <(configured_release_services)
+compose stop "${CURRENT_RELEASE_SERVICES[@]}"
+
+echo "  Running migrations while old writers are quiesced..."
 IMAGE_TAG="${TAG}" compose run --rm -T migrate </dev/null
 
-echo "  Recreating API, interactive workers, catalog workers, and beat..."
-ROLLBACK_ARMED=true
+echo "  Recreating API, interactive, catalog, curriculum workers, and beat..."
 IMAGE_TAG="${TAG}" compose up -d --force-recreate "${RELEASE_SERVICES[@]}"
 
 echo "  Waiting for API readiness..."
-READY=false
-for _ in $(seq 1 30); do
-  if curl -sf http://localhost:8000/ready >/dev/null 2>&1; then
-    READY=true
-    break
-  fi
-  sleep 2
-done
-if [[ "${READY}" != "true" ]]; then
-  echo "  ERROR: readiness check failed after 60s" >&2
-  docker logs --tail 60 cmpys-web-1 2>/dev/null || true
-  false
-fi
+wait_for_web
 
 for SERVICE in "${RELEASE_SERVICES[@]}"; do
   if ! service_is_running "${SERVICE}"; then
@@ -195,6 +229,8 @@ wait_for_celery_worker "worker-high" "high_priority"
 wait_for_celery_worker "worker-low" "low_priority"
 wait_for_celery_worker "catalog-worker" "catalog"
 wait_for_celery_worker "catalog-control" "catalog_control"
+wait_for_celery_worker "curriculum-worker" "curriculum"
+wait_for_celery_worker "curriculum-control" "curriculum_control"
 
 if grep -q '^IMAGE_TAG=' "${ENV_FILE}"; then
   sed -i.bak "s/^IMAGE_TAG=.*/IMAGE_TAG=${TAG}/" "${ENV_FILE}"

@@ -1,0 +1,12 @@
+Create the complete module outline before prose is written.
+
+MODULE TARGET
+{module_target_json}
+
+SANITIZED SOURCE PACK
+{source_pack_json}
+
+TECHNIQUE PLAN
+{technique_plan_json}
+
+Copy the server-owned skill_key, domain, level, locale, learning_outcome, prerequisites, artifact_type, and target duration without changing their identity. Create stable block IDs and preserve every implementation_block_id promised by the technique plan. Include an explanation, worked example, independent practice, and assessment. Add guided practice, retrieval, feedback, revision, transfer, reflection, or visual explanation wherever required by the selected technique contracts. Each semantic block must be 2–60 minutes. Whole consecutive blocks must partition exactly into 40–60 minute sessions; blocks will never be split silently. Bind every factual teaching block to both verified claim IDs and the source IDs that support those claims. If spaced_practice is selected, create retrieval/transfer blocks whose follow_up_day values cover every spacing_follow_up_days offset.

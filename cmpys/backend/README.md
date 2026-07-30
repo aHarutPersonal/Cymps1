@@ -29,6 +29,8 @@ cp .env.example .env        # fill in keys
 .venv/bin/celery -A app.core.celery.celery_app worker -n low@%h --concurrency=1 -Q low_priority
 .venv/bin/celery -A app.core.celery.celery_app worker -n catalog@%h --concurrency=2 -Q catalog
 .venv/bin/celery -A app.core.celery.celery_app worker -n catalog-control@%h --concurrency=1 -Q catalog_control
+.venv/bin/celery -A app.core.celery.celery_app worker -n curriculum@%h --pool=prefork --concurrency=2 -Q curriculum
+.venv/bin/celery -A app.core.celery.celery_app worker -n curriculum-control@%h --concurrency=1 -Q curriculum_control
 .venv/bin/celery -A app.core.celery.celery_app beat
 ```
 
@@ -69,6 +71,14 @@ Health check: `curl http://localhost:8000/health`
 | `CATALOG_QUOTE_VERIFICATION_BATCH_SIZE` | Quotes checked in one grounded call (default 4) |
 | `CATALOG_QUOTE_VERIFICATION_DAILY_LIMIT` | Maximum grounded quote calls per UTC day (default 2) |
 | `CATALOG_IDLE_DISCOVERY_ENABLED` | Seed new books/idols only while interactive and catalog work are idle |
+| `CURRICULUM_ENABLED` | Admit autonomous evidence-based curriculum generation (default `false` for pilot safety) |
+| `CURRICULUM_DAILY_BUDGET_USD` | Separate soft admission limit for curriculum research, writing, and review |
+| `CURRICULUM_JOB_BUDGET_USD` | Independent per-job admission limit, including persisted reserves for failed attempts (default 0.60); two repairs are a ceiling, so the budget can stop a later repair |
+| `CURRICULUM_DAILY_JOB_LIMIT` | Maximum curriculum jobs admitted per UTC day |
+| `CURRICULUM_MAX_RUNNING_JOBS` | Maximum durable curriculum leases, including mentor curation (default 2) |
+| `CURRICULUM_WORKER_CONCURRENCY` | Dedicated curriculum execution slots (default 2) |
+| `CURRICULUM_DURABLE_SPACING_SCHEDULER_ENABLED` | Allow spaced-practice modules only when durable follow-up delivery exists (default false) |
+| `LESSON_CATALOG_FIRST_ENABLED` | Try a fully personalized published module before the bespoke lesson fallback |
 | `CATALOG_IDLE_DISCOVERY_INTERVAL_SECONDS` | Idle-discovery Beat cadence and deterministic UTC bucket width (default 900) |
 | `CATALOG_IDLE_DISCOVERY_DAILY_LIMIT` | Maximum proactively seeded book/idol jobs per UTC day (default 6) |
 | `CATALOG_IDLE_DISCOVERY_RECENT_USER_MINUTES` | Recent durable user-job window that suppresses discovery (default 10) |
@@ -101,8 +111,9 @@ published. If either public search endpoint is temporarily throttled, a bounded
 curated identity pool keeps discovery moving; the ordinary direct source,
 human-identity, image-license, and publication checks still apply.
 
-Production runs default, high-priority, low-priority, catalog, and
-catalog-control queues in separate worker processes. First-use lesson work
+Production runs default, high-priority, low-priority, catalog,
+catalog-control, curriculum, and curriculum-control queues in separate worker
+processes. First-use lesson work
 therefore retains a reserved slot, while speculative look-ahead and long
 book/idol generation cannot occupy it. DB/Redis idle checks remain the
 admission guard for provider quota and background spend.
@@ -111,6 +122,23 @@ Book cache misses are inserted idempotently using their canonical key. Failed
 jobs use exponential backoff and stop after `CATALOG_MAX_ATTEMPTS`. Generated
 books and idols become visible to database-first APIs only after their quality
 gate changes catalog status to `published`.
+
+## Evidence-based curriculum factory
+
+The curriculum factory has its own `curriculum` and `curriculum_control`
+workers so long-running source research, writing, and independent review cannot
+consume user-visible lesson slots. The control task leases idempotent database
+jobs and enforces daily job and dollar limits. Processing creates a grounded
+source manifest, evidence-rated technique plan, complete module draft,
+independent quality reports, and an append-only published version.
+
+Catalog-first delivery remains behind `LESSON_CATALOG_FIRST_ENABLED`. An exact
+or strong compatible module is composed into a complete personalized lesson
+using the learner's demonstrated capability, goal, project, constraints,
+previous outcomes, and source-backed mentor evidence. Canonical-only content,
+weak matches, and failed compositions continue through the existing bespoke
+generator. See [docs/curriculum_factory.md](docs/curriculum_factory.md) for the
+artifact, versioning, scheduling, and rollout contracts.
 
 Quote imports use no LLM. The parser accepts only Wikiquote entries with a
 specific nested citation and rejects disputed, misattributed, unsourced, and

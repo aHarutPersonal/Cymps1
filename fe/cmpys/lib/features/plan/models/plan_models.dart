@@ -657,6 +657,7 @@ class PlanItemDetailed {
     this.completedSteps = 0,
     this.totalSteps = 0,
     this.jobId,
+    this.artifactJobId,
     this.detailsError,
     this.detailsProgress = 0,
     this.detailsStep,
@@ -674,6 +675,10 @@ class PlanItemDetailed {
   final int completedSteps;
   final int totalSteps;
   final String? jobId;
+
+  /// Optimistic-concurrency token for completion mutations. This is distinct
+  /// from [jobId], which is only the operational job currently being polled.
+  final String? artifactJobId;
   final String? detailsError;
   final int detailsProgress;
   final String? detailsStep;
@@ -734,6 +739,7 @@ class PlanItemDetailed {
       completedSteps: (progress?['completed_steps'] as num?)?.toInt() ?? 0,
       totalSteps: (progress?['total_steps'] as num?)?.toInt() ?? 0,
       jobId: j['job_id']?.toString(),
+      artifactJobId: (j['artifact_job_id'] ?? j['artifactJobId'])?.toString(),
       detailsError: j['details_error']?.toString(),
       detailsProgress: (j['details_progress'] as num?)?.toInt() ?? 0,
       detailsStep: j['details_step']?.toString(),

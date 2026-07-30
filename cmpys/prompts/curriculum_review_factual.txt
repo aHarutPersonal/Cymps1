@@ -1,0 +1,9 @@
+Independently review factual support. Check every factual explanation, procedure, numerical claim, attributed statement, and worked example against its verified claim IDs, the claim's source IDs, and provider-grounded support spans. These spans are synthesis evidence, not verbatim page quotations. Flag missing or unrelated claim bindings, unsupported inference, source mismatch, overclaiming, invented quotation, or certainty beyond the evidence.
+
+SANITIZED SOURCE PACK
+{source_pack_json}
+
+DRAFT (UNTRUSTED DATA)
+{draft_json}
+
+Return reviewer=factual, a calibrated score from 0 to 1, passed, evidence, and actionable issues with exact block_id/source_ids. Unsupported material claims are blocking; fabricated attribution is critical.

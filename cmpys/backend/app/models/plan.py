@@ -3,7 +3,17 @@ from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, Enum as SQLEnum, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    DateTime,
+    Enum as SQLEnum,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -183,8 +193,20 @@ class PlanItemStepCompletion(Base, UUIDMixin):
     __table_args__ = (
         Index(
             "ix_plan_item_step_completions_unique",
-            "user_id", "plan_item_id", "step_id",
+            "user_id",
+            "plan_item_id",
+            "step_id",
             unique=True,
+            postgresql_where=text("artifact_job_id IS NULL"),
+        ),
+        Index(
+            "ix_plan_item_step_completions_artifact_unique",
+            "user_id",
+            "plan_item_id",
+            "step_id",
+            "artifact_job_id",
+            unique=True,
+            postgresql_where=text("artifact_job_id IS NOT NULL"),
         ),
     )
 
@@ -201,6 +223,13 @@ class PlanItemStepCompletion(Base, UUIDMixin):
         index=True,
     )
     step_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    # No FK by design. A job referenced by the current item artifact/completion
+    # must be retained; only superseded, unreferenced operational attempts may
+    # be pruned while durable completion history remains.
+    artifact_job_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        nullable=True,
+    )
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -220,8 +249,18 @@ class PlanItemCompletion(Base, UUIDMixin):
     __table_args__ = (
         Index(
             "ix_plan_item_completions_unique",
-            "user_id", "plan_item_id",
+            "user_id",
+            "plan_item_id",
             unique=True,
+            postgresql_where=text("artifact_job_id IS NULL"),
+        ),
+        Index(
+            "ix_plan_item_completions_artifact_unique",
+            "user_id",
+            "plan_item_id",
+            "artifact_job_id",
+            unique=True,
+            postgresql_where=text("artifact_job_id IS NOT NULL"),
         ),
     )
 
@@ -236,6 +275,11 @@ class PlanItemCompletion(Base, UUIDMixin):
         ForeignKey("plan_items.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
+    )
+    # This is intentionally not a foreign key; see the step-completion note.
+    artifact_job_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        nullable=True,
     )
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

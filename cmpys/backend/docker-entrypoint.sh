@@ -8,6 +8,8 @@ case "$ROLE" in
   worker-low) exec celery -A app.core.celery.celery_app worker --loglevel=info --pool="${CELERY_LOW_POOL:-solo}" --concurrency="${CELERY_LOW_CONCURRENCY:-1}" -Q low_priority ;;
   catalog-worker) exec celery -A app.core.celery.celery_app worker --loglevel=info --pool="${CATALOG_WORKER_POOL:-solo}" --concurrency="${CATALOG_WORKER_CONCURRENCY:-1}" -Q catalog ;;
   catalog-control) exec celery -A app.core.celery.celery_app worker --loglevel=info --pool="${CATALOG_CONTROL_POOL:-solo}" --concurrency=1 -Q catalog_control ;;
+  curriculum-worker) exec celery -A app.core.celery.celery_app worker --loglevel=info --pool="${CURRICULUM_WORKER_POOL:-prefork}" --concurrency="${CURRICULUM_WORKER_CONCURRENCY:-2}" -Q curriculum ;;
+  curriculum-control) exec celery -A app.core.celery.celery_app worker --loglevel=info --pool="${CURRICULUM_CONTROL_POOL:-solo}" --concurrency=1 -Q curriculum_control ;;
   beat)    exec celery -A app.core.celery.celery_app beat --loglevel=info --schedule="${CELERY_BEAT_SCHEDULE:-/tmp/celerybeat-schedule}" ;;
   migrate) exec alembic upgrade heads ;;
   *) echo "unknown role: $ROLE" >&2; exit 1 ;;

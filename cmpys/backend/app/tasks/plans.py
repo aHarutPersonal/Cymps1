@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from sqlalchemy import and_, or_, select, update
 from sqlalchemy.orm import selectinload
 
+from app.core.config import settings
 from app.core.celery import celery_app
 from app.core.async_runtime import run_async
 from app.core.db import async_session_maker
@@ -26,6 +27,11 @@ from app.models.user_achievement import UserAchievement
 from app.models.user import User
 from app.models.user_profile import UserProfile
 from app.services.planning.generator import generate_plan
+from app.services.planning.artifact_identity import (
+    new_plan_item_detail_job,
+    validated_lesson_materials,
+    validated_lesson_steps,
+)
 from app.services.content_quality import (
     MAX_PLAN_DETAIL_LESSON_WORDS,
     MIN_PLAN_DETAIL_LESSON_WORDS,
@@ -60,10 +66,17 @@ from app.services.llm.schemas import (
 logger = logging.getLogger(__name__)
 
 WEEK_PREPARATION_STALE_AFTER = timedelta(minutes=10)
+MISSION_PLAN_ITEM_TYPES = frozenset(
+    {PlanItemType.PROJECT, PlanItemType.COURSE, PlanItemType.READING}
+)
 
 
 class PlanGenerationUnavailableError(RuntimeError):
     """Raised so a persisted failed plan job is also a failed Celery task."""
+
+
+class DetailArtifactPublicationSuperseded(RuntimeError):
+    """Raised when an older/cancelled worker loses the artifact publication CAS."""
 
 
 def _writing_thinking_level(tier: str) -> str:
@@ -1155,15 +1168,22 @@ async def _generate_plan_item_details_parallel(
         asyncio.create_task(write_tagged_lesson(step)) for step in pending_steps
     ]
     errors: list[str] = []
-    for completed_task in asyncio.as_completed(pending_tasks):
-        step_id, lesson, step_calls, error = await completed_task
-        calls.extend(step_calls)
-        if lesson is None:
-            if error:
-                errors.append(f"{step_id}: {error}")
-            continue
-        ready_by_id[step_id] = lesson
-        await emit_checkpoint(f"{step_id}_ready")
+    try:
+        for completed_task in asyncio.as_completed(pending_tasks):
+            step_id, lesson, step_calls, error = await completed_task
+            calls.extend(step_calls)
+            if lesson is None:
+                if error:
+                    errors.append(f"{step_id}: {error}")
+                continue
+            ready_by_id[step_id] = lesson
+            await emit_checkpoint(f"{step_id}_ready")
+    except Exception:
+        for pending_task in pending_tasks:
+            if not pending_task.done():
+                pending_task.cancel()
+        await asyncio.gather(*pending_tasks, return_exceptions=True)
+        raise
 
     if errors:
         return (
@@ -1440,6 +1460,18 @@ async def _load_session_context(
 
     if session.comparison_output:
         ctx["comparison_summary"] = session.comparison_output
+    try:
+        from app.services.comparison.scoring import comparison_scores_are_current
+
+        comparison_scores = getattr(session, "comparison_scores_json", None)
+        if comparison_scores_are_current(comparison_scores):
+            ctx["comparison_scores"] = comparison_scores
+    except Exception:
+        logger.exception(
+            "[PLANNING] Could not validate structured comparison scores "
+            "session_id=%s",
+            getattr(session, "id", "unknown"),
+        )
     if session.blueprint_output:
         ctx["blueprint_markdown"] = session.blueprint_output
     session_goal = getattr(session, "user_goal", None)
@@ -2216,6 +2248,151 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
 
         await _update_job(db, job, progress=60)
 
+        # The catalog pilot is strictly best-effort. Only a fully composed,
+        # learner-bound artifact returns here; a taxonomy miss, weak match, or
+        # failed quality gate continues into the proven bespoke pipeline below.
+        if settings.lesson_catalog_first_enabled:
+            try:
+                from app.services.planning.catalog_lessons import (
+                    try_catalog_personalized_lesson,
+                )
+                from app.tasks.ingestion import sanitize_for_postgres
+
+                await _update_job(
+                    db,
+                    job,
+                    step="matching_catalog_lesson",
+                    progress=61,
+                )
+                catalog_attempt = await try_catalog_personalized_lesson(
+                    db,
+                    user_id=str(user_id),
+                    plan=plan,
+                    item=item,
+                    user_profile=user_profile,
+                    session_context=sctx if "sctx" in locals() else {},
+                    idol=idol,
+                    idol_evidence=idol_evidence,
+                )
+                if catalog_attempt.details is not None:
+                    # Catalog steps were already normalized before their exact
+                    # immutable content hashes were persisted. Re-normalizing
+                    # here would make the delivered step differ from the READY
+                    # database version and fail the runtime integrity check.
+                    details = copy.deepcopy(catalog_attempt.details)
+                    now_iso = datetime.now(timezone.utc).isoformat()
+                    elapsed_ms = round(
+                        (time.perf_counter() - pipeline_started) * 1000
+                    )
+                    (
+                        plan,
+                        item,
+                        job,
+                        artifact_changed,
+                        supersedes_artifact,
+                    ) = await _prepare_current_detail_artifact_publication(
+                        db,
+                        plan_id=str(plan.id),
+                        item_id=str(item.id),
+                        user_id=str(user_id),
+                        job_id=str(job.id),
+                    )
+                    generation = details.setdefault("_generation", {})
+                    generation.update(
+                        {
+                            "status": "ready",
+                            "job_id": str(job.id),
+                            "checkpoint_stage": "ready",
+                            "updated_at": now_iso,
+                            "queue_wait_ms": queue_wait_ms,
+                            "elapsed_ms": elapsed_ms,
+                            "supersedes_artifact": supersedes_artifact,
+                        }
+                    )
+                    details["generated_at"] = now_iso
+                    ready_step_ids = [
+                        str(step.get("id")) for step in details.get("steps", [])
+                    ]
+                    item.details_json = sanitize_for_postgres(details)
+                    job.result_json = {
+                        **(job.result_json or {}),
+                        "input_hash": generation.get("input_hash"),
+                        "ready_step_ids": ready_step_ids,
+                        "ready_lesson_count": len(ready_step_ids),
+                        "total_lesson_count": len(ready_step_ids),
+                        "checkpoint_stage": "ready",
+                        "content_origin": "catalog_personalized",
+                        "personalized_lesson_version_id": (
+                            catalog_attempt.personalized_lesson_version_id
+                        ),
+                        "match_verdict": catalog_attempt.verdict.value,
+                        "match_reason": catalog_attempt.reason,
+                        "queue_wait_ms": queue_wait_ms,
+                        "elapsed_ms": elapsed_ms,
+                        "supersedes_artifact": supersedes_artifact,
+                    }
+                    await _reconcile_plan_after_detail_artifact_publish(
+                        db,
+                        plan=plan,
+                        item=item,
+                        artifact_changed=artifact_changed,
+                    )
+                    await _update_job(
+                        db,
+                        job,
+                        status="completed",
+                        step="done",
+                        progress=100,
+                    )
+                    logger.info(
+                        "[PLAN_DETAILS] Catalog-personalized lesson ready "
+                        "item_id=%s verdict=%s",
+                        item.id,
+                        catalog_attempt.verdict.value,
+                    )
+                    return {
+                        "status": "completed",
+                        "content_origin": "catalog_personalized",
+                        "steps_count": len(details.get("steps", [])),
+                        "materials_count": len(details.get("materials", [])),
+                    }
+                logger.info(
+                    "[PLAN_DETAILS] Catalog abstained item_id=%s reason=%s; "
+                    "continuing bespoke generation",
+                    item.id,
+                    catalog_attempt.reason,
+                )
+            except DetailArtifactPublicationSuperseded as stale_error:
+                await db.rollback()
+                logger.info(
+                    "[PLAN_DETAILS] Skipping superseded catalog publication "
+                    "job_id=%s reason=%s",
+                    job_id,
+                    stale_error,
+                )
+                return {"status": "skipped", "reason": "job_superseded"}
+            except Exception as catalog_error:
+                # Do not mark the detail job failed: catalog-first is an
+                # optimization and must never remove bespoke availability.
+                # The nested catalog SAVEPOINT has already been released on a
+                # successful composition. If normalization or item/job
+                # assembly then fails, roll back the outer transaction before
+                # the bespoke progress update can accidentally commit orphan
+                # personalized versions or assignments.
+                await _rollback_catalog_attempt_before_fallback(db, item, job)
+                logger.warning(
+                    "[PLAN_DETAILS] Catalog path failed item_id=%s; continuing "
+                    "bespoke generation: %s",
+                    item.id,
+                    catalog_error,
+                )
+            await _update_job(
+                db,
+                job,
+                step="generating_curriculum",
+                progress=60,
+            )
+
         input_contract = {
             "version": 3,
             "plan_item_id": str(item.id),
@@ -2270,7 +2447,7 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                 stage: str,
             ) -> None:
                 """Persist each semantic chunk before starting the next one."""
-                nonlocal first_lesson_ready_ms, checkpoint_outline
+                nonlocal first_lesson_ready_ms, checkpoint_outline, item, job, plan
                 from app.tasks.ingestion import sanitize_for_postgres
 
                 checkpoint_outline = PlanItemDetailsOutlineOutput.model_validate(
@@ -2287,6 +2464,19 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                 if "step_1" in ready_step_ids and first_lesson_ready_ms is None:
                     first_lesson_ready_ms = elapsed_ms
                 now_iso = datetime.now(timezone.utc).isoformat()
+                (
+                    plan,
+                    item,
+                    job,
+                    artifact_changed,
+                    supersedes_artifact,
+                ) = await _prepare_current_detail_artifact_publication(
+                    db,
+                    plan_id=str(plan.id),
+                    item_id=str(item.id),
+                    user_id=str(user_id),
+                    job_id=str(job.id),
+                )
                 generation_metadata = {
                     "version": 3,
                     "status": ("partial" if ready_step_ids else "generating"),
@@ -2301,6 +2491,7 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                     "queue_wait_ms": queue_wait_ms,
                     "elapsed_ms": elapsed_ms,
                     "first_lesson_ready_ms": first_lesson_ready_ms,
+                    "supersedes_artifact": supersedes_artifact,
                 }
                 item.details_json = sanitize_for_postgres(
                     {
@@ -2318,6 +2509,7 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                     "queue_wait_ms": queue_wait_ms,
                     "elapsed_ms": elapsed_ms,
                     "first_lesson_ready_ms": first_lesson_ready_ms,
+                    "supersedes_artifact": supersedes_artifact,
                 }
                 job.progress_percent = 62 + round(
                     18 * len(ready_step_ids) / max(1, total_lesson_count)
@@ -2333,6 +2525,12 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                 )
                 db.add(item)
                 db.add(job)
+                await _reconcile_plan_after_detail_artifact_publish(
+                    db,
+                    plan=plan,
+                    item=item,
+                    artifact_changed=artifact_changed,
+                )
                 await db.commit()
 
             def _score_detail_payload(payload: dict) -> float:
@@ -2497,6 +2695,19 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
             details["generated_at"] = datetime.now(timezone.utc).isoformat()
             total_elapsed_ms = round((time.perf_counter() - pipeline_started) * 1000)
             ready_step_ids = [str(step.get("id")) for step in details.get("steps", [])]
+            (
+                plan,
+                item,
+                job,
+                artifact_changed,
+                supersedes_artifact,
+            ) = await _prepare_current_detail_artifact_publication(
+                db,
+                plan_id=str(plan.id),
+                item_id=str(item.id),
+                user_id=str(user_id),
+                job_id=str(job.id),
+            )
             details["_generation"] = {
                 "version": 3,
                 "status": "ready",
@@ -2511,6 +2722,7 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                 "queue_wait_ms": queue_wait_ms,
                 "elapsed_ms": total_elapsed_ms,
                 "first_lesson_ready_ms": first_lesson_ready_ms,
+                "supersedes_artifact": supersedes_artifact,
             }
 
             from app.tasks.ingestion import sanitize_for_postgres
@@ -2526,11 +2738,18 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                 "queue_wait_ms": queue_wait_ms,
                 "elapsed_ms": total_elapsed_ms,
                 "first_lesson_ready_ms": first_lesson_ready_ms,
+                "supersedes_artifact": supersedes_artifact,
             }
 
             await _persist_detail_usage(
                 "quality_passed" if detail_quality_score >= 1.0 else "quality_partial",
                 detail_quality_score,
+            )
+            await _reconcile_plan_after_detail_artifact_publish(
+                db,
+                plan=plan,
+                item=item,
+                artifact_changed=artifact_changed,
             )
 
             # Finalize
@@ -2542,11 +2761,34 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                 "materials_count": len(details.get("materials", [])),
             }
 
+        except DetailArtifactPublicationSuperseded as stale_error:
+            await db.rollback()
+            logger.info(
+                "[PLAN_DETAILS] Skipping superseded publication job_id=%s reason=%s",
+                job_id,
+                stale_error,
+            )
+            return {"status": "skipped", "reason": "job_superseded"}
         except Exception as e:
             logger.error(f"[PLAN_DETAILS] LLM error for job {job_id}: {e}")
-            await _update_job(
-                db, job, status="failed", step="error", error_message=str(e)
+            # A publication failure may leave a newly assigned details_json and
+            # plan reset dirty in this session. Discard the whole attempted
+            # checkpoint before recording failure, otherwise _update_job's
+            # commit could publish an artifact without its reconciliation.
+            await db.rollback()
+            await db.execute(
+                update(PlanItemDetailJob)
+                .where(
+                    PlanItemDetailJob.id == job_id,
+                    PlanItemDetailJob.status.in_(["pending", "queued", "running"]),
+                )
+                .values(
+                    status="failed",
+                    step="error",
+                    error_message=str(e)[:4000],
+                )
             )
+            await db.commit()
             return {"status": "failed", "error": str(e)}
 
 
@@ -2567,17 +2809,231 @@ async def _update_job(
     await db.commit()
 
 
+async def _rollback_catalog_attempt_before_fallback(db, item, job) -> None:
+    """Discard released catalog SAVEPOINT writes before any fallback commit."""
+
+    await db.rollback()
+    await db.refresh(item)
+    await db.refresh(job)
+
+
+def _detail_artifact_job_id(details_json: Any) -> str | None:
+    details = details_json if isinstance(details_json, dict) else {}
+    generation = details.get("_generation")
+    if not isinstance(generation, dict) or not generation.get("job_id"):
+        return None
+    return str(generation["job_id"])
+
+
+def _details_have_usable_lesson(details_json: Any) -> bool:
+    """Whether a client could have rendered and completed the old artifact."""
+
+    steps = validated_lesson_steps(details_json)
+    if not steps or validated_lesson_materials(details_json) is None:
+        return False
+    return any(
+        len(str(step.get("lesson_content") or "").split())
+        >= MIN_PLAN_DETAIL_LESSON_WORDS
+        for step in steps
+    )
+
+
+def _prepare_detail_artifact_publish(item: PlanItem, job: Any) -> bool:
+    """Claim an item's artifact slot before the first checkpoint is persisted.
+
+    The durable marker covers legacy predecessors that had no detail job ID,
+    while the status reset prevents artifact A's terminal cache from leaking
+    into the first checkpoint of artifact B. Repeated B checkpoints are no-ops.
+    """
+
+    job_id = str(job.id)
+    current_job_id = _detail_artifact_job_id(item.details_json)
+    if current_job_id != job_id:
+        if _details_have_usable_lesson(item.details_json):
+            job.supersedes_artifact = True
+        item.status = PlanItemStatus.NOT_STARTED
+        item.progress_percent = 0
+    return bool(getattr(job, "supersedes_artifact", False))
+
+
+async def _lock_current_detail_artifact_publication(
+    db,
+    *,
+    plan_id: str,
+    item_id: str,
+    user_id: str,
+    job_id: str,
+) -> tuple[Plan, PlanItem, Any]:
+    """Lock Plan -> PlanItem -> latest job and verify publication ownership.
+
+    Regeneration can cancel worker A and enqueue B while A is still inside an
+    LLM/network call. Every checkpoint and final publication must therefore
+    re-read durable state under the same item lock used by retry creation. The
+    latest job is selected across *all* statuses so a newer failed/cancelled
+    attempt still prevents an older worker from reviving itself.
+    """
+
+    from app.models.item_detail_job import PlanItemDetailJob
+
+    plan_result = await db.execute(
+        select(Plan)
+        .where(
+            Plan.id == plan_id,
+            Plan.user_id == user_id,
+        )
+        .execution_options(populate_existing=True)
+        .with_for_update(of=Plan)
+    )
+    locked_plan = plan_result.scalar_one_or_none()
+    if locked_plan is None:
+        raise DetailArtifactPublicationSuperseded("plan ownership changed")
+
+    item_result = await db.execute(
+        select(PlanItem)
+        .where(
+            PlanItem.id == item_id,
+            PlanItem.plan_id == locked_plan.id,
+        )
+        .execution_options(populate_existing=True)
+        .with_for_update(of=PlanItem)
+    )
+    locked_item = item_result.scalar_one_or_none()
+    if locked_item is None:
+        raise DetailArtifactPublicationSuperseded("plan item no longer exists")
+
+    latest_result = await db.execute(
+        select(PlanItemDetailJob)
+        .where(
+            PlanItemDetailJob.plan_item_id == locked_item.id,
+            PlanItemDetailJob.user_id == user_id,
+        )
+        .order_by(
+            PlanItemDetailJob.artifact_epoch_at.desc(),
+            PlanItemDetailJob.id.desc(),
+        )
+        .limit(1)
+        .execution_options(populate_existing=True)
+        .with_for_update(of=PlanItemDetailJob)
+    )
+    locked_job = latest_result.scalar_one_or_none()
+    if (
+        locked_job is None
+        or str(locked_job.id) != str(job_id)
+        or locked_job.status != "running"
+    ):
+        raise DetailArtifactPublicationSuperseded(
+            "detail generation job was cancelled or superseded"
+        )
+
+    return locked_plan, locked_item, locked_job
+
+
+async def _prepare_current_detail_artifact_publication(
+    db,
+    *,
+    plan_id: str,
+    item_id: str,
+    user_id: str,
+    job_id: str,
+) -> tuple[Plan, PlanItem, Any, bool, bool]:
+    """Acquire the publication CAS, then reset state for this exact artifact."""
+
+    plan, item, job = await _lock_current_detail_artifact_publication(
+        db,
+        plan_id=plan_id,
+        item_id=item_id,
+        user_id=user_id,
+        job_id=job_id,
+    )
+    artifact_changed = _detail_artifact_job_id(item.details_json) != str(job.id)
+    supersedes_artifact = _prepare_detail_artifact_publish(item, job)
+    return plan, item, job, artifact_changed, supersedes_artifact
+
+
+async def _reconcile_plan_after_detail_artifact_publish(
+    db,
+    *,
+    plan: Plan,
+    item: PlanItem,
+    artifact_changed: bool,
+) -> None:
+    """Reopen a completed plan when its current mission artifact is replaced.
+
+    The Plan row is already locked by the publication guard. Completion stamps
+    stay sticky once a successor cycle exists, matching interactive toggles.
+    """
+
+    if (
+        not artifact_changed
+        or item.type not in MISSION_PLAN_ITEM_TYPES
+        or plan.completed_at is None
+    ):
+        return
+    successor_id = await db.scalar(
+        select(Plan.id).where(Plan.previous_plan_id == plan.id).limit(1)
+    )
+    if successor_id is None:
+        plan.completed_at = None
+
+
 def _details_ready_for_prefetch(details_json: dict | None) -> bool:
     """Use the same substantive threshold as the user-facing detail route."""
     if not details_json:
         return False
-    steps = details_json.get("steps", [])
-    if not steps:
+    from app.services.planning.catalog_lessons import (
+        catalog_details_are_personalized_and_ready,
+    )
+
+    if not catalog_details_are_personalized_and_ready(details_json):
+        return False
+    steps = validated_lesson_steps(details_json)
+    if not steps or validated_lesson_materials(details_json) is None:
         return False
     return all(
         len(str(step.get("lesson_content") or "").split())
         >= MIN_PLAN_DETAIL_LESSON_WORDS
         for step in steps
+    )
+
+
+async def _details_ready_for_prefetch_in_database(
+    db,
+    *,
+    item: PlanItem,
+    user_id: str,
+) -> bool:
+    if not _details_ready_for_prefetch(item.details_json):
+        return False
+    from app.services.planning.artifact_identity import (
+        artifact_job_marker_is_invalid,
+    )
+
+    if artifact_job_marker_is_invalid(item.details_json):
+        return False
+    artifact_job_id = _detail_artifact_job_id(item.details_json)
+    if artifact_job_id is not None:
+        from app.models.item_detail_job import PlanItemDetailJob
+
+        job_exists = await db.scalar(
+            select(PlanItemDetailJob.id)
+            .where(
+                PlanItemDetailJob.id == artifact_job_id,
+                PlanItemDetailJob.plan_item_id == item.id,
+                PlanItemDetailJob.user_id == user_id,
+            )
+            .limit(1)
+        )
+        if job_exists is None:
+            return False
+    from app.services.planning.catalog_lessons import (
+        catalog_details_are_ready_in_database,
+    )
+
+    return await catalog_details_are_ready_in_database(
+        db,
+        item.details_json,
+        user_id=str(user_id),
+        plan_item_id=str(item.id),
     )
 
 
@@ -2614,12 +3070,17 @@ async def _enqueue_plan_week_details_generation_async(
         .order_by(PlanItem.id.asc())
         .with_for_update(of=PlanItem)
     )
-    items = [
-        item
-        for item in items_result.scalars().all()
-        if item.status != PlanItemStatus.COMPLETED
-        and not _details_ready_for_prefetch(item.details_json)
-    ]
+    items: list[PlanItem] = []
+    for item in items_result.scalars().all():
+        if item.status == PlanItemStatus.COMPLETED:
+            continue
+        if await _details_ready_for_prefetch_in_database(
+            db,
+            item=item,
+            user_id=str(user_id),
+        ):
+            continue
+        items.append(item)
 
     # The first mission is the shortest path to useful content. Keep stable
     # backbone ordering and reserve high-priority capacity for only that item;
@@ -2652,9 +3113,10 @@ async def _enqueue_plan_week_details_generation_async(
     for item in items:
         if str(item.id) in active_item_ids:
             continue
-        job = PlanItemDetailJob(
+        job = await new_plan_item_detail_job(
+            db,
             user_id=user_id,
-            plan_item_id=item.id,
+            plan_item_id=str(item.id),
             status="queued",
             step="background_queued",
             progress_percent=0,

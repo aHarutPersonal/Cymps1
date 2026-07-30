@@ -10,7 +10,8 @@ AWS_REGION="${3:-us-east-1}"
 APP_DIR="/opt/cmpys"
 ENV_FILE="$APP_DIR/.env"
 COMPOSE="$APP_DIR/docker-compose.prod.yml"
-RELEASE_SERVICES=(web worker worker-high worker-low catalog-worker catalog-control beat)
+COMPOSE_BACKUP="$APP_DIR/docker-compose.prod.yml.rollback-$IMAGE_TAG"
+RELEASE_SERVICES=(web worker worker-high worker-low catalog-worker catalog-control curriculum-worker curriculum-control beat)
 
 # Serialize deployments on the host as a second line of defense beyond the CI
 # concurrency group. This also protects against an operator starting a release
@@ -45,19 +46,52 @@ configured_release_services() {
 }
 
 rollback_release() {
-  local rollback_services=()
+  local rollback_services=() service container
+  local -a new_service_containers=()
   trap - ERR
   if [[ "$ROLLBACK_ARMED" == "true" ]]; then
+    for service in "${RELEASE_SERVICES[@]}"; do
+      container="$(service_container "$service" 2>/dev/null || true)"
+      if [[ -n "$container" ]]; then
+        new_service_containers+=("$service:$container")
+      fi
+    done
+    if [[ ! -s "$COMPOSE_BACKUP" ]]; then
+      echo "ERROR: matching rollback Compose file is missing" >&2
+      return 1
+    fi
+    cp "$COMPOSE_BACKUP" "$COMPOSE"
     mapfile -t rollback_services < <(configured_release_services)
     echo "Rolling back services to $PREVIOUS_TAG..." >&2
     IMAGE_TAG="$PREVIOUS_TAG" compose up -d --no-deps --force-recreate \
-      "${rollback_services[@]}" || true
+      "${rollback_services[@]}"
+
+    for entry in "${new_service_containers[@]}"; do
+      service="${entry%%:*}"
+      container="${entry#*:}"
+      if ! printf '%s\n' "${rollback_services[@]}" | grep -Fxq "$service"; then
+        docker rm -f "$container" >/dev/null 2>&1 || true
+      fi
+    done
+
+    wait_for_web
+    for service in "${rollback_services[@]}"; do
+      if ! service_is_running "$service"; then
+        echo "ERROR: rollback service $service is not running" >&2
+        return 1
+      fi
+    done
+    verify_configured_workers "${rollback_services[@]}"
+    rm -f "$COMPOSE_BACKUP"
   fi
 }
 
 on_deploy_error() {
   local exit_code=$?
-  rollback_release
+  if ! rollback_release; then
+    echo "ERROR: automatic rollback failed; operator recovery is required" >&2
+    exit 70
+  fi
   exit "$exit_code"
 }
 
@@ -102,6 +136,35 @@ wait_for_celery_worker() {
   return 1
 }
 
+wait_for_web() {
+  echo "Waiting for web to become healthy..."
+  for i in $(seq 1 30); do
+    if compose exec -T web curl -sf http://localhost:8000/ready >/dev/null 2>&1; then
+      echo "web is healthy"
+      return 0
+    fi
+    sleep 2
+  done
+  echo "ERROR: web did not become healthy within 60s" >&2
+  compose logs --tail=40 web >&2 || true
+  return 1
+}
+
+verify_configured_workers() {
+  local service
+  for service in "$@"; do
+    case "$service" in
+      worker) wait_for_celery_worker "$service" "default" ;;
+      worker-high) wait_for_celery_worker "$service" "high_priority" ;;
+      worker-low) wait_for_celery_worker "$service" "low_priority" ;;
+      catalog-worker) wait_for_celery_worker "$service" "catalog" ;;
+      catalog-control) wait_for_celery_worker "$service" "catalog_control" ;;
+      curriculum-worker) wait_for_celery_worker "$service" "curriculum" ;;
+      curriculum-control) wait_for_celery_worker "$service" "curriculum_control" ;;
+    esac
+  done
+}
+
 # Authenticate Docker with ECR
 aws ecr get-login-password --region "$AWS_REGION" | \
   docker login --username AWS --password-stdin "$ECR_URL"
@@ -115,13 +178,18 @@ docker image prune -a -f
 # Pull the new image
 docker pull "$ECR_URL:$IMAGE_TAG"
 
-# Run migration first (one-off container)
+# Stop every old writer before the schema transition. PostgreSQL and Redis stay
+# online, but API completion writes, workers, and Beat cannot race the migration.
+ROLLBACK_ARMED=true
+mapfile -t current_release_services < <(configured_release_services)
+compose stop "${current_release_services[@]}"
+
+# Run migration from the new image while old writers are quiesced.
 IMAGE_TAG="$IMAGE_TAG" compose run --rm -T migrate </dev/null
 
 # Roll every runtime service to the new image. Book requests first enter the
 # catalog_control queue, then move to the catalog queue, so both dedicated
 # workers are part of the deployment contract rather than optional extras.
-ROLLBACK_ARMED=true
 IMAGE_TAG="$IMAGE_TAG" compose up -d --no-deps --force-recreate \
   "${RELEASE_SERVICES[@]}"
 
@@ -129,19 +197,7 @@ IMAGE_TAG="$IMAGE_TAG" compose up -d --no-deps --force-recreate \
 # container *starts*, not when it serves traffic — without this a crash-looping
 # image still reports a green deploy. Poll the in-container health endpoint and
 # fail loudly (non-zero exit) if it never comes up, so the caller can roll back.
-echo "Waiting for web to become healthy..."
-for i in $(seq 1 30); do
-  if compose exec -T web curl -sf http://localhost:8000/ready >/dev/null 2>&1; then
-    echo "web is healthy"
-    break
-  fi
-  if [ "$i" -eq 30 ]; then
-    echo "ERROR: web did not become healthy within 60s" >&2
-    compose logs --tail=40 web >&2
-    exit 1
-  fi
-  sleep 2
-done
+wait_for_web
 
 for service in "${RELEASE_SERVICES[@]}"; do
   if ! service_is_running "$service"; then
@@ -157,6 +213,8 @@ wait_for_celery_worker "worker-high" "high_priority"
 wait_for_celery_worker "worker-low" "low_priority"
 wait_for_celery_worker "catalog-worker" "catalog"
 wait_for_celery_worker "catalog-control" "catalog_control"
+wait_for_celery_worker "curriculum-worker" "curriculum"
+wait_for_celery_worker "curriculum-control" "curriculum_control"
 
 # Persist the successful release only after every service and queue consumer
 # has passed its health check. CI promotes the registry's :latest alias after
@@ -169,6 +227,7 @@ else
 fi
 ROLLBACK_ARMED=false
 trap - ERR
+rm -f "$COMPOSE_BACKUP"
 
 # Clean up old images (dangling only) once the new one is confirmed good.
 docker image prune -f

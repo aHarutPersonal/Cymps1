@@ -20,6 +20,15 @@ class Settings(BaseSettings):
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"
+    # Shell/Compose worker settings also belong to the accepted dotenv schema.
+    # Modeling them keeps typo detection (`extra=forbid`) without making the
+    # checked-in .env.example impossible to load through BaseSettings.
+    celery_default_pool: str = "solo"
+    celery_default_concurrency: int = 1
+    celery_high_pool: str = "solo"
+    celery_high_concurrency: int = 1
+    celery_low_pool: str = "solo"
+    celery_low_concurrency: int = 1
 
     # JWT
     jwt_secret_key: str = "change-me-in-production-use-openssl-rand-hex-32"
@@ -88,6 +97,9 @@ class Settings(BaseSettings):
 
     # Plan generation
     plan_generator_mode: str = "deterministic"  # "deterministic" or "llm"
+    # Safe runtime pilot. A catalog miss or failed personal composition falls
+    # through to the existing bespoke lesson generator.
+    lesson_catalog_first_enabled: bool = False
 
     # Local LLM (Spec 2 — inert until then)
     local_llm_base_url: str | None = None  # e.g. http://gpu-box:8000/v1 (Spec 2)
@@ -99,6 +111,9 @@ class Settings(BaseSettings):
     catalog_scheduler_enabled: bool = True
     catalog_tick_seconds: int = 60
     catalog_dispatch_per_tick: int = 1
+    catalog_worker_pool: str = "solo"
+    catalog_worker_concurrency: int = 1
+    catalog_control_pool: str = "solo"
     catalog_daily_job_limit: int = 50
     catalog_seed_per_tick: int = 25
     catalog_max_attempts: int = 3
@@ -108,6 +123,28 @@ class Settings(BaseSettings):
     catalog_quote_verification_enabled: bool = True
     catalog_quote_verification_batch_size: int = 4
     catalog_quote_verification_daily_limit: int = 2
+
+    # Evidence-based curriculum factory. It is intentionally off until the
+    # deterministic pilot taxonomy has been reviewed and seeded. Curriculum
+    # spend is accounted separately from the general background catalog.
+    curriculum_enabled: bool = False
+    curriculum_control_interval_seconds: int = 60
+    curriculum_max_dispatch_per_tick: int = 1
+    curriculum_max_running_jobs: int = 2
+    curriculum_lease_seconds: int = 20 * 60
+    curriculum_max_repairs: int = 2
+    curriculum_daily_budget_usd: float = 0.20
+    curriculum_job_budget_usd: float = 0.60
+    curriculum_daily_job_limit: int = 8
+    curriculum_durable_spacing_scheduler_enabled: bool = False
+    curriculum_research_model_tier: str = "fast"
+    curriculum_writing_model_tier: str = "balanced"
+    curriculum_review_model_tier: str = "quality"
+    # Deployment-only worker knobs are still modeled because Settings rejects
+    # unknown keys when developers copy the complete .env.example locally.
+    curriculum_worker_pool: str = "prefork"
+    curriculum_worker_concurrency: int = 2
+    curriculum_control_pool: str = "solo"
 
     # When every user-facing generation queue and tracked catalog job is idle,
     # discover at most one new book or idol candidate on this slower cadence.

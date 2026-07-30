@@ -1,5 +1,5 @@
 """Persisted usage telemetry for budget and quality decisions."""
-from sqlalchemy import Boolean, Float, Index, Integer, String
+from sqlalchemy import Boolean, Float, Index, Integer, String, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -11,6 +11,11 @@ class LLMUsageEvent(Base, UUIDMixin, TimestampMixin):
     __table_args__ = (
         Index("ix_llm_usage_events_operation_created", "operation", "created_at"),
         Index("ix_llm_usage_events_model_created", "model", "created_at"),
+        Index(
+            "ix_llm_usage_events_curriculum_job",
+            text("(metadata_json ->> 'curriculum_job_id')"),
+            postgresql_where=text("metadata_json ? 'curriculum_job_id'"),
+        ),
     )
 
     operation: Mapped[str] = mapped_column(String(80), nullable=False)

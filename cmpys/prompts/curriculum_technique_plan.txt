@@ -1,0 +1,23 @@
+Design the evidence-based learning-technique plan for this module.
+
+MODULE TARGET
+{module_target_json}
+
+SANITIZED SOURCE PACK
+{source_pack_json}
+
+VERSIONED TECHNIQUE REGISTRY
+{technique_registry_json}
+
+RUNTIME CAPABILITIES
+{runtime_capabilities_json}
+
+Select two to eight techniques appropriate for the skill type and learner level. For each technique:
+- use the exact registry technique_id;
+- explain why it fits this outcome and level;
+- give concrete implementation steps;
+- pre-assign stable block IDs beginning block_;
+- cite exact source IDs from the source pack;
+- preserve limitations.
+
+Never select a technique absent from the supplied registry. Select spaced_practice only when durable_spacing_scheduler is true; if selected, provide positive ascending follow-up day offsets. Assessment must test the stated performance, not recall of lesson prose.

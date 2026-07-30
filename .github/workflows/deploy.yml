@@ -1,11 +1,13 @@
 name: deploy
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
       - "cmpys/backend/**"
       - "cmpys/infra/**"
+      - "cmpys/prompts/**"
       - ".github/workflows/deploy.yml"
 
 env:
@@ -18,6 +20,22 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql+psycopg://cmpys:cmpys@localhost:5432/cmpys
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: cmpys
+          POSTGRES_PASSWORD: cmpys
+          POSTGRES_DB: cmpys
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cmpys -d cmpys"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
@@ -30,11 +48,14 @@ jobs:
       - name: Install dependencies
         run: pip install -r cmpys/backend/requirements.txt
 
+      - name: Migrate clean pgvector database
+        working-directory: cmpys/backend
+        run: python -m alembic upgrade head
+
       - name: Run tests
         run: |
           cd cmpys/backend
-          python -m pytest -q --ignore=tests/test_catalog_migration.py
-        # test_catalog_migration.py requires a live pgvector DB — skipped in CI
+          python -m pytest -q
 
   deploy:
     needs: test
@@ -99,7 +120,15 @@ jobs:
             exit 1
           fi
 
-          # Copy updated compose file and deploy script to server
+          # Preserve the compose topology that matches the currently running
+          # image before replacing release tooling. The remote rollback path
+          # restores this file before it starts the previous image.
+          ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no \
+            ec2-user@$SERVER_IP \
+            "cp /opt/cmpys/docker-compose.prod.yml \
+             /opt/cmpys/docker-compose.prod.yml.rollback-$IMAGE_TAG"
+
+          # Copy updated compose file and deploy script to server.
           scp -i /tmp/deploy_key -o StrictHostKeyChecking=no \
             cmpys/infra/docker-compose.prod.yml \
             cmpys/infra/deploy.sh \

@@ -94,11 +94,18 @@ def test_weekly_lesson_bundle_fills_the_mission_hour_budget():
 
 def test_short_lessons_are_upgraded_and_variable_long_lesson_counts_are_ready():
     assert not _lesson_details_meet_quality(
-        {"steps": [{"lesson_content": "word " * 500}]}
+        {"steps": [{"id": "step_1", "lesson_content": "word " * 500}]}
     )
-    assert _lesson_details_meet_quality({"steps": [{"lesson_content": "word " * 1900}]})
     assert _lesson_details_meet_quality(
-        {"steps": [{"lesson_content": "word " * 1900} for _ in range(5)]}
+        {"steps": [{"id": "step_1", "lesson_content": "word " * 1900}]}
+    )
+    assert _lesson_details_meet_quality(
+        {
+            "steps": [
+                {"id": f"step_{index}", "lesson_content": "word " * 1900}
+                for index in range(1, 6)
+            ]
+        }
     )
 
 

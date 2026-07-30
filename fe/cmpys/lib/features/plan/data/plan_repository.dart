@@ -198,10 +198,14 @@ class PlanRepository {
   /// progression and auto-completes the mission after its final lesson.
   Future<({bool completed, bool itemCompleted})> toggleStepComplete(
     String itemId,
-    String stepId,
-  ) async {
+    String stepId, {
+    String? artifactJobId,
+  }) async {
     final response = await _dioClient.post(
       '/plan-items/$itemId/steps/$stepId/toggle',
+      queryParameters: artifactJobId == null
+          ? null
+          : {'artifactJobId': artifactJobId},
     );
     final data = response.data as Map<String, dynamic>;
     return (
@@ -213,9 +217,15 @@ class PlanRepository {
   /// Toggle item-level completion. Returns a [ToggleResult] with the new
   /// completed state plus plan-level signals (planComplete,
   /// missionTasksRemaining) used by the achievement cycle flow.
-  Future<ToggleResult> toggleItemComplete(String itemId) async {
+  Future<ToggleResult> toggleItemComplete(
+    String itemId, {
+    String? artifactJobId,
+  }) async {
     final response = await _dioClient.post(
       '/plan-items/$itemId/toggle-complete',
+      queryParameters: artifactJobId == null
+          ? null
+          : {'artifactJobId': artifactJobId},
     );
     final data = response.data as Map<String, dynamic>;
     debugPrint('✅ Toggled plan item $itemId → ${data['completed']}');

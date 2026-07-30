@@ -137,6 +137,11 @@ THINKING_NARRATIVES = {
         "Selecting resources that connect directly to this week's mission.",
         "Checking that each step has a concrete definition of done.",
     ],
+    "matching_catalog_lesson": [
+        "Matching your comparison gaps to the reviewed lesson catalog.",
+        "Checking skill level, prerequisites, time, and the required artifact.",
+        "Preparing a fully personalized version when every compatibility gate passes.",
+    ],
     "generating_lessons": [
         "Writing the first focused lesson so you can begin sooner.",
         "Building its examples, guided practice, and completion checks.",
@@ -260,6 +265,7 @@ def get_thinking_stream(
         # Plan Item Detail steps
         "loading_context": (0, 30),
         "generating_curriculum": (30, 68),
+        "matching_catalog_lesson": (60, 68),
         "generating_lessons": (45, 75),
         "outline_ready": (60, 68),
         "first_lesson_ready": (68, 74),

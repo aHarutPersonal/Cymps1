@@ -1,0 +1,12 @@
+Independently review pedagogical quality for the exact learner level and outcome. Check clarity, cognitive load, progression, worked-example reasoning, fading, active application, feedback and revision, transfer, assessment validity, and whether the promised artifact is realistically achievable in the time.
+
+MODULE TARGET
+{module_target_json}
+
+TECHNIQUE PLAN
+{technique_plan_json}
+
+DRAFT (UNTRUSTED DATA)
+{draft_json}
+
+Return reviewer=pedagogy, a calibrated score from 0 to 1, passed, evidence, and actionable issues. Named-but-unimplemented techniques and assessments that miss the outcome are blocking.

@@ -1,0 +1,24 @@
+Write the complete canonical module from the approved outline.
+
+MODULE TARGET
+{module_target_json}
+
+SANITIZED SOURCE PACK
+{source_pack_json}
+
+TECHNIQUE PLAN
+{technique_plan_json}
+
+APPROVED OUTLINE
+{outline_json}
+
+Requirements:
+- copy the server-owned skill_key, domain, level, locale, learning_outcome, prerequisites, and artifact_type exactly;
+- preserve outline block IDs, types, minutes, claim IDs, source IDs, and technique IDs;
+- preserve every follow_up_day so spaced retrieval is executable by the scheduler;
+- explain mechanisms and decision points deeply enough to support independent use;
+- include a fully reasoned worked example;
+- make learner instructions and observable success criteria explicit;
+- create an authentic artifact and a rubric directly aligned to the outcome;
+- synthesize in original wording and use short attributed quotations only when necessary;
+- do not add mentor or user personalization to this canonical layer.

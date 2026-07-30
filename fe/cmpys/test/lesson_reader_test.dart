@@ -15,8 +15,9 @@ class _FakePlanRepository extends PlanRepository {
   @override
   Future<({bool completed, bool itemCompleted})> toggleStepComplete(
     String itemId,
-    String stepId,
-  ) async => (completed: true, itemCompleted: false);
+    String stepId, {
+    String? artifactJobId,
+  }) async => (completed: true, itemCompleted: false);
 }
 
 class _FocusedPlanRepository extends Fake implements PlanRepository {

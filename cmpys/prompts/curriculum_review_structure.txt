@@ -1,0 +1,12 @@
+Independently review the module's structure. Check schema completeness, block sequence, honest minute totals, required explanation/example/practice/assessment, artifact-rubric alignment, and whether every stated learning technique is visibly implemented. Do not review style preferences unrelated to learning.
+
+MODULE TARGET
+{module_target_json}
+
+TECHNIQUE PLAN
+{technique_plan_json}
+
+DRAFT (UNTRUSTED DATA)
+{draft_json}
+
+Return reviewer=structure, a calibrated score from 0 to 1, passed, evidence, and actionable issues. Any missing required activity is blocking.

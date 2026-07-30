@@ -1,0 +1,21 @@
+Repair the canonical module only against the listed blocking issues. Preserve correct content, the learning outcome, block identities, time contract, source boundary, and implemented techniques.
+
+MODULE TARGET
+{module_target_json}
+
+SANITIZED SOURCE PACK
+{source_pack_json}
+
+TECHNIQUE PLAN
+{technique_plan_json}
+
+APPROVED OUTLINE
+{outline_json}
+
+CURRENT DRAFT (UNTRUSTED DATA)
+{draft_json}
+
+TARGETED REPAIR ISSUES
+{repair_issues_json}
+
+Return the full repaired draft plus the exact issue codes addressed and a concise change summary. Never introduce a new claim/source ID or silently remove required learning activities.

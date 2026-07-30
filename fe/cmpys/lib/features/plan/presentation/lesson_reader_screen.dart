@@ -77,6 +77,7 @@ class LessonReaderScreen extends ConsumerStatefulWidget {
     required this.totalSteps,
     required this.materials,
     required this.completed,
+    this.artifactJobId,
   });
 
   final String itemId;
@@ -86,6 +87,7 @@ class LessonReaderScreen extends ConsumerStatefulWidget {
   final int totalSteps;
   final List<PlanMaterialDetail> materials;
   final bool completed;
+  final String? artifactJobId;
 
   @override
   ConsumerState<LessonReaderScreen> createState() => _LessonReaderScreenState();
@@ -141,7 +143,11 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
     try {
       final result = await ref
           .read(planRepositoryProvider)
-          .toggleStepComplete(widget.itemId, widget.step.id);
+          .toggleStepComplete(
+            widget.itemId,
+            widget.step.id,
+            artifactJobId: widget.artifactJobId,
+          );
       if (!mounted) return;
       Navigator.of(context).pop(result.completed);
     } catch (_) {

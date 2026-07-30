@@ -139,6 +139,44 @@ outcome, and confirmed weekly capacity are authoritative; caller defaults cannot
 replace them. Later week and lesson generation retain the source session and
 learner-baseline snapshot recorded on the plan.
 
+### Lesson artifact concurrency
+
+`GET /plan-items/{item_id}/detailed` returns `artifact_job_id` whenever its
+response contains current or partial lesson details. Clients should retain that
+value with the rendered lesson and echo it as the `artifactJobId` query
+parameter on both mutation endpoints:
+
+- `POST /plan-items/{item_id}/toggle-complete`
+- `POST /plan-items/{item_id}/steps/{step_id}/toggle`
+
+The token is optional only for a currently rendered legacy lesson and a true
+first-generation artifact. A first detail job that replaces an already usable
+legacy lesson is marked as a replacement and also requires its token. Missing,
+malformed, non-canonical, wrong-item, wrong-owner, or stale artifact identity
+returns `409`; the client must refresh the detailed lesson before retrying. A
+modern token is canonical lowercase hyphenated UUID text and its referenced
+detail job is retained even after the job leaves the active queue.
+
+Step and item completion rows are pinned to this exact artifact job. Historical
+progress is retained, but it is not counted toward a replacement lesson, week,
+or plan—even when both artifacts use a generic ID such as `step_1`.
+
+For `partial`/`generating` details, only steps named by a valid
+`_generation.ready_step_ids` checkpoint and containing complete reader content
+are completion-eligible. Responses keep all strict steps in `total_steps`, so
+progress stays below 100% until the artifact becomes ready.
+
+Failed jobs that never published an artifact do not remove first-generation
+token compatibility. Conversely, while a newer active job owns a replacement,
+the prior artifact's completion is excluded from item, week, plan, and daily
+execution summaries until the replacement publishes or the attempt terminates.
+
+`PATCH /plan-items/{item_id}` is notes-only. Send `{ "notes": "..." }`;
+`status` and `progressPercent` are rejected with validation status `422` because
+those fields are derived from the artifact-scoped completion endpoints above.
+`GET /plan-items/{item_id}` returns that authoritative derived progress rather
+than trusting the denormalized item cache.
+
 ## Notes — `/notes`
 
 | Method | Path | Notes |

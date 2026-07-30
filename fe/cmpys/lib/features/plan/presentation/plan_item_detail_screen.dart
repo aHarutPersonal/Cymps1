@@ -281,7 +281,10 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
     try {
       final result = await ref
           .read(planRepositoryProvider)
-          .toggleItemComplete(detailed.item.id);
+          .toggleItemComplete(
+            detailed.item.id,
+            artifactJobId: detailed.artifactJobId,
+          );
       if (!mounted) return;
       if (result.completed) {
         showCmpysToast(
@@ -1076,6 +1079,7 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
           totalSteps: detailed.steps.length,
           materials: detailed.materials,
           completed: completed,
+          artifactJobId: detailed.artifactJobId,
         ),
       ),
     );

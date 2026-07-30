@@ -44,11 +44,15 @@ class PlanGenerateRequest(BaseModel):
 
 
 class PlanItemUpdate(BaseModel):
-    """Update a plan item."""
+    """Update user-authored plan-item notes.
 
-    status: PlanItemStatus | None = None
-    progressPercent: int | None = Field(None, ge=0, le=100)
+    Mission status/progress are derived from exact artifact completion records
+    and can only be changed through the completion endpoints.
+    """
+
     notes: str | None = Field(None, max_length=5000)
+
+    model_config = {"extra": "forbid"}
 
 
 class PlanItemCreate(BaseModel):
@@ -202,6 +206,9 @@ class PlanItemDetailedResponse(BaseModel):
     # Details generation status
     details_status: DetailsStatus = DetailsStatus.AVAILABLE
     job_id: str | None = None
+    # Optimistic-concurrency token for mutations of the rendered artifact.
+    # Clients must echo it as artifactJobId on step/item completion requests.
+    artifact_job_id: str | None = None
     details_error: str | None = None
     details_progress: int = 0
     details_step: str | None = None

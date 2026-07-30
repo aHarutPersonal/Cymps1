@@ -67,8 +67,73 @@ PROMPT_PLACEHOLDERS = {
     "extractor_system.txt": [],  # No placeholders - pure system prompt
     "planner_system.txt": [],  # No placeholders - pure system prompt
     "book_writer_system.txt": [],  # No placeholders - pure system prompt
+    "curriculum_research_system.txt": [],
+    "curriculum_writer_system.txt": [],
     "idol_suggest_system.txt": [],  # No placeholders - pure system prompt
     "learning_materials_system.txt": [],  # No placeholders - pure system prompt
+
+    "curriculum_research_discovery.txt": [
+        "module_target_json",
+        "approved_technique_registry_json",
+    ],
+    "curriculum_research_curate.txt": [
+        "module_target_json",
+        "grounded_synthesis",
+        "server_owned_source_catalog_json",
+    ],
+    "curriculum_research_verify.txt": ["claim_support_pack_json"],
+    "curriculum_technique_plan.txt": [
+        "module_target_json",
+        "source_pack_json",
+        "technique_registry_json",
+        "runtime_capabilities_json",
+    ],
+    "curriculum_outline.txt": [
+        "module_target_json",
+        "source_pack_json",
+        "technique_plan_json",
+    ],
+    "curriculum_module_write.txt": [
+        "module_target_json",
+        "source_pack_json",
+        "technique_plan_json",
+        "outline_json",
+    ],
+    "curriculum_module_repair.txt": [
+        "module_target_json",
+        "source_pack_json",
+        "technique_plan_json",
+        "outline_json",
+        "draft_json",
+        "repair_issues_json",
+    ],
+    "curriculum_review_structure.txt": [
+        "module_target_json",
+        "technique_plan_json",
+        "draft_json",
+    ],
+    "curriculum_review_factual.txt": [
+        "source_pack_json",
+        "draft_json",
+    ],
+    "curriculum_review_pedagogy.txt": [
+        "module_target_json",
+        "technique_plan_json",
+        "draft_json",
+    ],
+    "curriculum_review_originality.txt": [
+        "source_pack_json",
+        "comparison_texts_json",
+        "draft_json",
+    ],
+    "curriculum_mentor_claims.txt": [
+        "mentor_json",
+        "source_chunks_json",
+    ],
+    "curriculum_mentor_claim_verify.txt": [
+        "mentor_json",
+        "claim_support_pack_json",
+    ],
 
     "learning_materials_generate.txt": [
         "topic",
@@ -627,6 +692,31 @@ PROMPT_REGISTRY = {
         "generate_book_module": [
             "book_writer_system.txt",
             "book_module_generate.txt",
+        ],
+    },
+    "curriculum": {
+        "grounded_research": [
+            "curriculum_research_system.txt",
+            "curriculum_research_discovery.txt",
+            "curriculum_research_curate.txt",
+            "curriculum_research_verify.txt",
+        ],
+        "module_generation": [
+            "curriculum_writer_system.txt",
+            "curriculum_technique_plan.txt",
+            "curriculum_outline.txt",
+            "curriculum_module_write.txt",
+            "curriculum_module_repair.txt",
+        ],
+        "independent_reviews": [
+            "curriculum_review_structure.txt",
+            "curriculum_review_factual.txt",
+            "curriculum_review_pedagogy.txt",
+            "curriculum_review_originality.txt",
+        ],
+        "mentor_evidence": [
+            "curriculum_mentor_claims.txt",
+            "curriculum_mentor_claim_verify.txt",
         ],
     },
     # Milestones query
