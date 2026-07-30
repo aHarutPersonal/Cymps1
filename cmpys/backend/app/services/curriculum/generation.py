@@ -127,6 +127,64 @@ def _assert_plan_sources(plan: TechniquePlan, manifest: ResearchManifest) -> Non
         )
 
 
+def _registry_evidence_bindings(
+    manifest: ResearchManifest,
+    *,
+    technique_ids: set[TechniqueId],
+) -> tuple[dict[TechniqueId, str], set[str]]:
+    source_id_by_url = {source.url: source.source_id for source in manifest.sources}
+    registry_urls = {
+        url for entry in TECHNIQUE_REGISTRY for url in entry.source_urls
+    }
+    registry_source_ids = {
+        source_id
+        for url, source_id in source_id_by_url.items()
+        if url in registry_urls
+    }
+    bindings: dict[TechniqueId, str] = {}
+    for entry in TECHNIQUE_REGISTRY:
+        if entry.technique_id not in technique_ids:
+            continue
+        source_id = source_id_by_url.get(entry.source_urls[0])
+        if source_id is None:
+            raise ValueError(
+                "research manifest lacks required registry source for: "
+                f"{entry.technique_id.value}"
+            )
+        bindings[entry.technique_id] = source_id
+    return bindings, registry_source_ids
+
+
+def _bind_exact_registry_evidence(
+    plan: TechniquePlan,
+    manifest: ResearchManifest,
+) -> TechniquePlan:
+    """Replace ambiguous registry citations with the server-pinned source ID."""
+
+    bindings, registry_source_ids = _registry_evidence_bindings(
+        manifest,
+        technique_ids={application.technique_id for application in plan.applications},
+    )
+    applications = []
+    for application in plan.applications:
+        live_source_ids = [
+            source_id
+            for source_id in application.evidence_source_ids
+            if source_id not in registry_source_ids
+        ][:7]
+        evidence_source_ids = list(
+            dict.fromkeys(
+                [*live_source_ids, bindings[application.technique_id]]
+            )
+        )
+        applications.append(
+            application.model_copy(
+                update={"evidence_source_ids": evidence_source_ids}
+            )
+        )
+    return plan.model_copy(update={"applications": applications})
+
+
 def _assert_plan_target(plan: TechniquePlan, module_target: dict[str, Any]) -> None:
     if " ".join(plan.learning_outcome.split()) != " ".join(
         str(module_target.get("learning_outcome") or "").split()
@@ -150,6 +208,10 @@ async def generate_technique_plan(
         if durable_spacing_scheduler_enabled
         or item.technique_id != TechniqueId.SPACED_PRACTICE
     ]
+    registry_bindings, _ = _registry_evidence_bindings(
+        manifest,
+        technique_ids={item.technique_id for item in registry},
+    )
     generated = await _generate(
         operation="curriculum_technique_plan",
         prompt_name="curriculum_technique_plan",
@@ -157,7 +219,13 @@ async def generate_technique_plan(
             "module_target_json": module_target,
             "source_pack_json": writer_source_pack(manifest),
             "technique_registry_json": [
-                item.model_dump(mode="json") for item in registry
+                {
+                    **item.model_dump(mode="json"),
+                    "required_evidence_source_ids": [
+                        registry_bindings[item.technique_id]
+                    ],
+                }
+                for item in registry
             ],
             "runtime_capabilities_json": {
                 "durable_spacing_scheduler": durable_spacing_scheduler_enabled,
@@ -169,6 +237,7 @@ async def generate_technique_plan(
         metadata={"stage": "technique_design", **(telemetry_metadata or {})},
     )
     plan = TechniquePlan.model_validate(generated.value)
+    plan = _bind_exact_registry_evidence(plan, manifest)
     _assert_plan_sources(plan, manifest)
     _assert_plan_target(plan, module_target)
     if (
@@ -179,7 +248,14 @@ async def generate_technique_plan(
         )
     ):
         raise ValueError("technique plan selected unavailable spaced practice")
-    return generated
+    return GeneratedArtifact(
+        value=plan,
+        model_name=generated.model_name,
+        provider=generated.provider,
+        input_tokens=generated.input_tokens,
+        output_tokens=generated.output_tokens,
+        total_tokens=generated.total_tokens,
+    )
 
 
 def _assert_outline_contract(

@@ -44,7 +44,10 @@ from app.services.curriculum.gates import (
     validate_source_attribution,
     validate_technique_implementation,
 )
-from app.services.curriculum.generation import _assert_plan_sources
+from app.services.curriculum.generation import (
+    _assert_plan_sources,
+    _bind_exact_registry_evidence,
+)
 from app.services.curriculum.hashing import sha256_json, stage_input_hash
 from app.services.curriculum.pilot import (
     PILOT_SKILLS,
@@ -380,6 +383,18 @@ def test_pilot_and_registry_are_bounded_and_all_planner_urls_are_available() -> 
             TechniquePlan.model_validate(wrong_evidence),
             _manifest(),
         )
+
+    rebound = _bind_exact_registry_evidence(
+        TechniquePlan.model_validate(wrong_evidence),
+        _manifest(),
+    )
+    worked_example = next(
+        application
+        for application in rebound.applications
+        if application.technique_id.value == "worked_examples"
+    )
+    assert worked_example.evidence_source_ids == ["src_guide"]
+    _assert_plan_sources(rebound, _manifest())
 
 
 def test_external_prompt_instructions_are_neutralized() -> None:
