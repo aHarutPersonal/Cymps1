@@ -45,8 +45,10 @@ from app.services.curriculum.gates import (
     validate_technique_implementation,
 )
 from app.services.curriculum.generation import (
+    _assert_outline_contract,
     _assert_plan_sources,
     _bind_exact_registry_evidence,
+    _bind_outline_claim_sources,
 )
 from app.services.curriculum.hashing import sha256_json, stage_input_hash
 from app.services.curriculum.pilot import (
@@ -66,6 +68,7 @@ from app.services.curriculum.research import (
 )
 from app.services.curriculum.schemas import (
     CanonicalModuleDraft,
+    CurriculumOutline,
     MentorClaimCuration,
     MentorClaimCandidate,
     MentorClaimVerificationBundle,
@@ -345,6 +348,29 @@ def _draft() -> CanonicalModuleDraft:
     )
 
 
+def _outline() -> CurriculumOutline:
+    draft = _draft()
+    return CurriculumOutline.model_validate(
+        {
+            **_target(),
+            "blocks": [
+                {
+                    "block_id": block.block_id,
+                    "block_type": block.block_type.value,
+                    "title": block.title,
+                    "purpose": block.content_markdown,
+                    "minutes": block.minutes,
+                    "source_ids": list(block.source_ids),
+                    "claim_ids": list(block.claim_ids),
+                    "technique_ids": [item.value for item in block.technique_ids],
+                }
+                for block in draft.blocks
+            ],
+            "artifact_description": draft.artifact_description,
+        }
+    )
+
+
 def _reviews() -> ReviewBundle:
     return ReviewBundle.model_validate(
         {
@@ -395,6 +421,19 @@ def test_pilot_and_registry_are_bounded_and_all_planner_urls_are_available() -> 
     )
     assert worked_example.evidence_source_ids == ["src_guide"]
     _assert_plan_sources(rebound, _manifest())
+
+
+def test_outline_sources_are_bound_to_verified_claims_server_side() -> None:
+    payload = _outline().model_dump(mode="json")
+    payload["blocks"][0]["source_ids"] = ["src_guide", "src_apply"]
+    mismatched = CurriculumOutline.model_validate(payload)
+
+    with pytest.raises(ValueError, match="binds unrelated source IDs"):
+        _assert_outline_contract(mismatched, _plan(), _manifest(), _target())
+
+    rebound = _bind_outline_claim_sources(mismatched, _manifest())
+    assert rebound.blocks[0].source_ids == ["src_guide"]
+    _assert_outline_contract(rebound, _plan(), _manifest(), _target())
 
 
 def test_external_prompt_instructions_are_neutralized() -> None:

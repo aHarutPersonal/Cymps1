@@ -322,6 +322,28 @@ def _assert_outline_contract(
                 )
 
 
+def _bind_outline_claim_sources(
+    outline: CurriculumOutline,
+    manifest: ResearchManifest,
+) -> CurriculumOutline:
+    """Make block citations the exact union of their verified claim sources."""
+
+    claims = {claim.claim_id: claim for claim in manifest.claims}
+    blocks = []
+    for block in outline.blocks:
+        if block.claim_ids and all(claim_id in claims for claim_id in block.claim_ids):
+            source_ids = list(
+                dict.fromkeys(
+                    source_id
+                    for claim_id in block.claim_ids
+                    for source_id in claims[claim_id].source_ids
+                )
+            )
+            block = block.model_copy(update={"source_ids": source_ids})
+        blocks.append(block)
+    return outline.model_copy(update={"blocks": blocks})
+
+
 async def generate_outline(
     *,
     module_target: dict[str, Any],
@@ -343,13 +365,24 @@ async def generate_outline(
         max_tokens=6000,
         metadata={"stage": "outline", **(telemetry_metadata or {})},
     )
-    _assert_outline_contract(
+    outline = _bind_outline_claim_sources(
         CurriculumOutline.model_validate(generated.value),
+        manifest,
+    )
+    _assert_outline_contract(
+        outline,
         technique_plan,
         manifest,
         module_target,
     )
-    return generated
+    return GeneratedArtifact(
+        value=outline,
+        model_name=generated.model_name,
+        provider=generated.provider,
+        input_tokens=generated.input_tokens,
+        output_tokens=generated.output_tokens,
+        total_tokens=generated.total_tokens,
+    )
 
 
 async def generate_module_draft(
