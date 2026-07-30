@@ -52,7 +52,12 @@ from app.services.curriculum.pilot import (
     TECHNIQUE_REGISTRY_VERSION,
 )
 from app.services.curriculum.research import (
+    GroundedDiscovery,
+    GroundedSource,
+    GroundingUnavailableError,
+    _domain_claim_eligible,
     _grounding_sources,
+    curate_research_manifest,
     required_planner_technique_sources,
     resolve_public_source_url,
 )
@@ -382,6 +387,63 @@ def test_external_prompt_instructions_are_neutralized() -> None:
     assert "ignore all previous" not in sanitized.casefold()
     assert "api key" not in sanitized.casefold()
     assert "instruction-like source text removed" in sanitized
+
+
+def _live_source(url: str, *, provenance: str = "gemini_grounding") -> GroundedSource:
+    return GroundedSource(
+        source_id=f"src_{sha256_json({'url': url})[:20]}",
+        title="Grounded domain evidence",
+        url=url,
+        support_text=(
+            "Provider-attributed support text with enough detail to ground a claim."
+        ),
+        content_hash=sha256_json({"url": url, "support": "grounded"}),
+        provenance=provenance,
+        provider_url=url,
+        checked_at=datetime.now(timezone.utc).isoformat(),
+        grounding_confidence=0.95,
+    )
+
+
+def test_domain_claim_eligibility_is_server_owned_and_requires_live_quality() -> None:
+    assert _domain_claim_eligible(_live_source("https://www.sec.gov/rules/example"))
+    assert not _domain_claim_eligible(_live_source("https://example.com/article"))
+    assert not _domain_claim_eligible(
+        _live_source(
+            "https://ies.ed.gov/ncee/wwc/PracticeGuide/1",
+            provenance="approved_technique_registry",
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_curator_retries_discovery_when_no_qualified_live_source() -> None:
+    discovery = GroundedDiscovery(
+        synthesis="A grounded synthesis that cites two live but unqualified sources.",
+        sources=(
+            _live_source("https://example.com/one"),
+            _live_source("https://example.org/two"),
+        ),
+        search_queries=("test query",),
+        model="test-model",
+    )
+
+    with pytest.raises(GroundingUnavailableError, match="qualified live source"):
+        await curate_research_manifest(
+            module_target=_target(),
+            discovery=discovery,
+            tier="fast",
+        )
+
+
+def test_curator_prompt_requires_server_qualified_domain_evidence() -> None:
+    prompt = load_prompt("curriculum_research_curate")
+    discovery_prompt = load_prompt("curriculum_research_discovery")
+
+    assert "domain_claim_eligible=true" in prompt
+    assert "doi.org" in discovery_prompt
+    assert ".gov" in discovery_prompt
+    assert ".edu" in discovery_prompt
 
 
 def test_grounding_sources_do_not_multiply_across_candidates() -> None:

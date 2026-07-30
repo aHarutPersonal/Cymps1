@@ -81,6 +81,17 @@ class GroundingUnavailableError(RuntimeError):
     pass
 
 
+_QUALIFIED_LIVE_DOMAIN_SOURCE_TYPES = frozenset(
+    {
+        SourceType.PRIMARY_RESEARCH,
+        SourceType.PRACTICE_GUIDE,
+        SourceType.PROFESSIONAL_STANDARD,
+        SourceType.OFFICIAL_DOCUMENTATION,
+        SourceType.UNIVERSITY_RESOURCE,
+    }
+)
+
+
 def _source_id(url: str) -> str:
     return f"src_{sha256_json({'url': url})[:20]}"
 
@@ -125,6 +136,17 @@ def deterministic_source_classification(
             "deterministic_url_rule",
         )
     return SourceType.OTHER, EvidenceTier.EMERGING, "unverified"
+
+
+def _domain_claim_eligible(source: GroundedSource) -> bool:
+    """Whether a live source can satisfy the manifest's domain evidence gate."""
+
+    source_type, _, provenance = deterministic_source_classification(source)
+    return (
+        source.provenance != "approved_technique_registry"
+        and provenance == "deterministic_url_rule"
+        and source_type in _QUALIFIED_LIVE_DOMAIN_SOURCE_TYPES
+    )
 
 
 async def _resolved_public_ips(url: str) -> tuple[str, ...]:
@@ -522,6 +544,18 @@ async def curate_research_manifest(
     telemetry_metadata: dict[str, Any] | None = None,
     usage_sink: list[dict[str, Any]] | None = None,
 ) -> ResearchManifest:
+    qualified_live_ids = {
+        source.source_id
+        for source in discovery.sources
+        if _domain_claim_eligible(source)
+    }
+    if not qualified_live_ids:
+        # The control loop treats this source-research failure as retryable and
+        # performs a fresh grounded discovery. Never ask the curator to invent
+        # a source or silently weaken the publication invariant.
+        raise GroundingUnavailableError(
+            "grounded discovery returned no deterministically qualified live source"
+        )
     allowed_sources = {source.source_id: source for source in discovery.sources}
     for source in approved_technique_sources():
         allowed_sources.setdefault(source.source_id, source)
@@ -535,6 +569,7 @@ async def curate_research_manifest(
             "provider_provenance_url": source.provider_url,
             "access_checked_at": source.checked_at,
             "grounding_confidence": source.grounding_confidence,
+            "domain_claim_eligible": source.source_id in qualified_live_ids,
         }
         for source in allowed_sources.values()
     ]
