@@ -83,6 +83,7 @@ from app.tasks.curriculum import (
     MENTOR_PROMPT_FILES,
     _accepted_mentor_candidates,
     _curate_mentor_evidence_async,
+    _curriculum_control_tick_async,
     _curriculum_recipe_provenance,
     _comparison_corpus,
     _comparison_corpus_texts,
@@ -108,6 +109,7 @@ from app.tasks.curriculum import (
     _recipe_is_current,
     _revoke_unrepresented_mentor_claims,
     _stage_dependencies,
+    _supersede_stale_job_before_dispatch,
     _supersede_outdated_mentor_claims,
     _technique_manifest_is_current,
     _validated_revocation_reason,
@@ -1484,6 +1486,26 @@ def test_changed_recipe_flags_job_before_any_paid_stage(monkeypatch) -> None:
     assert job.lease_owner is None
     assert job.last_error_code == "recipe_changed"
 
+    queued_job = SimpleNamespace(
+        input_json={"recipe_provenance": persisted_recipe},
+        state=GenerationState.QUEUED,
+        completed_at=None,
+        lease_owner=None,
+        lease_expires_at=None,
+        heartbeat_at=None,
+        next_attempt_at=None,
+        last_error_code=None,
+        last_error=None,
+        checkpoints_json={},
+    )
+    assert _supersede_stale_job_before_dispatch(
+        queued_job,
+        current_recipe=current_recipe,
+        now=datetime.now(timezone.utc),
+    )
+    assert queued_job.state == GenerationState.FLAGGED
+    assert queued_job.last_error_code == "recipe_changed"
+
     worker_source = inspect.getsource(_process_curriculum_job_async)
     kill_switch_index = worker_source.index("if not settings.curriculum_enabled")
     recipe_check_index = worker_source.index("_recipe_is_current")
@@ -1514,6 +1536,12 @@ def test_changed_recipe_flags_job_before_any_paid_stage(monkeypatch) -> None:
     assert mentor_kill_switch_index < reservation_check_index
     assert curation_check_index < curation_provider_index
     assert verifier_check_index < verifier_provider_index
+
+    control_source = inspect.getsource(_curriculum_control_tick_async)
+    supersede_index = control_source.index("_supersede_stale_job_before_dispatch")
+    admission_index = control_source.index("job.started_at is None")
+    reserve_index = control_source.index("_running_job_reserve(job.stage")
+    assert supersede_index < admission_index < reserve_index
 
 
 def test_mentor_identity_tracks_yunwu_primary_and_gemini_fallback_models(

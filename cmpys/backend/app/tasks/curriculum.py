@@ -504,6 +504,32 @@ def _mark_job_recipe_changed(
     }
 
 
+def _supersede_stale_job_before_dispatch(
+    job: CurriculumGenerationJob,
+    *,
+    current_recipe: dict[str, Any],
+    now: datetime,
+) -> bool:
+    """Flag obsolete queued work without consuming a daily admission slot."""
+
+    input_json = dict(job.input_json or {})
+    persisted_recipe = input_json.get("recipe_provenance")
+    recipe_current = _recipe_is_current(persisted_recipe, current_recipe)
+    definition_current = _pilot_definition_is_current(input_json)
+    if recipe_current and definition_current:
+        return False
+    _mark_job_recipe_changed(
+        job,
+        persisted_recipe=persisted_recipe,
+        current_recipe=current_recipe,
+        now=now,
+        identity_change={
+            "pilot_definition_current": definition_current,
+        },
+    )
+    return True
+
+
 def _stage(value: GenerationStage | str) -> PipelineStage:
     return PipelineStage(value.value if hasattr(value, "value") else str(value))
 
@@ -697,7 +723,12 @@ def _reserve_job_attempt(
     return updated
 
 
-async def _seed_pilot(db, *, now: datetime) -> dict[str, int]:
+async def _seed_pilot(
+    db,
+    *,
+    now: datetime,
+    recipe: dict[str, Any] | None = None,
+) -> dict[str, int]:
     existing_skills = {
         skill.key: skill
         for skill in (
@@ -873,7 +904,7 @@ async def _seed_pilot(db, *, now: datetime) -> dict[str, int]:
     }
     seeded_modules = 0
     seeded_jobs = 0
-    recipe = _curriculum_recipe_provenance()
+    recipe = recipe or _curriculum_recipe_provenance()
     for definition in PILOT_SKILLS:
         module_key = f"{definition.skill_key}:{definition.level}:{definition.locale}"
         module = existing_modules.get(module_key)
@@ -1287,9 +1318,11 @@ async def _curriculum_control_tick_async(
     owner = _worker_owner()
     dispatched: list[tuple[str, str]] = []
     recovered = 0
+    superseded = 0
     mentor_candidate: tuple[str, str, str, str] | None = None
+    current_recipe = _curriculum_recipe_provenance()
     async with async_session_maker() as db:
-        seeded = await _seed_pilot(db, now=current)
+        seeded = await _seed_pilot(db, now=current, recipe=current_recipe)
         expired = (
             await db.execute(
                 select(CurriculumGenerationJob)
@@ -1371,6 +1404,13 @@ async def _curriculum_control_tick_async(
         )
         admitted_reserve_usd = 0.0
         for job in due:
+            if _supersede_stale_job_before_dispatch(
+                job,
+                current_recipe=current_recipe,
+                now=current,
+            ):
+                superseded += 1
+                continue
             if len(dispatched) >= max(settings.curriculum_max_dispatch_per_tick, 0):
                 break
             if len(dispatched) >= running_capacity:
@@ -1426,6 +1466,7 @@ async def _curriculum_control_tick_async(
         "status": "ok",
         "seeded": seeded,
         "recovered": recovered,
+        "superseded": superseded,
         "dispatched": len(dispatched),
         "mentor_dispatched": mentor_candidate is not None,
         "daily_started": started_today,
