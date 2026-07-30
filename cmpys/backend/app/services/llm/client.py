@@ -958,19 +958,35 @@ def _gemini_compatibility_prompt(
     )
 
 
-def _gemini_minimal_shape(
+def _gemini_compatible_shape(
     value: object,
     *,
     definitions: dict[str, Any],
+    resolving_refs: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
-    """Reduce one schema node to provider-safe structural guidance."""
+    """Recursively reduce one schema node to provider-safe structure.
+
+    Gemini accepts the structural JSON Schema subset used here, while some
+    generated Pydantic constraints make otherwise valid schemas fail request
+    validation.  Keep object fields, required lists, arrays, primitive types,
+    and enums so nested objects cannot collapse to empty placeholders.  The
+    complete schema still lives in the compatibility prompt and Pydantic
+    remains the authoritative response validator.
+    """
 
     if not isinstance(value, dict):
         return {}
     ref = value.get("$ref")
     if isinstance(ref, str) and ref.startswith("#/$defs/"):
-        target = definitions.get(ref.rsplit("/", 1)[-1], {})
-        return _gemini_minimal_shape(target, definitions=definitions)
+        ref_name = ref.rsplit("/", 1)[-1]
+        if ref_name in resolving_refs:
+            return {"type": "object"}
+        target = definitions.get(ref_name, {})
+        return _gemini_compatible_shape(
+            target,
+            definitions=definitions,
+            resolving_refs=resolving_refs | {ref_name},
+        )
     variants = value.get("anyOf")
     if isinstance(variants, list):
         non_null = [
@@ -979,21 +995,37 @@ def _gemini_minimal_shape(
             if isinstance(item, dict) and item.get("type") != "null"
         ]
         if non_null:
-            return _gemini_minimal_shape(non_null[0], definitions=definitions)
+            return _gemini_compatible_shape(
+                non_null[0],
+                definitions=definitions,
+                resolving_refs=resolving_refs,
+            )
     kind = value.get("type")
     if isinstance(kind, list):
         kind = next((item for item in kind if item != "null"), None)
-    if kind == "array":
-        return {
-            "type": "array",
-            "items": _gemini_minimal_shape(
-                value.get("items"),
-                definitions=definitions,
-            ),
-        }
     result: dict[str, Any] = {"type": kind} if isinstance(kind, str) else {}
     if isinstance(value.get("enum"), list):
         result["enum"] = value["enum"]
+    required = value.get("required")
+    if isinstance(required, list):
+        result["required"] = required
+    properties = value.get("properties")
+    if isinstance(properties, dict):
+        result["properties"] = {
+            key: _gemini_compatible_shape(
+                field_schema,
+                definitions=definitions,
+                resolving_refs=resolving_refs,
+            )
+            for key, field_schema in properties.items()
+        }
+    items = value.get("items")
+    if isinstance(items, dict):
+        result["items"] = _gemini_compatible_shape(
+            items,
+            definitions=definitions,
+            resolving_refs=resolving_refs,
+        )
     return result
 
 
@@ -1002,13 +1034,13 @@ def _gemini_compatibility_schema(
     json_schema: dict[str, Any] | None,
     output_model: type[BaseModel] | None,
 ) -> dict[str, Any]:
-    """Keep required top-level structure when a full schema is too complex.
+    """Keep complete structural shape when a full schema is too complex.
 
     Some Gemini generate-content models reject otherwise valid, deeply nested
-    JSON Schemas.  A shallow schema with required root fields is broadly
-    supported and prevents both malformed JSON and empty-object responses.  The
-    full schema remains in the prompt and the caller's Pydantic model remains
-    the authoritative validator.
+    JSON Schemas.  A recursively simplified schema is broadly supported and
+    prevents malformed JSON as well as empty nested-object responses.  The full
+    schema remains in the prompt and the caller's Pydantic model remains the
+    authoritative validator.
     """
 
     schema = (
@@ -1019,20 +1051,8 @@ def _gemini_compatibility_schema(
     definitions = schema.get("$defs")
     if not isinstance(definitions, dict):
         definitions = {}
-    properties = schema.get("properties")
-    if not isinstance(properties, dict):
-        return {"type": "object"}
-    result: dict[str, Any] = {
-        "type": "object",
-        "properties": {
-            key: _gemini_minimal_shape(value, definitions=definitions)
-            for key, value in properties.items()
-        },
-    }
-    required = schema.get("required")
-    if isinstance(required, list) and required:
-        result["required"] = required
-    return result
+    result = _gemini_compatible_shape(schema, definitions=definitions)
+    return result or {"type": "object"}
 
 
 class GeminiLLMClient(BaseLLMClient):

@@ -390,27 +390,34 @@ class _NativeJsonSchemaOutput(BaseModel):
     values: dict[str, str]
 
 
-class _ShallowItem(BaseModel):
+class _StructuredItem(BaseModel):
     value: str
 
 
-class _ShallowOutput(BaseModel):
+class _StructuredOutput(BaseModel):
     name: str
-    items: list[_ShallowItem]
+    items: list[_StructuredItem]
     note: str | None = None
 
 
-def test_gemini_compatibility_schema_keeps_required_root_shape():
+def test_gemini_compatibility_schema_keeps_required_nested_shape():
     schema = _gemini_compatibility_schema(
         json_schema=None,
-        output_model=_ShallowOutput,
+        output_model=_StructuredOutput,
     )
 
     assert schema == {
         "type": "object",
         "properties": {
             "name": {"type": "string"},
-            "items": {"type": "array", "items": {"type": "object"}},
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"value": {"type": "string"}},
+                    "required": ["value"],
+                },
+            },
             "note": {"type": "string"},
         },
         "required": ["name", "items"],
