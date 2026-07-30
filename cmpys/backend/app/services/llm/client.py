@@ -989,17 +989,18 @@ def _gemini_compatible_shape(
         )
     variants = value.get("anyOf")
     if isinstance(variants, list):
-        non_null = [
-            item
-            for item in variants
-            if isinstance(item, dict) and item.get("type") != "null"
-        ]
-        if non_null:
-            return _gemini_compatible_shape(
-                non_null[0],
+        compatible_variants = [
+            _gemini_compatible_shape(
+                item,
                 definitions=definitions,
                 resolving_refs=resolving_refs,
             )
+            for item in variants
+            if isinstance(item, dict)
+        ]
+        compatible_variants = [item for item in compatible_variants if item]
+        if compatible_variants:
+            return {"anyOf": compatible_variants}
     kind = value.get("type")
     if isinstance(kind, list):
         kind = next((item for item in kind if item != "null"), None)

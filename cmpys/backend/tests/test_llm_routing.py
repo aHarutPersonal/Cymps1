@@ -392,6 +392,7 @@ class _NativeJsonSchemaOutput(BaseModel):
 
 class _StructuredItem(BaseModel):
     value: str
+    follow_up_day: int | None = None
 
 
 class _StructuredOutput(BaseModel):
@@ -414,11 +415,24 @@ def test_gemini_compatibility_schema_keeps_required_nested_shape():
                 "type": "array",
                 "items": {
                     "type": "object",
-                    "properties": {"value": {"type": "string"}},
+                    "properties": {
+                        "value": {"type": "string"},
+                        "follow_up_day": {
+                            "anyOf": [
+                                {"type": "integer"},
+                                {"type": "null"},
+                            ]
+                        },
+                    },
                     "required": ["value"],
                 },
             },
-            "note": {"type": "string"},
+            "note": {
+                "anyOf": [
+                    {"type": "string"},
+                    {"type": "null"},
+                ]
+            },
         },
         "required": ["name", "items"],
     }
