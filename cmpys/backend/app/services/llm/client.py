@@ -958,16 +958,81 @@ def _gemini_compatibility_prompt(
     )
 
 
-def _gemini_compatibility_schema() -> dict[str, str]:
-    """Keep constrained JSON syntax when a full schema is too complex.
+def _gemini_minimal_shape(
+    value: object,
+    *,
+    definitions: dict[str, Any],
+) -> dict[str, Any]:
+    """Reduce one schema node to provider-safe structural guidance."""
+
+    if not isinstance(value, dict):
+        return {}
+    ref = value.get("$ref")
+    if isinstance(ref, str) and ref.startswith("#/$defs/"):
+        target = definitions.get(ref.rsplit("/", 1)[-1], {})
+        return _gemini_minimal_shape(target, definitions=definitions)
+    variants = value.get("anyOf")
+    if isinstance(variants, list):
+        non_null = [
+            item
+            for item in variants
+            if isinstance(item, dict) and item.get("type") != "null"
+        ]
+        if non_null:
+            return _gemini_minimal_shape(non_null[0], definitions=definitions)
+    kind = value.get("type")
+    if isinstance(kind, list):
+        kind = next((item for item in kind if item != "null"), None)
+    if kind == "array":
+        return {
+            "type": "array",
+            "items": _gemini_minimal_shape(
+                value.get("items"),
+                definitions=definitions,
+            ),
+        }
+    result: dict[str, Any] = {"type": kind} if isinstance(kind, str) else {}
+    if isinstance(value.get("enum"), list):
+        result["enum"] = value["enum"]
+    return result
+
+
+def _gemini_compatibility_schema(
+    *,
+    json_schema: dict[str, Any] | None,
+    output_model: type[BaseModel] | None,
+) -> dict[str, Any]:
+    """Keep required top-level structure when a full schema is too complex.
 
     Some Gemini generate-content models reject otherwise valid, deeply nested
-    JSON Schemas.  A shallow object schema is broadly supported and prevents
-    malformed JSON while the full schema remains in the prompt and the caller's
-    Pydantic model remains the authoritative validator.
+    JSON Schemas.  A shallow schema with required root fields is broadly
+    supported and prevents both malformed JSON and empty-object responses.  The
+    full schema remains in the prompt and the caller's Pydantic model remains
+    the authoritative validator.
     """
 
-    return {"type": "object"}
+    schema = (
+        output_model.model_json_schema() if output_model is not None else json_schema
+    )
+    if not isinstance(schema, dict):
+        return {"type": "object"}
+    definitions = schema.get("$defs")
+    if not isinstance(definitions, dict):
+        definitions = {}
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        return {"type": "object"}
+    result: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            key: _gemini_minimal_shape(value, definitions=definitions)
+            for key, value in properties.items()
+        },
+    }
+    required = schema.get("required")
+    if isinstance(required, list) and required:
+        result["required"] = required
+    return result
 
 
 class GeminiLLMClient(BaseLLMClient):
@@ -1112,7 +1177,10 @@ class GeminiLLMClient(BaseLLMClient):
                 )
                 compatibility_kwargs: dict[str, Any] = {
                     "response_mime_type": "application/json",
-                    "response_json_schema": _gemini_compatibility_schema(),
+                    "response_json_schema": _gemini_compatibility_schema(
+                        json_schema=json_schema,
+                        output_model=output_model,
+                    ),
                     "http_options": types.HttpOptions(timeout=int(self.timeout * 1000)),
                     **generation_config_kwargs(
                         model=self.model,
@@ -1153,7 +1221,10 @@ class GeminiLLMClient(BaseLLMClient):
                     )
                     framing_kwargs: dict[str, Any] = {
                         "response_mime_type": "application/json",
-                        "response_json_schema": _gemini_compatibility_schema(),
+                        "response_json_schema": _gemini_compatibility_schema(
+                            json_schema=json_schema,
+                            output_model=output_model,
+                        ),
                         "http_options": types.HttpOptions(
                             timeout=int(self.timeout * 1000)
                         ),

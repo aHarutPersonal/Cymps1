@@ -11,6 +11,7 @@ from app.services.llm.client import (
     GeminiLLMClient,
     LLMResponse,
     OpenAILLMClient,
+    _gemini_compatibility_schema,
     get_llm_client,
 )
 from app.services.llm.gemini_compat import generation_config_kwargs
@@ -389,6 +390,33 @@ class _NativeJsonSchemaOutput(BaseModel):
     values: dict[str, str]
 
 
+class _ShallowItem(BaseModel):
+    value: str
+
+
+class _ShallowOutput(BaseModel):
+    name: str
+    items: list[_ShallowItem]
+    note: str | None = None
+
+
+def test_gemini_compatibility_schema_keeps_required_root_shape():
+    schema = _gemini_compatibility_schema(
+        json_schema=None,
+        output_model=_ShallowOutput,
+    )
+
+    assert schema == {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "items": {"type": "array", "items": {"type": "object"}},
+            "note": {"type": "string"},
+        },
+        "required": ["name", "items"],
+    }
+
+
 @pytest.mark.asyncio
 async def test_gemini_uses_native_json_schema_for_pydantic_models(monkeypatch):
     from app.services import gemini as gemini_service
@@ -469,7 +497,11 @@ async def test_gemini_invalid_native_config_retries_without_native_schema(
     assert "COMPATIBILITY MODE" in calls[1]["contents"]
     compatibility_config = calls[1]["config"].model_dump(exclude_none=True)
     assert "response_schema" not in compatibility_config
-    assert compatibility_config["response_json_schema"] == {"type": "object"}
+    assert compatibility_config["response_json_schema"] == {
+        "type": "object",
+        "properties": {"ok": {"type": "boolean"}},
+        "required": ["ok"],
+    }
     assert "thinking_config" in compatibility_config
 
 
@@ -509,7 +541,15 @@ async def test_gemini_compatibility_can_drop_rejected_thinking_config(monkeypatc
     assert len(calls) == 3
     second_config = calls[1]["config"].model_dump(exclude_none=True)
     third_config = calls[2]["config"].model_dump(exclude_none=True)
-    assert second_config["response_json_schema"] == {"type": "object"}
+    assert second_config["response_json_schema"] == {
+        "type": "object",
+        "properties": {"ok": {"type": "boolean"}},
+        "required": ["ok"],
+    }
     assert "thinking_config" in second_config
-    assert third_config["response_json_schema"] == {"type": "object"}
+    assert third_config["response_json_schema"] == {
+        "type": "object",
+        "properties": {"ok": {"type": "boolean"}},
+        "required": ["ok"],
+    }
     assert "thinking_config" not in third_config
