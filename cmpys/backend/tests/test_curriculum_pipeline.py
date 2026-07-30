@@ -49,6 +49,8 @@ from app.services.curriculum.generation import (
     _assert_plan_sources,
     _bind_exact_registry_evidence,
     _bind_outline_claim_sources,
+    _bind_outline_technique_blocks,
+    _bind_technique_block_contracts,
 )
 from app.services.curriculum.hashing import sha256_json, stage_input_hash
 from app.services.curriculum.pilot import (
@@ -441,6 +443,57 @@ def test_outline_sources_are_bound_to_verified_claims_server_side() -> None:
 
     rebound = _bind_outline_claim_sources(mismatched, _manifest())
     assert rebound.blocks[0].source_ids == ["src_guide"]
+    _assert_outline_contract(rebound, _plan(), _manifest(), _target())
+
+
+def test_multiblock_technique_gets_enough_stable_contract_ids() -> None:
+    payload = _plan().model_dump(mode="json")
+    payload["applications"][1]["technique_id"] = "feedback_revision"
+    payload["applications"][1]["implementation_block_ids"] = ["block_feedback"]
+    rebound = _bind_technique_block_contracts(TechniquePlan.model_validate(payload))
+
+    feedback = next(
+        application
+        for application in rebound.applications
+        if application.technique_id.value == "feedback_revision"
+    )
+    assert feedback.implementation_block_ids == [
+        "block_feedback",
+        "block_feedback_revision_1",
+    ]
+
+
+def test_outline_rejects_incomplete_multiblock_technique_contract() -> None:
+    plan_payload = _plan().model_dump(mode="json")
+    plan_payload["applications"][1]["technique_id"] = "feedback_revision"
+    plan_payload["applications"][1]["implementation_block_ids"] = [
+        "block_feedback"
+    ]
+    plan = TechniquePlan.model_validate(plan_payload)
+    outline_payload = _outline().model_dump(mode="json")
+    outline_payload["blocks"][3].update(
+        {
+            "block_id": "block_feedback",
+            "block_type": "feedback",
+            "technique_ids": ["feedback_revision"],
+        }
+    )
+    outline = CurriculumOutline.model_validate(outline_payload)
+
+    with pytest.raises(ValueError, match="technique contract incomplete"):
+        _assert_outline_contract(outline, plan, _manifest(), _target())
+
+
+def test_outline_technique_ids_are_aligned_to_pinned_block_blueprint() -> None:
+    payload = _outline().model_dump(mode="json")
+    payload["blocks"][1]["block_id"] = "block_model_example"
+    drifted = CurriculumOutline.model_validate(payload)
+
+    with pytest.raises(ValueError, match="omitted technique block"):
+        _assert_outline_contract(drifted, _plan(), _manifest(), _target())
+
+    rebound = _bind_outline_technique_blocks(drifted, _plan())
+    assert rebound.blocks[1].block_id == "block_example"
     _assert_outline_contract(rebound, _plan(), _manifest(), _target())
 
 

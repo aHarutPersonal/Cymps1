@@ -958,6 +958,18 @@ def _gemini_compatibility_prompt(
     )
 
 
+def _gemini_compatibility_schema() -> dict[str, str]:
+    """Keep constrained JSON syntax when a full schema is too complex.
+
+    Some Gemini generate-content models reject otherwise valid, deeply nested
+    JSON Schemas.  A shallow object schema is broadly supported and prevents
+    malformed JSON while the full schema remains in the prompt and the caller's
+    Pydantic model remains the authoritative validator.
+    """
+
+    return {"type": "object"}
+
+
 class GeminiLLMClient(BaseLLMClient):
     """
     Google Gemini LLM client for production use.
@@ -1100,7 +1112,14 @@ class GeminiLLMClient(BaseLLMClient):
                 )
                 compatibility_kwargs: dict[str, Any] = {
                     "response_mime_type": "application/json",
+                    "response_json_schema": _gemini_compatibility_schema(),
                     "http_options": types.HttpOptions(timeout=int(self.timeout * 1000)),
+                    **generation_config_kwargs(
+                        model=self.model,
+                        temperature=self.temperature,
+                        thinking_level=self.thinking_level,
+                        thinking_budget=self.thinking_budget,
+                    ),
                 }
                 if self.max_tokens:
                     compatibility_kwargs["max_output_tokens"] = self.max_tokens
@@ -1108,15 +1127,47 @@ class GeminiLLMClient(BaseLLMClient):
                     system_instruction=system_prompt,
                     **compatibility_kwargs,
                 )
-                response = await client.aio.models.generate_content(
-                    model=self.model,
-                    contents=_gemini_compatibility_prompt(
-                        user_prompt,
-                        json_schema=json_schema,
-                        output_model=output_model,
-                    ),
-                    config=compatibility_config,
+                compatibility_prompt = _gemini_compatibility_prompt(
+                    user_prompt,
+                    json_schema=json_schema,
+                    output_model=output_model,
                 )
+                try:
+                    response = await client.aio.models.generate_content(
+                        model=self.model,
+                        contents=compatibility_prompt,
+                        config=compatibility_config,
+                    )
+                except Exception as compatibility_exc:
+                    if not _is_gemini_invalid_argument_error(compatibility_exc):
+                        raise
+                    # If the original 400 was caused by a thinking option rather
+                    # than schema complexity, retry the shallow native schema once
+                    # more without reasoning controls.  This remains bounded at
+                    # three request shapes, and only the accepted request is billed.
+                    logger.warning(
+                        "[LLM] Gemini rejected compatibility thinking config for "
+                        "model=%s; retrying with JSON framing only: %s",
+                        self.model,
+                        compatibility_exc,
+                    )
+                    framing_kwargs: dict[str, Any] = {
+                        "response_mime_type": "application/json",
+                        "response_json_schema": _gemini_compatibility_schema(),
+                        "http_options": types.HttpOptions(
+                            timeout=int(self.timeout * 1000)
+                        ),
+                    }
+                    if self.max_tokens:
+                        framing_kwargs["max_output_tokens"] = self.max_tokens
+                    response = await client.aio.models.generate_content(
+                        model=self.model,
+                        contents=compatibility_prompt,
+                        config=types.GenerateContentConfig(
+                            system_instruction=system_prompt,
+                            **framing_kwargs,
+                        ),
+                    )
 
             duration_ms = (time.perf_counter() - start_time) * 1000
 

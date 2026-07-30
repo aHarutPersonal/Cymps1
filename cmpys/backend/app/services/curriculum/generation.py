@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Literal, TypeVar
 
@@ -9,6 +10,7 @@ from pydantic import BaseModel
 
 from app.services.curriculum.gates import (
     MIN_REVIEW_SCORE,
+    TECHNIQUE_BLOCK_REQUIREMENTS,
     GateResult,
     validate_source_attribution,
     validate_manifest_verification,
@@ -37,6 +39,7 @@ from app.services.llm.telemetry import record_llm_response
 
 T = TypeVar("T", bound=BaseModel)
 ReviewerName = Literal["structure", "factual", "pedagogy", "originality"]
+_BLOCK_ID_PATTERN = re.compile(r"^block_[a-z0-9][a-z0-9_-]{2,63}$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,6 +188,43 @@ def _bind_exact_registry_evidence(
     return plan.model_copy(update={"applications": applications})
 
 
+def _bind_technique_block_contracts(plan: TechniquePlan) -> TechniquePlan:
+    """Give every selected technique enough valid, stable implementation IDs."""
+
+    used_ids = {
+        block_id
+        for application in plan.applications
+        for block_id in application.implementation_block_ids
+        if _BLOCK_ID_PATTERN.fullmatch(block_id)
+    }
+    applications = []
+    for application in plan.applications:
+        block_ids = list(
+            dict.fromkeys(
+                block_id
+                for block_id in application.implementation_block_ids
+                if _BLOCK_ID_PATTERN.fullmatch(block_id)
+            )
+        )
+        required_count = len(
+            TECHNIQUE_BLOCK_REQUIREMENTS[application.technique_id]
+        )
+        suffix = 1
+        while len(block_ids) < required_count:
+            candidate = f"block_{application.technique_id.value}_{suffix}"
+            suffix += 1
+            if candidate in used_ids:
+                continue
+            block_ids.append(candidate)
+            used_ids.add(candidate)
+        applications.append(
+            application.model_copy(
+                update={"implementation_block_ids": block_ids}
+            )
+        )
+    return plan.model_copy(update={"applications": applications})
+
+
 def _assert_plan_target(plan: TechniquePlan, module_target: dict[str, Any]) -> None:
     if " ".join(plan.learning_outcome.split()) != " ".join(
         str(module_target.get("learning_outcome") or "").split()
@@ -238,6 +278,7 @@ async def generate_technique_plan(
     )
     plan = TechniquePlan.model_validate(generated.value)
     plan = _bind_exact_registry_evidence(plan, manifest)
+    plan = _bind_technique_block_contracts(plan)
     _assert_plan_sources(plan, manifest)
     _assert_plan_target(plan, module_target)
     if (
@@ -320,6 +361,20 @@ def _assert_outline_contract(
                 raise ValueError(
                     f"outline block {block_id} omitted {application.technique_id.value}"
                 )
+        referenced_types = {
+            blocks[block_id].block_type
+            for block_id in application.implementation_block_ids
+            if block_id in blocks
+        }
+        for allowed_types in TECHNIQUE_BLOCK_REQUIREMENTS[
+            application.technique_id
+        ]:
+            if referenced_types.isdisjoint(allowed_types):
+                raise ValueError(
+                    "outline technique contract incomplete: "
+                    f"{application.technique_id.value} requires one of "
+                    f"{sorted(item.value for item in allowed_types)}"
+                )
 
 
 def _bind_outline_claim_sources(
@@ -344,6 +399,84 @@ def _bind_outline_claim_sources(
     return outline.model_copy(update={"blocks": blocks})
 
 
+def _bind_outline_technique_blocks(
+    outline: CurriculumOutline,
+    plan: TechniquePlan,
+) -> CurriculumOutline:
+    """Align model-chosen block IDs with the server-pinned technique blueprint."""
+
+    blocks = list(outline.blocks)
+    reserved_ids = {
+        block_id
+        for application in plan.applications
+        for block_id in application.implementation_block_ids
+    }
+    for application in plan.applications:
+        expected_ids = list(application.implementation_block_ids)
+        referenced_indexes: set[int] = set()
+
+        for expected_id in expected_ids:
+            index = next(
+                (
+                    candidate_index
+                    for candidate_index, block in enumerate(blocks)
+                    if block.block_id == expected_id
+                ),
+                None,
+            )
+            if index is None:
+                continue
+            referenced_indexes.add(index)
+            block = blocks[index]
+            if application.technique_id not in block.technique_ids:
+                blocks[index] = block.model_copy(
+                    update={
+                        "technique_ids": [
+                            *block.technique_ids,
+                            application.technique_id,
+                        ]
+                    }
+                )
+
+        missing_ids = [
+            expected_id
+            for expected_id in expected_ids
+            if all(block.block_id != expected_id for block in blocks)
+        ]
+        for expected_id in missing_ids:
+            unsatisfied_groups = [
+                allowed_types
+                for allowed_types in TECHNIQUE_BLOCK_REQUIREMENTS[
+                    application.technique_id
+                ]
+                if all(
+                    blocks[index].block_type not in allowed_types
+                    for index in referenced_indexes
+                )
+            ]
+            candidates = [
+                (index, block)
+                for index, block in enumerate(blocks)
+                if index not in referenced_indexes
+                and block.block_id not in reserved_ids
+                and application.technique_id in block.technique_ids
+            ]
+            if unsatisfied_groups:
+                preferred = [
+                    candidate
+                    for candidate in candidates
+                    if candidate[1].block_type in unsatisfied_groups[0]
+                ]
+                candidates = preferred or candidates
+            if not candidates:
+                continue
+            index, block = candidates[0]
+            blocks[index] = block.model_copy(update={"block_id": expected_id})
+            referenced_indexes.add(index)
+
+    return outline.model_copy(update={"blocks": blocks})
+
+
 async def generate_outline(
     *,
     module_target: dict[str, Any],
@@ -365,9 +498,12 @@ async def generate_outline(
         max_tokens=6000,
         metadata={"stage": "outline", **(telemetry_metadata or {})},
     )
-    outline = _bind_outline_claim_sources(
-        CurriculumOutline.model_validate(generated.value),
-        manifest,
+    outline = _bind_outline_technique_blocks(
+        _bind_outline_claim_sources(
+            CurriculumOutline.model_validate(generated.value),
+            manifest,
+        ),
+        technique_plan,
     )
     _assert_outline_contract(
         outline,

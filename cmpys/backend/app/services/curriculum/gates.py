@@ -168,7 +168,7 @@ def validate_manifest_verification(manifest: ResearchManifest) -> GateResult:
     )
 
 
-_TECHNIQUE_BLOCK_REQUIREMENTS: dict[
+TECHNIQUE_BLOCK_REQUIREMENTS: dict[
     TechniqueId, tuple[frozenset[LessonBlockType], ...]
 ] = {
     TechniqueId.RETRIEVAL_PRACTICE: (frozenset({LessonBlockType.RETRIEVAL}),),
@@ -280,7 +280,7 @@ def validate_technique_implementation(
                 )
             )
         block_types = {block.block_type for block in referenced_blocks}
-        for allowed_types in _TECHNIQUE_BLOCK_REQUIREMENTS[application.technique_id]:
+        for allowed_types in TECHNIQUE_BLOCK_REQUIREMENTS[application.technique_id]:
             if block_types.isdisjoint(allowed_types):
                 issues.append(
                     _issue(
