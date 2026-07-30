@@ -1808,6 +1808,11 @@ def _retryable_error(exc: Exception, stage: PipelineStage) -> bool:
         "502",
         "503",
         "504",
+        # A syntactically malformed structured response is model/provider
+        # nondeterminism, not an invalid curriculum recipe.  Keep it inside the
+        # existing bounded job-attempt and cost-budget fences instead of making
+        # a resumable stage terminal after its first response.
+        "invalid json in response",
     )
     if any(marker in text for marker in transient_markers):
         return True

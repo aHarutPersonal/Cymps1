@@ -415,6 +415,9 @@ class FallbackLLMClient(BaseLLMClient):
                 "http 502",
                 "http 503",
                 "http 504",
+                "insufficient_quota",
+                "quota is not enough",
+                "quota exceeded",
             )
         )
 
@@ -1058,9 +1061,16 @@ class GeminiLLMClient(BaseLLMClient):
             if self.max_tokens:
                 config_kwargs["max_output_tokens"] = self.max_tokens
             if output_model is not None:
-                # Native schema-constrained decoding prevents most malformed
-                # JSON responses and avoids an otherwise expensive repair call.
-                config_kwargs["response_schema"] = output_model
+                # Pydantic models may contain standard JSON Schema keywords such
+                # as ``additionalProperties`` (for example on strict objects or
+                # mapping fields).  Passing the model through ``response_schema``
+                # makes the SDK convert it to Gemini's narrower OpenAPI ``Schema``
+                # shape, where those keywords have historically been rejected.
+                # ``response_json_schema`` is the API's standard JSON Schema path
+                # and keeps native constrained decoding for those models.
+                config_kwargs["response_json_schema"] = (
+                    output_model.model_json_schema()
+                )
             elif json_schema is not None:
                 config_kwargs["response_json_schema"] = json_schema
             config = types.GenerateContentConfig(

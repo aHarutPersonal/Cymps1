@@ -109,6 +109,7 @@ from app.tasks.curriculum import (
     _publish_curriculum_job,
     _recover_expired_job,
     _reconcile_job_usage_snapshot,
+    _retryable_error,
     _reserve_job_attempt,
     _revoke_canonical_module_version_async,
     _seed_pilot,
@@ -392,6 +393,13 @@ def test_hashes_are_canonical_and_stage_sensitive() -> None:
     )
     assert stage_input_hash(stage="outline", **base) != stage_input_hash(
         stage="writing", **base
+    )
+
+
+def test_malformed_structured_output_is_a_bounded_operational_retry() -> None:
+    assert _retryable_error(
+        ValueError("Invalid JSON in response: missing comma"),
+        PipelineStage.OUTLINE,
     )
 
 
