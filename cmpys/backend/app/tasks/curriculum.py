@@ -726,6 +726,11 @@ async def _seed_pilot(db, *, now: datetime) -> dict[str, int]:
             taxonomy_version=1,
             tags_json=[definition.level, definition.locale, PILOT_TAXONOMY_VERSION],
             status=CurriculumSkillStatus.ACTIVE,
+            # Async SQLAlchemy cannot lazy-load an uninitialized relationship
+            # collection after the flush below.  Mark it loaded while the row
+            # is still pending; prerequisite links are assigned in the second
+            # pass once every pilot skill exists.
+            prerequisites=[],
         )
         db.add(skill)
         existing_skills[definition.skill_key] = skill

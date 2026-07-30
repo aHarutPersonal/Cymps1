@@ -11,12 +11,16 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.orm import selectinload
 
 from app.core.celery import celery_app
 from app.core.config import settings
+from app.core.db import async_session_maker
 from app.models.curriculum import (
     AssignmentStatus,
+    CurriculumSkill,
     EvidenceVerificationStatus,
     GenerationState,
     PersonalizedLessonStatus,
@@ -127,6 +131,48 @@ def _source(
             {"title": f"Evidence for {source_id}", "url": url, "support_text": text}
         ),
     }
+
+
+@pytest.mark.asyncio
+async def test_seed_pilot_initializes_prerequisites_without_async_lazy_load(
+    monkeypatch,
+) -> None:
+    """Exercise the fresh-database path used by the first production tick."""
+
+    parent_key = "regression.async_seed_parent"
+    child_key = "regression.async_seed_child"
+    parent = PILOT_SKILLS[0].model_copy(
+        update={
+            "skill_key": parent_key,
+            "title": "Async seed parent",
+            "prerequisites": (),
+        }
+    )
+    child = PILOT_SKILLS[1].model_copy(
+        update={
+            "skill_key": child_key,
+            "title": "Async seed child",
+            "prerequisites": (parent_key,),
+        }
+    )
+    monkeypatch.setattr("app.tasks.curriculum.PILOT_SKILLS", (parent, child))
+
+    async with async_session_maker() as db:
+        transaction = await db.begin()
+        try:
+            seeded = await _seed_pilot(db, now=datetime.now(timezone.utc))
+            await db.flush()
+            persisted_child = await db.scalar(
+                select(CurriculumSkill)
+                .where(CurriculumSkill.key == child_key)
+                .options(selectinload(CurriculumSkill.prerequisites))
+            )
+
+            assert seeded["skills"] == 2
+            assert persisted_child is not None
+            assert [skill.key for skill in persisted_child.prerequisites] == [parent_key]
+        finally:
+            await transaction.rollback()
 
 
 def _manifest() -> ResearchManifest:
