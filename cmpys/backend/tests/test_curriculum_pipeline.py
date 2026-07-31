@@ -446,6 +446,49 @@ def test_outline_sources_are_bound_to_verified_claims_server_side() -> None:
     _assert_outline_contract(rebound, _plan(), _manifest(), _target())
 
 
+def test_outline_missing_claim_recovers_only_from_unique_exact_source_bundle() -> None:
+    payload = _outline().model_dump(mode="json")
+    payload["blocks"][0]["claim_ids"] = []
+    missing_claim = CurriculumOutline.model_validate(payload)
+
+    with pytest.raises(ValueError, match="lacks verified claim IDs"):
+        _assert_outline_contract(missing_claim, _plan(), _manifest(), _target())
+
+    rebound = _bind_outline_claim_sources(missing_claim, _manifest())
+    assert rebound.blocks[0].claim_ids == ["claim_worked"]
+    assert rebound.blocks[0].source_ids == ["src_guide"]
+    _assert_outline_contract(rebound, _plan(), _manifest(), _target())
+
+
+def test_outline_missing_claim_stays_unbound_when_source_bundle_is_ambiguous() -> None:
+    payload = _outline().model_dump(mode="json")
+    payload["blocks"][0]["claim_ids"] = []
+    missing_claim = CurriculumOutline.model_validate(payload)
+    manifest_payload = _manifest().model_dump(mode="json")
+    manifest_payload["claims"].append(
+        {
+            "claim_id": "claim_second_guide",
+            "statement": "A second independently verified claim uses the same guide.",
+            "source_ids": ["src_guide"],
+            "confidence": 0.91,
+            "verification_score": 0.91,
+            "verification_note": "Independently entailed by the support span.",
+        }
+    )
+    ambiguous_manifest = ResearchManifest.model_validate(manifest_payload)
+
+    rebound = _bind_outline_claim_sources(missing_claim, ambiguous_manifest)
+
+    assert rebound.blocks[0].claim_ids == []
+    with pytest.raises(ValueError, match="lacks verified claim IDs"):
+        _assert_outline_contract(
+            rebound,
+            _plan(),
+            ambiguous_manifest,
+            _target(),
+        )
+
+
 def test_multiblock_technique_gets_enough_stable_contract_ids() -> None:
     payload = _plan().model_dump(mode="json")
     payload["applications"][1]["technique_id"] = "feedback_revision"

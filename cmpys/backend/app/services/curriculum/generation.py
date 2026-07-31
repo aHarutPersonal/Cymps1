@@ -381,11 +381,37 @@ def _bind_outline_claim_sources(
     outline: CurriculumOutline,
     manifest: ResearchManifest,
 ) -> CurriculumOutline:
-    """Make block citations the exact union of their verified claim sources."""
+    """Make block citations the exact union of their verified claim sources.
+
+    A factual block may omit its claim ID while retaining the exact approved
+    source bundle.  Recover the ID only when that bundle identifies one and
+    only one verified manifest claim; ambiguous or absent evidence stays
+    untouched so the downstream contract fails closed.
+    """
 
     claims = {claim.claim_id: claim for claim in manifest.claims}
+    factual_types = {
+        "explanation",
+        "visual_explanation",
+        "worked_example",
+    }
     blocks = []
     for block in outline.blocks:
+        if (
+            block.block_type.value in factual_types
+            and not block.claim_ids
+            and block.source_ids
+        ):
+            source_bundle = set(block.source_ids)
+            exact_claims = [
+                claim
+                for claim in manifest.claims
+                if set(claim.source_ids) == source_bundle
+            ]
+            if len(exact_claims) == 1:
+                block = block.model_copy(
+                    update={"claim_ids": [exact_claims[0].claim_id]}
+                )
         if block.claim_ids and all(claim_id in claims for claim_id in block.claim_ids):
             source_ids = list(
                 dict.fromkeys(
