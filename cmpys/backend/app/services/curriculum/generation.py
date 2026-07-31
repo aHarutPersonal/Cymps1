@@ -525,7 +525,19 @@ def _bind_outline_technique_blocks(
                 ),
                 None,
             )
-            if replacement_index is None or candidate is None:
+            if replacement_index is None:
+                continue
+            if candidate is None:
+                replacement_block = blocks[replacement_index]
+                if application.technique_id not in replacement_block.technique_ids:
+                    continue
+                replacement_type = min(
+                    allowed_types,
+                    key=lambda item: item.value,
+                )
+                blocks[replacement_index] = replacement_block.model_copy(
+                    update={"block_type": replacement_type}
+                )
                 continue
             candidate_index, candidate_block = candidate
             replacement_block = blocks[replacement_index]
