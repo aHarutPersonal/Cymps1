@@ -413,6 +413,7 @@ def _bind_outline_technique_blocks(
     }
     for application in plan.applications:
         expected_ids = list(application.implementation_block_ids)
+        requirements = TECHNIQUE_BLOCK_REQUIREMENTS[application.technique_id]
         referenced_indexes: set[int] = set()
 
         for expected_id in expected_ids:
@@ -428,7 +429,13 @@ def _bind_outline_technique_blocks(
                 continue
             referenced_indexes.add(index)
             block = blocks[index]
-            if application.technique_id not in block.technique_ids:
+            valid_contract_type = any(
+                block.block_type in allowed_types for allowed_types in requirements
+            )
+            if (
+                valid_contract_type
+                and application.technique_id not in block.technique_ids
+            ):
                 blocks[index] = block.model_copy(
                     update={
                         "technique_ids": [
@@ -446,9 +453,7 @@ def _bind_outline_technique_blocks(
         for expected_id in missing_ids:
             unsatisfied_groups = [
                 allowed_types
-                for allowed_types in TECHNIQUE_BLOCK_REQUIREMENTS[
-                    application.technique_id
-                ]
+                for allowed_types in requirements
                 if all(
                     blocks[index].block_type not in allowed_types
                     for index in referenced_indexes
@@ -473,6 +478,65 @@ def _bind_outline_technique_blocks(
             index, block = candidates[0]
             blocks[index] = block.model_copy(update={"block_id": expected_id})
             referenced_indexes.add(index)
+
+        # The model can preserve every server-owned ID yet attach one to the
+        # wrong semantic block.  Move that ID only to an unreserved block that
+        # the model itself already tagged with the technique and whose type
+        # satisfies the missing contract.  Swapping IDs preserves uniqueness;
+        # absence of a valid candidate remains a fail-closed contract error.
+        for allowed_types in requirements:
+            if any(
+                blocks[index].block_type in allowed_types
+                for index in referenced_indexes
+            ):
+                continue
+            protected_indexes: set[int] = set()
+            for other_types in requirements:
+                match = next(
+                    (
+                        index
+                        for index in referenced_indexes
+                        if index not in protected_indexes
+                        and blocks[index].block_type in other_types
+                    ),
+                    None,
+                )
+                if match is not None:
+                    protected_indexes.add(match)
+            replacement_index = next(
+                (
+                    index
+                    for expected_id in expected_ids
+                    for index, block in enumerate(blocks)
+                    if block.block_id == expected_id
+                    and index in referenced_indexes
+                    and index not in protected_indexes
+                ),
+                None,
+            )
+            candidate = next(
+                (
+                    (index, block)
+                    for index, block in enumerate(blocks)
+                    if index not in referenced_indexes
+                    and block.block_id not in reserved_ids
+                    and block.block_type in allowed_types
+                    and application.technique_id in block.technique_ids
+                ),
+                None,
+            )
+            if replacement_index is None or candidate is None:
+                continue
+            candidate_index, candidate_block = candidate
+            replacement_block = blocks[replacement_index]
+            blocks[replacement_index] = replacement_block.model_copy(
+                update={"block_id": candidate_block.block_id}
+            )
+            blocks[candidate_index] = candidate_block.model_copy(
+                update={"block_id": replacement_block.block_id}
+            )
+            referenced_indexes.remove(replacement_index)
+            referenced_indexes.add(candidate_index)
 
     return outline.model_copy(update={"blocks": blocks})
 
