@@ -23,6 +23,7 @@ from app.services.curriculum.pilot import TECHNIQUE_REGISTRY
 from app.services.curriculum.schemas import (
     CanonicalModuleDraft,
     CurriculumOutline,
+    LessonBlockType,
     QualityReview,
     RepairResult,
     ResearchManifest,
@@ -40,6 +41,14 @@ from app.services.llm.telemetry import record_llm_response
 T = TypeVar("T", bound=BaseModel)
 ReviewerName = Literal["structure", "factual", "pedagogy", "originality"]
 _BLOCK_ID_PATTERN = re.compile(r"^block_[a-z0-9][a-z0-9_-]{2,63}$")
+_REQUIRED_BASE_BLOCK_TYPES = frozenset(
+    {
+        LessonBlockType.EXPLANATION,
+        LessonBlockType.WORKED_EXAMPLE,
+        LessonBlockType.INDEPENDENT_PRACTICE,
+        LessonBlockType.ASSESSMENT,
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -311,6 +320,14 @@ def _assert_outline_contract(
             "outline changed server-owned module target: "
             + ", ".join(issue.code for issue in target_gate.issues)
         )
+    actual_types = {block.block_type for block in outline.blocks}
+    missing_base_types = sorted(
+        block_type.value for block_type in _REQUIRED_BASE_BLOCK_TYPES - actual_types
+    )
+    if missing_base_types:
+        raise ValueError(
+            f"outline lacks required block types: {missing_base_types}"
+        )
     blocks = {block.block_id: block for block in outline.blocks}
     allowed_sources = {source.source_id for source in manifest.sources}
     claims = {claim.claim_id: claim for claim in manifest.claims}
@@ -561,6 +578,16 @@ def _bind_outline_technique_blocks(
                     allowed_types,
                     key=lambda item: item.value,
                 )
+                if (
+                    replacement_block.block_type in _REQUIRED_BASE_BLOCK_TYPES
+                    and replacement_block.block_type != replacement_type
+                    and sum(
+                        block.block_type == replacement_block.block_type
+                        for block in blocks
+                    )
+                    == 1
+                ):
+                    continue
                 blocks[replacement_index] = replacement_block.model_copy(
                     update={"block_type": replacement_type}
                 )
@@ -600,12 +627,12 @@ async def generate_outline(
         max_tokens=6000,
         metadata={"stage": "outline", **(telemetry_metadata or {})},
     )
-    outline = _bind_outline_technique_blocks(
-        _bind_outline_claim_sources(
+    outline = _bind_outline_claim_sources(
+        _bind_outline_technique_blocks(
             CurriculumOutline.model_validate(generated.value),
-            manifest,
+            technique_plan,
         ),
-        technique_plan,
+        manifest,
     )
     _assert_outline_contract(
         outline,

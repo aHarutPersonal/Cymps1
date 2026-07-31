@@ -514,7 +514,7 @@ def test_outline_rejects_incomplete_multiblock_technique_contract() -> None:
     ]
     plan = TechniquePlan.model_validate(plan_payload)
     outline_payload = _outline().model_dump(mode="json")
-    outline_payload["blocks"][3].update(
+    outline_payload["blocks"][2].update(
         {
             "block_id": "block_feedback",
             "block_type": "feedback",
@@ -579,32 +579,46 @@ def test_outline_multiblock_contract_rebinds_duplicate_semantic_types() -> None:
         {
             "technique_id": "feedback_revision",
             "implementation_block_ids": [
-                "block_practice",
+                "block_feedback",
                 "block_feedback_revision_1",
             ],
         }
     )
     plan = TechniquePlan.model_validate(plan_payload)
     outline_payload = _outline().model_dump(mode="json")
-    outline_payload["blocks"][2].update(
-        {
-            "block_id": "block_model_revision",
-            "block_type": "revision",
-            "technique_ids": ["feedback_revision"],
-        }
-    )
-    outline_payload["blocks"][3].update(
-        {
-            "block_type": "feedback",
-            "technique_ids": ["feedback_revision"],
-        }
-    )
-    outline_payload["blocks"][4].update(
-        {
-            "block_id": "block_feedback_revision_1",
-            "block_type": "feedback",
-            "technique_ids": ["feedback_revision"],
-        }
+    outline_payload["blocks"].extend(
+        [
+            {
+                "block_id": "block_feedback",
+                "block_type": "feedback",
+                "title": "Review the attempt",
+                "purpose": "Give specific feedback against the observable criteria.",
+                "minutes": 2,
+                "source_ids": [],
+                "claim_ids": [],
+                "technique_ids": ["feedback_revision"],
+            },
+            {
+                "block_id": "block_feedback_revision_1",
+                "block_type": "feedback",
+                "title": "Prioritize the feedback",
+                "purpose": "Choose the highest-impact correction before revising.",
+                "minutes": 2,
+                "source_ids": [],
+                "claim_ids": [],
+                "technique_ids": ["feedback_revision"],
+            },
+            {
+                "block_id": "block_model_revision",
+                "block_type": "revision",
+                "title": "Revise the artifact",
+                "purpose": "Apply the selected correction and verify the result.",
+                "minutes": 2,
+                "source_ids": [],
+                "claim_ids": [],
+                "technique_ids": ["feedback_revision"],
+            },
+        ]
     )
     drifted = CurriculumOutline.model_validate(outline_payload)
 
@@ -615,7 +629,7 @@ def test_outline_multiblock_contract_rebinds_duplicate_semantic_types() -> None:
     rebound_by_id = {block.block_id: block for block in rebound.blocks}
     bound_types = {
         rebound_by_id[block_id].block_type.value
-        for block_id in ("block_practice", "block_feedback_revision_1")
+        for block_id in ("block_feedback", "block_feedback_revision_1")
     }
     assert bound_types == {"feedback", "revision"}
     assert len(rebound_by_id) == len(rebound.blocks)
@@ -623,6 +637,32 @@ def test_outline_multiblock_contract_rebinds_duplicate_semantic_types() -> None:
 
 
 def test_outline_tagged_pinned_block_gets_required_structural_type() -> None:
+    plan_payload = _plan().model_dump(mode="json")
+    plan_payload["applications"][1].update(
+        {
+            "technique_id": "self_explanation",
+            "implementation_block_ids": ["block_recall"],
+        }
+    )
+    plan = TechniquePlan.model_validate(plan_payload)
+    outline_payload = _outline().model_dump(mode="json")
+    outline_payload["blocks"][2]["technique_ids"] = ["self_explanation"]
+    drifted = CurriculumOutline.model_validate(outline_payload)
+
+    with pytest.raises(ValueError, match="technique contract incomplete"):
+        _assert_outline_contract(drifted, plan, _manifest(), _target())
+
+    rebound = _bind_outline_technique_blocks(drifted, plan)
+    rebound_by_id = {block.block_id: block for block in rebound.blocks}
+    rebound_block = rebound_by_id["block_recall"]
+    assert rebound_block.block_type.value == "reflection"
+    assert [item.value for item in rebound_block.technique_ids] == [
+        "self_explanation"
+    ]
+    _assert_outline_contract(rebound, plan, _manifest(), _target())
+
+
+def test_outline_tagged_type_fallback_preserves_last_required_base_block() -> None:
     plan_payload = _plan().model_dump(mode="json")
     plan_payload["applications"][1].update(
         {
@@ -635,16 +675,50 @@ def test_outline_tagged_pinned_block_gets_required_structural_type() -> None:
     outline_payload["blocks"][3]["technique_ids"] = ["self_explanation"]
     drifted = CurriculumOutline.model_validate(outline_payload)
 
-    with pytest.raises(ValueError, match="technique contract incomplete"):
-        _assert_outline_contract(drifted, plan, _manifest(), _target())
-
     rebound = _bind_outline_technique_blocks(drifted, plan)
     rebound_by_id = {block.block_id: block for block in rebound.blocks}
-    rebound_block = rebound_by_id["block_practice"]
-    assert rebound_block.block_type.value == "reflection"
-    assert [item.value for item in rebound_block.technique_ids] == [
-        "self_explanation"
-    ]
+
+    assert rebound_by_id["block_practice"].block_type.value == "independent_practice"
+    with pytest.raises(ValueError, match="technique contract incomplete"):
+        _assert_outline_contract(rebound, plan, _manifest(), _target())
+
+
+def test_outline_claim_recovery_runs_after_safe_factual_type_normalization() -> None:
+    plan_payload = _plan().model_dump(mode="json")
+    plan_payload["applications"][0].update(
+        {
+            "technique_id": "active_application",
+            "implementation_block_ids": ["block_practice"],
+            "evidence_source_ids": ["src_apply"],
+        }
+    )
+    plan_payload["applications"][1].update(
+        {
+            "technique_id": "worked_examples",
+            "implementation_block_ids": ["block_recall"],
+            "evidence_source_ids": ["src_guide"],
+        }
+    )
+    plan = TechniquePlan.model_validate(plan_payload)
+    outline_payload = _outline().model_dump(mode="json")
+    outline_payload["blocks"][1]["technique_ids"] = []
+    outline_payload["blocks"][2].update(
+        {
+            "source_ids": ["src_guide"],
+            "claim_ids": [],
+            "technique_ids": ["worked_examples"],
+        }
+    )
+    drifted = CurriculumOutline.model_validate(outline_payload)
+
+    rebound = _bind_outline_claim_sources(
+        _bind_outline_technique_blocks(drifted, plan),
+        _manifest(),
+    )
+    rebound_by_id = {block.block_id: block for block in rebound.blocks}
+
+    assert rebound_by_id["block_recall"].block_type.value == "worked_example"
+    assert rebound_by_id["block_recall"].claim_ids == ["claim_worked"]
     _assert_outline_contract(rebound, plan, _manifest(), _target())
 
 
