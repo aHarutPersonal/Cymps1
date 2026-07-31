@@ -878,6 +878,8 @@ def test_originality_gates_reject_interleaved_source_copying() -> None:
     source_result = validate_source_originality(draft, manifest)
     assert not source_result.passed
     assert {issue.code for issue in source_result.issues} == {"source_copying_detected"}
+    assert source_result.issues[0].block_id == draft.blocks[0].block_id
+    assert "content_markdown" in source_result.issues[0].repair_instruction
 
     reference_tokens = [f"word{index:03d}" for index in range(200)]
     copied_subsection = reference_tokens[40:120]
@@ -931,6 +933,8 @@ def test_originality_gates_cover_rubric_and_other_non_block_prose() -> None:
     result = validate_source_originality(draft, manifest)
     assert not result.passed
     assert {issue.code for issue in result.issues} == {"source_copying_detected"}
+    assert result.issues[0].block_id is None
+    assert "rubric[0].evidence_required" in result.issues[0].repair_instruction
 
 
 def test_spaced_practice_is_blocked_without_durable_runtime_capability() -> None:

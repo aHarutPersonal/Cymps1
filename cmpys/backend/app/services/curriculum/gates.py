@@ -589,9 +589,9 @@ def shingle_containment(source: str, candidate: str) -> float:
     )
 
 
-def _draft_prose_segments(
+def _draft_prose_segments_with_locations(
     draft: CanonicalModuleDraft | Mapping[str, Any],
-) -> tuple[str, ...]:
+) -> tuple[tuple[str | None, str, str], ...]:
     content: Mapping[str, Any]
     if isinstance(draft, CanonicalModuleDraft):
         content = draft.model_dump(mode="python")
@@ -600,11 +600,16 @@ def _draft_prose_segments(
     else:
         return ()
 
-    prose: list[str] = []
+    prose: list[tuple[str | None, str, str]] = []
 
-    def append_text(value: Any) -> None:
+    def append_text(
+        value: Any,
+        *,
+        field_name: str,
+        block_id: str | None = None,
+    ) -> None:
         if isinstance(value, str) and value.strip():
-            prose.append(value.strip())
+            prose.append((block_id, field_name, value.strip()))
 
     for field_name in (
         "title",
@@ -613,28 +618,45 @@ def _draft_prose_segments(
         "artifact_type",
         "artifact_description",
     ):
-        append_text(content.get(field_name))
+        append_text(content.get(field_name), field_name=field_name)
     prerequisites = content.get("prerequisites")
     if isinstance(prerequisites, list):
-        for prerequisite in prerequisites:
-            append_text(prerequisite)
+        for index, prerequisite in enumerate(prerequisites):
+            append_text(
+                prerequisite,
+                field_name=f"prerequisites[{index}]",
+            )
 
     blocks = content.get("blocks")
     if isinstance(blocks, list):
         for block in blocks:
             if not isinstance(block, Mapping):
                 continue
-            append_text(block.get("title"))
-            append_text(block.get("content_markdown"))
+            raw_block_id = block.get("block_id")
+            block_id = str(raw_block_id) if raw_block_id else None
+            append_text(
+                block.get("title"),
+                field_name="title",
+                block_id=block_id,
+            )
+            append_text(
+                block.get("content_markdown"),
+                field_name="content_markdown",
+                block_id=block_id,
+            )
             for field_name in ("learner_instructions", "success_criteria"):
                 values = block.get(field_name)
                 if isinstance(values, list):
-                    for value in values:
-                        append_text(value)
+                    for index, value in enumerate(values):
+                        append_text(
+                            value,
+                            field_name=f"{field_name}[{index}]",
+                            block_id=block_id,
+                        )
 
     rubric = content.get("rubric")
     if isinstance(rubric, list):
-        for criterion in rubric:
+        for index, criterion in enumerate(rubric):
             if not isinstance(criterion, Mapping):
                 continue
             for field_name in (
@@ -642,9 +664,20 @@ def _draft_prose_segments(
                 "evidence_required",
                 "passing_standard",
             ):
-                append_text(criterion.get(field_name))
+                append_text(
+                    criterion.get(field_name),
+                    field_name=f"rubric[{index}].{field_name}",
+                )
 
     return tuple(prose)
+
+
+def _draft_prose_segments(
+    draft: CanonicalModuleDraft | Mapping[str, Any],
+) -> tuple[str, ...]:
+    return tuple(
+        text for _, _, text in _draft_prose_segments_with_locations(draft)
+    )
 
 
 def draft_text(draft: CanonicalModuleDraft | Mapping[str, Any]) -> str:
@@ -658,16 +691,21 @@ def draft_text(draft: CanonicalModuleDraft | Mapping[str, Any]) -> str:
     return "\n".join(_draft_prose_segments(draft))
 
 
-def _originality_candidate_texts(draft: CanonicalModuleDraft) -> tuple[str, ...]:
-    complete_text = draft_text(draft)
+def _originality_candidate_segments(
+    draft: CanonicalModuleDraft,
+) -> tuple[tuple[str | None, str, str], ...]:
+    segments = _draft_prose_segments_with_locations(draft)
+    complete_text = "\n".join(text for _, _, text in segments)
     # Whole-field comparisons catch a copied subsection even when the complete
     # module contains enough unrelated prose to dilute its aggregate overlap.
     substantive_segments = tuple(
-        segment
-        for segment in _draft_prose_segments(draft)
-        if len(_tokens(segment)) >= 12
+        segment for segment in segments if len(_tokens(segment[2])) >= 12
     )
-    return (complete_text, *substantive_segments)
+    return ((None, "complete_draft", complete_text), *substantive_segments)
+
+
+def _originality_candidate_texts(draft: CanonicalModuleDraft) -> tuple[str, ...]:
+    return tuple(text for _, _, text in _originality_candidate_segments(draft))
 
 
 def validate_originality(
@@ -706,9 +744,11 @@ def validate_source_originality(
     draft: CanonicalModuleDraft,
     manifest: ResearchManifest,
 ) -> GateResult:
-    candidate_texts = _originality_candidate_texts(draft)
+    candidates = _originality_candidate_segments(draft)
     maximum = 0.0
     source_id = ""
+    closest_block_id: str | None = None
+    closest_field = "complete_draft"
     for source in manifest.sources:
         source_tokens = _tokens(source.sanitized_support_text)
         size = min(7, len(source_tokens))
@@ -718,24 +758,45 @@ def validate_source_originality(
         positional_shingle_count = len(source_tokens) - size + 1 if size > 0 else 0
         if positional_shingle_count < 4:
             continue
-        containment = max(
-            shingle_containment(
-                source.sanitized_support_text,
-                candidate_text,
-            )
-            for candidate_text in candidate_texts
+        containment, block_id, field_name = max(
+            (
+                (
+                    shingle_containment(
+                        source.sanitized_support_text,
+                        candidate_text,
+                    ),
+                    candidate_block_id,
+                    candidate_field,
+                )
+                for candidate_block_id, candidate_field, candidate_text in candidates
+            ),
+            key=lambda item: (item[0], item[2] != "complete_draft"),
         )
         if containment > maximum:
             maximum = containment
             source_id = source.source_id
+            closest_block_id = block_id
+            closest_field = field_name
     issues: list[ReviewIssue] = []
     if maximum > MAX_SOURCE_SHINGLE_CONTAINMENT:
+        location = (
+            f"{closest_field} in block {closest_block_id}"
+            if closest_block_id
+            else closest_field
+        )
         issues.append(
             _issue(
                 "source_copying_detected",
-                f"Draft contains {maximum:.1%} of a source excerpt's phrase shingles.",
-                "Replace source wording with an original synthesis and keep only short attributed quotations.",
+                (
+                    f"Draft segment {location} contains {maximum:.1%} of a "
+                    "source excerpt's phrase shingles."
+                ),
+                (
+                    f"Rewrite {location} as an original synthesis and keep only "
+                    "short attributed quotations."
+                ),
                 severity=ReviewSeverity.CRITICAL,
+                block_id=closest_block_id,
                 source_ids=[source_id] if source_id else [],
             )
         )
