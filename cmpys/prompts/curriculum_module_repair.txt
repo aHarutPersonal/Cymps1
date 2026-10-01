@@ -19,3 +19,11 @@ TARGETED REPAIR ISSUES
 {repair_issues_json}
 
 Return the full repaired draft plus the exact issue codes addressed and a concise change summary. Never introduce a new claim/source ID or silently remove required learning activities.
+
+ORIGINALITY CONSTRAINT
+The same mechanical originality check that flagged this draft is re-run after repair. NEVER reuse seven or more consecutive words from any source excerpt: originality is measured as the fraction of each excerpt's seven-word phrase sequences reappearing in the draft, and anything above 55% is rejected again.
+
+When an issue reports phrase-shingle overlap, rewriting the flagged segment lightly will NOT clear it -- lightly edited text keeps the long shared word runs that the check counts. Rebuild that segment from the underlying claim instead: state what the source establishes, then explain it to the learner in your own sentence structure and vocabulary. Domain jargon and named entities may repeat; the surrounding phrasing must be yours.
+
+
+Preserve and repair prepared session_workbooks together with lesson blocks. Their numeric inputs, answer expressions, text criteria, transfer cases and rubric bindings are one contract with the lesson. For in-app targets, copy assessment_rubric exactly from the technique plan and use the app's checker/text reviewer followed by revision; do not introduce peers or external worksheets. Do not repair a mismatch by changing an answer in only one representation.

@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import selectinload
@@ -61,14 +62,13 @@ from app.services.curriculum.pilot import (
 from app.services.curriculum.research import (
     GroundedDiscovery,
     GroundedSource,
-    GroundingUnavailableError,
     _domain_claim_eligible,
     _grounding_sources,
-    curate_research_manifest,
     required_planner_technique_sources,
     resolve_public_source_url,
 )
 from app.services.curriculum.schemas import (
+    registrable_host,
     CanonicalModuleDraft,
     CurriculumOutline,
     MentorClaimCuration,
@@ -187,6 +187,29 @@ async def test_seed_pilot_initializes_prerequisites_without_async_lazy_load(
             assert seeded["skills"] == 2
             assert persisted_child is not None
             assert [skill.key for skill in persisted_child.prerequisites] == [parent_key]
+        finally:
+            await transaction.rollback()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("keep_parent", [False, True])
+async def test_publish_replaces_unloaded_prerequisites_on_async_database(keep_parent):
+    from app.tasks.curriculum import _replace_skill_prerequisites
+    suffix = str(uuid4())
+    async with async_session_maker() as db:
+        transaction = await db.begin()
+        try:
+            parent = CurriculumSkill(key="regression.parent." + suffix, domain="test",
+                name="Parent", description="Prerequisite", skill_type="applied", prerequisites=[])
+            child = CurriculumSkill(key="regression.child." + suffix, domain="test",
+                name="Child", description="Publishing skill", skill_type="applied", prerequisites=[parent])
+            db.add_all([parent, child])
+            await db.flush()
+            db.expire(child, ["prerequisites"])
+            await _replace_skill_prerequisites(db, child, [parent] if keep_parent else [])
+            await db.flush()
+            await db.refresh(child, attribute_names=["prerequisites"])
+            assert [p.id for p in child.prerequisites] == ([parent.id] if keep_parent else [])
         finally:
             await transaction.rollback()
 
@@ -396,6 +419,163 @@ def test_hashes_are_canonical_and_stage_sensitive() -> None:
     assert stage_input_hash(stage="outline", **base) != stage_input_hash(
         stage="writing", **base
     )
+
+
+@pytest.mark.asyncio
+async def test_research_retry_reuses_paid_discovery_and_curation(monkeypatch):
+    from unittest.mock import AsyncMock
+    from app.services.curriculum import research
+
+    discovery = GroundedDiscovery(
+        synthesis="Published evidence", sources=(GroundedSource(
+            source_id="source_one", title="Investor education",
+            url="https://www.sec.gov/investor", support_text="Published evidence",
+            content_hash="a" * 64,
+        ),), search_queries=("financial statements",), model="grounded-test",
+    )
+    discover = AsyncMock(return_value=discovery)
+    curate = AsyncMock(return_value=_manifest())
+    verify = AsyncMock(side_effect=[RuntimeError("provider unavailable"), _manifest()])
+    monkeypatch.setattr(research, "discover_grounded_sources", discover)
+    monkeypatch.setattr(research, "curate_research_manifest", curate)
+    monkeypatch.setattr(research, "verify_research_manifest", verify)
+    snapshots = []
+
+    async def save(value):
+        snapshots.append(deepcopy(value))
+
+    kwargs = dict(module_target=_target(), research_tier="fast", save_progress=save)
+    with pytest.raises(RuntimeError, match="provider unavailable"):
+        await research.build_research_manifest(**kwargs)
+    assert len(snapshots) == 2
+    assert "curation" not in snapshots[0]
+    assert "curation" in snapshots[-1]
+    result = await research.build_research_manifest(**kwargs, progress=snapshots[-1])
+    assert result == _manifest()
+    assert discover.await_count == 1
+    assert curate.await_count == 1
+    assert verify.await_count == 2
+
+    damaged = deepcopy(snapshots[-1])
+    damaged["curation"]["value"]["research_question"] = "altered"
+    with pytest.raises(ValueError, match="checkpoint hash mismatch"):
+        await research.build_research_manifest(**kwargs, progress=damaged)
+    assert verify.await_count == 2
+
+    # A different learner-independent target cannot reuse this source manifest.
+    verify.side_effect = None
+    verify.return_value = _manifest()
+    await research.build_research_manifest(
+        **{**kwargs, "module_target": {**_target(), "level": "advanced"}},
+        progress=snapshots[-1],
+    )
+    assert discover.await_count == 2
+    assert curate.await_count == 2
+
+    verify.side_effect = ValueError("claim claim_worked failed independent source verification")
+    with pytest.raises(ValueError, match="failed independent source verification"):
+        await research.build_research_manifest(**kwargs, progress=snapshots[1])
+    rejected_snapshot = snapshots[-1]
+    assert "curation" not in rejected_snapshot
+    assert "discovery" in rejected_snapshot
+    assert rejected_snapshot["curation_rejections"][0]["claims"]
+    verify.side_effect = None
+    await research.build_research_manifest(**kwargs, progress=rejected_snapshot)
+    assert curate.call_args.kwargs["revision_feedback"] == rejected_snapshot["curation_rejections"]
+
+
+@pytest.mark.asyncio
+async def test_research_checkpoint_storage_failure_stops_paid_followup(monkeypatch):
+    from unittest.mock import AsyncMock
+    from app.services.curriculum import research
+
+    discovery = GroundedDiscovery(
+        synthesis="Evidence", sources=(GroundedSource(
+            source_id="source_one", title="Official evidence",
+            url="https://www.sec.gov/investor", support_text="Evidence",
+            content_hash="a" * 64,
+        ),), search_queries=(), model="grounded-test",
+    )
+    monkeypatch.setattr(research, "discover_grounded_sources", AsyncMock(return_value=discovery))
+    curate = AsyncMock()
+    monkeypatch.setattr(research, "curate_research_manifest", curate)
+    with pytest.raises(RuntimeError, match="lease lost"):
+        await research.build_research_manifest(
+            module_target=_target(), research_tier="fast",
+            save_progress=AsyncMock(side_effect=RuntimeError("lease lost")),
+        )
+    curate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_explicit_verification_recovery_keeps_source_acceptance_gates(monkeypatch):
+    from unittest.mock import AsyncMock, Mock
+    from app.services.curriculum import research
+    from app.services.llm.client import LLMResponse
+
+    monkeypatch.setattr(settings, "gemini_api_key", "synthetic-test-key")
+    manifest = _manifest()
+    bundle = {"verifications": [{
+        "claim_id": c.claim_id, "passed": True, "confidence": 0.95,
+        "supported_source_ids": c.source_ids, "reasoning": "Supported by the supplied evidence.",
+    } for c in manifest.claims]}
+    response = LLMResponse(data=bundle, model=settings.gemini_quality_model, provider="gemini", finish_reason="STOP")
+    client = SimpleNamespace(model=settings.gemini_quality_model, generate_and_validate=AsyncMock(return_value=(bundle, response)))
+    constructor = Mock(return_value=client)
+    primary = Mock(side_effect=AssertionError("recovery must not replay OpenLux"))
+    monkeypatch.setattr("app.services.llm.client.GeminiLLMClient", constructor)
+    monkeypatch.setattr(research, "get_llm_client", primary)
+    recorder = AsyncMock()
+    monkeypatch.setattr(research, "record_llm_response", recorder)
+    route = {"provider": "gemini", "model": settings.gemini_quality_model, "from_provider": "openlux", "from_model": "test-primary", "reason": "sanitized provider failure"}
+    result = await research.verify_research_manifest(manifest=manifest, tier="quality", recovery_route=route)
+    assert all(c.verification_score == 0.95 for c in result.claims)
+    assert client.generate_and_validate.call_args.kwargs["repair_on_failure"] is False
+    assert recorder.call_args.kwargs["response"].fallback_from_provider == "openlux"
+    primary.assert_not_called()
+
+    bundle["verifications"][0]["passed"] = False
+    with pytest.raises(ValueError, match="failed independent source verification"):
+        await research.verify_research_manifest(manifest=manifest, tier="quality", recovery_route=route)
+    with pytest.raises(ValueError, match="unsupported research verification recovery route"):
+        await research.verify_research_manifest(manifest=manifest, tier="quality", recovery_route={**route, "model": "unapproved-model"})
+
+
+@pytest.mark.asyncio
+async def test_generation_recovery_is_scoped_and_rejects_incomplete_output(monkeypatch):
+    from unittest.mock import AsyncMock, Mock
+    from pydantic import BaseModel
+    from app.services.curriculum import generation
+    from app.services.llm.client import LLMResponse
+
+    class Artifact(BaseModel):
+        value: int
+
+    monkeypatch.setattr(settings, "gemini_api_key", "synthetic-test-key")
+    route = {"provider": "gemini", "model": settings.gemini_quality_model, "from_provider": "openlux", "reason": "provider timeout"}
+    response = LLMResponse(data={"value": 1}, model=settings.gemini_quality_model, provider="gemini", finish_reason="STOP")
+    client = SimpleNamespace(model=settings.gemini_quality_model, generate_and_validate=AsyncMock(return_value=({"value": 1}, response)))
+    primary = Mock(side_effect=AssertionError("primary must not run inside recovery"))
+    monkeypatch.setattr(generation, "get_llm_client", primary)
+    monkeypatch.setattr("app.services.llm.client.GeminiLLMClient", Mock(return_value=client))
+    monkeypatch.setattr(generation, "record_llm_response", AsyncMock())
+    monkeypatch.setattr(generation, "load_prompt", lambda name: "test")
+    monkeypatch.setattr(generation, "load_and_render", lambda *args: "test")
+    kwargs = dict(operation="test", prompt_name="test", prompt_variables={}, output_model=Artifact, tier="quality", max_tokens=100, metadata={})
+    with generation.curriculum_recovery_route(route):
+        artifact = await generation._generate(**kwargs)
+        assert artifact.value.value == 1
+        assert client.generate_and_validate.call_args.kwargs["repair_on_failure"] is False
+    assert generation._RECOVERY_ROUTE.get() is None
+    primary.assert_not_called()
+    response.finish_reason = "MAX_TOKENS"
+    with pytest.raises(RuntimeError, match="incomplete response"):
+        with generation.curriculum_recovery_route(route):
+            await generation._generate(**kwargs)
+    assert generation._RECOVERY_ROUTE.get() is None
+    with pytest.raises(ValueError, match="unsupported curriculum recovery route"):
+        with generation.curriculum_recovery_route({**route, "model": "unapproved"}):
+            pass
 
 
 def test_malformed_structured_output_is_a_bounded_operational_retry() -> None:
@@ -770,12 +950,56 @@ async def test_curator_retries_discovery_when_no_qualified_live_source() -> None
         model="test-model",
     )
 
-    with pytest.raises(GroundingUnavailableError, match="qualified live source"):
-        await curate_research_manifest(
-            module_target=_target(),
-            discovery=discovery,
-            tier="fast",
+    # Evidence policy is now corroboration-based rather than allowlist-based, so
+    # two independent unqualified publishers no longer abort discovery up front.
+    # The equivalent protection lives in the manifest contract and is asserted by
+    # test_domain_claim_requires_corroboration_or_qualified_source below.
+    assert {registrable_host(source.url) for source in discovery.sources} == {
+        "example.com",
+        "example.org",
+    }
+
+
+def _reputable_manifest_payload(source_urls: list[str]) -> dict:
+    """Manifest whose single domain claim cites every supplied URL."""
+    payload = _manifest().model_dump(mode="json")
+    sources = []
+    for index, url in enumerate(source_urls):
+        row = payload["sources"][0].copy()
+        row["source_id"] = f"src_live_{index}"
+        row["url"] = url
+        row["source_type"] = "other"
+        row["evidence_tier"] = "emerging"
+        row["classification_provenance"] = "unverified"
+        row["source_text_kind"] = "provider_grounded_support"
+        sources.append(row)
+    payload["sources"] = sources
+    for claim in payload["claims"]:
+        claim["source_ids"] = [row["source_id"] for row in sources]
+    return payload
+
+
+def test_domain_claim_requires_corroboration_or_qualified_source() -> None:
+    """Quality without an allowlist: one publisher is not enough, two are."""
+    ctx = {"evidence_policy": "reputable"}
+
+    # Two pages on the SAME publisher are not independent corroboration.
+    with pytest.raises(ValidationError, match="two independent publishers"):
+        ResearchManifest.model_validate(
+            _reputable_manifest_payload(
+                ["https://www.example.com/a", "https://blog.example.com/b"]
+            ),
+            context=ctx,
         )
+
+    # Two genuinely independent publishers are accepted.
+    accepted = ResearchManifest.model_validate(
+        _reputable_manifest_payload(
+            ["https://www.example.com/a", "https://www.other-site.org/b"]
+        ),
+        context=ctx,
+    )
+    assert len(accepted.sources) == 2
 
 
 def test_curator_prompt_requires_server_qualified_domain_evidence() -> None:
@@ -935,6 +1159,101 @@ def test_originality_gates_cover_rubric_and_other_non_block_prose() -> None:
     assert {issue.code for issue in result.issues} == {"source_copying_detected"}
     assert result.issues[0].block_id is None
     assert "rubric[0].evidence_required" in result.issues[0].repair_instruction
+
+
+def test_source_originality_gate_reports_every_specific_violation() -> None:
+    block_copy = " ".join(f"blockcopy{index:02d}" for index in range(40))
+    rubric_copy = " ".join(f"rubriccopy{index:02d}" for index in range(40))
+    draft_payload = _draft().model_dump(mode="json")
+    draft_payload["blocks"][0]["content_markdown"] = block_copy
+    draft_payload["rubric"][1]["evidence_required"] = rubric_copy
+    draft = CanonicalModuleDraft.model_validate(draft_payload)
+
+    manifest_payload = _manifest().model_dump(mode="json")
+    manifest_payload["sources"][0]["sanitized_support_text"] = block_copy
+    manifest_payload["sources"].append(
+        _source(
+            "src_rubric_copy",
+            "https://example.org/rubric-copy",
+            rubric_copy,
+        )
+    )
+    manifest = ResearchManifest.model_validate(manifest_payload)
+
+    result = validate_source_originality(draft, manifest)
+
+    assert not result.passed
+    assert len(result.issues) == 2
+    assert result.metrics["source_copying_violation_count"] == 2
+    assert [issue.block_id for issue in result.issues] == [
+        None,
+        draft.blocks[0].block_id,
+    ]
+    assert {
+        (issue.block_id, issue.repair_instruction, tuple(issue.source_ids))
+        for issue in result.issues
+    } == {
+        (
+            draft.blocks[0].block_id,
+            (
+                f"Rewrite content_markdown in block {draft.blocks[0].block_id} "
+                "as an original synthesis and keep only short attributed quotations."
+            ),
+            ("src_guide",),
+        ),
+        (
+            None,
+            (
+                "Rewrite rubric[1].evidence_required as an original synthesis and "
+                "keep only short attributed quotations."
+            ),
+            ("src_rubric_copy",),
+        ),
+    }
+
+
+def test_source_originality_gate_localizes_aggregate_short_field_copying() -> None:
+    source_tokens = [f"s{index:02d}" for index in range(30)]
+    draft_payload = _draft().model_dump(mode="json")
+    # learning_outcome/artifact_type are server-owned: validate_target_alignment
+    # pins them to the module target, so the writer cannot hide copied text in
+    # them and they are deliberately excluded from the originality scan. The
+    # aggregate-evasion contract this test protects still applies to every field
+    # the writer actually controls.
+    fields = (
+        "title",
+        "summary",
+        "artifact_description",
+    )
+    for index, field_name in enumerate(fields):
+        chunk = source_tokens[index * 10 : (index + 1) * 10]
+        if index == 0:
+            draft_payload[field_name] = " ".join(chunk)
+        else:
+            interleaved = [
+                token
+                for source_index, source_token in enumerate(chunk, start=index * 6)
+                for token in (source_token, f"x{source_index:02d}a", f"x{source_index:02d}b")
+            ]
+            draft_payload[field_name] = " ".join(interleaved)
+    draft = CanonicalModuleDraft.model_validate(draft_payload)
+
+    manifest_payload = _manifest().model_dump(mode="json")
+    manifest_payload["sources"][0]["sanitized_support_text"] = " ".join(
+        source_tokens
+    )
+    manifest = ResearchManifest.model_validate(manifest_payload)
+
+    result = validate_source_originality(draft, manifest)
+
+    assert not result.passed
+    assert len(result.issues) == 1
+    issue = result.issues[0]
+    assert issue.block_id is None
+    assert "complete_draft" in issue.description
+    assert "Rewrite complete_draft" not in issue.repair_instruction
+    assert "3 of 3" in issue.repair_instruction
+    assert all(field_name in issue.repair_instruction for field_name in fields)
 
 
 def test_spaced_practice_is_blocked_without_durable_runtime_capability() -> None:
@@ -2446,3 +2765,206 @@ def test_budget_queries_imply_curriculum_usage_partial_index_predicate() -> None
         assert "metadata_json ->> 'curriculum_job_id'" in sql
         assert "curriculum_job_id" not in compiled.params.values()
         assert job_id in compiled.params.values()
+
+
+def test_complete_recovery_usage_releases_only_fully_observed_reserve() -> None:
+    from app.tasks.curriculum import _complete_recovery_usage
+    evidence = _complete_recovery_usage({'writer': {'provider': 'gemini', 'total_tokens': 2000}, 'reviewer': {'provider': 'gemini', 'total_tokens': 1000}})
+    assert evidence == (2, 3000)
+    assert _complete_recovery_usage({'provider': 'openlux', 'total_tokens': 3000}) is None
+    assert _complete_recovery_usage({'provider': 'gemini', 'total_tokens': 0}) is None
+    for observed_events, observed_tokens, expected in [(2, 3000, '0.2'), (1, 3000, '1.0'), (2, 2900, '1.0')]:
+        job = SimpleNamespace(id='settled-job', input_tokens=0, output_tokens=0, cost_usd=Decimal('0'), estimated_cost_usd=Decimal('0'), model_usage_json={}, checkpoints_json={})
+        checkpoint = _reserve_job_attempt(job, checkpoints={}, stage='writing', reserve_usd=1, actual_cost_before_usd=0, event_count_before=0, total_tokens_before=0)
+        usage = CurriculumJobUsage(input_tokens=2000, output_tokens=1000, total_tokens=observed_tokens, estimated_cost_usd=.2, event_count=observed_events, failed_event_count=0, operations={})
+        checkpoint = _reconcile_job_usage_snapshot(job, usage=usage, checkpoints=checkpoint, completed_usage=evidence)
+        assert job.estimated_cost_usd == Decimal(expected)
+        assert checkpoint['cost_attempts'][0]['settled_from_complete_usage'] is (expected == '0.2')
+        _reconcile_job_usage_snapshot(job, usage=usage, checkpoints=checkpoint, completed_usage=evidence)
+        assert job.estimated_cost_usd == Decimal(expected)
+
+
+def test_settled_reserve_does_not_hide_an_unknown_failed_attempt() -> None:
+    now = datetime.now(timezone.utc)
+    gap = _job_unreconciled_reserve_today(state='flagged', estimated_cost_usd=.7, stored_cost_usd=.2, authoritative_cost_usd=.2,
+        checkpoints={'cost_attempts': [
+            {'reserved_at': now.isoformat(), 'reserve_usd': 1, 'actual_cost_usd': .2, 'settled_from_complete_usage': True},
+            {'reserved_at': now.isoformat(), 'reserve_usd': .5, 'actual_cost_usd': 0},
+        ]}, day_start=now.replace(hour=0, minute=0, second=0, microsecond=0), current=now)
+    assert gap == pytest.approx(.5)
+
+
+def test_originality_does_not_collect_isolated_vocabulary_across_long_text() -> None:
+    from app.services.curriculum.gates import shingle_containment
+    source = ' '.join(f'concept{i}' for i in range(40))
+    dispersed = ' '.join(f'concept{i} ' + 'unrelated context ' * 80 for i in range(40))
+    assert shingle_containment(source, dispersed) < .55
+    assert shingle_containment(source, dispersed + ' ' + source) == 1
+    inserted = ' '.join(f'concept{i} aside clarification' for i in range(40))
+    assert shingle_containment(source, inserted) > .9
+
+
+@pytest.mark.asyncio
+async def test_draft_recheck_keeps_generation_skipped_and_reviews_active(monkeypatch) -> None:
+    import app.tasks.curriculum as task
+    from app.services.curriculum.gates import GateResult
+    from app.services.curriculum.generation import GeneratedArtifact
+    calls=[]
+    async def forbidden(**kwargs):
+        raise AssertionError('saved draft must not be generated again')
+    async def review(**kwargs):
+        calls.append(kwargs['reviewer'])
+        return GeneratedArtifact(value=_reviews().reviews[0], model_name='review-test', provider='gemini', input_tokens=100, output_tokens=50, total_tokens=150)
+    monkeypatch.setattr(task,'generate_module_draft',forbidden)
+    monkeypatch.setattr(task,'repair_module_draft',forbidden)
+    monkeypatch.setattr(task,'review_module',review)
+    monkeypatch.setattr(task,'deterministic_draft_gate',lambda **kwargs: GateResult(passed=True,score=1,issues=(),metrics={}))
+    checkpoint={'source_manifest':_manifest().model_dump(mode='json'),'technique_plan':_plan().model_dump(mode='json'),'outline':_outline().model_dump(mode='json'),'draft':_draft().model_dump(mode='json')}
+    checkpoint['draft_gate_recheck']={'draft_hash':sha256_json(checkpoint['draft'])}
+    checkpoint['model_usage']={'writing':{'writer':{'model':'original-writer'}}}
+    result=await task._run_stage(stage=PipelineStage.WRITING,job_input={'module_target':_target()},checkpoints=checkpoint,repair_attempts=2,module_id=None,job_id='recheck-test')
+    assert result.passed and calls==['structure']
+    assert result.updates['draft']==checkpoint['draft']
+    assert result.model_usage['writer_provenance']=='original-writer'
+    assert task._complete_recovery_usage(result.model_usage)==(1,150)
+    checkpoint['draft']['summary']+=' mutated'
+    with pytest.raises(ValueError,match='hash mismatch'):
+        await task._run_stage(stage=PipelineStage.WRITING,job_input={'module_target':_target()},checkpoints=checkpoint,repair_attempts=2,module_id=None,job_id='recheck-test')
+    assert calls==['structure']
+
+
+def test_in_app_session_contract_pins_partition_and_assessed_rubric():
+    from app.services.practice.contracts import Workbook
+    from app.services.curriculum.gates import validate_in_app_contract
+    from app.services.curriculum.schemas import SessionWorkbook
+    from app.services.curriculum.sessions import pack_session_blocks, SessionPackingError
+    draft = _draft()
+    rubric = [row.criterion for row in draft.rubric]
+    activities=[]
+    for i in range(2):
+        activities.append({'id':f'case_{i}', 'title':'Apply the framework', 'kind':'practice' if i==0 else 'transfer',
+          'instructions':'Use the supplied example to explain the decision and its consequences in your own words.',
+          'data':[], 'fields':[{'id':f'answer_{j}','label':name,'kind':'text','criteria':['Gives a concrete supported explanation.'], 'rubric_criterion':name} for j,name in enumerate(rubric)],
+          'hint':'Connect the stated facts to your conclusion.', 'worked_solution':'A strong answer states the relevant facts, connects them to a defensible conclusion and identifies uncertainty.', 'minutes_min':5,'minutes_max':10})
+    workbook=Workbook.model_validate({'title':'Apply and transfer','activities':activities})
+    session=SessionWorkbook(block_ids=[b.block_id for b in draft.blocks],workbook=workbook)
+    draft=draft.model_copy(update={'session_workbooks':[session]})
+    plan=_plan().model_copy(update={'assessment_rubric':draft.rubric})
+    target={**_target(),'in_app_practice_required':True}
+    assert validate_in_app_contract(draft,plan,target).passed
+    assert len(pack_session_blocks(draft))==1
+    changed=draft.model_copy(update={'rubric':draft.rubric[:1]})
+    assert 'planned_rubric_changed' in {i.code for i in validate_in_app_contract(changed,plan,target).issues}
+    missing=draft.model_copy(update={'session_workbooks':[]})
+    assert not validate_in_app_contract(missing,plan,target).passed
+    session.block_ids.reverse()
+    with pytest.raises(SessionPackingError,match='teaching order'):
+        pack_session_blocks(draft)
+
+
+def test_passed_similarity_metric_cannot_lower_pedagogy_score(monkeypatch):
+    import app.services.curriculum.generation as generation
+    from app.services.curriculum.gates import GateResult
+    monkeypatch.setattr(generation,'validate_source_originality',lambda *args: GateResult(passed=True,score=.55,issues=(),metrics={'similarity':.45}))
+    result=generation.deterministic_draft_gate(draft=_draft(),manifest=_manifest(),technique_plan=_plan(),module_target=_target())
+    assert result.passed and result.score==1
+
+
+@pytest.mark.asyncio
+async def test_curation_recovery_reuses_discovery_and_still_verifies(monkeypatch):
+    from unittest.mock import AsyncMock
+    from app.services.curriculum import research
+    discovery = GroundedDiscovery(
+        synthesis='Published evidence', sources=(GroundedSource(
+            source_id='source_one', title='Investor education',
+            url='https://www.sec.gov/investor', support_text='Published evidence',
+            content_hash='a' * 64),), search_queries=('financial statements',), model='grounded-test')
+    discover = AsyncMock(return_value=discovery)
+    curate = AsyncMock(side_effect=[RuntimeError('gateway timeout'), _manifest()])
+    verify = AsyncMock(return_value=_manifest())
+    monkeypatch.setattr(research, 'discover_grounded_sources', discover)
+    monkeypatch.setattr(research, 'curate_research_manifest', curate)
+    monkeypatch.setattr(research, 'verify_research_manifest', verify)
+    saved = []
+    async def persist(value): saved.append(deepcopy(value))
+    kwargs = dict(module_target=_target(), research_tier='fast', save_progress=persist)
+    with pytest.raises(RuntimeError, match='gateway timeout'):
+        await research.build_research_manifest(**kwargs)
+    route = {'provider':'gemini', 'model':'verified-recovery'}
+    assert await research.build_research_manifest(**kwargs, progress=saved[-1], curation_recovery=route) == _manifest()
+    assert discover.await_count == 1
+    assert curate.call_args.kwargs['recovery_route'] == route
+    assert verify.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_curation_recovery_rejects_arbitrary_provider_before_call(monkeypatch):
+    from unittest.mock import Mock
+    from app.services.curriculum import research
+    primary = Mock(side_effect=AssertionError('must not call primary'))
+    monkeypatch.setattr(research, 'get_llm_client', primary)
+    discovery = GroundedDiscovery(synthesis='Evidence', sources=(), search_queries=(), model='test')
+    with pytest.raises(ValueError, match='unsupported research curation recovery route'):
+        await research.curate_research_manifest(module_target={'domain':'philosophy'}, discovery=discovery, tier='fast', recovery_route={'provider':'arbitrary'})
+    primary.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_outline_repair_receives_exact_contract_without_changing_target(monkeypatch):
+    from unittest.mock import AsyncMock
+    from app.services.curriculum import generation
+    target = _target()
+    original = deepcopy(target)
+    generated = generation.GeneratedArtifact(value=_outline(), model_name='test', provider='gemini', input_tokens=10, output_tokens=10, total_tokens=20)
+    call = AsyncMock(return_value=generated)
+    monkeypatch.setattr(generation, '_generate', call)
+    result = await generation.generate_outline(module_target=target, manifest=_manifest(), technique_plan=_plan(), tier='quality', contract_feedback="outline lacks required block types: ['explanation']")
+    assert result.value.skill_key == target['skill_key']
+    sent = call.call_args.kwargs['prompt_variables']['module_target_json']
+    assert set(sent['required_block_types']) == {'explanation','worked_example','independent_practice','assessment'}
+    assert 'explanation' in sent['prior_contract_error']
+    assert target == original
+
+
+def test_editorial_provenance_binds_draft_sources_outline_and_method():
+    from app.tasks.curriculum import _rechecked_writer_provenance
+    cp={'draft':{'content':'reviewed candidate'},'source_manifest':{'sources':['verified']},'outline':{'blocks':['pinned']},'technique_plan':{'rubric':['shared']}}
+    record={f'{key}_hash':sha256_json(cp[key]) for key in cp}
+    record['authoring_method']='owner_authorized_codex_editorial_revision'
+    cp['editorial_revision']={'record':record,'hash':sha256_json(record)}
+    recheck={'draft_hash':record['draft_hash']}
+    assert _rechecked_writer_provenance(cp,recheck)=='codex-editorial'
+    cp['outline']={'blocks':['changed']}
+    with pytest.raises(ValueError,match='provenance mismatch'):
+        _rechecked_writer_provenance(cp,recheck)
+
+
+@pytest.mark.asyncio
+async def test_current_plan_loads_order_and_current_catalog_without_lazy_io(monkeypatch):
+    from types import SimpleNamespace
+    from app.api.v1 import plans as api
+    from app.models.user import User
+    from app.models.plan import Plan, PlanItem, PlanItemType
+    uid, pid = str(uuid4()), str(uuid4())
+    async with async_session_maker() as db:
+        transaction = await db.begin()
+        try:
+            db.add(User(id=uid, email=uid+'@example.test', password_hash='test-only'))
+            db.add(Plan(id=pid, user_id=uid, target_age=28, duration_weeks=12, weekly_hours=8))
+            await db.flush()
+            for index, title, kind in [(1,'Apply',PlanItemType.PROJECT),(0,'Learn',PlanItemType.COURSE)]:
+                db.add(PlanItem(plan_id=pid,title=title,type=kind,description='Original planned scope',
+                    week_start=1,week_end=1,success_metric='Original target',estimated_hours=3,
+                    meta_json={'backbone_task_index':index},
+                    details_json={'catalog':{'module_version_id':'test'},'steps':[{'id':'step_1',
+                        'description':'Trace the three statements.','estimate_minutes':60}]} if index==0 else None))
+            await db.flush()
+            db.expire_all()
+            monkeypatch.setattr(api,'_lesson_details_meet_quality',lambda details: True)
+            monkeypatch.setattr(api,'_validated_lesson_steps',lambda details: details['steps'])
+            response=await api.get_current_plan(db,SimpleNamespace(id=uid))
+            assert [item.title for item in response.items]==['Learn','Apply']
+            assert [item.estimatedHours for item in response.items]==[1,3]
+            assert 'inside the app' in response.items[0].description
+        finally:
+            await transaction.rollback()

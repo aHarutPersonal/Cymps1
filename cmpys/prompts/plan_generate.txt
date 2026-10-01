@@ -97,7 +97,14 @@ BAD daily rhythm examples (too vague, not domain-specific):
 
 GOOD daily rhythm examples (specific, progressive, domain-grounded):
 - ✅ Einstein Week 1: "Solve 3 kinematics problems from 'University Physics' Ch 2 using only first principles — no formula sheet allowed" (30 min)
-- ✅ Buffett Week 3: "Pick 1 company from the S&P 500, find its 10-K filing, and calculate owner earnings using Buffett's formula: Net Income + Depreciation - CapEx" (40 min)
+- ✅ Buffett practice: "Use a supplied financial-statement case to estimate a range of owner earnings. Reconcile reported earnings and relevant non-cash charges; distinguish maintenance investment from growth investment; account for any additional working capital needed to maintain the business. Record uncertain inputs and explain the range." Size the exercise to the learner's demonstrated accounting skill and available time.
+
+For this example, Buffett's 1986 shareholder letter is the primary reference.
+Do not present net income plus depreciation minus total capital expenditure as
+his complete definition. Maintenance spending and required additional working
+capital involve judgment; supply case data and explicit assumptions rather than
+inventing a precise company estimate. A book or method example illustrates a
+learning activity, not a recommendation to trade a security.
 - ✅ Jobs Week 5: "Find 1 product you use daily. Write 200 words on what makes its design great and what you'd change, using Dieter Rams' 10 principles as your framework" (25 min)
 - ✅ Einstein Week 8: "Work through 1 thought experiment from 'Spacetime Physics' Ch 3 — draw the spacetime diagram, predict the outcome, then verify against the book's solution" (35 min)
 
@@ -194,3 +201,30 @@ Use the User Context and Readiness data. Adapt difficulty to their level. If the
 }
 
 IMPORTANT: Use the authoritative conditional task-count rule: under 6 hours/week means exactly 1 mission plus exactly 1 daily rhythm; 6 hours/week or more means 2-3 missions plus 1-2 daily rhythms. Keep all substance minimums at every capacity. The sum of every task's weekly `estimated_hours` MUST NOT exceed {hours_per_week}. EVERY task MUST include a `success_metric`: a concrete, binary, measurable completion criterion that names the deliverable — never a restatement of the title and never "task completed".
+
+
+LEARNER PLACEMENT SAFETY:
+- Use learner_baseline.answer_evidence_status and skill_diagnostics when supplied.
+  Unknown, not_assessed, and needs_review are uncertainty, never proof of beginner level.
+- correct_on_item demonstrates only the specific item; it does not certify professional
+  competence or all prerequisites. needs_practice_on_item calls for targeted checking
+  and remediation, not restarting the whole subject.
+- Do not infer knowledge from savings, a portfolio, age, job title, or lack of achievements.
+  A knowledgeable learner without capital can use supplied fictional cases.
+- Skip foundations already supported by concrete skill evidence. A foundation phase means
+  prerequisites for THIS learner's target, not a mandatory introductory course for everyone.
+- When prerequisites are uncertain, begin with a short diagnostic practice and adapt;
+  do not silently assume mastery or force weeks of basics. Keep self-report and checked
+  evidence distinct, and never claim a learning duration has been measured when it has not.
+
+RECENT PRACTICE EVIDENCE:
+When supplied, practice_evidence/recent_practice describes recent work in this same goal
+session, scoped to the named lessons and cases. Prefer this newer checked evidence over
+an older self-rating for the SAME skill. Never generalize it to unrelated skills.
+- needs_practice: revisit the named concept or prerequisite with a changed case.
+- needs_review: clarify the uncertain assessment before concluding the learner is wrong.
+- completed_with_support: offer a fresh independent transfer check before raising difficulty.
+- transfer_without_hint: consider a harder or adjacent case for that skill; this records no
+  in-app hint, not proof of broad mastery, retention, or absence of outside help.
+- not_assessed/in_progress: a draft or partial attempt is not evidence of poor knowledge.
+Do not overwrite already completed work or demand that the learner repeat all foundations.

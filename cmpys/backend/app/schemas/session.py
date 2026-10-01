@@ -111,6 +111,8 @@ class InterviewResponseInput(BaseModel):
         Literal[
             "achievement_inventory",
             "current_capability",
+            "foundation_check",
+            "application_check",
             "weekly_hours",
             "target_outcome",
             "constraints_resources",
@@ -118,6 +120,8 @@ class InterviewResponseInput(BaseModel):
         ]
         | None
     ) = None
+
+    diagnostic_id: str | None = Field(default=None, max_length=80)
 
     model_config = {"populate_by_name": True}
 

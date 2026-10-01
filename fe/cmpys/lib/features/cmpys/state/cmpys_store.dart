@@ -760,6 +760,8 @@ class CmpysStore extends StateNotifier<CmpysState> {
   /// Clears all persisted local state. Called on logout so the next account
   /// never inherits a previous user's mentor, achievements, or notes.
   Future<void> reset() async {
+    // Startup hydration must finish before clearing an expired account.
+    await ready;
     _persistTimer?.cancel(); // a pending write must not resurrect old state
     state = CmpysState.initial();
     try {

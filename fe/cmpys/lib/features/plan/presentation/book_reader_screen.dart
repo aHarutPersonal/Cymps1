@@ -438,7 +438,8 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
       BookNarrationAlignmentGranularity.word => ' Word synchronized.',
       BookNarrationAlignmentGranularity.phrase => ' Phrase synchronized.',
       BookNarrationAlignmentGranularity.sentence => ' Sentence synchronized.',
-      BookNarrationAlignmentGranularity.none => '',
+      BookNarrationAlignmentGranularity.none =>
+        _narrationProvider.isEmpty ? '' : ' Text tracking is estimated.',
     };
     return '$status$passage Voice: $_narrationVoiceLabel. '
         '$_narrationDisclosure.$provider$model$tracking';
@@ -699,10 +700,8 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
         _narrationAlignmentGranularity = event.alignmentGranularity;
       }
       if (audio != null) {
-        if (audio.alignmentGranularity !=
-            BookNarrationAlignmentGranularity.none) {
-          _narrationAlignmentGranularity = audio.alignmentGranularity;
-        }
+        // A new audio-only clip must clear timing claims from the prior clip.
+        _narrationAlignmentGranularity = audio.alignmentGranularity;
         _narrationProvider = audio.provider;
         _narrationModel = audio.model;
         final profileLabel = audio.narratorProfileLabel.trim();
@@ -741,6 +740,9 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
           _narrationPlaying = false;
           _narrationWordStart = 0;
           _narrationWordEnd = 0;
+          if (event.highlightStart != null) {
+            _narrationResumeOffset = event.highlightStart!;
+          }
           break;
         case BookNarrationPlaybackPhase.completed:
           _narrationPreparing = false;
@@ -1040,6 +1042,8 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
       return;
     }
     _narrationRun++;
+    _narrationTrackSessionId = null;
+    _narrationTrackReady = false;
     if (mounted) {
       setState(() {
         _narrationPlaying = false;
@@ -1175,29 +1179,34 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
         _narrationWordEnd = 0;
       });
       _syncRemoteDock();
+      var seekSessionId = _narrationTrackSessionId;
       try {
-        await controller.seekToSentence(
-          chapterIndex: chapter,
-          segmentIndex: segment,
-        );
-      } on RangeError {
-        final sessionId = ++_narrationRun;
-        _narrationTrackSessionId = sessionId;
-        _narrationTrackReady = false;
-        setState(() => _narrationPreparing = true);
-        _syncRemoteDock();
-        await controller.loadTrack(
-          sessionId: sessionId,
-          chapters: _narrationDocuments,
-          initialChapterIndex: chapter,
-          initialSegmentIndex: segment,
-          initialCharacterOffset: 0,
-        );
-        if (!mounted || sessionId != _narrationTrackSessionId) return;
-        _narrationTrackReady = true;
-        if (continuePlaying) await controller.playTrack();
+        try {
+          await controller.seekToSentence(
+            chapterIndex: chapter,
+            segmentIndex: segment,
+          );
+        } on RangeError {
+          if (!mounted || seekSessionId != _narrationTrackSessionId) return;
+          final sessionId = ++_narrationRun;
+          _narrationTrackSessionId = sessionId;
+          seekSessionId = sessionId;
+          _narrationTrackReady = false;
+          setState(() => _narrationPreparing = true);
+          _syncRemoteDock();
+          await controller.loadTrack(
+            sessionId: sessionId,
+            chapters: _narrationDocuments,
+            initialChapterIndex: chapter,
+            initialSegmentIndex: segment,
+            initialCharacterOffset: 0,
+          );
+          if (!mounted || sessionId != _narrationTrackSessionId) return;
+          _narrationTrackReady = true;
+          if (continuePlaying) await controller.playTrack();
+        }
       } catch (_) {
-        if (!mounted) return;
+        if (!mounted || seekSessionId != _narrationTrackSessionId) return;
         setState(() {
           _narrationPreparing = false;
           _narrationPlaying = false;
@@ -1208,6 +1217,7 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
         _toast('Couldn’t move the narration. Try again.');
         return;
       }
+      if (!mounted || seekSessionId != _narrationTrackSessionId) return;
       if (chapter != _chapterIndex) {
         _narrationChangingChapter = true;
         unawaited(
@@ -1429,6 +1439,16 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
         SnackBar(
           content: Text(message),
           behavior: SnackBarBehavior.floating,
+          margin: EdgeInsets.fromLTRB(
+            16,
+            0,
+            16,
+            AppShell.isWithinShell(context)
+                ? AppShell.bottomNavClearance(context)
+                : _narrationVisible
+                ? BookNarrationDock.preferredHeight + 24
+                : 16,
+          ),
           duration: const Duration(seconds: 2),
         ),
       );
@@ -1978,9 +1998,6 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
                         _narrationVisible &&
                         !AppShell.isWithinShell(context))
                       _narrationPlayer(),
-                    if (_chapters.isNotEmpty) _bottomBar(),
-                    if (_chapters.isNotEmpty && AppShell.isWithinShell(context))
-                      SizedBox(height: AppShell.bottomNavClearance(context)),
                   ],
                 ),
         ),
@@ -2029,13 +2046,48 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
             ),
           ),
           _circleButton(Icons.format_size_rounded, _showReaderSettings),
-          const SizedBox(width: 5),
-          _circleButton(
-            _resource?.isSaved == true
-                ? Icons.bookmark_rounded
-                : Icons.bookmark_border_rounded,
-            _toggleSaved,
-            active: _resource?.isSaved == true,
+          if (!_narrationVisible && _chapters.isNotEmpty)
+            IconButton(
+              key: const Key('book-listen-button'),
+              tooltip: 'Listen',
+              onPressed: () => unawaited(_toggleNarration()),
+              icon: const Icon(
+                Icons.headphones_rounded,
+                color: AppColors.green2,
+              ),
+            ),
+          PopupMenuButton<String>(
+            tooltip: 'Book menu',
+            icon: Icon(Icons.more_horiz_rounded, color: _muted),
+            onSelected: (action) {
+              switch (action) {
+                case 'contents':
+                  _showContents();
+                case 'notes':
+                  _showNotes();
+                case 'save':
+                  _toggleSaved();
+              }
+            },
+            itemBuilder: (_) => [
+              const PopupMenuItem(value: 'contents', child: Text('Contents')),
+              PopupMenuItem(
+                value: 'notes',
+                child: Text(
+                  _notes.isEmpty
+                      ? 'Notes & highlights'
+                      : 'Notes & highlights (${_notes.length})',
+                ),
+              ),
+              PopupMenuItem(
+                value: 'save',
+                child: Text(
+                  _resource?.isSaved == true
+                      ? 'Remove saved book'
+                      : 'Save book',
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -2071,7 +2123,14 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
     final author = _resource?.authorOrCreator?.trim();
     return SingleChildScrollView(
       key: PageStorageKey<String>('${widget.resourceId}-$index'),
-      padding: const EdgeInsets.fromLTRB(24, 30, 24, 52),
+      padding: EdgeInsets.fromLTRB(
+        24,
+        30,
+        24,
+        AppShell.isWithinShell(context)
+            ? AppShell.bottomNavClearance(context) + 20
+            : 52,
+      ),
       child: Align(
         alignment: Alignment.topCenter,
         child: ConstrainedBox(
@@ -2136,6 +2195,32 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
                     fontSize: _fontSize,
                     lineHeight: 1.72,
                   ),
+                const SizedBox(height: 32),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: FilledButton.icon(
+                    key: ValueKey('book-chapter-next-$index'),
+                    onPressed: _next,
+                    icon: Icon(
+                      index == _chapters.length - 1
+                          ? Icons.check_rounded
+                          : Icons.arrow_forward_rounded,
+                    ),
+                    label: Text(
+                      index == _chapters.length - 1
+                          ? 'Finish book'
+                          : 'Next chapter',
+                    ),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.green,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 20,
+                        vertical: 14,
+                      ),
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
@@ -2149,137 +2234,6 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
       controller: _remoteDockController,
       backgroundColor: _chrome,
       foregroundColor: _ink,
-    );
-  }
-
-  Widget _bottomBar() {
-    final last = _chapterIndex == _chapters.length - 1;
-    final compact =
-        MediaQuery.sizeOf(context).width < 360 ||
-        MediaQuery.textScalerOf(context).scale(14) > 17;
-    return Container(
-      decoration: BoxDecoration(
-        color: _chrome,
-        border: Border(top: BorderSide(color: _muted.withValues(alpha: .13))),
-      ),
-      padding: const EdgeInsets.fromLTRB(12, 9, 12, 10),
-      child: Row(
-        children: [
-          IconButton(
-            tooltip: 'Contents',
-            onPressed: _showContents,
-            icon: Icon(Icons.format_list_bulleted_rounded, color: _muted),
-          ),
-          Stack(
-            clipBehavior: Clip.none,
-            children: [
-              IconButton(
-                tooltip: 'Notes',
-                onPressed: _showNotes,
-                icon: Icon(Icons.edit_note_rounded, color: _muted),
-              ),
-              if (_notes.isNotEmpty)
-                Positioned(
-                  right: 2,
-                  top: 0,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 5,
-                      vertical: 2,
-                    ),
-                    decoration: const BoxDecoration(
-                      color: AppColors.green,
-                      borderRadius: AppRadii.brFull,
-                    ),
-                    child: Text(
-                      '${_notes.length}',
-                      style: AppTypography.captionMedium.copyWith(
-                        color: Colors.white,
-                        fontSize: 9,
-                      ),
-                    ),
-                  ),
-                ),
-            ],
-          ),
-          if (!_narrationVisible) ...[
-            const SizedBox(width: 2),
-            if (compact)
-              IconButton(
-                key: const Key('book-listen-button'),
-                tooltip: 'Listen',
-                onPressed: () => unawaited(_toggleNarration()),
-                visualDensity: VisualDensity.compact,
-                icon: const Icon(
-                  Icons.headphones_rounded,
-                  color: AppColors.green2,
-                  size: 20,
-                ),
-              )
-            else
-              TextButton.icon(
-                key: const Key('book-listen-button'),
-                onPressed: () => unawaited(_toggleNarration()),
-                icon: const Icon(Icons.headphones_rounded, size: 19),
-                label: const Text('Listen'),
-                style: TextButton.styleFrom(
-                  foregroundColor: AppColors.green2,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 9,
-                  ),
-                  minimumSize: const Size(0, 42),
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  shape: const StadiumBorder(),
-                ),
-              ),
-          ],
-          const Spacer(),
-          if (_chapterIndex > 0)
-            IconButton(
-              tooltip: 'Previous chapter',
-              onPressed: () => _pageController.previousPage(
-                duration: const Duration(milliseconds: 260),
-                curve: Curves.easeOutCubic,
-              ),
-              icon: Icon(Icons.arrow_back_rounded, color: _muted),
-            ),
-          const SizedBox(width: 4),
-          if (compact)
-            IconButton.filled(
-              tooltip: last ? 'Finish book' : 'Next chapter',
-              onPressed: _next,
-              style: IconButton.styleFrom(
-                backgroundColor: AppColors.green,
-                foregroundColor: Colors.white,
-              ),
-              icon: Icon(
-                last ? Icons.check_rounded : Icons.arrow_forward_rounded,
-                size: 20,
-              ),
-            )
-          else
-            FilledButton.icon(
-              onPressed: _next,
-              icon: Icon(
-                last ? Icons.check_rounded : Icons.arrow_forward_rounded,
-                size: 18,
-              ),
-              label: Text(last ? 'Finish' : 'Next'),
-              style: FilledButton.styleFrom(
-                backgroundColor: AppColors.green,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 18,
-                  vertical: 13,
-                ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(99),
-                ),
-              ),
-            ),
-        ],
-      ),
     );
   }
 

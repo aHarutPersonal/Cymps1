@@ -13,6 +13,7 @@ import 'book_reader_screen.dart';
 import 'material_reader_screen.dart';
 import 'material_video_screen.dart';
 import 'material_web_screen.dart';
+import 'lesson_practice_screen.dart';
 
 List<PlanMaterialDetail> matchLessonMaterials(
   List<String> resourceTitles,
@@ -101,6 +102,7 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
   int _theme = 0;
   double _fontSize = 18;
   bool _completing = false;
+  bool _practicePassed = false;
   final Map<String, String> _resolvedBookGuideIds = {};
   final Set<String> _preparingBookGuideKeys = {};
 
@@ -139,6 +141,10 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
       Navigator.of(context).pop(false);
       return;
     }
+    if (!_practicePassed) {
+      await _openPractice(finishOnPass: true);
+      return;
+    }
     setState(() => _completing = true);
     try {
       final result = await ref
@@ -160,6 +166,24 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
         ),
       );
     }
+  }
+
+  Future<void> _openPractice({bool finishOnPass = false}) async {
+    final passed = await Navigator.of(context, rootNavigator: true).push<bool>(
+      CmpysPageRoute<bool>(
+        builder: (_) => LessonPracticeScreen(
+          itemId: widget.itemId,
+          stepId: widget.step.id,
+          artifactJobId: widget.artifactJobId,
+          lessonTitle: widget.step.title,
+          lessonContent: widget.step.lessonContent ?? '',
+          dark: _theme == 2,
+        ),
+      ),
+    );
+    if (!mounted) return;
+    setState(() => _practicePassed = passed == true);
+    if (_practicePassed && finishOnPass) await _finish();
   }
 
   Future<void> _next() async {
@@ -248,6 +272,11 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
             ),
           ),
           IconButton(
+            tooltip: 'Open practice',
+            onPressed: _completing ? null : () => _openPractice(),
+            icon: Icon(Icons.edit_note_rounded, color: _muted),
+          ),
+          IconButton(
             tooltip: 'Contents',
             onPressed: _showContents,
             icon: Icon(Icons.format_list_bulleted_rounded, color: _muted),
@@ -301,10 +330,7 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
                         PhosphorIconsRegular.bookOpenText,
                         '${widget.step.readingMinutes ?? _estimatedReadingMinutes} min read',
                       ),
-                      _timeChip(
-                        PhosphorIconsRegular.timer,
-                        '${widget.step.practiceMinutes ?? _estimatedPracticeMinutes} min practice',
-                      ),
+                      _timeChip(PhosphorIconsRegular.timer, 'Practice in app'),
                     ],
                   ),
                 ],
@@ -329,12 +355,6 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
         .length;
     return (words / 200).ceil().clamp(1, 60);
   }
-
-  int get _estimatedPracticeMinutes =>
-      ((widget.step.estimateMinutes ?? 45) - _estimatedReadingMinutes).clamp(
-        20,
-        55,
-      );
 
   Widget _timeChip(IconData icon, String label) {
     return Container(
@@ -456,10 +476,10 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
                     fontSize: 12,
                   ),
                 ),
-                if (material.exactLinkUnavailable && action == null) ...[
+                if (action == null) ...[
                   const SizedBox(height: 3),
                   Text(
-                    'Exact source link unavailable',
+                    material.exactLinkUnavailable ? 'Exact source link unavailable' : 'Reference is still being prepared',
                     style: AppTypography.caption.copyWith(
                       color: _muted,
                       fontSize: 11.5,
@@ -494,6 +514,7 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
     if (material.type == 'book' && _bookResourceId(material) != null) {
       return 'Read book';
     }
+    if (material.type == 'book' && material.directUrl != null) return 'Open source';
     if (material.type == 'book' && (material.canonicalKey ?? '').isNotEmpty) {
       return _isPreparingBookGuide(material) ? 'Preparing…' : 'Open guide';
     }
@@ -510,6 +531,7 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
     var bookResourceId = _bookResourceId(material);
     if (material.type == 'book' &&
         bookResourceId == null &&
+        material.directUrl == null &&
         canonicalKey.isNotEmpty) {
       if (_preparingBookGuideKeys.contains(canonicalKey)) return;
       setState(() => _preparingBookGuideKeys.add(canonicalKey));
@@ -639,7 +661,9 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
               last
                   ? widget.completed
                         ? 'Close lesson'
-                        : 'Complete lesson'
+                        : _practicePassed
+                        ? 'Complete lesson'
+                        : 'Practice & finish'
                   : 'Next',
             ),
             style: FilledButton.styleFrom(

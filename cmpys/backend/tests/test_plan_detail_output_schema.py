@@ -562,6 +562,9 @@ async def test_parallel_generation_uses_a_model_selected_five_lesson_outline() -
         model = "fake-model"
 
         async def generate_json(self, *, user_prompt, output_model, **kwargs):
+            from app.services.planning.lesson_review import LessonReview
+            if output_model is LessonReview:
+                return SimpleNamespace(data={"acceptable": True, "issues": [], "practice_minutes": 60, "contains_calculations": False, "calculations": []}, error=None)
             if output_model is PlanItemDetailsOutlineOutput:
                 return SimpleNamespace(data=copy.deepcopy(outline), error=None)
             assert any(
@@ -590,7 +593,7 @@ async def test_parallel_generation_uses_a_model_selected_five_lesson_outline() -
     assert error is None
     assert result is not None
     assert len(result["steps"]) == 5
-    assert len([stage for stage, *_ in calls if "parallel_lesson" in stage]) == 5
+    assert len([stage for stage, *_ in calls if "parallel_lesson" in stage and "_review_" not in stage]) == 5
 
 
 @pytest.mark.asyncio
@@ -608,6 +611,9 @@ async def test_all_missing_lessons_start_concurrently_and_checkpoint_independent
         model = "fake-model"
 
         async def generate_json(self, *, user_prompt, output_model, **kwargs):
+            from app.services.planning.lesson_review import LessonReview
+            if output_model is LessonReview:
+                return SimpleNamespace(data={"acceptable": True, "issues": [], "practice_minutes": 60, "contains_calculations": False, "calculations": []}, error=None)
             if output_model is PlanItemDetailsOutlineOutput:
                 return SimpleNamespace(data=copy.deepcopy(outline), error=None)
 
@@ -665,7 +671,7 @@ async def test_all_missing_lessons_start_concurrently_and_checkpoint_independent
     )
     assert all("## References" in step["lesson_content"] for step in result["steps"])
     assert calls[0][0] == "parallel_outline_attempt_1"
-    assert {stage for stage, *_ in calls[1:]} == {
+    assert {stage for stage, *_ in calls[1:] if "_review_" not in stage} == {
         "parallel_lesson_step_1_attempt_1",
         "parallel_lesson_step_2_attempt_1",
         "parallel_lesson_step_3_attempt_1",
@@ -675,9 +681,10 @@ async def test_all_missing_lessons_start_concurrently_and_checkpoint_independent
     assert client_options[0]["tier"] == "balanced"
     assert client_options[0]["thinking_level"] == "medium"
     assert all(options["tier"] == "balanced" for options in client_options[1:])
-    assert all(options["thinking_level"] == "minimal" for options in client_options[1:])
-    assert all(options["max_tokens"] == 16000 for options in client_options[1:])
-    assert all(options["timeout"] == 120 for options in client_options[1:])
+    writing_options = [o for o in client_options[1:] if o["max_tokens"] != 4500]
+    assert all(options["thinking_level"] == "minimal" for options in writing_options)
+    assert all(options["max_tokens"] == 16000 for options in writing_options)
+    assert all(options["timeout"] == 120 for options in writing_options)
     assert all(options["allow_fallback"] is False for options in client_options[1:])
 
 
@@ -862,6 +869,9 @@ async def test_parallel_generation_retries_only_the_failed_lesson() -> None:
         model = "fake-model"
 
         async def generate_json(self, *, user_prompt, output_model, **kwargs):
+            from app.services.planning.lesson_review import LessonReview
+            if output_model is LessonReview:
+                return SimpleNamespace(data={"acceptable": True, "issues": [], "practice_minutes": 60, "contains_calculations": False, "calculations": []}, error=None)
             if output_model is PlanItemDetailsOutlineOutput:
                 return SimpleNamespace(data=copy.deepcopy(outline), error=None)
 
@@ -927,6 +937,9 @@ async def test_thin_section_is_expanded_without_a_full_lesson_rewrite() -> None:
         model = "fake-model"
 
         async def generate_json(self, *, user_prompt, output_model, **kwargs):
+            from app.services.planning.lesson_review import LessonReview
+            if output_model is LessonReview:
+                return SimpleNamespace(data={"acceptable": True, "issues": [], "practice_minutes": 60, "contains_calculations": False, "calculations": []}, error=None)
             nonlocal repair_attempts
             if output_model is PlanItemDetailsOutlineOutput:
                 return SimpleNamespace(data=copy.deepcopy(outline), error=None)
@@ -1007,6 +1020,9 @@ async def test_substep_only_failure_preserves_long_lesson_and_repairs_small_fiel
         model = "fake-model"
 
         async def generate_json(self, *, user_prompt, output_model, **kwargs):
+            from app.services.planning.lesson_review import LessonReview
+            if output_model is LessonReview:
+                return SimpleNamespace(data={"acceptable": True, "issues": [], "practice_minutes": 60, "contains_calculations": False, "calculations": []}, error=None)
             nonlocal repair_attempts
             if output_model is PlanItemDetailsOutlineOutput:
                 return SimpleNamespace(data=copy.deepcopy(outline), error=None)
@@ -1060,6 +1076,9 @@ async def test_valid_checkpoint_skips_outline_and_completed_first_lesson() -> No
         model = "fake-model"
 
         async def generate_json(self, *, user_prompt, output_model, **kwargs):
+            from app.services.planning.lesson_review import LessonReview
+            if output_model is LessonReview:
+                return SimpleNamespace(data={"acceptable": True, "issues": [], "practice_minutes": 60, "contains_calculations": False, "calculations": []}, error=None)
             assert output_model is PlanDetailLessonSectionsOutput
             step_id = next(
                 candidate["id"]
@@ -1112,6 +1131,9 @@ async def test_invalid_small_outline_retries_before_long_lessons() -> None:
         model = "fake-model"
 
         async def generate_json(self, *, user_prompt, output_model, **kwargs):
+            from app.services.planning.lesson_review import LessonReview
+            if output_model is LessonReview:
+                return SimpleNamespace(data={"acceptable": True, "issues": [], "practice_minutes": 60, "contains_calculations": False, "calculations": []}, error=None)
             nonlocal outline_attempts
             if output_model is PlanItemDetailsOutlineOutput:
                 outline_attempts += 1
@@ -1156,3 +1178,16 @@ async def test_invalid_small_outline_retries_before_long_lessons() -> None:
     assert "OUTLINE CONTRACT RETRY" not in outline_prompts[0]
     assert "OUTLINE CONTRACT RETRY" in outline_prompts[1]
     assert "no forced type quota" in outline_prompts[1]
+
+
+def test_outline_shortens_only_overlong_display_heading():
+    from app.tasks.plans import _validate_plan_detail_outline_response
+    from app.services.llm.client import LLMResponse
+    payload = _outline_payload()
+    original = payload["steps"][0]["description"]
+    payload["steps"][0]["title"] = "Separate accrual profit from cash movement using a complete fictional shop ledger"
+    response = LLMResponse(data=payload)
+    _validate_plan_detail_outline_response(response)
+    assert response.error is None
+    assert len(response.data["steps"][0]["title"]) <= 60
+    assert response.data["steps"][0]["description"] == original

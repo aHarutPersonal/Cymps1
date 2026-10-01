@@ -43,6 +43,8 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
   bool _scrollShouldAnimate = false;
 
   final List<_Msg> _msgs = [];
+  bool _loadingHistory = true;
+  bool _historyFailed = false;
   bool _waiting = false; // sent, no chunks yet
   bool _streaming = false;
 
@@ -60,12 +62,53 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
     'What should I read this week?',
   ];
 
-  bool get _busy => _waiting || _streaming;
+  bool get _busy => _loadingHistory || _waiting || _streaming;
 
   @override
   void initState() {
     super.initState();
     _composerFocus.addListener(_handleComposerFocusChanged);
+    Future.microtask(_restoreHistory);
+  }
+
+  Future<void> _restoreHistory() async {
+    if (!mounted) return;
+    setState(() {
+      _loadingHistory = true;
+      _error = null;
+    });
+    try {
+      final id = await _resolveSessionId();
+      if (!mounted) return;
+      if (id != null) {
+        final messages = await ref
+            .read(sessionRepositoryProvider)
+            .learningMessages(id);
+        if (!mounted) return;
+        _cachedSessionId = id;
+        _msgs.clear();
+        for (final m in messages) {
+          _msgs.add(
+            _Msg(me: m['role'] == 'user', text: m['content'] as String),
+          );
+        }
+        if (messages.isNotEmpty && messages.last['role'] == 'user') {
+          _lastSent = messages.last['content'] as String;
+          _error =
+              'Your last message did not receive a complete reply. You can retry it.';
+        }
+      }
+      _historyFailed = false;
+    } catch (_) {
+      if (!mounted) return;
+      _historyFailed = true;
+      _error = 'Couldn’t restore your conversation. Retry to load it.';
+    } finally {
+      if (mounted) {
+        setState(() => _loadingHistory = false);
+        if (_msgs.isNotEmpty) _scrollToBottom(streaming: true);
+      }
+    }
   }
 
   void _handleComposerFocusChanged() {
@@ -151,6 +194,10 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
   }
 
   Future<void> _retry() async {
+    if (_historyFailed) {
+      await _restoreHistory();
+      return;
+    }
     final last = _lastSent;
     if (last == null || _busy) return;
     setState(() {
@@ -379,7 +426,7 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: AppTypography.caption.copyWith(
-                          color: AppColors.green,
+                          color: AppColors.green2,
                           fontSize: 12,
                         ),
                       ),
@@ -459,6 +506,8 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
             ),
           ),
           const SizedBox(height: 18),
+          if (_msgs.isEmpty && !_busy && !_winMode && !_composerFocus.hasFocus)
+            _composerContext(idol, true),
           for (final m in _msgs)
             FeedbackReveal(key: ObjectKey(m), child: _bubble(idol, m)),
           if (_streaming)
@@ -466,7 +515,7 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
               key: const ValueKey('streaming-reply'),
               child: _streamingBubble(idol),
             ),
-          if (_waiting)
+          if (_waiting || _loadingHistory)
             FeedbackReveal(
               key: const ValueKey('waiting-reply'),
               child: _waitingBubble(idol),
@@ -519,7 +568,7 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
               onTap: () => context.go(AppRoutes.cmpysOnboarding),
               child: const Text('Finish onboarding'),
             )
-          else if (_lastSent != null)
+          else if (_lastSent != null || _historyFailed)
             CmpysButton(
               variant: CmpysBtnVariant.outline,
               size: CmpysBtnSize.sm,
@@ -731,8 +780,6 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
         ? AppDurations.fast
         : Duration.zero;
     final keyboardActive = _composerFocus.hasFocus;
-    final showSuggestions =
-        _msgs.isEmpty && !_busy && !_winMode && !keyboardActive;
 
     return AnimatedContainer(
       duration: motionDuration,
@@ -750,7 +797,7 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _composerContext(idol, showSuggestions),
+          _composerContext(idol, false),
           TextFieldTapRegion(
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.end,
@@ -827,7 +874,11 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
                             controller: _input,
                             focusNode: _composerFocus,
                             minLines: 1,
-                            maxLines: 5,
+                            maxLines:
+                                MediaQuery.textScalerOf(context).scale(15.5) >
+                                    24
+                                ? 2
+                                : 5,
                             keyboardType: TextInputType.multiline,
                             textInputAction: TextInputAction.newline,
                             textAlignVertical: TextAlignVertical.center,
@@ -835,10 +886,12 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
                             style: AppTypography.body.copyWith(fontSize: 15.5),
                             cursorColor: AppColors.green,
                             decoration: InputDecoration(
-                              hintText: _winMode
-                                  ? 'Tell ${idol.short} what you did…'
-                                  : 'Message ${idol.short}…',
+                              hintText: _winMode ? 'Share a win…' : 'Message…',
+                              hintMaxLines: 1,
                               border: InputBorder.none,
+                              enabledBorder: InputBorder.none,
+                              focusedBorder: InputBorder.none,
+                              disabledBorder: InputBorder.none,
                               isDense: true,
                               filled: false,
                               contentPadding: const EdgeInsets.symmetric(
@@ -900,7 +953,7 @@ class _CmpysChatScreenState extends ConsumerState<CmpysChatScreen> {
         key: const ValueKey('chat-suggestions'),
         padding: const EdgeInsets.only(bottom: 10),
         child: SizedBox(
-          height: 44,
+          height: MediaQuery.textScalerOf(context).scale(13) * 1.4 + 18,
           child: ListView(
             scrollDirection: Axis.horizontal,
             children: [

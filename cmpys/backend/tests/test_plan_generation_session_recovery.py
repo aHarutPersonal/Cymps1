@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -17,6 +17,52 @@ class _Result:
 
     def scalar_one_or_none(self):
         return self.value
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["failed", "pending", "running"])
+async def test_retry_preserves_saved_work_and_job_identity(monkeypatch, state):
+    session = _plan_ready_session()
+    saved = {"identity": "inputs", "stages": {"backbone": {"saved": True}}}
+    job = SimpleNamespace(
+        id="saved-job", status=state, plan_id=None, step="error",
+        generation_checkpoint_json=saved, created_at=datetime.now(timezone.utc) - timedelta(minutes=20),
+        updated_at=datetime.now(timezone.utc) - timedelta(minutes=20),
+    )
+    db = AsyncMock()
+    db.add = MagicMock()
+    db.execute.side_effect = [_Result(session), _Result(job)]
+    from app.tasks import plans as plan_tasks
+    delay = MagicMock()
+    monkeypatch.setattr(plan_tasks.run_plan_generation, "delay", delay)
+    response = await generate_plan_endpoint(
+        PlanGenerateRequest(idolId="idol-1", targetAge=31, sessionId="session-1"),
+        db=db, current_user=SimpleNamespace(id="user-1"),
+    )
+    assert response.jobId == "saved-job"
+    assert response.status == "pending"
+    assert job.generation_checkpoint_json is saved
+    db.add.assert_not_called()
+    delay.assert_called_once_with("saved-job")
+
+
+@pytest.mark.asyncio
+async def test_queue_failure_returns_retryable_saved_job(monkeypatch):
+    from app.api.v1.plans import publish_plan_generation_job
+    from app.tasks import plans as plan_tasks
+    job = SimpleNamespace(id="job-1", status="pending")
+    db = AsyncMock()
+    async def refresh(row):
+        row.status = "failed"
+    db.refresh.side_effect = refresh
+    monkeypatch.setattr(plan_tasks.run_plan_generation, "delay", MagicMock(side_effect=ConnectionError("broker down")))
+    assert await publish_plan_generation_job(db, job) == "failed"
+    statement = db.execute.await_args.args[0]
+    assert "plan_generation_jobs.status =" in str(statement)
+    values = statement.compile().params
+    assert "failed" in values.values()
+    assert any("answers are saved" in str(value) for value in values.values())
+    db.commit.assert_awaited_once()
 
 
 def _plan_ready_session(

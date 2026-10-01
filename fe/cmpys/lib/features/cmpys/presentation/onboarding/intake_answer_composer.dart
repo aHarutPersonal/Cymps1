@@ -156,8 +156,13 @@ class _IntakeAnswerComposerState extends State<IntakeAnswerComposer> {
                     key: const ValueKey('intake-text-input'),
                     controller: _text,
                     minLines: 1,
-                    maxLines: 5,
-                    autofocus: true,
+                    maxLines: MediaQuery.textScalerOf(context).scale(15.5) > 22
+                        ? 2
+                        : 5,
+                    // Leave the question visible until the user chooses to
+                    // type; opening the keyboard on every turn hides it on
+                    // smaller phones.
+                    autofocus: _custom,
                     onChanged: _onTextChanged,
                     textAlignVertical: TextAlignVertical.center,
                     onTapOutside: (_) =>
@@ -171,6 +176,11 @@ class _IntakeAnswerComposerState extends State<IntakeAnswerComposer> {
                           : null,
                       errorMaxLines: 2,
                       border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                      disabledBorder: InputBorder.none,
+                      errorBorder: InputBorder.none,
+                      focusedErrorBorder: InputBorder.none,
                       isDense: true,
                       filled: false,
                       contentPadding: const EdgeInsets.symmetric(vertical: 11),

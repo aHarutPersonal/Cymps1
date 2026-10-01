@@ -196,7 +196,7 @@ class BinaryTask(BaseModel):
     """A single binary (done/not-done) task within a week."""
 
     title: str = Field(max_length=300)
-    description: str = Field(min_length=10, max_length=1000)
+    description: str = Field(min_length=10, max_length=2000)
     type: str = Field(
         default="project", max_length=50
     )  # project|course|habit|practice|reading|reflection
@@ -242,11 +242,67 @@ class PlanGenerationResponse(BaseModel):
     weeks: list[PlanWeek] = Field(default_factory=list)
 
 
+class ExecutionBinaryTask(BinaryTask):
+    """Generation-only requirements; historical plan readers remain permissive."""
+
+    description: str = Field(
+        min_length=10, max_length=2000,
+        description=(
+            "80-140 substantive words for a mission or 45-80 for a daily rhythm. "
+            "Preserve the approved task intent and recurrence. Lessons offer reading "
+            "and separately generated practice; do not invent a diagnostic dashboard, "
+            "skill-score profile or targeted rerun feature. Work must remain executable "
+            "from supplied explanations/cases when a named book is unavailable; never "
+            "claim a paid resource is free or supplied in-app."
+        ),
+    )
+    daily_instructions: str | None = Field(
+        default=None, max_length=2000,
+        description=(
+            "For a daily rhythm, give 70-120 actionable words including the actual "
+            "small fictional dataset/inputs needed to work from Today alone. Today "
+            "has only one saved free-text reflection and a completion button: no "
+            "structured drill fields, automatically presented cases, scoring, feedback, "
+            "timers or spreadsheet editor. Record answers and manual checks in that "
+            "reflection or the learner's notebook. Preserve the approved session/drill "
+            "count; every prose cadence must agree and fill the task's weekly hours. "
+            "An external clock is optional. Null for a mission."
+        ),
+    )
+    success_metric: str = Field(
+        min_length=10, max_length=300,
+        description=(
+            "Preserve the approved measurable outcome, quantity and recurrence. "
+            "A metric requiring five drills cannot become three sessions elsewhere "
+            "in the task. Do not promise unsupported automatic assessment."
+        ),
+    )
+
+
+class ExecutionPlanWeek(PlanWeek):
+    primary_mission: str = Field(
+        max_length=500,
+        pattern=r"^\s*\S+(?:\s+\S+){34,}\s*$",
+        description="35-70 concrete words describing the skill, artifact and learning progression.",
+    )
+    binary_tasks: list[ExecutionBinaryTask] = Field(min_length=2, max_length=5)
+
+
+class ExecutionPlanResponse(PlanGenerationResponse):
+    weeks: list[ExecutionPlanWeek] = Field(min_length=1, max_length=1)
+
+
 class PlanBackboneTask(BaseModel):
     """Compact task identity used before its execution week is prepared."""
 
     title: str = Field(max_length=200)
-    type: Literal["project", "course", "reading", "habit", "practice"]
+    type: Literal["project", "course", "reading", "habit", "practice"] = Field(
+        description=(
+            "project/course/reading are mission blocks. habit/practice are recurring "
+            "daily rhythms only, never a one-off diagnostic, assessment or case. "
+            "A one-off diagnostic with a submitted artifact is a project mission."
+        )
+    )
     estimated_hours: float = Field(ge=0.1, le=168.0)
     success_metric: str = Field(max_length=300)
 
@@ -318,6 +374,12 @@ class PlanDetailStepOutlineOutput(BaseModel):
     )
 
 
+class PlanOutlineMaterialOutput(PlanDetailMaterialOutput):
+    """Only externally resolvable resources belong in an outline's material list."""
+
+    type: Literal["book", "video", "article", "course", "tool"]
+
+
 class PlanItemDetailsOutlineOutput(BaseModel):
     """Shared lesson sequence and materials for parallel lesson generation."""
 
@@ -325,7 +387,7 @@ class PlanItemDetailsOutlineOutput(BaseModel):
         min_length=MIN_PLAN_DETAIL_LESSONS,
         max_length=MAX_PLAN_DETAIL_LESSONS,
     )
-    materials: list[PlanDetailMaterialOutput] = Field(
+    materials: list[PlanOutlineMaterialOutput] = Field(
         min_length=MIN_PLAN_DETAIL_MATERIALS,
         max_length=MAX_PLAN_DETAIL_MATERIALS,
     )

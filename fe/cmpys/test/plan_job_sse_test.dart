@@ -275,6 +275,11 @@ void main() {
 
 class _PlanJobRepository implements AgenticSessionRepository {
   @override
+  Future<List<Map<String, dynamic>>> learningMessages(String sessionId) async => [];
+  @override
+  Future<List<Map<String, dynamic>>> discoverMentors(String query) async => [];
+
+  @override
   Stream<Map<String, dynamic>> generateResults(String sessionId) async* {
     yield {'type': 'status', 'message': 'Reading your interview…'};
     yield {'type': 'section', 'section': 'blueprint'};

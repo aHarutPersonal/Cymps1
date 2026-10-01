@@ -21,3 +21,10 @@ Select two to eight techniques appropriate for the skill type and learner level.
 - preserve limitations.
 
 Never select a technique absent from the supplied registry. Select spaced_practice only when durable_spacing_scheduler is true; if selected, provide positive ascending follow-up day offsets. Assessment must test the stated performance, not recall of lesson prose.
+
+FIELD LENGTH LIMITS
+assessment_strategy must be at most 1500 characters. Write it as a compact plan, not an essay: name what evidence demonstrates the outcome, how it is judged, and the pass bar. A longer value is rejected outright and the whole module is discarded, so trim before returning rather than risking the limit.
+
+
+IN-APP DELIVERY CONTRACT
+Use only the feedback_capabilities declared in MODULE TARGET. Feedback is provided by the application's deterministic checker for arithmetic/choices and a rubric-based text reviewer, followed by an editable resubmission. Do not require a peer, teacher, download, external worksheet, or unavailable feature. Include a structured assessment_rubric (criterion, evidence_required, passing_standard) with explicit observable dimensions. The writer and the in-app workbook will use these exact criterion names. Keep selected techniques and required steps achievable in the target duration; do not select techniques merely to maximize the count.

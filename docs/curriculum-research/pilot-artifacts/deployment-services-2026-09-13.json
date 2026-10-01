@@ -1,0 +1,7 @@
+{
+  "release": "reliability-20260913",
+  "services_running": 9,
+  "workers_responding": 7,
+  "ready": true,
+  "existing_settings_preserved": true
+}

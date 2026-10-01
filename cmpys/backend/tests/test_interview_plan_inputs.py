@@ -154,6 +154,8 @@ def test_full_plan_ready_profile_distinguishes_explicit_none_from_missing():
     values = {
         "achievement_inventory": "None yet",
         "current_capability": "I understand the basics but need guided practice.",
+        "foundation_check": "I do not know",
+        "application_check": "I do not know",
         "weekly_hours": "6 hours per week",
         "target_outcome": "Publish one working portfolio project.",
         "constraints_resources": "A laptop; limited weekday evenings.",

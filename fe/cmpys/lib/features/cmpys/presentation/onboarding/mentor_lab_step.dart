@@ -1,12 +1,14 @@
 import 'dart:async';
-import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:phosphor_flutter/phosphor_flutter.dart';
 
 import '../../../../app/design_tokens.dart';
+import '../../../../core/network/api_error.dart';
 import '../../../../core/ui/cmpys/cmpys_primitives.dart';
+import '../../../../core/ui/motion/motion_config.dart';
 import '../../../plan/data/plan_repository.dart';
 import '../../../session/data/session_repository.dart';
 import '../../data/cmpys_seed.dart';
@@ -35,8 +37,9 @@ class CmpysMentorLabStep extends ConsumerStatefulWidget {
   ConsumerState<CmpysMentorLabStep> createState() => _CmpysMentorLabStepState();
 }
 
-class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep> {
-  final PageController _cards = PageController(viewportFraction: 0.88);
+class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep>
+    with WidgetsBindingObserver {
+  final PageController _cards = PageController();
   Timer? _cardTimer;
   Timer? _jobTimer;
 
@@ -49,25 +52,12 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep> {
   bool _starting = false;
   bool _jobCompleted = false;
   bool _planReady = false;
+  bool _jobFailed = false;
+  bool _resultsComplete = false;
+  int _pollFailures = 0;
+  int _attempt = 0;
 
   static const _cardsContent = <_MentorLabCard>[
-    _MentorLabCard.benefit(
-      icon: PhosphorIconsRegular.chatCenteredText,
-      eyebrow: 'YOUR WORDS BECOME INPUTS',
-      title: 'The interview is not a personality quiz.',
-      body:
-          'Your answers become constraints for the plan: what you want, where you are starting, how much time you can commit, and which obstacles keep repeating. CMPYS uses that context to choose priorities instead of handing everyone the same checklist.',
-      proof: 'Personalized from this conversation—not a generic template.',
-    ),
-    _MentorLabCard.benefit(
-      icon: PhosphorIconsRegular.path,
-      eyebrow: 'MENTOR AS A DECISION LENS',
-      title: 'Learn the pattern, not the costume.',
-      body:
-          'The goal is not to imitate your mentor’s life literally. CMPYS studies relevant decisions, principles, and milestones, then translates those patterns into actions that fit your age, resources, interests, and current goal.',
-      proof:
-          'Evidence informs the direction; your reality determines the action.',
-    ),
     _MentorLabCard.voice(
       eyebrow: 'WHY ROLE MODELS WORK',
       speaker: 'Seneca',
@@ -78,14 +68,6 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep> {
           'A role model gives you a standard to measure decisions against—not a life to copy blindly.',
       portraitAsset: 'assets/images/voices/seneca.jpg',
       source: 'Moral Letters to Lucilius, Letter 11',
-    ),
-    _MentorLabCard.benefit(
-      icon: PhosphorIconsRegular.numberCircleOne,
-      eyebrow: 'ONE WEEK AT A TIME',
-      title: 'Focus is part of the product—not a suggestion.',
-      body:
-          'You receive a complete twelve-week path, but only the current week asks for attention. Finish its mission and the next week unlocks. That keeps the roadmap visible without turning future work into today’s distraction.',
-      proof: 'Sequential unlocking protects attention and momentum.',
     ),
     _MentorLabCard.voice(
       eyebrow: 'LEARNING IS CUMULATIVE',
@@ -110,37 +92,24 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep> {
       source: 'Columbia Business School, “Fast Forward,” 2015',
       portraitContain: true,
     ),
-    _MentorLabCard.benefit(
-      icon: PhosphorIconsRegular.bookOpenText,
-      eyebrow: 'TEACH, THEN PRACTICE',
-      title: 'A lesson should change what you can do.',
-      body:
-          'Mission lessons combine a substantial explanation, a worked example, likely failure modes, a knowledge check, and guided practice. The target is an honest 40–60 minute learning session—not two minutes of motivational text.',
-      proof: 'Deep lessons are paired with a concrete output or decision.',
-    ),
-    _MentorLabCard.benefit(
-      icon: PhosphorIconsRegular.repeat,
-      eyebrow: 'DAILY RHYTHM, ZERO GUILT',
-      title: 'Small repetition supports the mission.',
-      body:
-          'Daily habits and practices reset every day. They help you rehearse the week’s skill, but they never permanently block the next week. Mission completion advances the plan; daily rhythm builds consistency around it.',
-      proof: 'Daily work supports progression—it does not hold it hostage.',
-    ),
-    _MentorLabCard.benefit(
-      icon: PhosphorIconsRegular.checkCircle,
-      eyebrow: 'PROGRESS YOU CAN PROVE',
-      title: 'Every mission ends with observable evidence.',
-      body:
-          'CMPYS favors binary success criteria: something shipped, written, practiced, explained, or measured. Completed missions can become achievements, giving future comparisons and plans a stronger picture of what you have actually built.',
-      proof: 'The plan tracks outputs, not vague feelings of productivity.',
-    ),
   ];
 
   @override
   void initState() {
     super.initState();
-    _cardTimer = Timer.periodic(const Duration(seconds: 9), (_) {
-      if (!mounted || !_cards.hasClients) return;
+    WidgetsBinding.instance.addObserver(this);
+    _resultsComplete =
+        !widget.draft.resultsFailed &&
+        widget.draft.comparisonMd?.trim().isNotEmpty == true &&
+        widget.draft.blueprintMd?.trim().isNotEmpty == true;
+    _cardTimer = Timer.periodic(const Duration(seconds: 18), (_) {
+      if (!mounted ||
+          !_cards.hasClients ||
+          _error != null ||
+          _planReady ||
+          !MotionConfig.enabled(context)) {
+        return;
+      }
       final next = (_cardIndex + 1) % _cardsContent.length;
       _cards.animateToPage(
         next,
@@ -153,10 +122,21 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _cardTimer?.cancel();
     _jobTimer?.cancel();
     _cards.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      final jobId = _pollingJobId;
+      if (jobId != null && !_planReady && !_jobFailed) {
+        _startJobPolling(jobId, reconnect: true);
+      }
+    }
   }
 
   void _setStage(String status, int progress) {
@@ -179,18 +159,72 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep> {
     }
 
     _jobTimer?.cancel();
+    _jobTimer = null;
     _pollingJobId = null;
+    final attempt = ++_attempt;
+    final savedJob = widget.draft.planJobId;
+    final recoverPlan =
+        _resultsComplete &&
+        (_jobFailed || savedJob == null || savedJob.isEmpty);
+    var requestStage = 'results';
     setState(() {
       _starting = true;
       _jobCompleted = false;
       _planReady = false;
       _error = null;
-      _progress = 6;
-      _status = 'Organizing what you shared…';
+      _pollFailures = 0;
+      _jobFailed = false;
+      // A failed attempt may have reached a later stage than its valid saved
+      // work. Start at the confirmed results boundary; the next server status
+      // restores any further progress that actually survived the retry.
+      _progress = _resultsComplete ? 62 : 6;
+      _status = recoverPlan
+          ? 'Reconnecting to your saved session…'
+          : 'Organizing what you shared…';
       widget.draft.resultsFailed = false;
     });
 
     try {
+      if (recoverPlan) {
+        requestStage = 'saved_session';
+        var idolId = widget.draft.backendIdolId;
+        var targetAge = widget.draft.age;
+        if (idolId == null || idolId.isEmpty) {
+          // Older drafts may not retain the server mentor identity. New
+          // restores and intake completion already have it, so restarting a
+          // failed plan does not depend on another session read.
+          final session = await ref
+              .read(sessionRepositoryProvider)
+              .getSession(sessionId);
+          if (!mounted || attempt != _attempt) return;
+          idolId = session.selectedIdol?.id;
+          targetAge = session.userAge;
+          widget.draft.backendIdolId = idolId;
+        }
+        if (idolId == null || idolId.isEmpty) {
+          throw StateError('Missing mentor');
+        }
+        requestStage = 'plan_restart';
+        _setStage('Restarting the unfinished plan steps…', 62);
+        final jobId = await ref
+            .read(planRepositoryProvider)
+            .generatePlan(
+              idolId: idolId,
+              targetAge: targetAge,
+              sessionId: sessionId,
+            );
+        if (!mounted || attempt != _attempt) return;
+        if (jobId.isEmpty) throw StateError('Missing plan job');
+        widget.draft.planJobId = jobId;
+        _setStage('Continuing your saved plan…', 62);
+        _startJobPolling(jobId);
+        return;
+      }
+      if (_resultsComplete && savedJob?.isNotEmpty == true) {
+        _setStage('Checking your saved plan…', 62);
+        _startJobPolling(savedJob!);
+        return;
+      }
       await streamGenerateResults(
         repo: ref.read(sessionRepositoryProvider),
         sessionId: sessionId,
@@ -220,6 +254,8 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep> {
           _startJobPolling(jobId);
         },
       );
+      if (!mounted || attempt != _attempt) return;
+      _resultsComplete = true;
       widget.draft.resultsFailed = false;
       _markReadyIfComplete();
       final jobId = widget.draft.planJobId;
@@ -231,27 +267,47 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep> {
         _startJobPolling(jobId);
       }
     } catch (e) {
+      if (!mounted || attempt != _attempt || _planReady) return;
+      // Log only diagnostic metadata, never the session, answers, response
+      // body, or credentials. A server error during the saved-session lookup
+      // must be distinguishable from a plan dispatch failure.
+      debugPrint(
+        'Mentor lab request failed: stage=$requestStage type=${e.runtimeType}'
+        '${e is ApiError ? ' status=${e.statusCode} code=${e.code}' : ''}',
+      );
       widget.draft.resultsFailed = true;
-      _jobTimer?.cancel();
-      if (!mounted) return;
+      // A running plan remains recoverable even if the results connection
+      // closes. Do not discard its polling handle.
+      if (recoverPlan) _jobFailed = true;
       setState(() {
-        _error =
-            'The mentor lab was interrupted. Your interview is saved—retry to continue from the last completed stage.';
+        _error = switch (requestStage) {
+          'saved_session' =>
+            'Your saved session couldn’t be loaded. Your answers are safe. Try again.',
+          'plan_restart' =>
+            'Your plan couldn’t restart. Your progress is saved. Try again.',
+          _ =>
+            'Your answers are saved. Reconnect to continue from the last completed step.',
+        };
       });
     } finally {
       if (mounted) setState(() => _starting = false);
     }
   }
 
-  void _startJobPolling(String jobId) {
-    if (_planReady || (_pollingJobId == jobId && _jobTimer != null)) return;
+  void _startJobPolling(String jobId, {bool reconnect = false}) {
+    if (_planReady ||
+        (!reconnect &&
+            _pollingJobId == jobId &&
+            (_jobTimer?.isActive ?? false))) {
+      return;
+    }
     _jobTimer?.cancel();
     _pollingJobId = jobId;
-    _checkPlanJob(jobId);
     _jobTimer = Timer.periodic(
       const Duration(seconds: 3),
       (_) => _checkPlanJob(jobId),
     );
+    _checkPlanJob(jobId);
   }
 
   Future<void> _checkPlanJob(String jobId) async {
@@ -260,6 +316,10 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep> {
     try {
       final job = await ref.read(planRepositoryProvider).getJobStatus(jobId);
       if (!mounted || _pollingJobId != jobId) return;
+      if (_pollFailures > 0) {
+        _pollFailures = 0;
+        setState(() => _error = null);
+      }
       if (job.isCompleted) {
         _jobCompleted = true;
         _markReadyIfComplete();
@@ -268,9 +328,10 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep> {
         }
       } else if (job.isFailed) {
         _jobTimer?.cancel();
+        _jobTimer = null;
+        _jobFailed = true;
         setState(() {
-          _error =
-              'Your comparison is safe, but the plan could not finish. Retry to restart only the missing work.';
+          _error = 'Your plan paused. Continue to retry the unfinished steps.';
         });
       } else if (job.progressPercent > 0) {
         final mapped = 62 + (job.progressPercent * 0.37).round();
@@ -281,10 +342,25 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep> {
           mapped.clamp(62, 99),
         );
       }
-    } catch (_) {
-      // A transient poll failure should not discard a healthy generation
-      // stream. The next timer tick retries; the pipeline request itself owns
-      // the visible terminal error state.
+    } catch (error) {
+      if (!mounted || _pollingJobId != jobId) return;
+      _pollFailures++;
+      if (error is ApiError && error.statusCode == 404) {
+        _jobTimer?.cancel();
+        _jobTimer = null;
+        _jobFailed = true;
+        setState(
+          () => _error =
+              'Your saved plan needs to be reconnected. Your answers are safe.',
+        );
+      } else if (_pollFailures >= 3) {
+        _jobTimer?.cancel();
+        _jobTimer = null;
+        setState(
+          () => _error =
+              'We can’t check your plan right now. Check your connection and continue.',
+        );
+      }
     } finally {
       _checkingJob = false;
     }
@@ -297,475 +373,452 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep> {
     final blueprintReady = widget.draft.blueprintMd?.trim().isNotEmpty == true;
     if (!comparisonReady || !blueprintReady) return;
     _jobTimer?.cancel();
+    _jobTimer = null;
     setState(() {
       _planReady = true;
       _progress = 100;
-      _status =
-          'Your roadmap is ready. Current-week lessons and guides continue preparing.';
+      _status = 'Your roadmap is ready. Lessons are preparing.';
       _error = null;
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(gradient: AppColors.gradInk),
-      child: SafeArea(
-        child: Column(
-          children: [
-            _header(),
-            Expanded(
-              child: NotificationListener<ScrollStartNotification>(
-                onNotification: (notification) {
-                  if (notification.dragDetails != null) _cardTimer?.cancel();
-                  return false;
-                },
-                child: PageView.builder(
-                  controller: _cards,
-                  itemCount: _cardsContent.length,
-                  onPageChanged: (index) => setState(() => _cardIndex = index),
-                  itemBuilder: (_, index) {
-                    final card = _cardsContent[index];
-                    return card.isVoice
-                        ? _voiceCard(card, index)
-                        : _benefitCard(card, index);
-                  },
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle.dark,
+      child: Material(
+        color: AppColors.paper,
+        child: SafeArea(
+          child: Column(
+            children: [
+              Expanded(
+                child: SingleChildScrollView(
+                  key: const Key('mentor-lab-content'),
+                  padding: const EdgeInsets.fromLTRB(22, 18, 22, 24),
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 520),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _header(),
+                          const SizedBox(height: 26),
+                          _preparationStatus(),
+                          const SizedBox(height: 22),
+                          _perspectiveNavigation(),
+                          const SizedBox(height: 10),
+                          LayoutBuilder(
+                            builder: (context, constraints) => SizedBox(
+                              height: _perspectiveHeight(constraints.maxWidth),
+                              child:
+                                  NotificationListener<ScrollStartNotification>(
+                                    onNotification: (notification) {
+                                      if (notification.dragDetails != null) {
+                                        _cardTimer?.cancel();
+                                      }
+                                      return false;
+                                    },
+                                    child: PageView.builder(
+                                      controller: _cards,
+                                      itemCount: _cardsContent.length,
+                                      onPageChanged: (index) =>
+                                          setState(() => _cardIndex = index),
+                                      itemBuilder: (_, index) =>
+                                          _voiceCard(_cardsContent[index]),
+                                    ),
+                                  ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 ),
               ),
-            ),
-            _pageDots(),
-            _footer(),
-          ],
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.sizeOf(context).height * 0.38,
+                ),
+                child: SingleChildScrollView(child: _footer()),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
   Widget _header() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(22, 18, 22, 14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              CmpysMentorAvatar(
-                slug: widget.idol.slug,
-                initials: widget.idol.initials,
-                color: widget.idol.color,
-                tint: Colors.white,
-                size: 44,
-                border: Border.all(color: Colors.white.withValues(alpha: 0.4)),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'THE MENTOR LAB',
-                      style: AppTypography.kicker.copyWith(
-                        color: AppColors.green,
-                      ),
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      _status,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppTypography.bodyMedium.copyWith(
-                        color: Colors.white,
-                        fontSize: 14,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Text(
-                '$_progress%',
-                style: AppTypography.captionMedium.copyWith(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 13),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(999),
-            child: LinearProgressIndicator(
-              key: const Key('mentor-lab-progress'),
-              value: _progress / 100,
-              minHeight: 6,
-              backgroundColor: Colors.white.withValues(alpha: 0.12),
-              valueColor: AlwaysStoppedAnimation<Color>(
-                _planReady ? AppColors.green : AppColors.ochre,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _benefitCard(_MentorLabCard benefit, int index) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(6, 10, 6, 12),
-      child: Container(
-        decoration: BoxDecoration(
-          color: AppColors.card,
-          borderRadius: BorderRadius.circular(28),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.22),
-              blurRadius: 24,
-              offset: const Offset(0, 12),
-            ),
-          ],
-        ),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    width: 48,
-                    height: 48,
-                    alignment: Alignment.center,
-                    decoration: const BoxDecoration(
-                      color: AppColors.greenSoft,
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(
-                      benefit.icon,
-                      color: AppColors.green2,
-                      size: 23,
-                    ),
-                  ),
-                  const Spacer(),
-                  Text(
-                    '${index + 1}/${_cardsContent.length}',
-                    style: AppTypography.caption.copyWith(
-                      color: AppColors.ink3,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 24),
-              Text(
-                benefit.eyebrow,
-                style: AppTypography.kicker.copyWith(color: AppColors.green2),
-              ),
-              const SizedBox(height: 9),
-              Text(
-                benefit.title!,
-                style: AppTypography.h2.copyWith(
-                  fontSize: 25,
-                  letterSpacing: -0.35,
-                  height: 1.2,
-                ),
-              ),
-              const SizedBox(height: 14),
-              Text(
-                benefit.body!,
-                style: AppTypography.body.copyWith(fontSize: 15, height: 1.58),
-              ),
-              const SizedBox(height: 20),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(15),
-                decoration: BoxDecoration(
-                  color: AppColors.paper2,
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Icon(
-                      PhosphorIconsRegular.sparkle,
-                      size: 17,
-                      color: AppColors.ochre2,
-                    ),
-                    const SizedBox(width: 9),
-                    Expanded(
-                      child: Text(
-                        benefit.proof!,
-                        style: AppTypography.captionMedium.copyWith(
-                          color: AppColors.ink2,
-                          fontSize: 13,
-                          height: 1.4,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _voiceCard(_MentorLabCard voice, int index) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(6, 10, 6, 12),
-      child: Container(
-        clipBehavior: Clip.antiAlias,
-        decoration: BoxDecoration(
-          color: AppColors.card,
-          borderRadius: BorderRadius.circular(28),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.22),
-              blurRadius: 24,
-              offset: const Offset(0, 12),
-            ),
-          ],
-        ),
-        child: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Stack(
-                children: [
-                  Semantics(
-                    key: Key('mentor-voice-${voice.speaker}'),
-                    label: 'Portrait of ${voice.speaker}',
-                    image: true,
-                    child: SizedBox(
-                      width: double.infinity,
-                      height: 184,
-                      child: _voicePortrait(voice),
-                    ),
-                  ),
-                  Positioned.fill(
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [
-                            Colors.transparent,
-                            Colors.black.withValues(alpha: 0.55),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    top: 18,
-                    right: 20,
-                    child: Text(
-                      '${index + 1}/${_cardsContent.length}',
-                      style: AppTypography.caption.copyWith(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    left: 22,
-                    right: 22,
-                    bottom: 18,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          voice.speaker!,
-                          style: AppTypography.h2.copyWith(
-                            color: Colors.white,
-                            fontSize: 25,
-                          ),
-                        ),
-                        const SizedBox(height: 3),
-                        Text(
-                          voice.descriptor!,
-                          style: AppTypography.caption.copyWith(
-                            color: Colors.white.withValues(alpha: 0.82),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(24, 21, 24, 24),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      voice.eyebrow,
-                      style: AppTypography.kicker.copyWith(
-                        color: AppColors.green2,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      voice.quote!,
-                      style: AppTypography.h3.copyWith(
-                        fontSize: 20,
-                        height: 1.38,
-                        letterSpacing: -0.15,
-                      ),
-                    ),
-                    const SizedBox(height: 15),
-                    Text(
-                      voice.takeaway!,
-                      style: AppTypography.body.copyWith(
-                        fontSize: 14,
-                        height: 1.5,
-                        color: AppColors.ink2,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Icon(
-                          PhosphorIconsRegular.bookOpenText,
-                          size: 15,
-                          color: AppColors.ochre2,
-                        ),
-                        const SizedBox(width: 7),
-                        Expanded(
-                          child: Text(
-                            'Source: ${voice.source}',
-                            style: AppTypography.caption.copyWith(
-                              color: AppColors.ink3,
-                              fontSize: 11.5,
-                              height: 1.35,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _voicePortrait(_MentorLabCard voice) {
-    if (!voice.portraitContain) {
-      return Image.asset(
-        voice.portraitAsset!,
-        fit: BoxFit.cover,
-        alignment: Alignment.center,
-      );
-    }
-
-    // Preserve the full face from portrait-oriented source photography. A
-    // softened copy fills the wide card behind the contained original.
-    return Stack(
-      fit: StackFit.expand,
+    return Row(
       children: [
-        ImageFiltered(
-          imageFilter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-          child: Transform.scale(
-            scale: 1.14,
-            child: Image.asset(voice.portraitAsset!, fit: BoxFit.cover),
+        CmpysMentorAvatar(
+          slug: widget.idol.slug,
+          initials: widget.idol.initials,
+          color: AppColors.green2,
+          tint: AppColors.card,
+          size: 42,
+          border: Border.all(color: AppColors.hair2),
+        ),
+        const SizedBox(width: 11),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'YOUR MENTOR',
+                style: AppTypography.monoLabel.copyWith(
+                  fontSize: 9,
+                  letterSpacing: 1.3,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                widget.idol.name,
+                style: AppTypography.bodyMedium.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
           ),
         ),
-        ColoredBox(color: Colors.black.withValues(alpha: 0.18)),
-        Image.asset(voice.portraitAsset!, fit: BoxFit.contain),
+        const SizedBox(width: 12),
+        Container(width: 29, height: 2, color: AppColors.ochre2),
       ],
     );
   }
 
-  Widget _pageDots() {
-    return Padding(
-      padding: const EdgeInsets.only(top: 2, bottom: 10),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          for (var index = 0; index < _cardsContent.length; index++)
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 220),
-              width: index == _cardIndex ? 20 : 6,
-              height: 6,
-              margin: const EdgeInsets.symmetric(horizontal: 3),
-              decoration: BoxDecoration(
-                color: index == _cardIndex
-                    ? AppColors.green
-                    : Colors.white.withValues(alpha: 0.24),
-                borderRadius: BorderRadius.circular(999),
+  Widget _preparationStatus() {
+    final paused = _error != null;
+    final largeText = MediaQuery.textScalerOf(context).scale(14) > 19;
+    final status = paused
+        ? _jobFailed
+              ? 'Plan paused. Your progress is saved.'
+              : 'Connection interrupted. Your progress is saved.'
+        : _status;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          largeText
+              ? _planReady
+                    ? 'Your plan\nis ready.'
+                    : paused
+                    ? 'Progress\nsaved.'
+                    : 'Preparing\nyour plan.'
+              : _planReady
+              ? 'Your next chapter\nis ready.'
+              : paused
+              ? 'Pick up where\nyou left off.'
+              : 'Your plan,\ntaking shape.',
+          style: AppTypography.display.copyWith(
+            fontSize: largeText ? 26 : 34,
+            height: 1.08,
+            letterSpacing: -1.0,
+          ),
+        ),
+        const SizedBox(height: 15),
+        Semantics(
+          liveRegion: true,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Icon(
+                  paused
+                      ? Icons.pause_circle_outline_rounded
+                      : _planReady
+                      ? Icons.check_circle_outline_rounded
+                      : Icons.auto_awesome_outlined,
+                  key: paused ? const Key('mentor-lab-paused') : null,
+                  size: 17,
+                  color: paused ? AppColors.ochre2 : AppColors.green2,
+                ),
               ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  status,
+                  style: AppTypography.captionMedium.copyWith(
+                    color: AppColors.ink2,
+                    height: 1.45,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 13),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(999),
+          child: LinearProgressIndicator(
+            key: const Key('mentor-lab-progress'),
+            value: _progress / 100,
+            // Progress comes from completed pipeline milestones, not elapsed
+            // time. Keep the actual phase more prominent than a percentage.
+            semanticsLabel: paused
+                ? 'Saved progress, preparation paused'
+                : 'Plan preparation: $_status',
+            semanticsValue: _planReady
+                ? 'Ready'
+                : paused
+                ? 'Paused'
+                : 'In progress',
+            minHeight: 4,
+            backgroundColor: AppColors.hair2,
+            valueColor: AlwaysStoppedAnimation<Color>(
+              paused ? AppColors.ink3 : AppColors.green2,
             ),
+          ),
+        ),
+        const SizedBox(height: 9),
+        Text(
+          '12 weeks · Focused lessons · Practical work',
+          style: AppTypography.caption.copyWith(fontSize: 11.5),
+        ),
+      ],
+    );
+  }
+
+  void _showPerspective(int index) {
+    _cardTimer?.cancel();
+    final next = (index + _cardsContent.length) % _cardsContent.length;
+    if (MotionConfig.enabled(context)) {
+      _cards.animateToPage(
+        next,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOutCubic,
+      );
+    } else {
+      _cards.jumpToPage(next);
+    }
+  }
+
+  Widget _perspectiveNavigation() {
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            'ON LEARNING FROM OTHERS',
+            style: AppTypography.monoLabel.copyWith(
+              fontSize: 9,
+              letterSpacing: 0.7,
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          '${(_cardIndex + 1).toString().padLeft(2, '0')} / 03',
+          style: AppTypography.monoLabel.copyWith(fontSize: 10),
+        ),
+        const SizedBox(width: 3),
+        IconButton(
+          tooltip: 'Previous perspective',
+          onPressed: () => _showPerspective(_cardIndex - 1),
+          icon: const Icon(Icons.chevron_left_rounded, size: 20),
+          color: AppColors.ink2,
+          visualDensity: VisualDensity.compact,
+        ),
+        IconButton(
+          tooltip: 'Next perspective',
+          onPressed: () => _showPerspective(_cardIndex + 1),
+          icon: const Icon(Icons.chevron_right_rounded, size: 20),
+          color: AppColors.ink2,
+          visualDensity: VisualDensity.compact,
+        ),
+      ],
+    );
+  }
+
+  TextStyle get _quoteStyle => AppTypography.ideaCardBody.copyWith(
+    fontSize: 21,
+    fontWeight: FontWeight.w500,
+    fontStyle: FontStyle.normal,
+    height: 1.4,
+    color: AppColors.ink,
+  );
+  TextStyle get _speakerStyle => AppTypography.display.copyWith(
+    fontSize: 23,
+    height: 1.1,
+    letterSpacing: -0.4,
+  );
+  TextStyle get _sourceStyle => AppTypography.caption.copyWith(
+    fontSize: 10.5,
+    height: 1.4,
+    color: AppColors.ink3,
+  );
+  TextStyle get _descriptorStyle => AppTypography.caption.copyWith(
+    fontSize: 11,
+    height: 1.4,
+    color: AppColors.ink2,
+  );
+
+  // Keep the three perspectives the same height without a large empty panel.
+  // Measure their actual typography so large text remains fully scrollable.
+  double _perspectiveHeight(double width) {
+    double measure(String text, TextStyle style, double availableWidth) {
+      final painter = TextPainter(
+        text: TextSpan(text: text, style: style),
+        textScaler: MediaQuery.textScalerOf(context),
+        textDirection: Directionality.of(context),
+      )..layout(maxWidth: availableWidth.clamp(1, double.infinity));
+      final height = painter.height;
+      painter.dispose();
+      return height;
+    }
+
+    // Two pixels of horizontal page margin plus border/padding on both sides.
+    final contentWidth = width - 42;
+    var height = 0.0;
+    for (final voice in _cardsContent) {
+      final identityHeight =
+          measure(voice.speaker, _speakerStyle, contentWidth - 98) +
+          7 +
+          measure(voice.descriptor, _descriptorStyle, contentWidth - 98);
+      final candidate =
+          40 +
+          identityHeight.clamp(88, double.infinity) +
+          18 +
+          measure(voice.quote, _quoteStyle, contentWidth) +
+          18 +
+          1 +
+          12 +
+          measure('Source: ${voice.source}', _sourceStyle, contentWidth - 21);
+      if (candidate > height) height = candidate;
+    }
+    return height.ceilToDouble() + 4;
+  }
+
+  Widget _voiceCard(_MentorLabCard voice) {
+    return Container(
+      key: Key('mentor-lab-perspective-${voice.speaker}'),
+      margin: const EdgeInsets.symmetric(horizontal: 1),
+      padding: const EdgeInsets.all(19),
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        border: Border.all(color: AppColors.hair2.withValues(alpha: 0.75)),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(voice.speaker, style: _speakerStyle),
+                    const SizedBox(height: 7),
+                    Text(voice.descriptor, style: _descriptorStyle),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 16),
+              Semantics(
+                key: Key('mentor-voice-${voice.speaker}'),
+                label: 'Portrait of ${voice.speaker}',
+                image: true,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: ColoredBox(
+                    color: AppColors.paper2,
+                    child: Image.asset(
+                      voice.portraitAsset,
+                      width: 82,
+                      height: 88,
+                      fit: voice.portraitContain
+                          ? BoxFit.contain
+                          : BoxFit.cover,
+                      alignment: Alignment.topCenter,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          Text(voice.quote, style: _quoteStyle),
+          const Spacer(),
+          const SizedBox(height: 18),
+          const Divider(height: 1, thickness: 1, color: AppColors.hair),
+          const SizedBox(height: 12),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(
+                PhosphorIconsRegular.bookOpenText,
+                size: 14,
+                color: AppColors.ochre2,
+              ),
+              const SizedBox(width: 7),
+              Expanded(
+                child: Text('Source: ${voice.source}', style: _sourceStyle),
+              ),
+            ],
+          ),
         ],
       ),
     );
   }
 
   Widget _footer() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(22, 0, 22, 18),
-      child: _error != null
-          ? Column(
-              children: [
-                Text(
-                  _error!,
-                  textAlign: TextAlign.center,
-                  style: AppTypography.caption.copyWith(
-                    color: Colors.white.withValues(alpha: 0.72),
-                    height: 1.4,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                CmpysButton(
-                  key: const Key('mentor-lab-retry'),
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(22, 14, 22, 16),
+      decoration: const BoxDecoration(
+        color: AppColors.paper,
+        border: Border(top: BorderSide(color: AppColors.hair2)),
+      ),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 520),
+          child: _error != null
+              ? Column(
+                  children: [
+                    Text(
+                      _error!,
+                      textAlign: TextAlign.center,
+                      style: AppTypography.caption.copyWith(
+                        color: AppColors.ink2,
+                        height: 1.4,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    CmpysButton(
+                      key: const Key('mentor-lab-retry'),
+                      variant: CmpysBtnVariant.primary,
+                      size: CmpysBtnSize.lg,
+                      full: true,
+                      disabled: _starting,
+                      leadingIcon: Icons.refresh_rounded,
+                      onTap: _startPipeline,
+                      child: Text(
+                        _starting ? 'Restarting…' : 'Continue generation',
+                      ),
+                    ),
+                  ],
+                )
+              : CmpysButton(
+                  key: const Key('mentor-lab-enter'),
                   variant: CmpysBtnVariant.primary,
                   size: CmpysBtnSize.lg,
                   full: true,
-                  disabled: _starting,
-                  leadingIcon: Icons.refresh_rounded,
-                  onTap: _startPipeline,
+                  disabled: !_planReady,
+                  trailingIcon: _planReady ? Icons.arrow_forward_rounded : null,
+                  onTap: _planReady ? widget.onDone : null,
                   child: Text(
-                    _starting ? 'Restarting…' : 'Continue generation',
+                    _planReady ? 'Enter CMPYS' : 'Your plan is building…',
                   ),
                 ),
-              ],
-            )
-          : CmpysButton(
-              key: const Key('mentor-lab-enter'),
-              variant: _planReady
-                  ? CmpysBtnVariant.primary
-                  : CmpysBtnVariant.dark,
-              size: CmpysBtnSize.lg,
-              full: true,
-              disabled: !_planReady,
-              trailingIcon: _planReady ? Icons.arrow_forward_rounded : null,
-              onTap: _planReady ? widget.onDone : null,
-              child: Text(
-                _planReady ? 'Enter CMPYS' : 'Your plan is building…',
-              ),
-            ),
+        ),
+      ),
     );
   }
 }
 
 class _MentorLabCard {
-  const _MentorLabCard.benefit({
-    required this.icon,
-    required this.eyebrow,
-    required this.title,
-    required this.body,
-    required this.proof,
-  }) : speaker = null,
-       descriptor = null,
-       quote = null,
-       takeaway = null,
-       portraitAsset = null,
-       source = null,
-       portraitContain = false;
-
   const _MentorLabCard.voice({
     required this.eyebrow,
     required this.speaker,
@@ -775,23 +828,14 @@ class _MentorLabCard {
     required this.portraitAsset,
     required this.source,
     this.portraitContain = false,
-  }) : icon = null,
-       title = null,
-       body = null,
-       proof = null;
+  });
 
-  final IconData? icon;
-  final String eyebrow;
-  final String? title;
-  final String? body;
-  final String? proof;
-  final String? speaker;
-  final String? descriptor;
-  final String? quote;
-  final String? takeaway;
-  final String? portraitAsset;
-  final String? source;
+  final String eyebrow,
+      speaker,
+      descriptor,
+      quote,
+      takeaway,
+      portraitAsset,
+      source;
   final bool portraitContain;
-
-  bool get isVoice => quote != null;
 }

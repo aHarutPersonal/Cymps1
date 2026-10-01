@@ -1,0 +1,458 @@
+{
+  "provider": "zai",
+  "configured": true,
+  "cap_usd": 1.0,
+  "reserved_usd": 0.8442759999999997,
+  "calls": [
+    {
+      "model": "glm-5.3-flash",
+      "reserved_usd": 0.0052404999999999995,
+      "seconds": 6.22,
+      "finish": "stop",
+      "prompt_tokens": 2109,
+      "completion_tokens": 469,
+      "total_tokens": 2578,
+      "estimated_cost_usd": 0.00055085
+    },
+    {
+      "model": "glm-5.3",
+      "reserved_usd": 0.08114275000000001,
+      "seconds": 45.0,
+      "finish": null,
+      "estimated_cost_usd": null
+    },
+    {
+      "model": "glm-5.3",
+      "reserved_usd": 0.12025875,
+      "seconds": 27.91,
+      "finish": "stop",
+      "prompt_tokens": 2551,
+      "completion_tokens": 933,
+      "total_tokens": 3484,
+      "estimated_cost_usd": 0.0076766
+    },
+    {
+      "model": "glm-5.3",
+      "reserved_usd": 0.05180175000000001,
+      "seconds": 27.1,
+      "finish": "stop",
+      "prompt_tokens": 2272,
+      "completion_tokens": 800,
+      "total_tokens": 3072,
+      "estimated_cost_usd": 0.0067008
+    },
+    {
+      "model": "glm-5.3",
+      "reserved_usd": 0.053056500000000006,
+      "seconds": 15.7,
+      "finish": "stop",
+      "prompt_tokens": 2419,
+      "completion_tokens": 561,
+      "total_tokens": 2980,
+      "estimated_cost_usd": 0.005855
+    },
+    {
+      "model": "glm-5.3",
+      "reserved_usd": 0.06452524999999999,
+      "seconds": 45.0,
+      "finish": null,
+      "estimated_cost_usd": null
+    },
+    {
+      "model": "glm-5.3-flash",
+      "reserved_usd": 0.00206975,
+      "seconds": 2.75,
+      "finish": "stop",
+      "prompt_tokens": 52,
+      "completion_tokens": 96,
+      "total_tokens": 148,
+      "estimated_cost_usd": 5.58e-05
+    },
+    {
+      "model": "glm-5.3",
+      "reserved_usd": 0.081218,
+      "seconds": 55.82,
+      "finish": "stop",
+      "prompt_tokens": 2486,
+      "completion_tokens": 2337,
+      "total_tokens": 4823,
+      "estimated_cost_usd": 0.0137632
+    },
+    {
+      "model": "glm-5.3",
+      "reserved_usd": 0.12056325,
+      "seconds": 27.71,
+      "finish": "stop",
+      "prompt_tokens": 2595,
+      "completion_tokens": 1054,
+      "total_tokens": 3649,
+      "estimated_cost_usd": 0.0082706
+    },
+    {
+      "model": "glm-5.3",
+      "reserved_usd": 0.0737935,
+      "seconds": 7.37,
+      "finish": "stop",
+      "prompt_tokens": 3590,
+      "completion_tokens": 325,
+      "total_tokens": 3915,
+      "estimated_cost_usd": 0.006456
+    },
+    {
+      "model": "glm-5.3",
+      "reserved_usd": 0.0523635,
+      "seconds": 24.85,
+      "finish": "stop",
+      "prompt_tokens": 2334,
+      "completion_tokens": 922,
+      "total_tokens": 3256,
+      "estimated_cost_usd": 0.0073244
+    },
+    {
+      "model": "glm-5.3",
+      "reserved_usd": 0.053634,
+      "seconds": 23.36,
+      "finish": "stop",
+      "prompt_tokens": 2487,
+      "completion_tokens": 869,
+      "total_tokens": 3356,
+      "estimated_cost_usd": 0.0073054
+    },
+    {
+      "model": "glm-5.3",
+      "reserved_usd": 0.06452524999999999,
+      "seconds": 45.0,
+      "finish": null,
+      "estimated_cost_usd": null
+    },
+    {
+      "model": "glm-5.3",
+      "reserved_usd": 0.08122325,
+      "seconds": 90.0,
+      "finish": null,
+      "estimated_cost_usd": null
+    },
+    {
+      "model": "glm-5.3",
+      "reserved_usd": 0.120341,
+      "seconds": 90.0,
+      "finish": null,
+      "estimated_cost_usd": null
+    },
+    {
+      "model": "glm-5.3",
+      "reserved_usd": 0.052531499999999995,
+      "seconds": 27.09,
+      "finish": "stop",
+      "prompt_tokens": 2356,
+      "completion_tokens": 1037,
+      "total_tokens": 3393,
+      "estimated_cost_usd": 0.0078612
+    },
+    {
+      "model": "glm-5.3",
+      "reserved_usd": 0.121237,
+      "seconds": 107.24,
+      "finish": "stop",
+      "prompt_tokens": 2513,
+      "completion_tokens": 4058,
+      "total_tokens": 6571,
+      "estimated_cost_usd": 0.0213734
+    },
+    {
+      "model": "glm-5.3-flash",
+      "reserved_usd": 0.010842375,
+      "seconds": 39.96,
+      "finish": "stop",
+      "prompt_tokens": 6270,
+      "completion_tokens": 4326,
+      "total_tokens": 10596,
+      "estimated_cost_usd": 0.0031035
+    },
+    {
+      "model": "glm-5.3-flash",
+      "reserved_usd": 0.0091574375,
+      "seconds": 30.18,
+      "finish": "stop",
+      "prompt_tokens": 2555,
+      "completion_tokens": 2440,
+      "total_tokens": 4995,
+      "estimated_cost_usd": 0.00160325
+    },
+    {
+      "model": "glm-5.3",
+      "reserved_usd": 0.07422875,
+      "seconds": 56.56,
+      "finish": "stop",
+      "prompt_tokens": 2242,
+      "completion_tokens": 1008,
+      "total_tokens": 3250,
+      "estimated_cost_usd": 0.007574
+    },
+    {
+      "model": "glm-5.3",
+      "reserved_usd": 0.11894975,
+      "seconds": 17.19,
+      "finish": "stop",
+      "prompt_tokens": 2329,
+      "completion_tokens": 647,
+      "total_tokens": 2976,
+      "estimated_cost_usd": 0.0061074
+    },
+    {
+      "model": "glm-5.3-flash",
+      "reserved_usd": 0.0091574375,
+      "seconds": 35.19,
+      "finish": "stop",
+      "prompt_tokens": 2555,
+      "completion_tokens": 3224,
+      "total_tokens": 5779,
+      "estimated_cost_usd": 0.00199525
+    },
+    {
+      "model": "glm-5.3",
+      "reserved_usd": 0.074486,
+      "seconds": 25.92,
+      "finish": "stop",
+      "prompt_tokens": 2290,
+      "completion_tokens": 941,
+      "total_tokens": 3231,
+      "estimated_cost_usd": 0.0073464
+    },
+    {
+      "model": "glm-5.3",
+      "reserved_usd": 0.11942925,
+      "seconds": 29.54,
+      "finish": "stop",
+      "prompt_tokens": 2414,
+      "completion_tokens": 1076,
+      "total_tokens": 3490,
+      "estimated_cost_usd": 0.008114
+    },
+    {
+      "model": "glm-5.3-flash",
+      "reserved_usd": 0.0091574375,
+      "seconds": 32.02,
+      "finish": "stop",
+      "prompt_tokens": 2555,
+      "completion_tokens": 2985,
+      "total_tokens": 5540,
+      "estimated_cost_usd": 0.00187575
+    },
+    {
+      "model": "glm-5.3",
+      "reserved_usd": 0.12113374999999998,
+      "seconds": 57.9,
+      "finish": "stop",
+      "prompt_tokens": 2660,
+      "completion_tokens": 2189,
+      "total_tokens": 4849,
+      "estimated_cost_usd": 0.0133556
+    },
+    {
+      "model": "glm-5.3",
+      "reserved_usd": 0.07459275,
+      "seconds": 30.43,
+      "finish": "stop",
+      "prompt_tokens": 2292,
+      "completion_tokens": 952,
+      "total_tokens": 3244,
+      "estimated_cost_usd": 0.0073976
+    },
+    {
+      "model": "glm-5.3",
+      "reserved_usd": 0.06633825,
+      "seconds": 5.94,
+      "finish": "stop",
+      "prompt_tokens": 2264,
+      "completion_tokens": 123,
+      "total_tokens": 2387,
+      "estimated_cost_usd": 0.0037108
+    }
+  ],
+  "checks": {
+    "comparison": {
+      "passed": true,
+      "seconds": 7.63,
+      "dimensions": 5,
+      "missing_evidence_not_scored": true
+    },
+    "plan": {
+      "passed": true,
+      "seconds": 120.94,
+      "source": "llm",
+      "items": 24,
+      "backbone_weeks": 12
+    },
+    "lesson": {
+      "passed": true,
+      "seconds": 134.34,
+      "steps": 1,
+      "lesson_words": [
+        2743
+      ],
+      "contract_passed": true
+    },
+    "practice": {
+      "passed": true,
+      "seconds": 39.98,
+      "activities": 4,
+      "validated": true
+    },
+    "chat": {
+      "passed": true,
+      "seconds": 2.76,
+      "characters": 436,
+      "first_text_seconds": 2.52
+    },
+    "text_review": {
+      "passed": true,
+      "seconds": 6.86,
+      "fields": 1,
+      "correct_transfer_answer_accepted": true
+    }
+  },
+  "estimated_cost_usd": 0.1553768,
+  "unknown_cost_calls": 5,
+  "previous_checks": [
+    {
+      "comparison": {
+        "passed": true,
+        "seconds": 7.63,
+        "dimensions": 5,
+        "missing_evidence_not_scored": true
+      },
+      "plan": {
+        "passed": false,
+        "seconds": 91.5,
+        "error_type": "RuntimeError",
+        "error": "Personalized plan generation failed across configured providers"
+      },
+      "lesson": {
+        "passed": false,
+        "seconds": 48.22,
+        "error_type": "AssertionError",
+        "error": "Plan detail outline validation failed: 1 validation error for PlanItemDetailsOutlineOutput\nsteps.0.title\n  String should have at most 60 characters [type=string_too_long, input_value='Separate accrual profit ...with a fictional ledger', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/string_too_long"
+      },
+      "practice": {
+        "passed": false,
+        "seconds": 45.02,
+        "error_type": "ValueError",
+        "error": "Practice response did not satisfy its contract"
+      },
+      "chat": {
+        "passed": true,
+        "seconds": 2.76,
+        "characters": 436,
+        "first_text_seconds": 2.52
+      }
+    },
+    {
+      "comparison": {
+        "passed": true,
+        "seconds": 7.63,
+        "dimensions": 5,
+        "missing_evidence_not_scored": true
+      },
+      "plan": {
+        "passed": false,
+        "seconds": 180.57,
+        "error_type": "RuntimeError",
+        "error": "Personalized plan generation failed across configured providers"
+      },
+      "lesson": {
+        "passed": true,
+        "seconds": 134.34,
+        "steps": 1,
+        "lesson_words": [
+          2743
+        ],
+        "contract_passed": true
+      },
+      "practice": {
+        "passed": true,
+        "seconds": 39.98,
+        "activities": 4,
+        "validated": true
+      },
+      "chat": {
+        "passed": true,
+        "seconds": 2.76,
+        "characters": 436,
+        "first_text_seconds": 2.52
+      }
+    },
+    {
+      "comparison": {
+        "passed": true,
+        "seconds": 7.63,
+        "dimensions": 5,
+        "missing_evidence_not_scored": true
+      },
+      "plan": {
+        "passed": false,
+        "seconds": 104.53,
+        "error_type": "RuntimeError",
+        "error": "Personalized plan generation failed across configured providers"
+      },
+      "lesson": {
+        "passed": true,
+        "seconds": 134.34,
+        "steps": 1,
+        "lesson_words": [
+          2743
+        ],
+        "contract_passed": true
+      },
+      "practice": {
+        "passed": true,
+        "seconds": 39.98,
+        "activities": 4,
+        "validated": true
+      },
+      "chat": {
+        "passed": true,
+        "seconds": 2.76,
+        "characters": 436,
+        "first_text_seconds": 2.52
+      }
+    },
+    {
+      "comparison": {
+        "passed": true,
+        "seconds": 7.63,
+        "dimensions": 5,
+        "missing_evidence_not_scored": true
+      },
+      "plan": {
+        "passed": false,
+        "seconds": 91.25,
+        "error_type": "RuntimeError",
+        "error": "Personalized plan generation failed across configured providers"
+      },
+      "lesson": {
+        "passed": true,
+        "seconds": 134.34,
+        "steps": 1,
+        "lesson_words": [
+          2743
+        ],
+        "contract_passed": true
+      },
+      "practice": {
+        "passed": true,
+        "seconds": 39.98,
+        "activities": 4,
+        "validated": true
+      },
+      "chat": {
+        "passed": true,
+        "seconds": 2.76,
+        "characters": 436,
+        "first_text_seconds": 2.52
+      }
+    }
+  ],
+  "prior_reservation_total": 0.7543069374999998,
+  "accounting_note": "Completed calls settled at 125% of usage-based estimate; interrupted calls retain their full reserves."
+}

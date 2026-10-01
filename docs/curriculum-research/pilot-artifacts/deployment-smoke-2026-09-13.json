@@ -1,0 +1,20 @@
+{
+  "ready": {
+    "status": "ready",
+    "checks": {
+      "database": true,
+      "redis": true
+    }
+  },
+  "configuration": {
+    "provider": "openlux",
+    "catalog_first": true,
+    "openlux_configured": true,
+    "gemini_configured": true,
+    "books_configured": true
+  },
+  "background_budget_state": "usage_unknown",
+  "saved_lesson_ready": true,
+  "saved_practice_attempts": 4,
+  "books_lookup_ok": false
+}

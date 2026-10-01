@@ -67,8 +67,8 @@ def test_gzip_uses_balanced_compression_level():
     assert middleware.kwargs["compresslevel"] == 6
 
 
-def test_lazy_image_generation_does_not_block_asyncio_loop():
+def test_public_media_never_generates_images():
     source = inspect.getsource(media.get_media)
 
-    assert "await asyncio.to_thread(" in source
-    assert "await db.commit()" in source
+    assert "generate_images" not in source
+    assert "FileResponse" in source

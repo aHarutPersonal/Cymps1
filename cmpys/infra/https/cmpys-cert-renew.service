@@ -1,0 +1,12 @@
+[Unit]
+Description=Renew CMPYS API TLS certificate and reload nginx
+Wants=network-online.target
+After=network-online.target docker.service nginx.service
+Requires=docker.service nginx.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/cmpys-cert-renew
+TimeoutStartSec=10min
+UMask=0077
+Nice=10

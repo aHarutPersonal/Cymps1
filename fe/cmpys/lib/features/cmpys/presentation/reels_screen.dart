@@ -15,9 +15,48 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/design_tokens.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/ui/cmpys/cmpys_primitives.dart';
+import '../../../core/ui/motion/motion_config.dart';
 import '../data/cmpys_ideas_provider.dart';
 import '../data/cmpys_seed.dart';
 import '../state/cmpys_store.dart';
+
+const _reelsTitleStyle = TextStyle(
+  color: Colors.white,
+  fontFamily: 'Plus Jakarta Sans',
+  fontWeight: FontWeight.w800,
+  fontSize: 16,
+  height: 1.2,
+);
+
+TextStyle _reelsCountStyle(BuildContext context) =>
+    Theme.of(context).textTheme.bodyMedium!.copyWith(
+      color: Colors.white.withValues(alpha: 0.75),
+      fontSize: 11.5,
+      height: 1.2,
+    );
+
+double _reelsHeaderHeight(BuildContext context, String countLabel) {
+  final media = MediaQuery.of(context);
+  final textWidth = (media.size.width - 28 - 88 - 10).clamp(
+    1.0,
+    double.infinity,
+  );
+  double measure(String text, TextStyle style) {
+    final painter = TextPainter(
+      text: TextSpan(text: text, style: style),
+      textDirection: Directionality.of(context),
+      textScaler: media.textScaler,
+    )..layout(maxWidth: textWidth);
+    final height = painter.height;
+    painter.dispose();
+    return height;
+  }
+
+  final textHeight =
+      measure('Ideas', _reelsTitleStyle) +
+      measure(countLabel, _reelsCountStyle(context));
+  return media.padding.top + 37 + textHeight.clamp(44.0, double.infinity);
+}
 
 class CmpysReelsScreen extends ConsumerStatefulWidget {
   const CmpysReelsScreen({super.key});
@@ -51,11 +90,28 @@ class _CmpysReelsScreenState extends ConsumerState<CmpysReelsScreen> {
         _active = 0;
       });
       _page.jumpToPage(0);
-      showCmpysToast(context, 'Fresh ideas loaded',
-          icon: Icons.auto_awesome_rounded, tone: AppColors.green);
+      showCmpysToast(
+        context,
+        'Fresh ideas loaded',
+        icon: Icons.auto_awesome_rounded,
+        tone: AppColors.green,
+      );
     } catch (e) {
       if (!mounted) return;
       setState(() => _refresh = 'error');
+    }
+  }
+
+  void _goToIdea(int index) {
+    if (!_page.hasClients) return;
+    if (MotionConfig.enabled(context)) {
+      _page.animateToPage(
+        index,
+        duration: AppDurations.normal,
+        curve: AppCurves.easeOut,
+      );
+    } else {
+      _page.jumpToPage(index);
     }
   }
 
@@ -79,8 +135,10 @@ class _CmpysReelsScreenState extends ConsumerState<CmpysReelsScreen> {
                 Positioned(
                   top: 8,
                   left: 14,
-                  child: _circleBtn(PhosphorIconsRegular.caretLeft,
-                      () => Navigator.of(context).maybePop()),
+                  child: _circleBtn(
+                    PhosphorIconsRegular.caretLeft,
+                    () => Navigator.of(context).maybePop(),
+                  ),
                 ),
                 Center(
                   child: Padding(
@@ -88,14 +146,20 @@ class _CmpysReelsScreenState extends ConsumerState<CmpysReelsScreen> {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        const Icon(Icons.wifi_off_rounded,
-                            size: 36, color: Colors.white),
+                        const Icon(
+                          Icons.wifi_off_rounded,
+                          size: 36,
+                          color: Colors.white,
+                        ),
                         const SizedBox(height: 16),
                         Text(
                           'Couldn’t load your ideas. Check your connection and try again.',
                           textAlign: TextAlign.center,
                           style: AppTypography.bodyLarge.copyWith(
-                              color: Colors.white, fontSize: 16, height: 1.5),
+                            color: Colors.white,
+                            fontSize: 16,
+                            height: 1.5,
+                          ),
                         ),
                         const SizedBox(height: 22),
                         CmpysButton(
@@ -140,7 +204,13 @@ class _CmpysReelsScreenState extends ConsumerState<CmpysReelsScreen> {
               idea: ideas[i],
               active: i == _active,
               first: i == 0,
+              headerHeight: _reelsHeaderHeight(
+                context,
+                'For you · ${_active + 1} of ${ideas.length}',
+              ),
               onComments: () => _openComments(ideas[i]),
+              onPrevious: i == 0 ? null : () => _goToIdea(i - 1),
+              onNext: i == ideas.length - 1 ? null : () => _goToIdea(i + 1),
             ),
           ),
 
@@ -151,10 +221,11 @@ class _CmpysReelsScreenState extends ConsumerState<CmpysReelsScreen> {
             right: 0,
             child: Container(
               padding: EdgeInsets.only(
-                  top: MediaQuery.of(context).padding.top + 8,
-                  left: 14,
-                  right: 14,
-                  bottom: 14),
+                top: MediaQuery.of(context).padding.top + 8,
+                left: 14,
+                right: 14,
+                bottom: 14,
+              ),
               decoration: BoxDecoration(
                 gradient: LinearGradient(
                   begin: Alignment.topCenter,
@@ -174,7 +245,8 @@ class _CmpysReelsScreenState extends ConsumerState<CmpysReelsScreen> {
                         child: Container(
                           height: 3,
                           margin: EdgeInsets.only(
-                              right: i == ideas.length - 1 ? 0 : 4),
+                            right: i == ideas.length - 1 ? 0 : 4,
+                          ),
                           decoration: BoxDecoration(
                             color: i <= _active
                                 ? Colors.white
@@ -188,23 +260,20 @@ class _CmpysReelsScreenState extends ConsumerState<CmpysReelsScreen> {
                   const SizedBox(height: 12),
                   Row(
                     children: [
-                      _circleBtn(PhosphorIconsRegular.caretLeft,
-                          () => Navigator.of(context).maybePop()),
+                      _circleBtn(
+                        PhosphorIconsRegular.caretLeft,
+                        () => Navigator.of(context).maybePop(),
+                      ),
                       const SizedBox(width: 10),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Text('Ideas',
-                                style: TextStyle(
-                                    color: Colors.white,
-                                    fontFamily: 'Plus Jakarta Sans',
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: 16)),
-                            Text('For you · ${_active + 1} of ${ideas.length}',
-                                style: TextStyle(
-                                    color: Colors.white.withValues(alpha: 0.75),
-                                    fontSize: 11.5)),
+                            const Text('Ideas', style: _reelsTitleStyle),
+                            Text(
+                              'For you · ${_active + 1} of ${ideas.length}',
+                              style: _reelsCountStyle(context),
+                            ),
                           ],
                         ),
                       ),
@@ -215,12 +284,15 @@ class _CmpysReelsScreenState extends ConsumerState<CmpysReelsScreen> {
                               padding: const EdgeInsets.all(9),
                               child: const CircularProgressIndicator(
                                 strokeWidth: 2,
-                                valueColor:
-                                    AlwaysStoppedAnimation<Color>(Colors.white),
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  Colors.white,
+                                ),
                               ),
                             )
                           : _circleBtn(
-                              PhosphorIconsRegular.arrowClockwise, _doRefresh),
+                              PhosphorIconsRegular.arrowClockwise,
+                              _doRefresh,
+                            ),
                     ],
                   ),
                 ],
@@ -241,26 +313,38 @@ class _CmpysReelsScreenState extends ConsumerState<CmpysReelsScreen> {
                   borderRadius: BorderRadius.circular(18),
                   boxShadow: const [
                     BoxShadow(
-                        color: Color(0x4D000000),
-                        blurRadius: 30,
-                        offset: Offset(0, 12)),
+                      color: Color(0x4D000000),
+                      blurRadius: 30,
+                      offset: Offset(0, 12),
+                    ),
                   ],
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.warning_amber_rounded,
-                        size: 20, color: AppColors.danger),
+                    const Icon(
+                      Icons.warning_amber_rounded,
+                      size: 20,
+                      color: AppColors.danger,
+                    ),
                     const SizedBox(width: 11),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('Couldn’t refresh your feed',
-                              style: AppTypography.bodyMedium.copyWith(
-                                  fontSize: 13.5, fontWeight: FontWeight.w700)),
-                          Text('Check your connection and try again.',
-                              style: AppTypography.caption.copyWith(
-                                  color: AppColors.ink2, fontSize: 12)),
+                          Text(
+                            'Couldn’t refresh your feed',
+                            style: AppTypography.bodyMedium.copyWith(
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          Text(
+                            'Check your connection and try again.',
+                            style: AppTypography.caption.copyWith(
+                              color: AppColors.ink2,
+                              fontSize: 12,
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -303,10 +387,7 @@ class _CmpysReelsScreenState extends ConsumerState<CmpysReelsScreen> {
       child: StatefulBuilder(
         builder: (ctx, setSheet) {
           final st = ref.read(cmpysStoreProvider).ideaState[idea.id];
-          final merged = [
-            ...idea.comments,
-            ...(st?.comments ?? const []),
-          ];
+          final merged = [...idea.comments, ...(st?.comments ?? const [])];
           return Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -325,8 +406,10 @@ class _CmpysReelsScreenState extends ConsumerState<CmpysReelsScreen> {
                 ),
                 child: Text(
                   '"${idea.text.length > 90 ? '${idea.text.substring(0, 90)}…' : idea.text}"',
-                  style: AppTypography.caption
-                      .copyWith(color: AppColors.ink2, fontSize: 13.5),
+                  style: AppTypography.caption.copyWith(
+                    color: AppColors.ink2,
+                    fontSize: 13.5,
+                  ),
                 ),
               ),
               const SizedBox(height: 12),
@@ -334,9 +417,12 @@ class _CmpysReelsScreenState extends ConsumerState<CmpysReelsScreen> {
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 20),
                   child: Center(
-                    child: Text('No comments yet. Start the conversation.',
-                        style: AppTypography.caption
-                            .copyWith(color: AppColors.ink3)),
+                    child: Text(
+                      'No comments yet. Start the conversation.',
+                      style: AppTypography.caption.copyWith(
+                        color: AppColors.ink3,
+                      ),
+                    ),
                   ),
                 )
               else
@@ -364,13 +450,20 @@ class _CmpysReelsScreenState extends ConsumerState<CmpysReelsScreen> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(c.who,
-                                    style: AppTypography.captionMedium.copyWith(
-                                        fontWeight: FontWeight.w700,
-                                        fontSize: 13)),
-                                Text(c.text,
-                                    style: AppTypography.body.copyWith(
-                                        color: AppColors.ink2, fontSize: 14)),
+                                Text(
+                                  c.who,
+                                  style: AppTypography.captionMedium.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                                Text(
+                                  c.text,
+                                  style: AppTypography.body.copyWith(
+                                    color: AppColors.ink2,
+                                    fontSize: 14,
+                                  ),
+                                ),
                               ],
                             ),
                           ),
@@ -407,7 +500,11 @@ class _CmpysReelsScreenState extends ConsumerState<CmpysReelsScreen> {
                             contentPadding: EdgeInsets.zero,
                           ),
                           onSubmitted: (_) => _submitComment(
-                              store, idea.id, controller, setSheet),
+                            store,
+                            idea.id,
+                            controller,
+                            setSheet,
+                          ),
                         ),
                       ),
                     ),
@@ -429,8 +526,11 @@ class _CmpysReelsScreenState extends ConsumerState<CmpysReelsScreen> {
                               : AppColors.green,
                           shape: BoxShape.circle,
                         ),
-                        child: const Icon(Icons.arrow_forward_rounded,
-                            color: Colors.white, size: 18),
+                        child: const Icon(
+                          Icons.arrow_forward_rounded,
+                          color: Colors.white,
+                          size: 18,
+                        ),
                       ),
                     ),
                   ),
@@ -443,8 +543,12 @@ class _CmpysReelsScreenState extends ConsumerState<CmpysReelsScreen> {
     );
   }
 
-  void _submitComment(CmpysStore store, String id,
-      TextEditingController controller, void Function(void Function()) setSheet) {
+  void _submitComment(
+    CmpysStore store,
+    String id,
+    TextEditingController controller,
+    void Function(void Function()) setSheet,
+  ) {
     final text = controller.text.trim();
     if (text.isEmpty) return;
     final who = ref.read(cmpysStoreProvider).user.name;
@@ -459,12 +563,18 @@ class _Reel extends ConsumerStatefulWidget {
     required this.idea,
     required this.active,
     required this.first,
+    required this.headerHeight,
     required this.onComments,
+    this.onPrevious,
+    this.onNext,
   });
   final CmpysIdea idea;
   final bool active;
   final bool first;
+  final double headerHeight;
   final VoidCallback onComments;
+  final VoidCallback? onPrevious;
+  final VoidCallback? onNext;
 
   @override
   ConsumerState<_Reel> createState() => _ReelState();
@@ -473,6 +583,7 @@ class _Reel extends ConsumerStatefulWidget {
 class _ReelState extends ConsumerState<_Reel>
     with SingleTickerProviderStateMixin {
   late final AnimationController _burst;
+  final ScrollController _readingScroll = ScrollController();
   DateTime? _lastTap;
 
   @override
@@ -485,7 +596,17 @@ class _ReelState extends ConsumerState<_Reel>
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!MotionConfig.enabled(context)) {
+      _burst.stop();
+      _burst.value = 0;
+    }
+  }
+
+  @override
   void dispose() {
+    _readingScroll.dispose();
     _burst.dispose();
     super.dispose();
   }
@@ -494,12 +615,14 @@ class _ReelState extends ConsumerState<_Reel>
     final now = DateTime.now();
     if (_lastTap != null &&
         now.difference(_lastTap!) < const Duration(milliseconds: 320)) {
-      final liked = ref.read(cmpysStoreProvider).ideaState[widget.idea.id]?.liked ?? false;
+      final liked =
+          ref.read(cmpysStoreProvider).ideaState[widget.idea.id]?.liked ??
+          false;
       if (!liked) {
         ref.read(cmpysStoreProvider.notifier).likeIdea(widget.idea.id);
         HapticFeedback.lightImpact();
       }
-      _burst.forward(from: 0);
+      if (MotionConfig.enabled(context)) _burst.forward(from: 0);
     }
     _lastTap = now;
   }
@@ -507,7 +630,9 @@ class _ReelState extends ConsumerState<_Reel>
   @override
   Widget build(BuildContext context) {
     final idea = widget.idea;
-    final st = ref.watch(cmpysStoreProvider.select((s) => s.ideaState[idea.id]));
+    final st = ref.watch(
+      cmpysStoreProvider.select((s) => s.ideaState[idea.id]),
+    );
     final liked = st?.liked ?? false;
     final saved = st?.saved ?? false;
     final commentCount = idea.comments.length + (st?.comments.length ?? 0);
@@ -515,9 +640,15 @@ class _ReelState extends ConsumerState<_Reel>
     final dark = Color.lerp(idea.tone, Colors.black, 0.45)!;
     final media = MediaQuery.of(context);
     final compact = media.size.height < 700 || media.textScaler.scale(14) > 16;
+    final readingLayout =
+        media.size.height < 500 || media.textScaler.scale(14) >= 24;
+    final readingBottom = readingLayout
+        ? media.padding.bottom + 95 + media.textScaler.scale(12) * 1.3
+        : media.padding.bottom + (compact ? 92.0 : 130.0);
 
     return GestureDetector(
       onTap: _onTap,
+      excludeFromSemantics: true,
       behavior: HitTestBehavior.opaque,
       child: Stack(
         fit: StackFit.expand,
@@ -550,53 +681,105 @@ class _ReelState extends ConsumerState<_Reel>
             left: compact ? 16 : 20,
             child: Opacity(
               opacity: 0.55,
-              child: Icon(PhosphorIconsFill.quotes,
-                  size: compact ? 90 : 120,
-                  color: Colors.white.withValues(alpha: 0.16)),
+              child: Icon(
+                PhosphorIconsFill.quotes,
+                size: compact ? 90 : 120,
+                color: Colors.white.withValues(alpha: 0.16),
+              ),
             ),
           ),
 
           // Main text block
           Positioned(
             left: compact ? 18 : 24,
-            right: compact ? 76 : 90,
-            bottom: compact ? 92 : 130,
-            child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 450),
-              transitionBuilder: (child, anim) => FadeTransition(
-                opacity: anim,
-                child: SlideTransition(
-                  position: Tween(begin: const Offset(0, 0.12), end: Offset.zero)
-                      .animate(CurvedAnimation(
-                          parent: anim, curve: Curves.easeOutCubic)),
-                  child: child,
+            right: readingLayout ? 18 : (compact ? 76 : 90),
+            top: widget.headerHeight + 12,
+            bottom: readingBottom,
+            child: LayoutBuilder(
+              builder: (context, constraints) => Scrollbar(
+                controller: _readingScroll,
+                thumbVisibility: readingLayout,
+                child: SingleChildScrollView(
+                  controller: _readingScroll,
+                  key: ValueKey('idea-reading-${idea.id}'),
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(
+                      minHeight: constraints.maxHeight,
+                    ),
+                    child: Align(
+                      alignment: Alignment.bottomLeft,
+                      child: AnimatedSwitcher(
+                        duration: MotionConfig.enabled(context)
+                            ? const Duration(milliseconds: 450)
+                            : Duration.zero,
+                        transitionBuilder: (child, anim) => FadeTransition(
+                          opacity: anim,
+                          child: SlideTransition(
+                            position:
+                                Tween(
+                                  begin: const Offset(0, 0.12),
+                                  end: Offset.zero,
+                                ).animate(
+                                  CurvedAnimation(
+                                    parent: anim,
+                                    curve: Curves.easeOutCubic,
+                                  ),
+                                ),
+                            child: child,
+                          ),
+                        ),
+                        child: widget.active
+                            ? Column(
+                                key: ValueKey('on-${idea.id}'),
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: _textColumn(
+                                  idea,
+                                  compact: compact,
+                                  pageControls: readingLayout,
+                                ),
+                              )
+                            : Column(
+                                key: ValueKey('off-${idea.id}'),
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: _textColumn(
+                                  idea,
+                                  compact: compact,
+                                  pageControls: readingLayout,
+                                ),
+                              ),
+                      ),
+                    ),
+                  ),
                 ),
               ),
-              child: widget.active
-                  ? Column(
-                      key: ValueKey('on-${idea.id}'),
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: _textColumn(idea, compact: compact),
-                    )
-                  : Column(
-                      key: ValueKey('off-${idea.id}'),
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: _textColumn(idea, compact: compact),
-                    ),
             ),
           ),
 
           // Action rail
           Positioned(
-            right: 12,
-            bottom: compact ? 82 : 118,
+            left: readingLayout ? 18 : null,
+            right: readingLayout ? 18 : 12,
+            bottom:
+                media.padding.bottom +
+                (readingLayout ? 16 : (compact ? 82 : 118)),
             child: GestureDetector(
               onTap: () {}, // absorb taps so card double-tap doesn't fire
-              child: Column(
+              excludeFromSemantics: true,
+              child: Flex(
+                direction: readingLayout ? Axis.horizontal : Axis.vertical,
+                mainAxisAlignment: readingLayout
+                    ? MainAxisAlignment.spaceBetween
+                    : MainAxisAlignment.start,
+                crossAxisAlignment: readingLayout
+                    ? CrossAxisAlignment.start
+                    : CrossAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
                 children: [
                   _RailBtn(
+                    label: 'Like idea',
+                    toggled: liked,
                     icon: PhosphorIconsFill.heart,
                     outlineIcon: PhosphorIconsRegular.heart,
                     count: likeN,
@@ -605,8 +788,9 @@ class _ReelState extends ConsumerState<_Reel>
                     onTap: () =>
                         ref.read(cmpysStoreProvider.notifier).likeIdea(idea.id),
                   ),
-                  SizedBox(height: compact ? 10 : 16),
+                  SizedBox(height: readingLayout ? 0 : (compact ? 10 : 16)),
                   _RailBtn(
+                    label: 'Comments',
                     icon: PhosphorIconsFill.chatCircle,
                     outlineIcon: PhosphorIconsRegular.chatCircle,
                     count: commentCount,
@@ -614,32 +798,47 @@ class _ReelState extends ConsumerState<_Reel>
                     activeColor: Colors.white,
                     onTap: widget.onComments,
                   ),
-                  SizedBox(height: compact ? 10 : 16),
+                  SizedBox(height: readingLayout ? 0 : (compact ? 10 : 16)),
                   _RailBtn(
+                    label: 'Save idea',
+                    toggled: saved,
                     icon: PhosphorIconsFill.bookmarkSimple,
                     outlineIcon: PhosphorIconsRegular.bookmarkSimple,
                     count: null,
                     active: saved,
                     activeColor: const Color(0xFFFFD166),
                     onTap: () {
-                      final now = ref.read(cmpysStoreProvider.notifier).toggleIdeaSave(
-                          id: idea.id, title: idea.text, author: idea.author);
-                      showCmpysToast(context, now ? 'Idea saved' : 'Removed from saved',
-                          icon: now
-                              ? Icons.bookmark_added_outlined
-                              : Icons.bookmark_remove_outlined,
-                          tone: now ? AppColors.green : AppColors.ink3);
+                      final now = ref
+                          .read(cmpysStoreProvider.notifier)
+                          .toggleIdeaSave(
+                            id: idea.id,
+                            title: idea.text,
+                            author: idea.author,
+                          );
+                      showCmpysToast(
+                        context,
+                        now ? 'Idea saved' : 'Removed from saved',
+                        icon: now
+                            ? Icons.bookmark_added_outlined
+                            : Icons.bookmark_remove_outlined,
+                        tone: now ? AppColors.green : AppColors.ink3,
+                      );
                     },
                   ),
-                  SizedBox(height: compact ? 10 : 16),
+                  SizedBox(height: readingLayout ? 0 : (compact ? 10 : 16)),
                   _RailBtn(
+                    label: 'Share idea',
                     icon: PhosphorIconsFill.shareNetwork,
                     outlineIcon: PhosphorIconsRegular.shareNetwork,
                     count: null,
                     active: false,
                     activeColor: Colors.white,
-                    onTap: () => showCmpysToast(context, 'Link copied',
-                        icon: Icons.ios_share_rounded, tone: AppColors.ink3),
+                    onTap: () => showCmpysToast(
+                      context,
+                      'Link copied',
+                      icon: Icons.ios_share_rounded,
+                      tone: AppColors.ink3,
+                    ),
                   ),
                 ],
               ),
@@ -647,7 +846,10 @@ class _ReelState extends ConsumerState<_Reel>
           ),
 
           // Swipe hint (first reel only)
-          if (widget.first && widget.active)
+          if (widget.first &&
+              widget.active &&
+              widget.onNext != null &&
+              !readingLayout)
             Positioned(
               left: 0,
               right: 0,
@@ -659,14 +861,18 @@ class _ReelState extends ConsumerState<_Reel>
           AnimatedBuilder(
             animation: _burst,
             builder: (_, _) {
-              if (_burst.value == 0) return const SizedBox.shrink();
+              if (!MotionConfig.enabled(context) || _burst.value == 0) {
+                return const SizedBox.shrink();
+              }
               final t = _burst.value;
               final scale = t < 0.25
                   ? 0.3 + (t / 0.25) * 0.95
                   : t < 0.55
-                      ? 1.25 - ((t - 0.25) / 0.3) * 0.25
-                      : 1.0 + ((t - 0.55) / 0.45) * 0.1;
-              final opacity = t < 0.55 ? (t / 0.25).clamp(0.0, 1.0) : 1 - (t - 0.55) / 0.45;
+                  ? 1.25 - ((t - 0.25) / 0.3) * 0.25
+                  : 1.0 + ((t - 0.55) / 0.45) * 0.1;
+              final opacity = t < 0.55
+                  ? (t / 0.25).clamp(0.0, 1.0)
+                  : 1 - (t - 0.55) / 0.45;
               final dy = t < 0.55 ? 0.0 : -30 * ((t - 0.55) / 0.45);
               return IgnorePointer(
                 child: Center(
@@ -676,8 +882,11 @@ class _ReelState extends ConsumerState<_Reel>
                       scale: scale,
                       child: Opacity(
                         opacity: opacity.clamp(0.0, 1.0),
-                        child: const Icon(PhosphorIconsFill.heart,
-                            size: 110, color: Colors.white),
+                        child: const Icon(
+                          PhosphorIconsFill.heart,
+                          size: 110,
+                          color: Colors.white,
+                        ),
                       ),
                     ),
                   ),
@@ -690,7 +899,11 @@ class _ReelState extends ConsumerState<_Reel>
     );
   }
 
-  List<Widget> _textColumn(CmpysIdea idea, {required bool compact}) {
+  List<Widget> _textColumn(
+    CmpysIdea idea, {
+    required bool compact,
+    required bool pageControls,
+  }) {
     return [
       Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -700,15 +913,16 @@ class _ReelState extends ConsumerState<_Reel>
         ),
         child: Text(
           idea.tag.toUpperCase(),
-          style: AppTypography.kicker
-              .copyWith(color: Colors.white, fontSize: 11, letterSpacing: 1.4),
+          style: AppTypography.kicker.copyWith(
+            color: Colors.white,
+            fontSize: 11,
+            letterSpacing: 1.4,
+          ),
         ),
       ),
       const SizedBox(height: 16),
       Text(
         idea.text,
-        maxLines: compact ? 7 : null,
-        overflow: compact ? TextOverflow.ellipsis : null,
         // Design uses the reading serif (`className="serif"`) for idea body text.
         style: AppTypography.readingBold.copyWith(
           color: Colors.white,
@@ -733,20 +947,24 @@ class _ReelState extends ConsumerState<_Reel>
             child: Text(
               _reelInitials(idea.author),
               style: TextStyle(
-                  color: idea.tone,
-                  fontWeight: FontWeight.w800,
-                  fontSize: 11.5),
+                color: idea.tone,
+                fontWeight: FontWeight.w800,
+                fontSize: 11.5,
+              ),
             ),
           ),
           const SizedBox(width: 9),
           Flexible(
-            child: Text(idea.author,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14.5)),
+            child: Text(
+              idea.author,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+                fontSize: 14.5,
+              ),
+            ),
           ),
           if (idea.isSourced) ...[
             const SizedBox(width: 6),
@@ -763,17 +981,53 @@ class _ReelState extends ConsumerState<_Reel>
           ],
         ],
       ),
+      if (pageControls &&
+          (widget.onPrevious != null || widget.onNext != null)) ...[
+        const SizedBox(height: 18),
+        Wrap(
+          spacing: 12,
+          runSpacing: 8,
+          children: [
+            if (widget.onPrevious != null)
+              TextButton.icon(
+                onPressed: widget.onPrevious,
+                style: TextButton.styleFrom(
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size(44, 44),
+                ),
+                icon: const Icon(PhosphorIconsRegular.caretUp, size: 18),
+                label: const Text('Previous idea'),
+              ),
+            if (widget.onNext != null)
+              TextButton.icon(
+                onPressed: widget.onNext,
+                style: TextButton.styleFrom(
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size(44, 44),
+                ),
+                icon: const Icon(PhosphorIconsRegular.caretDown, size: 18),
+                label: const Text('Next idea'),
+              ),
+          ],
+        ),
+      ],
     ];
   }
 
   String _reelInitials(String name) {
     final parts = name.trim().split(RegExp(r'\s+'));
-    return parts.take(2).map((p) => p.isNotEmpty ? p[0] : '').join().toUpperCase();
+    return parts
+        .take(2)
+        .map((p) => p.isNotEmpty ? p[0] : '')
+        .join()
+        .toUpperCase();
   }
 }
 
 class _RailBtn extends StatelessWidget {
   const _RailBtn({
+    required this.label,
+    this.toggled,
     required this.icon,
     required this.outlineIcon,
     required this.count,
@@ -781,6 +1035,8 @@ class _RailBtn extends StatelessWidget {
     required this.activeColor,
     required this.onTap,
   });
+  final String label;
+  final bool? toggled;
   final IconData icon;
   final IconData outlineIcon;
   final int? count;
@@ -789,41 +1045,72 @@ class _RailBtn extends StatelessWidget {
   final VoidCallback onTap;
 
   @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Column(
-        children: [
-          AnimatedScale(
-            duration: const Duration(milliseconds: 220),
-            scale: active ? 1.12 : 1.0,
-            child: Container(
-              width: 50,
-              height: 50,
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.16),
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
-              ),
-              child: Icon(active ? icon : outlineIcon,
-                  size: 24, color: active ? activeColor : Colors.white),
+  Widget build(BuildContext context) => Semantics(
+    label: label,
+    value: count == null ? null : '$count',
+    toggled: toggled,
+    button: true,
+    onTap: onTap,
+    child: Tooltip(
+      message: label,
+      excludeFromSemantics: true,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          excludeFromSemantics: true,
+          borderRadius: BorderRadius.circular(28),
+          focusColor: Colors.white.withValues(alpha: 0.28),
+          child: ExcludeSemantics(
+            child: Column(
+              children: [
+                AnimatedScale(
+                  duration: MotionConfig.enabled(context)
+                      ? const Duration(milliseconds: 220)
+                      : Duration.zero,
+                  scale: active ? 1.12 : 1.0,
+                  child: Container(
+                    width: 50,
+                    height: 50,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.16),
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.18),
+                      ),
+                    ),
+                    child: Icon(
+                      active ? icon : outlineIcon,
+                      size: 24,
+                      color: active ? activeColor : Colors.white,
+                    ),
+                  ),
+                ),
+                if (count != null) ...[
+                  const SizedBox(height: 5),
+                  Text(
+                    '$count',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12,
+                      shadows: [
+                        Shadow(
+                          color: Color(0x4D000000),
+                          blurRadius: 4,
+                          offset: Offset(0, 1),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
             ),
           ),
-          if (count != null) ...[
-            const SizedBox(height: 5),
-            Text('$count',
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 12,
-                    shadows: [
-                      Shadow(color: Color(0x4D000000), blurRadius: 4, offset: Offset(0, 1))
-                    ])),
-          ],
-        ],
+        ),
       ),
-    );
-  }
+    ),
+  );
 }
 
 class _SwipeHint extends StatefulWidget {
@@ -839,8 +1126,20 @@ class _SwipeHintState extends State<_SwipeHint>
   void initState() {
     super.initState();
     _c = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 1700))
-      ..repeat(reverse: true);
+      vsync: this,
+      duration: const Duration(milliseconds: 1700),
+    );
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MotionConfig.enabled(context)) {
+      if (!_c.isAnimating) _c.repeat(reverse: true);
+    } else {
+      _c.stop();
+      _c.value = 0;
+    }
   }
 
   @override
@@ -863,13 +1162,19 @@ class _SwipeHintState extends State<_SwipeHint>
         },
         child: Column(
           children: [
-            const Icon(Icons.keyboard_arrow_up_rounded,
-                color: Colors.white, size: 22),
-            Text('Swipe up for the next idea',
-                style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.85),
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w600)),
+            const Icon(
+              Icons.keyboard_arrow_up_rounded,
+              color: Colors.white,
+              size: 22,
+            ),
+            Text(
+              'Swipe up for the next idea',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.85),
+                fontSize: 12.5,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
           ],
         ),
       ),

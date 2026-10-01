@@ -11,6 +11,7 @@ PROMPT MAPPING:
 - GET /idols/discover (Wikidata only, no LLM)
   - Uses Wikidata API for exact name searches
 """
+import asyncio
 import logging
 import time
 from datetime import datetime, timedelta, timezone
@@ -375,7 +376,9 @@ async def import_idol(
         
         # Trigger ingestion task
         from app.tasks.ingestion import run_idol_ingestion
-        run_idol_ingestion.delay(job.id)
+        # A worker must see the row before consuming its broker message.
+        await db.commit()
+        await asyncio.to_thread(run_idol_ingestion.delay, str(job.id))
         
         logger.info(
             f"[IDOL_IMPORT] Created new job {job.id} for existing idol {existing.idol.name} "
@@ -455,7 +458,8 @@ async def import_idol(
 
     # Trigger ingestion task
     from app.tasks.ingestion import run_idol_ingestion
-    run_idol_ingestion.delay(job.id)
+    await db.commit()
+    await asyncio.to_thread(run_idol_ingestion.delay, str(job.id))
 
     return IdolImportResponse(
         idolId=idol.id,

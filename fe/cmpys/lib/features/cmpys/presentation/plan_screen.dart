@@ -59,9 +59,9 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
         child: EntranceScope(
           child: ListView(
             padding: EdgeInsets.fromLTRB(
-              18,
+              AppSpacing.pageGutter(MediaQuery.sizeOf(context).width),
               14,
-              18,
+              AppSpacing.pageGutter(MediaQuery.sizeOf(context).width),
               AppShell.bottomNavClearance(context),
             ),
             children: EntranceGroup.wrap([
@@ -122,31 +122,36 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
 
   Widget _toggleChip(String label, int idx) {
     final active = _view == idx;
-    return GestureDetector(
-      onTap: () => setState(() => _view = idx),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        height: 44,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: active ? AppColors.card : Colors.transparent,
-          borderRadius: BorderRadius.circular(999),
-          boxShadow: active
-              ? [
-                  const BoxShadow(
-                    color: Color(0x1416161C),
-                    blurRadius: 8,
-                    offset: Offset(0, 2),
-                  ),
-                ]
-              : null,
-        ),
-        child: Text(
-          label,
-          style: AppTypography.bodyMedium.copyWith(
-            fontSize: 14,
-            color: active ? AppColors.ink : AppColors.ink2,
-            fontWeight: FontWeight.w700,
+    return Semantics(
+      selected: active,
+      child: CmpysPressable(
+        onTap: () => setState(() => _view = idx),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          constraints: const BoxConstraints(minHeight: 48),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: active ? AppColors.card : Colors.transparent,
+            borderRadius: BorderRadius.circular(999),
+            boxShadow: active
+                ? [
+                    const BoxShadow(
+                      color: Color(0x1416161C),
+                      blurRadius: 8,
+                      offset: Offset(0, 2),
+                    ),
+                  ]
+                : null,
+          ),
+          child: Text(
+            label,
+            textAlign: TextAlign.center,
+            style: AppTypography.bodyMedium.copyWith(
+              fontSize: 14,
+              color: active ? AppColors.ink : AppColors.ink2,
+              fontWeight: FontWeight.w700,
+            ),
           ),
         ),
       ),

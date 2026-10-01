@@ -72,7 +72,7 @@ PILOT_SKILLS: tuple[PilotSkill, ...] = (
         title="Read the three core financial statements",
         level="beginner",
         learning_outcome="Trace how one business event changes the income statement, balance sheet, and cash-flow statement.",
-        estimated_minutes=180,
+        estimated_minutes=60,
         priority=100,
     ),
     PilotSkill(

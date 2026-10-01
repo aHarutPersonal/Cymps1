@@ -107,7 +107,7 @@ class _EmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Center(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -123,7 +123,8 @@ class _EmptyState extends StatelessWidget {
               child: Icon(icon, size: 28, color: AppColors.ink3),
             ),
             const SizedBox(height: 16),
-            Text(title, style: AppTypography.h3.copyWith(fontSize: 21)),
+            Text(title, textAlign: TextAlign.center,
+                style: AppTypography.h3.copyWith(fontSize: 21)),
             const SizedBox(height: 8),
             ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 260),
@@ -533,8 +534,11 @@ class CmpysSettingsScreen extends ConsumerWidget {
   Widget _toggleRow(IconData icon, String label, String? sub, bool on,
       VoidCallback onTap,
       {bool last = false}) {
-    return _rowFrame(icon, label, sub, _Toggle(on: on, onTap: onTap),
-        last: last);
+    return MergeSemantics(
+      child: _rowFrame(icon, label, sub,
+          Switch(value: on, onChanged: (_) => onTap(),
+              activeTrackColor: AppColors.green2), last: last),
+    );
   }
 
   Widget _staticRow(IconData icon, String label, String value) {
@@ -556,41 +560,6 @@ class CmpysSettingsScreen extends ConsumerWidget {
       child: _rowFrame(icon, label, sub,
           const Icon(Icons.chevron_right_rounded, color: AppColors.ink3, size: 22),
           last: last),
-    );
-  }
-}
-
-class _Toggle extends StatelessWidget {
-  const _Toggle({required this.on, required this.onTap});
-  final bool on;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 220),
-        width: 50,
-        height: 30,
-        padding: const EdgeInsets.all(3),
-        alignment: on ? Alignment.centerRight : Alignment.centerLeft,
-        decoration: BoxDecoration(
-          color: on ? AppColors.green : AppColors.hair2,
-          borderRadius: BorderRadius.circular(999),
-        ),
-        child: Container(
-          width: 24,
-          height: 24,
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(color: Color(0x22000000), blurRadius: 4, offset: Offset(0, 1)),
-            ],
-          ),
-        ),
-      ),
     );
   }
 }

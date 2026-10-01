@@ -23,6 +23,12 @@ from app.services.book_narration import (
 )
 
 
+@pytest.fixture(autouse=True)
+def legacy_narration_provider(monkeypatch):
+    """These fixtures exercise legacy MiniMax recordings, independent of defaults."""
+    monkeypatch.setattr(settings, "book_narration_provider", "yunwu")
+
+
 def test_rendered_markdown_passage_is_accepted_for_narration():
     markdown = """
 ## Choose with care
@@ -340,6 +346,79 @@ def test_minimax_response_rejects_provider_and_audio_errors(payload):
         _parse_minimax_response(payload)
 
 
+@pytest.mark.parametrize("subtitle", [None, "", 42])
+def test_valid_audio_does_not_require_optional_subtitle_url(subtitle):
+    parsed = _parse_minimax_response({
+        "base_resp": {"status_code": 0},
+        "data": {"status": 2, "audio": (b"\xff\xfb" + b"a" * 126).hex(), "subtitle_file": subtitle},
+        "extra_info": {"audio_length": 1000},
+    })
+    assert parsed.duration_ms == 1000
+    assert len(parsed.audio_bytes) == 128
+    assert parsed.subtitle_url is None
+
+
+@pytest.mark.parametrize("duration", [float("nan"), float("inf"), True, 0, -1])
+def test_missing_timing_does_not_relax_required_audio_duration(duration):
+    with pytest.raises(BookNarrationUnavailableError) as raised:
+        _parse_minimax_response({
+            "base_resp": {"status_code": 0},
+            "data": {"status": 2, "audio": (b"\xff\xfb" + b"a" * 126).hex()},
+            "extra_info": {"audio_length": duration},
+        })
+    assert raised.value.reason_code == "duration_invalid"
+
+
+def test_provider_rejection_diagnostic_keeps_only_numeric_code():
+    with pytest.raises(BookNarrationUnavailableError) as raised:
+        _parse_minimax_response({"base_resp": {"status_code": 1004, "status_msg": "PRIVATE_PROVIDER_BODY"}})
+    assert raised.value.provider_status == 1004
+    assert raised.value.reason_code == "provider_rejected"
+    assert "PRIVATE_PROVIDER_BODY" not in str(raised.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["yunwu", "openlux"])
+async def test_native_gateway_uses_only_explicit_provider_credential(monkeypatch, provider):
+    monkeypatch.setattr(settings, "book_narration_provider", provider)
+    monkeypatch.setattr(settings, "book_narration_api_base_url", f"https://{provider}.example/minimax/v1")
+    monkeypatch.setattr(settings, "yunwu_api_key", "YUNWU_TEST_KEY")
+    monkeypatch.setattr(settings, "openlux_api_key", "OPENLUX_TEST_KEY")
+    observed = []
+    async def handler(request):
+        observed.append(request)
+        return httpx.Response(200, json={
+            "base_resp": {"status_code": 0},
+            "data": {"status": 2, "audio": (b"\xff\xfb" + b"a" * 126).hex()},
+            "extra_info": {"audio_length": 1000},
+        })
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await _synthesize_with_minimax("Private passage", preset=_STYLE_PRESETS["expressive"],
+                                       profile=_narrator_profile("expressive_narrator"), client=client)
+    assert len(observed) == 1
+    assert str(observed[0].url) == f"https://{provider}.example/minimax/v1/t2a_v2"
+    assert observed[0].headers["authorization"] == f"Bearer {provider.upper()}_TEST_KEY"
+
+
+@pytest.mark.asyncio
+async def test_gateway_http_failure_exposes_safe_status_without_retry(monkeypatch):
+    monkeypatch.setattr(settings, "book_narration_provider", "yunwu")
+    monkeypatch.setattr(settings, "yunwu_api_key", "PRIVATE_TEST_KEY")
+    calls = []
+    async def handler(request):
+        calls.append(request)
+        return httpx.Response(403, text="PRIVATE_PROVIDER_BODY")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(BookNarrationUnavailableError) as raised:
+            await _synthesize_with_minimax("PRIVATE_PASSAGE", preset=_STYLE_PRESETS["expressive"],
+                                           profile=_narrator_profile("expressive_narrator"), client=client)
+    assert len(calls) == 1
+    assert raised.value.reason_code == "provider_http_error"
+    assert raised.value.http_status == 403
+    assert raised.value.retryable is False
+    assert "PRIVATE" not in str(raised.value)
+
+
 @pytest.mark.asyncio
 async def test_native_yunwu_request_uses_minimax_payload(monkeypatch):
     monkeypatch.setattr(
@@ -627,12 +706,12 @@ async def test_render_logs_alignment_structure_without_source_or_provider_text(
 
 
 @pytest.mark.asyncio
-async def test_render_retries_a_cache_entry_with_missing_provider_timing(
+async def test_render_reuses_recording_with_missing_provider_timing(
     monkeypatch,
     tmp_path,
     caplog,
 ):
-    text = "Timing should recover."
+    text = "Playback should remain available."
     synthesis = _MiniMaxSynthesis(
         audio_bytes=b"\xff\xfb" + (b"a" * 256),
         duration_ms=1600,
@@ -676,10 +755,78 @@ async def test_render_retries_a_cache_entry_with_missing_provider_timing(
 
     assert first.alignment_source == "none"
     assert first.alignment == ()
-    assert second.alignment_source == "provider"
-    assert len(second.alignment) == 1
-    assert synthesize.await_count == 2
-    assert fetch_subtitle.await_count == 2
+    assert second.alignment_source == "none"
+    assert second.alignment == ()
+    assert second.audio_url == first.audio_url
+    assert second.cached
+    assert synthesize.await_count == 1
+    assert fetch_subtitle.await_count == 1
     assert "reason=subtitle_alignment_inconsistent" in caplog.text
     assert text not in caplog.text
     assert synthesis.subtitle_url not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_audio_only_cache_works_without_credential_and_keeps_provider_identity(monkeypatch, tmp_path):
+    import asyncio
+    from pathlib import Path
+    text = "A saved recording remains available."
+    synthesize = AsyncMock(return_value=_MiniMaxSynthesis(
+        audio_bytes=b"\xff\xfb" + b"a" * 256, duration_ms=1600, subtitle_url=None,
+    ))
+    subtitle = AsyncMock(side_effect=AssertionError("No subtitle URL should be fetched"))
+    monkeypatch.setattr(settings, "book_narration_enabled", True)
+    monkeypatch.setattr(settings, "book_narration_provider", "yunwu")
+    monkeypatch.setattr(settings, "yunwu_api_key", "YUNWU_TEST_KEY")
+    monkeypatch.setattr(settings, "openlux_api_key", None)
+    monkeypatch.setattr(settings, "book_narration_media_dir", str(tmp_path))
+    monkeypatch.setattr(book_narration, "_synthesize_with_minimax", synthesize)
+    monkeypatch.setattr(book_narration, "_fetch_subtitle_with_retry", subtitle)
+    book_narration._locks.clear()
+
+    first, concurrent = await asyncio.gather(
+        render_book_narration(text, "expressive"), render_book_narration(text, "expressive"),
+    )
+    assert first.audio_url == concurrent.audio_url
+    assert first.alignment_source == "none" and first.alignment == ()
+    assert Path(tmp_path / Path(first.audio_url).name).stat().st_size == 258
+    synthesize.assert_awaited_once()
+    subtitle.assert_not_awaited()
+    monkeypatch.setattr(settings, "yunwu_api_key", None)
+    cached = await render_book_narration(text, "expressive")
+    assert cached.cached and cached.audio_url == first.audio_url
+    synthesize.assert_awaited_once()
+
+    # Choosing another provider never borrows the old provider's credential or
+    # labels its cache as a recording from the newly selected provider.
+    monkeypatch.setattr(settings, "book_narration_provider", "openlux")
+    with pytest.raises(BookNarrationUnavailableError, match="not configured"):
+        await render_book_narration(text, "expressive")
+    synthesize.assert_awaited_once()
+    monkeypatch.setattr(settings, "openlux_api_key", "OPENLUX_TEST_KEY")
+    openlux_asset = await render_book_narration(text, "expressive")
+    assert openlux_asset.provider == "openlux"
+    assert openlux_asset.audio_url != first.audio_url
+    assert synthesize.await_args.kwargs["provider"] == "openlux"
+    assert synthesize.await_count == 2
+
+
+@pytest.mark.parametrize("enabled,provider,expected_load", [
+    (True, "openlux", True), (False, "openlux", False), (True, "yunwu", False),
+])
+def test_narration_can_load_openlux_secret_without_switching_text_provider(monkeypatch, enabled, provider, expected_load):
+    from unittest.mock import Mock
+    from app.core import credentials
+    from app.core.config import Settings
+    read_secret = Mock(return_value="OPENLUX_TEST_SECRET")
+    monkeypatch.setattr(credentials, "read_aws_secret", read_secret)
+    config = Settings(
+        _env_file=None, llm_provider="zai", zai_api_key="ZAI_TEST_KEY", zai_secret_id=None,
+        google_books_secret_id=None, openlux_api_key=None, openlux_secret_id="test/openlux",
+        openlux_secret_region="us-east-1", openlux_keychain_service=None,
+        book_narration_provider=provider, book_narration_enabled=enabled,
+    )
+    assert config.llm_provider == "zai" and config.zai_api_key == "ZAI_TEST_KEY"
+    assert read_secret.call_count == int(expected_load)
+    assert config.openlux_api_key == ("OPENLUX_TEST_SECRET" if expected_load else None)
+    assert "OPENLUX_TEST_SECRET" not in repr(config)

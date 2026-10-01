@@ -90,7 +90,9 @@ def test_personal_savings_and_business_ipo_are_forced_to_different_basis() -> No
 
 def test_evidence_levels_become_coarse_points_and_never_a_percentage() -> None:
     raw = {
-        "dimensions": [_comparable_dimension(dimension_id) for dimension_id in FIXED_IDS],
+        "dimensions": [
+            _comparable_dimension(dimension_id) for dimension_id in FIXED_IDS
+        ],
         "milestones": [{"text": "Shipped a defining product", "hit_by_age": 25}],
     }
 
@@ -101,24 +103,19 @@ def test_evidence_levels_become_coarse_points_and_never_a_percentage() -> None:
 
     assert [dimension["you"] for dimension in output["dimensions"]] == [50] * 5
     assert [dimension["idol"] for dimension in output["dimensions"]] == [100] * 5
-    assert output["overall"] == {
-        "status": "estimated",
-        "you": 50,
-        "idol": 100,
-        "gap": 50,
-        "comparable_dimensions": 5,
-        "total_dimensions": 5,
-        "reason": (
-            "Ordinal readiness estimate from self-reported user evidence; "
-            "not a percentage of the idol's achievements."
-        ),
-    }
+    assert output["overall"]["status"] == "not_combined"
+    assert output["overall"]["you"] is None
+    assert output["overall"]["gap"] is None
     assert output["milestones"][0]["id"] == "m1"
 
 
 def test_no_achievements_disables_overall_even_with_dimension_signals() -> None:
     output = normalize_comparison_scores(
-        {"dimensions": [_comparable_dimension(dimension_id) for dimension_id in FIXED_IDS]},
+        {
+            "dimensions": [
+                _comparable_dimension(dimension_id) for dimension_id in FIXED_IDS
+            ]
+        },
         achievement_baseline_status="none_yet",
     )
 
@@ -139,6 +136,7 @@ def test_only_the_v2_server_contract_is_current() -> None:
     assert comparison_scores_are_current(
         {
             "version": COMPARISON_SCORE_VERSION,
+            "placement_version": 1,
             "methodology": COMPARISON_SCORE_METHOD,
             "overall": {},
             "dimensions": [],
@@ -179,3 +177,38 @@ async def test_generation_threads_authoritative_achievement_status() -> None:
     assert output["overall"]["status"] == "insufficient_evidence"
     prompt = client.generate_json.await_args.kwargs["user_prompt"]
     assert "AUTHORITATIVE ACHIEVEMENT BASELINE STATUS: none_yet" in prompt
+
+
+@pytest.mark.asyncio
+async def test_gateway_outage_recovers_once_and_records_both_calls(monkeypatch):
+    from app.services.llm.client import LLMResponse
+    primary = SimpleNamespace(model='gateway', generate_json=AsyncMock(return_value=LLMResponse(
+        data={}, provider='openlux', model='gateway', error='OpenLux request failed (TimeoutError; finish=missing)')))
+    fallback = SimpleNamespace(model='independent', generate_json=AsyncMock(return_value=LLMResponse(
+        data={'dimensions': []}, provider='gemini', model='independent')))
+    recovery = AsyncMock()
+    def select_recovery(response, **kwargs):
+        assert 0 < kwargs['timeout'] <= 20
+        return fallback
+    monkeypatch.setattr('app.services.llm.recovery.operational_recovery_client', select_recovery)
+    monkeypatch.setattr('app.services.llm.telemetry.record_llm_response', recovery)
+    result = await generate_comparison_scores(primary, idol_name='Mentor', user_age=28,
+        user_profile_json='{}', interview_transcript_json='[]', idol_facts_json='{}', comparison_summary='Saved verdict')
+    assert result is not None
+    assert result['overall']['you'] is None
+    assert primary.generate_json.await_count == fallback.generate_json.await_count == 1
+    assert [c.kwargs['metadata']['stage'] for c in recovery.await_args_list] == ['primary', 'operational_recovery']
+
+
+@pytest.mark.asyncio
+async def test_invalid_content_does_not_switch_provider(monkeypatch):
+    from app.services.llm.client import LLMResponse
+    monkeypatch.setattr('app.services.llm.telemetry.record_llm_response', AsyncMock())
+    monkeypatch.setattr('app.services.llm.recovery.settings', SimpleNamespace(
+        gemini_api_key='test-only', gemini_quality_model='test'))
+    client = SimpleNamespace(model='gateway', generate_json=AsyncMock(return_value=LLMResponse(
+        data={}, provider='openlux', error='OpenLux request failed (JSONDecodeError; finish=stop)')))
+    result = await generate_comparison_scores(client, idol_name='Mentor', user_age=28,
+        user_profile_json='{}', interview_transcript_json='[]', idol_facts_json='{}', comparison_summary='Saved verdict')
+    assert result is None
+    assert client.generate_json.await_count == 1

@@ -1,10 +1,10 @@
 """Daily monetary budget policy for autonomous catalog work."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -98,7 +98,22 @@ async def get_daily_background_budget_status(
         running_query = running_query.where(IngestJob.id != exclude_running_job_id)
     running_kinds = (await db.execute(running_query)).scalars().all()
     reserved = sum(job_budget_reserve_usd(kind) for kind in running_kinds)
-    return make_budget_status(spent_usd=spent, reserved_usd=reserved)
+    status = make_budget_status(spent_usd=spent, reserved_usd=reserved)
+    # Do not reset unknown gateway charges at midnight. Resume autonomous paid
+    # work only after reconciliation gives these attempts an explicit cost (or
+    # confirms no charge). Covers legacy failures incorrectly recorded as zero.
+    unknown = (await db.execute(select(LLMUsageEvent.id).where(
+        LLMUsageEvent.operation.in_(BACKGROUND_OPERATIONS),
+        LLMUsageEvent.provider.in_(("openlux", "zai")),
+        LLMUsageEvent.success.is_(False),
+        LLMUsageEvent.prompt_tokens.is_(None),
+        LLMUsageEvent.completion_tokens.is_(None),
+        LLMUsageEvent.total_tokens.is_(None),
+        or_(LLMUsageEvent.estimated_cost_usd.is_(None),
+            LLMUsageEvent.estimated_cost_usd <= 0),
+        func.coalesce(LLMUsageEvent.metadata_json["billing_reconciled"].as_boolean(), False).is_(False),
+    ).limit(1))).scalar_one_or_none()
+    return replace(status, state="usage_unknown") if unknown else status
 
 
 def job_budget_reserve_usd(kind: IngestKind) -> float:

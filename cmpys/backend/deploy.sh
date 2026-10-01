@@ -52,6 +52,13 @@ ROLLBACK_ARMED=false
 COMPOSE_REPLACED=false
 RELEASE_SERVICES=(web worker worker-high worker-low catalog-worker catalog-control curriculum-worker curriculum-control beat)
 
+# Share the CI deployment lock before changing any live release files.
+exec 9>"${DIR}/.deploy.lock"
+if ! flock -n 9; then
+  echo "ERROR: another production deployment is already running" >&2
+  exit 1
+fi
+
 compose() {
   docker compose -p cmpys --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" "$@"
 }
@@ -71,20 +78,22 @@ rollback_release() {
   trap - ERR
   echo "  Rolling back release..."
   if [[ -f "${COMPOSE_BACKUP}" ]]; then
-    cp "${COMPOSE_BACKUP}" "${COMPOSE_FILE}"
+    cp "${COMPOSE_BACKUP}" "${COMPOSE_FILE}" || return 1
   fi
   if [[ "${ROLLBACK_ARMED}" == "true" ]]; then
     mapfile -t rollback_services < <(configured_release_services)
-    IMAGE_TAG="${PREVIOUS_TAG}" compose up -d --force-recreate \
-      "${rollback_services[@]}"
-    wait_for_web
+    [[ ${#rollback_services[@]} -gt 0 ]] || return 1
+    # Migrations already ran forward; an older image must not rerun them.
+    IMAGE_TAG="${PREVIOUS_TAG}" compose up -d --no-deps --force-recreate \
+      "${rollback_services[@]}" || return 1
+    wait_for_web || return 1
     for service in "${rollback_services[@]}"; do
       if ! service_is_running "${service}"; then
         echo "  ERROR: rollback service ${service} is not running" >&2
         return 1
       fi
     done
-    verify_configured_workers "${rollback_services[@]}"
+    verify_configured_workers "${rollback_services[@]}" || return 1
   fi
 }
 
@@ -191,8 +200,8 @@ if ! grep -q '^JWT_SECRET_KEY=' "${ENV_FILE}"; then
 fi
 
 cp "${COMPOSE_FILE}" "${COMPOSE_BACKUP}"
-cp "${INCOMING_COMPOSE}" "${COMPOSE_FILE}"
 COMPOSE_REPLACED=true
+cp "${INCOMING_COMPOSE}" "${COMPOSE_FILE}"
 
 echo "  Loading and tagging image..."
 docker load < "${ARCHIVE}"
@@ -204,13 +213,17 @@ IMAGE_TAG="${TAG}" compose config --quiet
 echo "  Stopping old writers before migration..."
 ROLLBACK_ARMED=true
 mapfile -t CURRENT_RELEASE_SERVICES < <(configured_release_services)
+if [[ ${#CURRENT_RELEASE_SERVICES[@]} -eq 0 ]]; then
+  echo "  ERROR: no runtime services were resolved; refusing to stop dependencies" >&2
+  false
+fi
 compose stop "${CURRENT_RELEASE_SERVICES[@]}"
 
 echo "  Running migrations while old writers are quiesced..."
 IMAGE_TAG="${TAG}" compose run --rm -T migrate </dev/null
 
 echo "  Recreating API, interactive, catalog, curriculum workers, and beat..."
-IMAGE_TAG="${TAG}" compose up -d --force-recreate "${RELEASE_SERVICES[@]}"
+IMAGE_TAG="${TAG}" compose up -d --no-deps --force-recreate "${RELEASE_SERVICES[@]}"
 
 echo "  Waiting for API readiness..."
 wait_for_web
@@ -241,7 +254,8 @@ fi
 
 ROLLBACK_ARMED=false
 COMPOSE_REPLACED=false
-rm -f "${COMPOSE_BACKUP}" "${ARCHIVE}" "${INCOMING_COMPOSE}"
+# Keep the matching topology for later operator recovery.
+rm -f "${ARCHIVE}" "${INCOMING_COMPOSE}"
 echo "  Ready: API, PostgreSQL, Redis, all workers, and beat are healthy."
 REMOTE
 

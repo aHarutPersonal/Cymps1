@@ -81,9 +81,7 @@ void main() {
     expect(draft.blueprintMd, 'Blueprint ready.');
     expect(draft.planJobId, 'plan-job-1');
     expect(
-      find.text(
-        'Your roadmap is ready. Current-week lessons and guides continue preparing.',
-      ),
+      find.text('Your roadmap is ready. Lessons are preparing.'),
       findsOneWidget,
     );
     expect(find.text('Enter CMPYS'), findsOneWidget);
@@ -96,7 +94,7 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('benefit cards can be swiped while generation runs', (
+  testWidgets('perspectives can be swiped without affecting plan readiness', (
     tester,
   ) async {
     final draft = CmpysOnboardingDraft()..sessionId = 'session-1';
@@ -117,13 +115,12 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(
-      find.text('The interview is not a personality quiz.'),
-      findsOneWidget,
-    );
-    await tester.drag(find.byType(PageView), const Offset(-320, 0));
+    expect(find.text('Seneca'), findsOneWidget);
+    await tester.ensureVisible(find.byType(PageView));
+    await tester.drag(find.byType(PageView), const Offset(-600, 0));
     await tester.pumpAndSettle();
-    expect(find.text('Learn the pattern, not the costume.'), findsOneWidget);
+    expect(find.text('Isaac Newton'), findsOneWidget);
+    expect(find.text('Enter CMPYS'), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox());
   });
@@ -149,11 +146,6 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.drag(find.byType(PageView), const Offset(-700, 0));
-    await tester.pumpAndSettle();
-    await tester.drag(find.byType(PageView), const Offset(-700, 0));
-    await tester.pumpAndSettle();
-
     expect(find.text('Seneca'), findsOneWidget);
     expect(find.byKey(const Key('mentor-voice-Seneca')), findsOneWidget);
     expect(
@@ -163,9 +155,8 @@ void main() {
     expect(find.textContaining('protector or your pattern'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
-    await tester.drag(find.byType(PageView), const Offset(-700, 0));
-    await tester.pumpAndSettle();
-    await tester.drag(find.byType(PageView), const Offset(-700, 0));
+    await tester.ensureVisible(find.byTooltip('Next perspective'));
+    await tester.tap(find.byTooltip('Next perspective'));
     await tester.pumpAndSettle();
 
     expect(find.text('Isaac Newton'), findsOneWidget);
@@ -175,10 +166,10 @@ void main() {
       findsOneWidget,
     );
 
-    await tester.drag(find.byType(PageView), const Offset(-700, 0));
+    await tester.tap(find.byTooltip('Next perspective'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Warren Buffett'), findsOneWidget);
+    expect(find.text('Warren Buffett'), findsWidgets);
     expect(
       find.byKey(const Key('mentor-voice-Warren Buffett')),
       findsOneWidget,

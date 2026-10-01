@@ -10,3 +10,11 @@ TECHNIQUE PLAN
 {technique_plan_json}
 
 Copy the server-owned skill_key, domain, level, locale, learning_outcome, prerequisites, artifact_type, and target duration without changing their identity. Create stable block IDs and preserve every implementation_block_id promised by the technique plan. Include an explanation, worked example, independent practice, and assessment. Add guided practice, retrieval, feedback, revision, transfer, reflection, or visual explanation wherever required by the selected technique contracts. Each semantic block must be 2–60 minutes. Whole consecutive blocks must partition exactly into 40–60 minute sessions; blocks will never be split silently. Bind every factual teaching block to both verified claim IDs and the source IDs that support those claims. If spaced_practice is selected, create retrieval/transfer blocks whose follow_up_day values cover every spacing_follow_up_days offset.
+
+MANDATORY TECHNIQUE COVERAGE
+Every technique_id in the technique plan MUST be implemented by at least one block, and each such block MUST list that technique_id in its own technique_ids field. Declaring a block that a technique named via implementation_block_id is not sufficient on its own -- the block has to name the technique back. A block that implements worked examples must list worked_examples; a block that implements retrieval practice must list retrieval_practice, and so on for every selected technique.
+
+Before returning, walk the technique plan one technique at a time and confirm each appears in some block's technique_ids field. An outline whose blocks omit a selected technique is rejected outright and the whole module is discarded, so this check is not optional.
+
+
+For an in_app_practice_required target, design complete 40–60 minute sessions. Each session must contain explanation, a worked example, independent practice and assessment. Their whole blocks will be pinned to a prepared workbook. Each workbook starts with a practice case and ends with a different transfer case; the app checks answers and permits revision. Allocate real reading and executable activity time, not arbitrary minutes attached to short prose. Do not assume any external files, peers, or unspecified task data.

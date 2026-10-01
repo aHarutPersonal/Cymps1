@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from app.core.config import settings
 
 
-PRICING_VERSION = "multi-provider-2026-07-24-yunwu-gemini"
+PRICING_VERSION = "multi-provider-2026-09-15-zai"
 
 
 @dataclass(frozen=True)
@@ -42,9 +42,33 @@ def price_card_for_model(model: str, provider: str | None = None) -> PriceCard:
     normalized = model.casefold().removeprefix("models/")
     resolved_provider = (provider or settings.llm_provider).casefold()
 
+    if resolved_provider == "zai":
+        # Official uncached rates, verified 2026-09-15. Completion includes reasoning.
+        if normalized == "glm-5.3-flash":
+            return PriceCard(0.15, 0.50)
+        if normalized == "glm-5.3":
+            return PriceCard(1.40, 4.40)
+    if resolved_provider == "openlux":
+        # The gateway account's group/discount is not the direct OpenAI price.
+        # Until reconciled, use explicit conservative budget rates, not Yunwu's
+        # historical recharge multiplier or an accidental free fallback.
+        return PriceCard(
+            settings.openlux_input_usd_per_million,
+            settings.openlux_output_usd_per_million,
+        )
+
     # Effective Yunwu cash rates. Recharge conversion and the token's assigned
     # route are configurable because either can change independently.
     # Grok 4.5 doubles token rates above a 200k prompt context.
+    # OpenRouter's stealth route is free at present, so it contributes nothing to
+    # the internal spend estimate. Grounded discovery still runs natively on
+    # Gemini and is still priced by the Gemini cards below, so the daily budget
+    # guard keeps protecting the one curriculum path that actually bills.
+    if resolved_provider == "openrouter":
+        return PriceCard(
+            max(settings.openrouter_input_usd_per_million, 0.0),
+            max(settings.openrouter_output_usd_per_million, 0.0),
+        )
     if resolved_provider == "yunwu":
         exchange_rate = max(settings.yunwu_usd_exchange_rate, 0.000001)
         cash_multiplier = (

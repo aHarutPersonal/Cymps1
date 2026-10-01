@@ -37,7 +37,11 @@ def sanitize_external_text(value: str | None, *, max_chars: int = 2500) -> str:
     return " ".join(text.split())[:max_chars].strip()
 
 
-def sanitize_research_manifest(payload: Any) -> ResearchManifest:
+def sanitize_research_manifest(
+    payload: Any,
+    *,
+    evidence_policy: str = "institutional",
+) -> ResearchManifest:
     """Validate, sanitize excerpts, and recompute their exact content hashes."""
     raw = payload.model_dump(mode="json") if isinstance(payload, ResearchManifest) else payload
     if not isinstance(raw, dict):
@@ -73,7 +77,10 @@ def sanitize_research_manifest(payload: Any) -> ResearchManifest:
             claim["statement"] = sanitize_external_text(
                 claim.get("statement"), max_chars=1200
             )
-    return ResearchManifest.model_validate(normalized)
+    return ResearchManifest.model_validate(
+        normalized,
+        context={"evidence_policy": evidence_policy},
+    )
 
 
 def writer_source_pack(manifest: ResearchManifest) -> dict[str, Any]:

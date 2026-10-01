@@ -32,7 +32,7 @@ typedef LiveDim = ({
   String idolEvidence,
 });
 
-/// CMPYS Compare tab — head-to-head gauge, verdict, record entry, radar,
+/// CMPYS Compare tab — learning context, skill checks, record entry, radar,
 /// expandable dimensions, milestones (claimable), strengths.
 class CmpysCompareScreen extends ConsumerStatefulWidget {
   const CmpysCompareScreen({super.key});
@@ -71,26 +71,8 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
     final overall = rawOverall is Map
         ? rawOverall.cast<String, dynamic>()
         : null;
-    final hasOverall =
-        overall?['status'] == 'estimated' &&
-        comparableDims.length == dims.length &&
-        dims.isNotEmpty;
-    final youAvg = hasOverall
-        ? (comparableDims.map((d) => d.you!).reduce((a, b) => a + b) /
-                  comparableDims.length)
-              .round()
-        : 0;
-    final idolAvg = hasOverall
-        ? (comparableDims.map((d) => d.idol!).reduce((a, b) => a + b) /
-                  comparableDims.length)
-              .round()
-        : 0;
-    final readinessGap = idolAvg - youAvg;
     final hitCount = ms.where((m) => st.milestones[m.id] ?? false).length;
     final pending = st.pendingWins().length;
-    final initial = st.user.name.isNotEmpty
-        ? st.user.name[0].toUpperCase()
-        : 'Y';
     final strengths = comparableDims.where((d) => d.you! >= d.idol!).toList();
 
     return Scaffold(
@@ -100,9 +82,9 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
         child: EntranceScope(
           child: ListView(
             padding: EdgeInsets.fromLTRB(
-              18,
+              AppSpacing.pageGutter(MediaQuery.sizeOf(context).width),
               14,
-              18,
+              AppSpacing.pageGutter(MediaQuery.sizeOf(context).width),
               AppShell.bottomNavClearance(context),
             ),
             children: EntranceGroup.wrap([
@@ -110,11 +92,13 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   CmpysKicker(
-                    cmpAge > 0 ? 'Both at age $cmpAge' : 'Your comparison',
+                    cmpAge > 0
+                        ? 'Your context at age $cmpAge'
+                        : 'Your learning context',
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'You vs ${idol.short}',
+                    'Learn from ${idol.short}',
                     style: AppTypography.display.copyWith(
                       fontSize: 30,
                       letterSpacing: -0.5,
@@ -124,12 +108,17 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
                 ],
               ),
               const SizedBox(height: 16),
-              if (hasScores && hasOverall)
-                _readinessHero(idol, youAvg, idolAvg, readinessGap, initial)
-              else if (hasScores)
+              if (hasScores)
                 _insufficientEvidenceHero(overall)
               else
                 _comparisonScoresStatus(scoresSync),
+              if (hasScores &&
+                  (st.liveComparisonScores?['learner_diagnostics'] as List?)
+                          ?.isNotEmpty ==
+                      true)
+                _diagnosticCard(
+                  st.liveComparisonScores!['learner_diagnostics'] as List,
+                ),
               const SizedBox(height: 14),
               _aiVerdictCard(st, idol),
               const SizedBox(height: 14),
@@ -149,7 +138,7 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
                   const SizedBox(height: 22),
                   const Padding(
                     padding: EdgeInsets.only(left: 2),
-                    child: CmpysKicker('Where you’re already ahead'),
+                    child: CmpysKicker('Strengths to build on'),
                   ),
                   const SizedBox(height: 10),
                   ...strengths.map(_strengthCard),
@@ -162,7 +151,7 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
                 full: true,
                 leadingIcon: PhosphorIconsBold.signpost,
                 onTap: () => context.go(AppRoutes.plan),
-                child: const Text('Work the plan to close the gap'),
+                child: const Text('Continue your learning plan'),
               ),
             ]),
           ),
@@ -177,8 +166,8 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
     return scoresSync.when(
       loading: () => _comparisonScoresCard(
         key: const Key('comparison-scores-pending'),
-        title: 'Your comparison scores are being prepared.',
-        subtitle: 'This usually takes less than a minute.',
+        title: 'Assessing the evidence for each dimension.',
+        subtitle: 'Your written comparison and learning plan remain available.',
         loading: true,
       ),
       error: (error, stackTrace) => _comparisonScoresCard(
@@ -205,8 +194,8 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
           case ComparisonScoresSyncResult.failed:
             return _comparisonScoresCard(
               key: const Key('comparison-scores-failed'),
-              title: 'We couldn’t finish your comparison.',
-              subtitle: 'Tap to start a fresh scoring attempt.',
+              title: 'Your dimension assessment couldn’t finish.',
+              subtitle: 'Your written comparison is saved. Tap to retry the assessment.',
               onRetry: () => unawaited(_retryComparisonScores()),
             );
           case ComparisonScoresSyncResult.ready:
@@ -302,91 +291,49 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
     );
   }
 
-  Widget _readinessHero(
-    CmpysIdol idol,
-    int youAvg,
-    int idolAvg,
-    int gap,
-    String initial,
-  ) {
-    final gapText = gap > 0
-        ? '−$gap'
-        : gap < 0
-        ? '+${-gap}'
-        : '0';
-    return CmpysCardSurface(
-      raised: true,
-      pad: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              _gaugeSide(
-                CmpysMonogram(
-                  initials: initial,
-                  size: 56,
-                  color: AppColors.ochre2,
-                  tint: AppColors.ochreSoft,
-                ),
-                'You, now',
-                'READINESS $youAvg',
-              ),
-              Expanded(
-                child: Center(
-                  child: Container(
-                    width: 92,
-                    height: 92,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: AppColors.paper2,
-                      border: Border.all(color: AppColors.hair, width: 8),
-                    ),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(
-                          gapText,
-                          style: AppTypography.display.copyWith(
-                            fontSize: 24,
-                            fontWeight: FontWeight.w800,
-                            height: 1,
-                          ),
-                        ),
-                        Text(
-                          'point gap',
-                          style: AppTypography.caption.copyWith(
-                            color: AppColors.ink3,
-                            fontSize: 10.5,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+  Widget _diagnosticCard(List values) {
+    const labels = {
+      'profit_vs_cash': 'Profit and cash',
+      'maintenance_vs_growth': 'Maintenance and growth spending',
+      'pythagorean_calculation': 'Right-triangle calculation',
+      'pythagorean_precondition': 'When the triangle rule applies',
+      'logical_implication': 'Logical implication',
+      'universal_counterexample': 'Testing a universal claim',
+      'goal_specific_sample': 'Your work example',
+      'goal_specific_validation': 'Checking your work',
+    };
+    const statuses = {
+      'correct_on_item': 'Correct on this check',
+      'needs_practice_on_item': 'Revisit this specific skill',
+      'needs_review': 'Needs a closer review',
+      'unknown': 'Not established yet',
+      'not_assessed': 'Not checked yet',
+    };
+    return Padding(
+      padding: const EdgeInsets.only(top: 14),
+      child: CmpysCardSurface(
+        key: const Key('comparison-skill-checks'),
+        pad: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const CmpysKicker('Your starting checks'),
+            const SizedBox(height: 8),
+            for (final value in values.whereType<Map>())
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  '${labels[value['skill_id']] ?? 'Skill check'}: '
+                  '${statuses[value['status']] ?? 'Needs a closer review'}',
+                  style: AppTypography.bodyMedium,
                 ),
               ),
-              _gaugeSide(
-                CmpysMentorAvatar(
-                  slug: idol.slug,
-                  initials: idol.initials,
-                  color: idol.color,
-                  tint: idol.tint,
-                  size: 56,
-                ),
-                idol.short,
-                'BENCHMARK $idolAvg',
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Text(
-            'Evidence-tier estimate · not a percentage of achievements',
-            textAlign: TextAlign.center,
-            style: AppTypography.caption.copyWith(
-              color: AppColors.ink3,
-              fontSize: 11.5,
+            Text(
+              'Brief checks guide the next lesson; they do not certify your overall level.',
+              style: AppTypography.caption,
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -395,10 +342,10 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
     final comparable =
         (overall?['comparable_dimensions'] as num?)?.toInt() ?? 0;
     final total = (overall?['total_dimensions'] as num?)?.toInt() ?? 5;
-    final reason =
-        (overall?['reason'] ??
-                'There is not enough like-for-like evidence for an overall score.')
-            .toString();
+    const reason =
+        'Your knowledge, resources, and circumstances are different dimensions. '
+        'They are not one overall ability score. Missing evidence means we still need '
+        'to check, not that you are a beginner. Your plan should build on what you can already do.';
     return CmpysCardSurface(
       key: const Key('comparison-overall-insufficient'),
       raised: true,
@@ -424,7 +371,7 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
-                  'No honest overall score yet',
+                  'Your starting point, skill by skill',
                   style: AppTypography.h4.copyWith(fontSize: 16),
                 ),
               ),
@@ -459,35 +406,6 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
     );
   }
 
-  Widget _gaugeSide(Widget avatar, String label, String index) {
-    return SizedBox(
-      width: 84,
-      child: Column(
-        children: [
-          avatar,
-          const SizedBox(height: 8),
-          Text(
-            label,
-            textAlign: TextAlign.center,
-            style: AppTypography.captionMedium.copyWith(
-              fontSize: 12.5,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          Text(
-            index,
-            style: AppTypography.monoLabel.copyWith(
-              color: AppColors.ink3,
-              fontSize: 10,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// The mentor's verdict — the LLM-generated comparison from onboarding.
-  /// Shows a preview with "Read the full verdict"; no canned copy exists.
   Widget _aiVerdictCard(CmpysState st, CmpysIdol idol) {
     final md = st.comparisonMd;
     if (md == null || md.trim().isEmpty) {
@@ -574,7 +492,7 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
               CmpysPageRoute(
                 builder: (_) => CmpysMarkdownScreen(
                   kicker: 'From ${idol.short}',
-                  title: 'The verdict',
+                  title: 'Learning perspective',
                   markdown: md,
                 ),
               ),
@@ -584,7 +502,7 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
               children: [
                 Flexible(
                   child: Text(
-                    'Read the full verdict',
+                    'Read the full perspective',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: AppTypography.bodyMedium.copyWith(
@@ -733,7 +651,7 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
         children: [
           Row(
             children: [
-              const Expanded(child: CmpysKicker('The shape of the gap')),
+              const Expanded(child: CmpysKicker('Evidence by dimension')),
               const SizedBox(width: 10),
               _legendDot(AppColors.ochre, 'You'),
               const SizedBox(width: 14),
@@ -806,8 +724,6 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
     final open = _open == d.id;
     final comparable =
         d.status == 'comparable' && d.you != null && d.idol != null;
-    final gap = comparable ? d.idol! - d.you! : null;
-    final ahead = gap != null && gap < 0;
     return Container(
       decoration: BoxDecoration(
         border: first
@@ -840,25 +756,19 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
                           vertical: 3,
                         ),
                         decoration: BoxDecoration(
-                          color: !comparable
-                              ? AppColors.paper2
-                              : ahead
+                          color: comparable
                               ? AppColors.greenSoft
-                              : AppColors.claySoft,
+                              : AppColors.paper2,
                           borderRadius: BorderRadius.circular(999),
                         ),
                         child: Text(
                           comparable
-                              ? ahead
-                                    ? '+${-gap}'
-                                    : '−$gap'
+                              ? 'Comparable evidence'
                               : _dimensionStatusLabel(d.status),
                           style: AppTypography.kicker.copyWith(
-                            color: !comparable
-                                ? AppColors.ink3
-                                : ahead
+                            color: comparable
                                 ? AppColors.green2
-                                : AppColors.clay,
+                                : AppColors.ink3,
                             fontSize: 10.5,
                           ),
                         ),
@@ -1093,7 +1003,7 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
             const SizedBox(width: 10),
             Expanded(
               child: Text(
-                'You’re currently ahead in ${dimension.label}.',
+                'Build on your reported strengths in ${dimension.label}.',
                 style: AppTypography.bodyMedium.copyWith(
                   color: AppColors.green2,
                   fontSize: 14,

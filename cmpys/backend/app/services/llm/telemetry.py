@@ -34,6 +34,8 @@ class UsageRecord:
 
 def infer_provider(model: str | None) -> str:
     lowered = (model or "").casefold()
+    if settings.llm_provider == "openlux":
+        return "openlux"
     if settings.llm_provider == "yunwu":
         return "yunwu"
     if "gemini" in lowered:
@@ -105,7 +107,14 @@ def _event(record: UsageRecord) -> LLMUsageEvent:
     from app.services.llm.pricing import PRICING_VERSION, estimate_cost_usd
 
     estimated_cost = record.estimated_cost_usd
-    if estimated_cost is None:
+    usage_unknown = (
+        not record.success
+        and record.prompt_tokens is None
+        and record.completion_tokens is None
+        and record.total_tokens is None
+        and record.estimated_cost_usd is None
+    )
+    if estimated_cost is None and not usage_unknown:
         estimated_cost = estimate_cost_usd(
             model=record.model,
             provider=record.provider,
@@ -130,7 +139,8 @@ def _event(record: UsageRecord) -> LLMUsageEvent:
         error_code=record.error_code,
         result_status=record.result_status,
         quality_score=record.quality_score,
-        metadata_json={**record.metadata, "pricing_version": PRICING_VERSION},
+        metadata_json={**record.metadata, "pricing_version": PRICING_VERSION,
+                       "usage_unknown": usage_unknown},
     )
 
 

@@ -26,7 +26,12 @@ Future<void> streamGenerateResults({
   );
 
   try {
-    await for (final ev in repo.generateResults(sessionId)) {
+    // An abandoned connection must become recoverable instead of leaving the
+    // user on a spinner forever. Heartbeats count as activity in this stream.
+    await for (final ev
+        in repo
+            .generateResults(sessionId)
+            .timeout(const Duration(seconds: 90))) {
       final type = ev['type'] as String? ?? '';
       switch (type) {
         case 'status':

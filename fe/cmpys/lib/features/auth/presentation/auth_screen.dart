@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -74,8 +76,15 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
           final sessionState = ref.read(sessionControllerProvider);
           if (sessionState is SessionReady) {
             context.go(AppRoutes.home);
-          } else {
+          } else if (sessionState is SessionNeedsOnboarding) {
             context.go(AppRoutes.cmpysOnboarding);
+          } else if (sessionState is SessionError) {
+            context.go(AppRoutes.splash);
+          } else {
+            setState(
+              () => _errorMessage =
+                  'Your session could not be verified. Please sign in again.',
+            );
           }
         });
       } else if (next is AuthError) {
@@ -90,23 +99,34 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
           children: [
             _ErrorBanner(message: _errorMessage, onDismiss: _clearError),
             Expanded(
-              child: SingleChildScrollView(
-                keyboardDismissBehavior:
-                    ScrollViewKeyboardDismissBehavior.onDrag,
-                padding: const EdgeInsets.fromLTRB(28, 8, 28, 20),
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(
-                    minHeight:
-                        MediaQuery.of(context).size.height -
-                        MediaQuery.of(context).padding.top -
-                        MediaQuery.of(context).padding.bottom -
-                        (_errorMessage != null ? 56 : 0) -
-                        28,
+              child: LayoutBuilder(
+                builder: (context, constraints) => SingleChildScrollView(
+                  keyboardDismissBehavior:
+                      ScrollViewKeyboardDismissBehavior.onDrag,
+                  padding: EdgeInsets.fromLTRB(
+                    ((constraints.maxWidth - 520) / 2).clamp(
+                      24.0,
+                      double.infinity,
+                    ),
+                    8,
+                    ((constraints.maxWidth - 520) / 2).clamp(
+                      24.0,
+                      double.infinity,
+                    ),
+                    20,
                   ),
-                  child: IntrinsicHeight(
-                    child: _showEmailForm
-                        ? _buildEmailForm(isLoading)
-                        : _buildSocialAuth(isLoading),
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(
+                      minHeight: (constraints.maxHeight - 28).clamp(
+                        0.0,
+                        double.infinity,
+                      ),
+                    ),
+                    child: IntrinsicHeight(
+                      child: _showEmailForm
+                          ? _buildEmailForm(isLoading)
+                          : _buildSocialAuth(isLoading),
+                    ),
                   ),
                 ),
               ),
@@ -122,7 +142,11 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const SizedBox(height: 8),
-        Row(
+        Wrap(
+          alignment: WrapAlignment.spaceBetween,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 20,
+          runSpacing: 8,
           children: [
             Text(
               'CMPYS',
@@ -132,16 +156,6 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                 letterSpacing: 4,
               ),
             ),
-            const Spacer(),
-            Container(
-              width: 8,
-              height: 8,
-              decoration: const BoxDecoration(
-                color: AppColors.green,
-                shape: BoxShape.circle,
-              ),
-            ),
-            const SizedBox(width: 7),
             Text(
               'MENTORSHIP',
               style: AppTypography.kicker.copyWith(
@@ -176,35 +190,37 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         ),
         const SizedBox(height: 24),
         _AuthPill(
-          label: 'Continue with Apple',
-          icon: AppAssets.iconApple,
+          label: 'Get started',
+          icon: AppAssets.iconArrowRight,
           filled: true,
-          onTap: isLoading ? null : () => _handleOAuth('apple'),
-        ),
-        const SizedBox(height: 12),
-        // Google — outline pill
-        _AuthPill(
-          label: 'Continue with Google',
-          icon: AppAssets.iconGoogle,
-          filled: false,
-          useColorIcon: true,
-          onTap: isLoading ? null : () => _handleOAuth('google'),
+          onTap: isLoading
+              ? null
+              : () {
+                  _clearError();
+                  setState(() {
+                    _isLoginMode = false;
+                    _showEmailForm = true;
+                  });
+                },
         ),
         const SizedBox(height: 16),
         Center(
-          child: GestureDetector(
-            onTap: isLoading
+          child: TextButton(
+            onPressed: isLoading
                 ? null
                 : () {
                     _clearError();
-                    setState(() => _showEmailForm = true);
+                    setState(() {
+                      _isLoginMode = true;
+                      _showEmailForm = true;
+                    });
                   },
             child: Text(
-              'Use email instead',
+              'I already have an account',
               style: AppTypography.bodyMedium.copyWith(
                 fontSize: 14.5,
                 fontWeight: FontWeight.w700,
-                color: AppColors.accent,
+                color: AppColors.green2,
               ),
             ),
           ),
@@ -223,7 +239,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
           children: [
             const SizedBox(height: 8),
             // Back to social
-            GestureDetector(
+            CmpysPressable(
+              semanticLabel: 'Back to welcome',
               onTap: isLoading
                   ? null
                   : () {
@@ -292,10 +309,11 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
               obscureText: _obscurePassword,
               enabled: !isLoading,
               onChanged: (_) => _clearError(),
-              suffixIcon: GestureDetector(
-                onTap: () =>
+              suffixIcon: IconButton(
+                tooltip: _obscurePassword ? 'Show password' : 'Hide password',
+                onPressed: () =>
                     setState(() => _obscurePassword = !_obscurePassword),
-                child: Icon(
+                icon: Icon(
                   _obscurePassword
                       ? Icons.visibility_off_outlined
                       : Icons.visibility_outlined,
@@ -308,13 +326,13 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
               const SizedBox(height: 12),
               Align(
                 alignment: Alignment.centerRight,
-                child: GestureDetector(
-                  onTap: () => context.push(AppRoutes.forgotPassword),
+                child: TextButton(
+                  onPressed: () => context.push(AppRoutes.forgotPassword),
                   child: Text(
                     'Forgot Password?',
                     style: AppTypography.bodyMedium.copyWith(
                       fontSize: 14,
-                      color: AppColors.accent,
+                      color: AppColors.green2,
                     ),
                   ),
                 ),
@@ -330,8 +348,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
             ),
             const SizedBox(height: 16),
             Center(
-              child: GestureDetector(
-                onTap: isLoading
+              child: TextButton(
+                onPressed: isLoading
                     ? null
                     : () {
                         _clearError();
@@ -352,7 +370,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                         style: AppTypography.bodyMedium.copyWith(
                           fontSize: 14,
                           fontWeight: FontWeight.w700,
-                          color: AppColors.accent,
+                          color: AppColors.green2,
                         ),
                       ),
                     ],
@@ -386,8 +404,17 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       setState(() => _errorMessage = 'Please enter your password');
       return;
     }
-    if (password.length < 6) {
-      setState(() => _errorMessage = 'Password must be at least 6 characters');
+    if (!_isLoginMode && password.length < 8) {
+      setState(
+        () => _errorMessage = 'Use at least 8 characters for your password',
+      );
+      return;
+    }
+    if (utf8.encode(password).length > 72) {
+      setState(
+        () => _errorMessage =
+            'This password is too long. Use a shorter password.',
+      );
       return;
     }
     if (!_isLoginMode && name.isEmpty) {
@@ -409,11 +436,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   }
 
   bool _isValidEmail(String email) {
-    return RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$').hasMatch(email);
-  }
-
-  void _handleOAuth(String provider) {
-    setState(() => _errorMessage = '$provider login coming soon!');
+    return RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$').hasMatch(email);
   }
 }
 
@@ -651,7 +674,6 @@ class _AuthPill extends StatelessWidget {
     this.icon,
     this.filled = false,
     this.accent = false,
-    this.useColorIcon = false,
     this.loading = false,
   });
 
@@ -660,23 +682,24 @@ class _AuthPill extends StatelessWidget {
   final String? icon;
   final bool filled;
   final bool accent;
-  final bool useColorIcon;
   final bool loading;
 
   @override
   Widget build(BuildContext context) {
     final Color bg = accent
-        ? AppColors.accent
+        ? AppColors.green2
         : filled
         ? AppColors.ink
         : AppColors.surface;
     final Color fg = filled || accent ? Colors.white : AppColors.ink;
 
-    return GestureDetector(
-      onTap: onTap,
+    return CmpysPressable(
+      semanticLabel: loading ? '$label in progress' : label,
+      onTap: loading ? null : onTap,
       child: Container(
         width: double.infinity,
-        height: 56,
+        constraints: const BoxConstraints(minHeight: 56),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
         decoration: BoxDecoration(
           color: bg,
           borderRadius: AppRadii.brFull,
@@ -703,17 +726,13 @@ class _AuthPill extends StatelessWidget {
                         icon!,
                         width: 19,
                         height: 19,
-                        colorFilter: useColorIcon
-                            ? null
-                            : ColorFilter.mode(fg, BlendMode.srcIn),
+                        colorFilter: ColorFilter.mode(fg, BlendMode.srcIn),
                       ),
                       const SizedBox(width: 10),
                     ],
                     Flexible(
                       child: Text(
                         label,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
                         textAlign: TextAlign.center,
                         style: AppTypography.bodyMedium.copyWith(
                           fontSize: 16,

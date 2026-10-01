@@ -64,6 +64,8 @@ _loaded_prompts: set[str] = set()
 # Documents required placeholders for each prompt file
 
 PROMPT_PLACEHOLDERS = {
+    "lesson_practice_generate.txt": [],
+    "lesson_practice_review.txt": [],
     "extractor_system.txt": [],  # No placeholders - pure system prompt
     "planner_system.txt": [],  # No placeholders - pure system prompt
     "book_writer_system.txt": [],  # No placeholders - pure system prompt

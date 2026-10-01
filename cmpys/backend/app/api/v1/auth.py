@@ -3,6 +3,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
+from starlette.concurrency import run_in_threadpool
 
 from app.core.db import get_db
 from app.core.security import create_access_token, create_refresh_token, hash_password, verify_password
@@ -32,10 +34,22 @@ async def register(
     # Create new user
     user = User(
         email=data.email,
-        password_hash=hash_password(data.password),
+        password_hash=await run_in_threadpool(hash_password, data.password),
     )
     db.add(user)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered",
+        ) from None
+
+    if data.full_name and data.full_name.strip():
+        from app.models.user_profile import UserProfile
+        db.add(UserProfile(user_id=user.id, full_name=data.full_name.strip()))
+        await db.flush()
 
     # Generate tokens
     access_token = create_access_token(subject=user.id)
@@ -54,7 +68,9 @@ async def login(
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
 
-    if not user or not verify_password(data.password, user.password_hash):
+    if not user or not await run_in_threadpool(
+        verify_password, data.password, user.password_hash
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
@@ -88,11 +104,9 @@ async def refresh_token(
             detail="Invalid token subject"
         )
     
-    # Optionally verify user still exists
-    # stmt = select(User).where(User.id == user_id)
-    # result = await db.execute(stmt)
-    # if not result.scalar_one_or_none():
-    #     raise HTTPException(status_code=401)
+    result = await db.execute(select(User.id).where(User.id == user_id))
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
 
     new_access_token = create_access_token(subject=user_id)
     # Ideally rotate refresh token too to prevent reuse attacks

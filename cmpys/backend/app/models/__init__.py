@@ -1,4 +1,5 @@
 from app.models.base import Base
+from app.models.lesson_practice import LessonPractice
 from app.models.user import User
 from app.models.user_profile import UserProfile
 from app.models.idol import Idol

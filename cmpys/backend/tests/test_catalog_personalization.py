@@ -4,7 +4,7 @@ import hashlib
 from dataclasses import replace
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from sqlalchemy.dialects import postgresql
@@ -305,6 +305,64 @@ def _draft(*, source_ids=None) -> catalog.PersonalizedSessionDraft:
 def _disable_word_count_gate(monkeypatch):
     monkeypatch.setattr(catalog, "MIN_PLAN_DETAIL_LESSON_WORDS", 1)
     monkeypatch.setattr(catalog, "MAX_PLAN_DETAIL_LESSON_WORDS", 20_000)
+
+
+@pytest.mark.asyncio
+async def test_complete_session_reuses_blocks_and_only_requests_adaptation(monkeypatch):
+    from app.services.llm.client import LLMResponse
+
+    block_types = ["retrieval", "explanation", "worked_example", "guided_practice", "feedback", "assessment"]
+    blocks = [{
+        "block_id": f"block_{index}", "block_type": kind,
+        "title": f"Published step {index}", "minutes": 8,
+        "content_markdown": " ".join(f"{kind}_evidence_{word}" for word in range(370)),
+        "learner_instructions": ["Inspect the supplied figures, show every calculation, and explain which assumption determines your decision."],
+        "success_criteria": ["The calculation and conclusion must agree with the supplied evidence."],
+    } for index, kind in enumerate(block_types)]
+    session = replace(_session(content={"blocks": blocks}), artifact_spec={
+        "description": "Produce the supplied decision artifact.",
+        "rubric": [{"criterion": "Accuracy", "evidence_required": "Show calculations", "passing_standard": "All calculations are reproducible"}],
+    })
+    full = _draft(source_ids=["source_1"])
+    adaptation = catalog.SessionAdaptation(
+        why_this_matters=full.why_this_matters,
+        example_guidance=full.worked_example,
+        practice_guidance=full.guided_practice,
+        artifact_guidance=full.artifact_spec,
+        rubric_guidance=full.success_rubric,
+        bindings=full.bindings, reference_source_ids=["source_1"],
+    )
+    client = SimpleNamespace(model="test-adapter", generate_json=AsyncMock(return_value=LLMResponse(data=adaptation.model_dump())))
+    factory = Mock(return_value=client)
+    monkeypatch.setattr("app.services.llm.get_llm_client", factory)
+    monkeypatch.setattr("app.services.llm.telemetry.record_llm_response", AsyncMock())
+    draft = await catalog._llm_session_composer(_candidate(), session, _brief())
+    assert client.generate_json.await_count == 1
+    assert client.generate_json.call_args.kwargs["output_model"] is catalog.SessionAdaptation
+    assert factory.call_args.kwargs["max_tokens"] == 4000
+    assert draft.reference_source_ids == ["source-db-1"]
+    content = catalog.assemble_personalized_lesson_content(draft, approved_materials={"source-db-1": _material()})
+    positions = []
+    for block in blocks:
+        assert content.count(block["content_markdown"]) == 1
+        positions.append(content.index(block["content_markdown"]))
+    assert positions == sorted(positions)
+    assert "Acme annual report" in content
+    assert "downside analysis" in content
+    assert "_canonical_reuse_hash" not in draft.model_dump()
+
+    # A mutation of the teaching body cannot retain the reuse exemption.
+    changed = draft.model_copy(deep=True)
+    changed.core_framework = "Altered calculation"
+    with pytest.raises(catalog.PersonalizationQualityError, match="published teaching blocks changed"):
+        catalog.validate_personalized_session(changed, canonical_session=session, brief=_brief(), allowed_materials={"source-db-1": _material()})
+    untrusted = catalog.PersonalizedSessionDraft.model_validate(draft.model_dump())
+    with pytest.raises(catalog.PersonalizationQualityError, match="without personal composition"):
+        catalog.validate_personalized_session(untrusted, canonical_session=session, brief=_brief(), allowed_materials={"source-db-1": _material()})
+
+
+def test_incomplete_session_cannot_use_compact_adaptation():
+    assert catalog._reusable_session_fields(_session()) is None
 
 
 def test_matcher_returns_exact_and_strong_but_never_waives_hard_fields():
@@ -2385,3 +2443,45 @@ async def test_prefetch_threads_owner_and_item_into_database_readiness(monkeypat
         "user_id": "user-1",
         "plan_item_id": "item-1",
     }
+
+
+@pytest.mark.asyncio
+async def test_catalog_brief_keeps_diagnostic_scope_before_long_self_report():
+    db = _CapturingFakeDB([_Result(), _Result()])
+    brief = await catalog.build_learner_lesson_brief(
+        db,
+        user_id='user-private-id',
+        plan=SimpleNamespace(id='plan-private-id', weekly_hours=3, roadmap_json={}),
+        item=SimpleNamespace(id='item-private-id', title='A business case', success_metric='A checked solution'),
+        gap=_gap(), user_profile=None,
+        session_context={'learner_baseline': {
+            'current_capability': {'answer': 'self-report ' * 1000},
+            'practice_evidence': [{'lesson': 'Cash flow', 'status': 'completed_with_support', 'activities': []}],
+            'skill_diagnostics': [{'skill_id': 'profit_vs_cash', 'status': 'needs_practice_on_item', 'scope': 'One item only'}],
+        }},
+        idol=SimpleNamespace(id='idol-private-id', name='Warren Buffett'),
+        idol_evidence=None,
+    )
+    assert 'needs_practice_on_item' in brief.current_capability
+    assert 'One item only' in brief.current_capability
+    assert len(brief.current_capability) <= catalog.MAX_BRIEF_FACT_CHARS
+
+    assert 'completed_with_support' in brief.fact_map()['learner.recent_practice'].value
+
+
+def test_compact_adapter_does_not_receive_prepared_answer_keys():
+    from tests.test_lesson_practice import workbook
+    from app.services.curriculum.hashing import sha256_json
+    private = workbook().model_dump(mode='json')
+    private['activities'][0]['worked_solution'] = 'SECRET SOLUTION NEVER SEND TO ADAPTER AT ANY TIME'
+    private['activities'][0]['hint'] = 'SECRET HINT'
+    prepared = _session(content={
+        'blocks': [], 'practice_workbook': private,
+        'practice_workbook_hash': sha256_json(private),
+    })
+    prompt = catalog._composition_prompt(_candidate(), prepared, _brief()).text
+    assert 'SECRET SOLUTION' not in prompt
+    assert 'SECRET HINT' not in prompt
+    assert 'sqrt(x*x+y*y)' not in prompt
+    assert sha256_json(private) not in prompt
+    assert 'Calculate the missing side' in prompt

@@ -1,0 +1,11 @@
+{
+  "started_at": "2026-09-13T11:59:28.648419+00:00",
+  "mode": "new-release first-week generation from separately verified saved backbone; no user plan replacement",
+  "success": true,
+  "source": "llm",
+  "weeks": 12,
+  "tasks": 36,
+  "week_one_hours": 8,
+  "duration_seconds": 22.24,
+  "reserved_usd": 1.554405
+}

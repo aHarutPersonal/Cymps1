@@ -11,25 +11,59 @@ when deterministic mode is explicitly configured.
 """
 
 import logging
+import json
+import re
+from contextvars import ContextVar
+from pydantic import BaseModel, Field
 from dataclasses import dataclass, field
 
 from app.core.config import settings
 from app.models.plan import PlanItemType
 from app.services.llm import get_llm_client
+from app.services.llm.recovery import operational_recovery_client, CompleteRecoveryClient
+from app.services.curriculum.hashing import sha256_json
+from app.services.planning.checkpoints import PlanCheckpointStore
 from app.services.llm.prompt_loader import (
     load_prompt,
     render_prompt,
     sanitize_untrusted_input,
 )
 from app.services.llm.schemas import (
+    BinaryTask,
     PlanBackboneResponse,
     PlanBackboneWeek,
     PlanGenerationResponse,
+    ExecutionPlanResponse,
     PlanWeek,
 )
 from app.services.llm.telemetry import record_llm_response
 
 logger = logging.getLogger(__name__)
+
+_plan_recovery_response = ContextVar("plan_recovery_response", default=None)
+_plan_run_active = ContextVar("plan_run_active", default=False)
+
+
+def _recover_plan_outage(response, **kwargs):
+    client = operational_recovery_client(response, **kwargs)
+    if client is not None and _plan_run_active.get():
+        # Carry an observed outage through this run only. Subsequent stages
+        # must not pay for another call to the same unavailable gateway.
+        _plan_recovery_response.set(response)
+    return client
+
+
+
+def _plan_client(**kwargs):
+    recovery = operational_recovery_client(
+        _plan_recovery_response.get(), timeout=max(90, kwargs["timeout"]), max_tokens=kwargs["max_tokens"]
+    )
+    return recovery or get_llm_client(**kwargs)
+
+
+class BackboneWeekRepair(BaseModel):
+    weeks: list[PlanBackboneWeek] = Field(min_length=1, max_length=12)
+
 
 PLAN_BACKBONE_TIMEOUT_SECONDS = 45.0
 PLAN_BACKBONE_MAX_TOKENS = 9000
@@ -294,6 +328,61 @@ def validate_plan_backbone(
     return issues
 
 
+def _normalize_backbone_workload(
+    backbone: PlanBackboneResponse,
+    *,
+    hours_per_week: int,
+) -> tuple[PlanBackboneResponse, list[dict]]:
+    """Correct a one-hour scheduling slip before lesson content is written.
+
+    Models select the learning work; integer workload accounting is server
+    arithmetic. Keep all identities and pedagogical text, reject infeasible
+    task counts, and leave larger discrepancies for a quality review.
+    """
+    candidate = backbone.model_copy(deep=True)
+    adjustments: list[dict] = []
+    for week in candidate.weeks:
+        missions = [i for i, task in enumerate(week.tasks) if task.type in {"project", "course", "reading"}]
+        daily = [i for i, task in enumerate(week.tasks) if task.type in {"habit", "practice"}]
+        low_capacity = hours_per_week < 6
+        if (
+            (low_capacity and (len(missions), len(daily)) != (1, 1))
+            or (not low_capacity and not (2 <= len(missions) <= 3 and 1 <= len(daily) <= 2))
+            or len(missions) + len(daily) != len(week.tasks)
+        ):
+            continue
+        hours = [_resolve_estimated_hours(task.estimated_hours, hours_per_week, len(week.tasks)) for task in week.tasks]
+        if any(not 2 <= hours[index] <= 8 for index in missions):
+            continue
+        difference = hours_per_week - sum(hours)
+        if abs(difference) != 1:
+            continue
+        if difference > 0:
+            eligible = sorted((index for index in missions if hours[index] < 8), key=lambda index: hours[index])
+            eligible += sorted(daily, key=lambda index: hours[index])
+        else:
+            eligible = sorted((index for index in daily if hours[index] > 1), key=lambda index: -hours[index])
+            eligible += sorted((index for index in missions if hours[index] > 2), key=lambda index: -hours[index])
+        if not eligible:
+            continue
+        index = eligible[0]
+        previous = hours[index]
+        week.tasks[index].estimated_hours = previous + difference
+        adjustments.append({"week": week.week_number, "task_index": index, "from_hours": previous, "to_hours": previous + difference})
+    return candidate, adjustments
+
+
+def daily_workload_issues(task: BinaryTask) -> list[str]:
+    if task.type not in {"habit", "practice"}:
+        return []
+    text = " ".join((task.description, task.daily_instructions or ""))
+    # Verify explicit weekly totals; do not interpret a single session as a week.
+    totals = re.findall(r"\b(\d+(?:\.\d+)?)\s*minutes?\s+(?:per|a|each)\s+week\b", text, re.IGNORECASE)
+    expected = float(task.estimated_hours) * 60
+    return [f"Daily task '{task.title}' claims {v} minutes per week but stores {expected:g}; make the cadence and workload agree."
+            for v in totals if abs(float(v) - expected) > 0.01]
+
+
 def validate_week_against_backbone(
     week: PlanWeek,
     backbone_week: PlanBackboneWeek,
@@ -329,8 +418,11 @@ def validate_week_against_backbone(
                 f"{backbone_task.estimated_hours}; got {task.estimated_hours}"
             )
         description_words = len(task.description.split())
+        # A daily card is a summary; execution depth is checked separately in
+        # its >=70-word instructions. Use the existing plan-contract floor for
+        # the summary instead of rejecting a complete plan at 44 vs 45 words.
         minimum_description_words = (
-            80 if task.type in {"project", "course", "reading"} else 45
+            80 if task.type in {"project", "course", "reading"} else 30
         )
         if description_words < minimum_description_words:
             issues.append(
@@ -338,6 +430,7 @@ def validate_week_against_backbone(
                 f"minimum is {minimum_description_words}"
             )
         if task.type in {"habit", "practice"}:
+            issues.extend(daily_workload_issues(task))
             instruction_words = len((task.daily_instructions or "").split())
             if instruction_words < 70:
                 issues.append(
@@ -485,10 +578,11 @@ async def _generate_plan_backbone(
     duration_weeks: int,
     hours_per_week: int,
     telemetry_context: dict | None = None,
+    candidate_callback=None,
 ) -> PlanBackboneResponse:
     telemetry_context = telemetry_context or {}
-    active_client = get_llm_client(
-        timeout=PLAN_BACKBONE_TIMEOUT_SECONDS,
+    active_client = _plan_client(
+        timeout=90 if settings.llm_provider == "zai" else PLAN_BACKBONE_TIMEOUT_SECONDS,
         max_tokens=PLAN_BACKBONE_MAX_TOKENS,
         tier="balanced",
         thinking_level="medium",
@@ -501,6 +595,11 @@ async def _generate_plan_backbone(
         # model, not expanded into a second large same-tier repair prompt.
         repair_on_failure=False,
     )
+    workload_adjustments = []
+    if validated is not None:
+        validated, workload_adjustments = _normalize_backbone_workload(
+            validated, hours_per_week=hours_per_week
+        )
     issues = (
         validate_plan_backbone(
             validated,
@@ -510,7 +609,13 @@ async def _generate_plan_backbone(
         if validated is not None
         else [str(response.error or "backbone schema validation failed")]
     )
-    if issues:
+    localized_failure = (
+        candidate_callback is not None
+        and validated is not None
+        and bool(issues)
+        and all(re.match(r"week \d+\b", issue) for issue in issues)
+    )
+    if issues and not localized_failure and not (isinstance(active_client, CompleteRecoveryClient) and _plan_recovery_response.get() is not None):
         finish_reason = str(getattr(response, "finish_reason", "") or "")
         was_truncated = "MAX_TOKENS" in finish_reason.upper()
         recovery_reason = (
@@ -546,7 +651,11 @@ async def _generate_plan_backbone(
         # few thousand visible tokens. Escalate exactly once to the quality
         # model with enough total headroom and low reasoning so the complete
         # JSON artifact, rather than hidden thoughts, receives the budget.
-        active_client = get_llm_client(
+        active_client = _recover_plan_outage(
+            response,
+            timeout=PLAN_BACKBONE_RECOVERY_TIMEOUT_SECONDS,
+            max_tokens=PLAN_BACKBONE_RECOVERY_MAX_TOKENS,
+        ) or _plan_client(
             timeout=PLAN_BACKBONE_RECOVERY_TIMEOUT_SECONDS,
             max_tokens=PLAN_BACKBONE_RECOVERY_MAX_TOKENS,
             tier="quality",
@@ -571,6 +680,10 @@ async def _generate_plan_backbone(
             repair_on_failure=False,
         )
         response.retried = True
+        if validated is not None:
+            validated, workload_adjustments = _normalize_backbone_workload(
+                validated, hours_per_week=hours_per_week
+            )
         issues = (
             validate_plan_backbone(
                 validated,
@@ -594,11 +707,104 @@ async def _generate_plan_backbone(
             "stage": "final",
             "week_count": len(validated.weeks) if validated else 0,
             "contract_issues": issues[:30],
+            "workload_adjustments": workload_adjustments,
+            "targeted_repair": localized_failure,
         },
     )
+    if candidate_callback is not None and validated is not None:
+        await candidate_callback(validated, response, issues)
     if validated is None or issues:
         raise ValueError("Invalid plan backbone: " + "; ".join(issues))
     return validated
+
+
+async def _checkpointed_backbone(*, store, system_prompt, user_prompt,
+                                 duration_weeks, hours_per_week, telemetry_context):
+    async def remember(candidate, response, issues):
+        await store.put("backbone", candidate.model_dump(mode="json"),
+                        provider=getattr(response, "provider", None),
+                        model=getattr(response, "model", None), issues=issues, repair_attempts=0)
+    saved = store.load("backbone")
+    if saved is None:
+        try:
+            return await _generate_plan_backbone(
+                system_prompt=system_prompt, user_prompt=user_prompt,
+                duration_weeks=duration_weeks, hours_per_week=hours_per_week,
+                telemetry_context=telemetry_context, candidate_callback=remember)
+        except ValueError:
+            saved = store.load("backbone")
+            if saved is None:
+                raise
+    candidate = PlanBackboneResponse.model_validate(saved["payload"])
+    candidate, workload_adjustments = _normalize_backbone_workload(
+        candidate, hours_per_week=hours_per_week
+    )
+    issues = validate_plan_backbone(candidate, duration_weeks=duration_weeks,
+                                    hours_per_week=hours_per_week)
+    if not issues:
+        if workload_adjustments:
+            await store.put("backbone", candidate.model_dump(mode="json"),
+                            **{key: value for key, value in saved.items() if key not in {"payload", "issues", "workload_adjustments"}},
+                            issues=[], workload_adjustments=workload_adjustments)
+        return candidate
+    if saved.get("repair_attempts", 0) >= 1:
+        raise ValueError("Saved backbone exhausted its targeted repair: " + "; ".join(issues))
+    # Only localized semantic failures can be repaired by replacing weeks.
+    # Global topology/title failures need a changed full-cycle request.
+    numbers = set()
+    for issue in issues:
+        match = re.match(r"week (\d+)\b", issue)
+        if not match:
+            raise ValueError("Backbone requires full-cycle revision: " + issue)
+        numbers.add(int(match.group(1)))
+    if not numbers.issubset({w.week_number for w in candidate.weeks}):
+        raise ValueError("Backbone repair references an unknown week")
+    await store.put("backbone", candidate.model_dump(mode="json"),
+                    provider=saved.get("provider"), model=saved.get("model"),
+                    issues=issues, repair_attempts=1)
+    client = (
+        CompleteRecoveryClient(model=settings.gemini_quality_model, timeout=90,
+                               max_tokens=6000, thinking_level="low")
+        if saved.get("provider") == "gemini" and settings.gemini_api_key
+        else _plan_client(timeout=90, max_tokens=6000, tier="quality", thinking_level="low")
+    )
+    prompt = user_prompt + "\n\nTARGETED BACKBONE CORRECTION:\n" + json.dumps({
+        "replace_only_week_numbers": sorted(numbers), "errors": issues,
+        "current_backbone": candidate.model_dump(mode="json"),
+        "instruction": "Return only the requested replacement weeks. Copy each requested week's primary_mission, outcome and phase verbatim; preserve its place in the progression. Correct task count and capacity; every task must serve the user's goal. Do not include other weeks, thesis or anti-goals."
+    }, ensure_ascii=False)
+    result, response = await client.generate_and_validate(
+        system_prompt=system_prompt, user_prompt=prompt,
+        output_model=BackboneWeekRepair, repair_on_failure=False)
+    repair_issues = []
+    merged = None
+    if result is None:
+        repair_issues = [str(response.error or "invalid repair schema")]
+    elif len(result.weeks) != len(numbers) or {w.week_number for w in result.weeks} != numbers:
+        repair_issues = ["Repair must replace exactly the requested weeks"]
+    elif any(
+        (w.primary_mission, w.outcome, w.phase) !=
+        next((old.primary_mission, old.outcome, old.phase) for old in candidate.weeks if old.week_number == w.week_number)
+        for w in result.weeks
+    ):
+        repair_issues = ["Repair changed the approved weekly outcome or phase"]
+    else:
+        replacements = {w.week_number: w for w in result.weeks}
+        merged = candidate.model_copy(update={"weeks": [replacements.get(w.week_number, w) for w in candidate.weeks]})
+        merged, _ = _normalize_backbone_workload(merged, hours_per_week=hours_per_week)
+        repair_issues = validate_plan_backbone(merged, duration_weeks=duration_weeks,
+                                              hours_per_week=hours_per_week)
+    await record_llm_response(operation="plan_backbone_targeted_repair", response=response,
+        model=getattr(client, "model", None), result_status="failed" if repair_issues else "schema_valid",
+        metadata={**(telemetry_context or {}), "repaired_weeks": sorted(numbers), "contract_issues": repair_issues})
+    if merged is not None:
+        await store.put("backbone", merged.model_dump(mode="json"),
+                        provider=getattr(response, "provider", None), model=getattr(client, "model", None),
+                        issues=repair_issues, repair_attempts=1,
+                        previous_payload=candidate.model_dump(mode="json"))
+    if repair_issues or merged is None:
+        raise ValueError("Invalid targeted backbone repair: " + "; ".join(repair_issues))
+    return merged
 
 
 async def generate_plan_week_from_backbone(
@@ -636,8 +842,8 @@ async def generate_plan_week_from_backbone(
         prompt_name="plan_week_generate.txt",
         strict=True,
     )
-    active_client = get_llm_client(
-        timeout=PLAN_WEEK_TIMEOUT_SECONDS,
+    active_client = _plan_client(
+        timeout=90 if settings.llm_provider == "zai" else PLAN_WEEK_TIMEOUT_SECONDS,
         max_tokens=PLAN_WEEK_MAX_TOKENS,
         tier="balanced",
         thinking_level="medium",
@@ -645,7 +851,7 @@ async def generate_plan_week_from_backbone(
     validated, response = await active_client.generate_and_validate(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
-        output_model=PlanGenerationResponse,
+        output_model=ExecutionPlanResponse,
         # A malformed week should be regenerated by the quality model, not
         # expanded into a second large same-tier schema repair prompt.
         repair_on_failure=False,
@@ -667,7 +873,7 @@ async def generate_plan_week_from_backbone(
         return contract_issues
 
     issues = _issues(validated)
-    if issues:
+    if issues and not (isinstance(active_client, CompleteRecoveryClient) and _plan_recovery_response.get() is not None):
         finish_reason = str(getattr(response, "finish_reason", "") or "")
         was_truncated = "MAX_TOKENS" in finish_reason.upper()
         recovery_reason = (
@@ -703,7 +909,11 @@ async def generate_plan_week_from_backbone(
         # Hidden Gemini reasoning consumes max_output_tokens even when little
         # visible JSON is returned. Give the one bounded quality rewrite enough
         # total headroom and low reasoning so it can finish the approved week.
-        active_client = get_llm_client(
+        active_client = _recover_plan_outage(
+            response,
+            timeout=PLAN_WEEK_RECOVERY_TIMEOUT_SECONDS,
+            max_tokens=PLAN_WEEK_RECOVERY_MAX_TOKENS,
+        ) or _plan_client(
             timeout=PLAN_WEEK_RECOVERY_TIMEOUT_SECONDS,
             max_tokens=PLAN_WEEK_RECOVERY_MAX_TOKENS,
             tier="quality",
@@ -724,7 +934,7 @@ async def generate_plan_week_from_backbone(
         validated, response = await active_client.generate_and_validate(
             system_prompt=system_prompt,
             user_prompt=retry_prompt,
-            output_model=PlanGenerationResponse,
+            output_model=ExecutionPlanResponse,
             repair_on_failure=False,
         )
         response.retried = True
@@ -851,6 +1061,10 @@ async def _generate_llm_items(
     blueprint_markdown: str = "",
     previous_cycle_block: str = "",
     telemetry_context: dict | None = None,
+    generation_checkpoint: dict | None = None,
+    save_generation_checkpoint=None,
+    on_generation_stage=None,
+    recovery_response=None,
 ) -> PlanRoadmap:
     """
     Generate plan items using LLM.
@@ -862,11 +1076,14 @@ async def _generate_llm_items(
     reserved for explicit deterministic mode; silently publishing one from an
     LLM-mode outage would mislabel a degraded artifact as a personalized plan.
     """
+    recovery_token = _plan_recovery_response.set(recovery_response)
+    active_token = _plan_run_active.set(True)
     try:
         system_prompt = load_prompt("planner_system")
         user_prompt = render_prompt(
             load_prompt("plan_backbone_generate"),
             {
+                "duration_weeks": str(duration_weeks),
                 "user_goal": sanitize_untrusted_input(user_goal),
                 "idol_name": idol_name,
                 "hours_per_week": str(hours_per_week),
@@ -896,38 +1113,85 @@ async def _generate_llm_items(
             prompt_name="plan_backbone_generate.txt",
             strict=True,
         )
-        backbone = await _generate_plan_backbone(
+        store = PlanCheckpointStore(generation_checkpoint, sha256_json({
+            "version": "planning-checkpoints-v1", "system": system_prompt, "user": user_prompt,
+            "provider": settings.llm_provider, "openlux_model": settings.openlux_model,
+            "zai_model": settings.zai_model, "zai_quality_model": settings.zai_quality_model,
+            "zai_fast_model": settings.zai_fast_model,
+            "openlux_quality_model": settings.openlux_quality_model,
+            "gemini_model": settings.gemini_model, "gemini_quality_model": settings.gemini_quality_model,
+            "week_prompt": load_prompt("plan_week_generate"),
+            "duration_weeks": duration_weeks, "hours_per_week": hours_per_week,
+        }), save_generation_checkpoint)
+        previous_backbone = store.load("backbone")
+        if previous_backbone is not None:
+            candidate = PlanBackboneResponse.model_validate(previous_backbone["payload"])
+            candidate, _ = _normalize_backbone_workload(candidate, hours_per_week=hours_per_week)
+            previous_issues = validate_plan_backbone(
+                candidate, duration_weeks=duration_weeks, hours_per_week=hours_per_week
+            )
+            if previous_issues and (
+                previous_backbone.get("repair_attempts", 0) >= 1
+                or any(not re.match(r"week \d+\b", issue) for issue in previous_issues)
+            ):
+                # An explicit retry must be able to make progress after a
+                # failed repair. Keeping an exhausted invalid stage made every
+                # later attempt fail immediately without a provider call.
+                logger.warning("Replacing an invalid exhausted backbone checkpoint")
+                await store.discard("backbone", "week_one")
+        backbone = await _checkpointed_backbone(
+            store=store,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             duration_weeks=duration_weeks,
             hours_per_week=hours_per_week,
             telemetry_context=telemetry_context,
         )
-        first_week = await generate_plan_week_from_backbone(
-            backbone_week=backbone.weeks[0],
-            roadmap_thesis=backbone.roadmap_thesis,
-            idol_name=idol_name,
-            idol_domain=(
-                str(idol_profile.get("domains", [""])[0])
-                if isinstance(idol_profile, dict) and idol_profile.get("domains")
-                else "general"
-            ),
-            user_goal=user_goal,
-            hours_per_week=hours_per_week,
-            user_context=user_context,
-            # The transcript already shaped the backbone. Repeating it in the
-            # Week 1 expansion adds prompt latency without new information;
-            # keep only the distilled decision artifacts.
-            session_context="\n\n".join(
-                value
-                for value in (
-                    comparison_summary,
-                    blueprint_markdown,
-                )
-                if value
-            ),
-            telemetry_context=telemetry_context,
-        )
+        # A stored draft can still require repair. Publish this milestone only
+        # after the complete backbone validates, including checkpoint resumes.
+        if on_generation_stage:
+            await on_generation_stage("backbone_ready")
+        saved_week = store.load("week_one")
+        backbone_hash = sha256_json(backbone.model_dump(mode="json"))
+        if saved_week is not None and saved_week.get("backbone_hash") == backbone_hash:
+            first_week = PlanWeek.model_validate(saved_week["payload"])
+            week_issues = validate_week_against_backbone(first_week, backbone.weeks[0])
+            week_issues += validate_plan_contract(PlanGenerationResponse(weeks=[first_week],
+                roadmap_thesis=backbone.roadmap_thesis, anti_goals=backbone.anti_goals),
+                duration_weeks=1, hours_per_week=hours_per_week, start_week=1)
+            if week_issues:
+                raise ValueError("Saved first week violates its contract: " + "; ".join(week_issues))
+        else:
+            first_week = await generate_plan_week_from_backbone(
+                backbone_week=backbone.weeks[0],
+                roadmap_thesis=backbone.roadmap_thesis,
+                idol_name=idol_name,
+                idol_domain=(
+                    str(idol_profile.get("domains", [""])[0])
+                    if isinstance(idol_profile, dict) and idol_profile.get("domains")
+                    else "general"
+                ),
+                user_goal=user_goal,
+                hours_per_week=hours_per_week,
+                user_context=user_context,
+                # The transcript already shaped the backbone. Repeating it in the
+                # Week 1 expansion adds prompt latency without new information;
+                # keep only the distilled decision artifacts.
+                session_context="\n\n".join(
+                    value
+                    for value in (
+                        ("Current learner placement: " + learner_baseline_json)
+                        if learner_baseline_json else "",
+                        comparison_summary,
+                        blueprint_markdown,
+                    )
+                    if value
+                ),
+                telemetry_context=telemetry_context,
+            )
+            await store.put("week_one", first_week.model_dump(mode="json"), backbone_hash=backbone_hash)
+        if on_generation_stage:
+            await on_generation_stage("week_one_ready")
         return _roadmap_from_backbone(
             backbone,
             expanded_week=first_week,
@@ -939,6 +1203,9 @@ async def _generate_llm_items(
         raise RuntimeError(
             "Personalized plan generation failed across configured providers"
         ) from exc
+    finally:
+        _plan_recovery_response.reset(recovery_token)
+        _plan_run_active.reset(active_token)
 
 
 # =============================================================================
@@ -1000,6 +1267,10 @@ async def generate_plan(
             blueprint_markdown=kwargs.get("blueprint_markdown", ""),
             previous_cycle_block=previous_cycle_block,
             telemetry_context=kwargs.get("telemetry_context"),
+            generation_checkpoint=kwargs.get("generation_checkpoint"),
+            save_generation_checkpoint=kwargs.get("save_generation_checkpoint"),
+            on_generation_stage=kwargs.get("on_generation_stage"),
+            recovery_response=kwargs.get("recovery_response"),
         )
     else:
         logger.info("Generating plan using deterministic templates")

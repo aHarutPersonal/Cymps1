@@ -303,3 +303,36 @@ class TestPlanPromptSessionContext:
 
         assert "Weeks 1-3: Foundation" in rendered
         assert "Read Security Analysis Ch 1-3" in rendered
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('unavailable', [False, True])
+async def test_practice_enrichment_preserves_intake_even_when_storage_unavailable(monkeypatch, unavailable):
+    from contextlib import asynccontextmanager
+    from unittest.mock import AsyncMock
+    from sqlalchemy.exc import SQLAlchemyError
+    from app.services.practice import evidence
+    from app.services.interview_inputs import provider_interview_plan_inputs, compact_placement_context
+
+    session = SimpleNamespace(id='s1', interview_thread_id='t1', comparison_output=None,
+                              blueprint_output=None, user_goal='Geometry')
+    thread = SimpleNamespace(messages=[
+        _FakeMessage('assistant', 'Experience?', message_id='q1', answer_key='current_capability'),
+        _FakeMessage('user', 'I solve triangle problems.', message_id='a1', reply_to='q1'),
+    ])
+    db = _FakeDB([session, thread])
+    @asynccontextmanager
+    async def savepoint():
+        yield
+    db.begin_nested = savepoint
+    checked = [{'lesson': 'Triangles', 'status': 'completed_with_support', 'activities': []}]
+    loader = AsyncMock(side_effect=SQLAlchemyError('unavailable') if unavailable else None, return_value=checked)
+    monkeypatch.setattr(evidence, 'load_recent_practice_evidence', loader)
+    ctx = await _load_session_context(db, user_id='u1', idol_id='i1', session_id='s1')
+    assert ctx['learner_baseline']['current_capability']['answer'] == 'I solve triangle problems.'
+    loader.assert_awaited_once_with(db, user_id='u1', idol_id='i1', session_id='s1')
+    if unavailable:
+        assert 'practice_evidence' not in ctx['learner_baseline']
+    else:
+        assert provider_interview_plan_inputs(ctx['learner_baseline'])['practice_evidence'] == checked
+        assert 'completed_with_support' in compact_placement_context(ctx['learner_baseline'])

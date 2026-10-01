@@ -110,9 +110,13 @@ List<Widget> backendPlanRoadmapBlocks(BackendPlan plan) {
       _PlanThesisCard(plan: plan),
     ],
     const SizedBox(height: 22),
-    Row(
+    Wrap(
+      alignment: WrapAlignment.spaceBetween,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 16,
+      runSpacing: 8,
       children: [
-        const Expanded(child: CmpysKicker('Your roadmap')),
+        const CmpysKicker('Your roadmap'),
         Text(
           'ONE WEEK AT A TIME',
           style: AppTypography.kicker.copyWith(
@@ -251,7 +255,7 @@ class _CurrentFocusCard extends StatelessWidget {
                             ? 'Finish 1 mission to unlock Week ${week + 1}.'
                             : 'Finish $remaining missions to unlock Week ${week + 1}.',
                     style: AppTypography.caption.copyWith(
-                      color: Colors.white.withValues(alpha: 0.78),
+                      color: Colors.white.withValues(alpha: 0.92),
                       fontSize: 12.5,
                     ),
                   ),
@@ -276,8 +280,6 @@ class _CurrentFocusCard extends StatelessWidget {
                                     focus.status == 'in_progress'
                                         ? 'Continue focus'
                                         : 'Start focus',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
                                     style:
                                         AppTypography.captionMedium.copyWith(
                                       color: AppColors.green2,
@@ -340,7 +342,7 @@ class _CurrentFocusCard extends StatelessWidget {
         Text(
           'Every mission is complete. Your roadmap is open for review.',
           style: AppTypography.body.copyWith(
-            color: Colors.white.withValues(alpha: 0.78),
+            color: Colors.white.withValues(alpha: 0.92),
             fontSize: 13.5,
           ),
         ),

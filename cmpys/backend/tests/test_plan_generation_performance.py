@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.services.llm.schemas import PlanBackboneResponse, PlanGenerationResponse
+from app.services.llm.schemas import PlanBackboneResponse, PlanGenerationResponse, ExecutionPlanResponse
 from app.services.planning import generator
 
 
@@ -174,7 +174,7 @@ async def test_initial_plan_generates_backbone_then_only_week_one(monkeypatch) -
         telemetry_context={"plan_job_id": "job-1", "queue_wait_ms": 123},
     )
 
-    assert requested_models == [PlanBackboneResponse, PlanGenerationResponse]
+    assert requested_models == [PlanBackboneResponse, ExecutionPlanResponse]
     assert {item.week_start for item in roadmap.items} == set(range(1, 13))
     assert len(roadmap.items) == 24
     assert all(
@@ -193,9 +193,9 @@ async def test_initial_plan_generates_backbone_then_only_week_one(monkeypatch) -
     assert "Built a compiler" in rendered_prompts[PlanBackboneResponse]
     assert "<<<USER_INPUT" in rendered_prompts[PlanBackboneResponse]
     assert rendered_prompts[PlanBackboneResponse].count("USER_INPUT>>>") >= 1
-    assert "RAW INTERVIEW TRANSCRIPT" not in rendered_prompts[PlanGenerationResponse]
-    assert "DISTILLED COMPARISON" in rendered_prompts[PlanGenerationResponse]
-    assert "DISTILLED BLUEPRINT" in rendered_prompts[PlanGenerationResponse]
+    assert "RAW INTERVIEW TRANSCRIPT" not in rendered_prompts[ExecutionPlanResponse]
+    assert "DISTILLED COMPARISON" in rendered_prompts[ExecutionPlanResponse]
+    assert "DISTILLED BLUEPRINT" in rendered_prompts[ExecutionPlanResponse]
     assert all(row["plan_job_id"] == "job-1" for row in telemetry_metadata)
     assert all(row["queue_wait_ms"] == 123 for row in telemetry_metadata)
     assert factory_kwargs == [

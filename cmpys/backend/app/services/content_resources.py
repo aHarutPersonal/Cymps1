@@ -882,6 +882,16 @@ async def _generate_book_module_unbounded(
         routing_reason=routing_decision.reason,
     )
     if response.error:
+        from app.services.llm.client import FallbackLLMClient
+
+        # Rewriting the JSON prompt cannot recover a transport outage. Record
+        # the paid attempt once and let the durable scheduler handle retry.
+        if FallbackLLMClient._is_operational_failure(response.error) or (
+            getattr(response, "provider", None) == "openlux"
+            and "finish=missing" in response.error
+        ):
+            await _persist_usage("provider_unavailable", None)
+            raise RuntimeError(response.error)
         logger.warning(
             "[BOOK_MODULE] Structured response failed for '%s': %s. Retrying once.",
             title,
@@ -1390,19 +1400,13 @@ async def lookup_book_reference_context(
     book. This small lookup improves title/author accuracy before the LLM call
     without paying for search grounding.
     """
-    import httpx
+    from app.services.google_books import search_volumes
 
     query = f'intitle:"{title}"' + (f' inauthor:"{author}"' if author else "")
-    try:
-        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
-            response = await client.get(
-                "https://www.googleapis.com/books/v1/volumes",
-                params={"q": query, "maxResults": 8, "printType": "books"},
-            )
-            response.raise_for_status()
-            items = response.json().get("items", [])
-    except Exception:
+    data = await search_volumes({"q": query, "maxResults": 8, "printType": "books"})
+    if data is None:
         return None
+    items = data.get("items", [])
 
     ranked: list[tuple[float, dict[str, Any], dict[str, Any]]] = []
     for item in items:

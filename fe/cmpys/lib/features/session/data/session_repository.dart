@@ -88,6 +88,18 @@ Stream<Map<String, dynamic>> parseCompletedSseEvents(
 /// - Interview SSE streaming
 /// - Comparison + Blueprint result generation
 class SessionRepository {
+  Future<List<Map<String, dynamic>>> discoverMentors(String query) async {
+    final response = await _dioClient.get('/idols/discover', queryParameters: {'q': query, 'limit': 10});
+    return (response.data['candidates'] as List)
+        .map((m) => Map<String, dynamic>.from(m as Map)).toList();
+  }
+
+  Future<List<Map<String, dynamic>>> learningMessages(String sessionId) async {
+    final response = await _dioClient.get('/sessions/$sessionId/guided-learning/messages');
+    return (response.data['messages'] as List)
+        .map((m) => Map<String, dynamic>.from(m as Map)).toList();
+  }
+
   SessionRepository({required DioClient dioClient}) : _dioClient = dioClient;
 
   final DioClient _dioClient;

@@ -1,0 +1,20 @@
+server {
+    listen 443 ssl;
+    server_name __PUBLIC_IP__;
+    server_tokens off;
+
+    ssl_certificate /etc/letsencrypt/live/cmpys-api/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/cmpys-api/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:CMPYS_TLS:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+__PROXY_DIRECTIVES__
+
+__AUTH_LOCATIONS__
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+    }
+}

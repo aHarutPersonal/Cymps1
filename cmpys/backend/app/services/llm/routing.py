@@ -39,6 +39,13 @@ class RoutingDecision:
 
 
 def _model_for_tier(tier: str) -> str | None:
+    if settings.llm_provider == "zai":
+        return {"fast": settings.zai_fast_model, "balanced": settings.zai_model}.get(tier)
+    if settings.llm_provider == "openlux":
+        return {
+            "fast": settings.openlux_fast_model,
+            "balanced": settings.openlux_model,
+        }.get(tier)
     if settings.llm_provider == "gemini":
         return {
             "fast": settings.gemini_fast_model,

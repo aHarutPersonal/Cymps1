@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import re
+import asyncio
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Literal, TypeVar
 
@@ -16,6 +19,7 @@ from app.services.curriculum.gates import (
     validate_manifest_verification,
     validate_source_originality,
     validate_structure,
+    validate_in_app_contract,
     validate_technique_implementation,
     validate_module_target,
 )
@@ -65,6 +69,36 @@ def configured_tier(value: str, *, default: str) -> str:
     return value if value in {"fast", "balanced", "quality"} else default
 
 
+# Reasoning models spend part of the completion budget thinking before they emit
+# the JSON body, so a ceiling sized for the answer alone yields an empty response
+# rather than a short one -- observed as "Empty response from OPENROUTER" on the
+# review stages while the 24k-token draft stage succeeded. max_tokens is a cap and
+# not a target: providers bill generated tokens, so raising the headroom costs
+# nothing for models that do not need it.
+CURRICULUM_STRUCTURED_MAX_TOKENS = 16000
+
+_RECOVERY_ROUTE: ContextVar[dict[str, Any] | None] = ContextVar("curriculum_recovery_route", default=None)
+
+
+@contextmanager
+def curriculum_recovery_route(route: dict[str, Any] | None):
+    """Scope an audited recovery route to one task's current stage only."""
+    from app.core.config import settings
+
+    if route is not None and (
+        route.get("provider") != "gemini"
+        or route.get("model") != settings.gemini_quality_model
+        or route.get("from_provider") != "openlux"
+        or not settings.gemini_api_key
+    ):
+        raise ValueError("unsupported curriculum recovery route")
+    token = _RECOVERY_ROUTE.set(route)
+    try:
+        yield
+    finally:
+        _RECOVERY_ROUTE.reset(token)
+
+
 async def _generate(
     *,
     operation: str,
@@ -75,23 +109,33 @@ async def _generate(
     max_tokens: int,
     metadata: dict[str, Any],
 ) -> GeneratedArtifact:
-    client = get_llm_client(
-        tier=tier,
-        timeout=120,
-        max_tokens=max_tokens,
-        temperature=0.1,
-    )
-    validated, response = await client.generate_and_validate(
-        system_prompt=load_prompt("curriculum_writer_system"),
-        user_prompt=load_and_render(prompt_name, prompt_variables),
-        output_model=output_model,
-        repair_on_failure=True,
-    )
+    recovery = _RECOVERY_ROUTE.get()
+    if recovery:
+        from app.services.llm.client import GeminiLLMClient
+
+        client = GeminiLLMClient(model=recovery["model"], timeout=240,
+                                 max_tokens=max_tokens, thinking_level="high", temperature=0.1)
+    else:
+        client = get_llm_client(tier=tier, timeout=120, max_tokens=max_tokens, temperature=0.1)
+    async with asyncio.timeout(245):
+        validated, response = await client.generate_and_validate(
+            system_prompt=load_prompt("curriculum_writer_system"),
+            user_prompt=load_and_render(prompt_name, prompt_variables),
+            output_model=output_model,
+            repair_on_failure=recovery is None,
+        )
+    if recovery:
+        response.retried = True
+        response.fallback_from_provider = "openlux"
+        response.fallback_from_model = recovery.get("from_model")
+        response.fallback_error = recovery.get("reason")
+        if response.finish_reason not in {"STOP", "stop"} and not response.error:
+            response.error = "Curriculum recovery returned an incomplete response"
     await record_llm_response(
         operation=operation,
         response=response,
         model=getattr(client, "model", None),
-        result_status="schema_valid" if validated else "failed",
+        result_status="schema_valid" if validated and not response.error else "failed",
         metadata=metadata,
     )
     if validated is None or response.error:
@@ -282,7 +326,7 @@ async def generate_technique_plan(
         },
         output_model=TechniquePlan,
         tier=tier,
-        max_tokens=6000,
+        max_tokens=CURRICULUM_STRUCTURED_MAX_TOKENS,
         metadata={"stage": "technique_design", **(telemetry_metadata or {})},
     )
     plan = TechniquePlan.model_validate(generated.value)
@@ -613,18 +657,23 @@ async def generate_outline(
     technique_plan: TechniquePlan,
     tier: str,
     telemetry_metadata: dict[str, Any] | None = None,
+    contract_feedback: str | None = None,
 ) -> GeneratedArtifact:
     generated = await _generate(
         operation="curriculum_module_outline",
         prompt_name="curriculum_outline",
         prompt_variables={
-            "module_target_json": module_target,
+            "module_target_json": {
+                **module_target,
+                "required_block_types": sorted(t.value for t in _REQUIRED_BASE_BLOCK_TYPES),
+                **({"prior_contract_error": contract_feedback[:2000]} if contract_feedback else {}),
+            },
             "source_pack_json": writer_source_pack(manifest),
             "technique_plan_json": technique_plan.model_dump(mode="json"),
         },
         output_model=CurriculumOutline,
         tier=tier,
-        max_tokens=6000,
+        max_tokens=CURRICULUM_STRUCTURED_MAX_TOKENS,
         metadata={"stage": "outline", **(telemetry_metadata or {})},
     )
     outline = _bind_outline_claim_sources(
@@ -741,6 +790,7 @@ def deterministic_draft_gate(
             else ()
         ),
         validate_structure(draft),
+        validate_in_app_contract(draft, technique_plan, module_target),
         validate_manifest_verification(manifest),
         validate_source_attribution(draft, manifest),
         validate_technique_implementation(
@@ -754,7 +804,9 @@ def deterministic_draft_gate(
     issues = tuple(issue for result in results for issue in result.issues)
     return GateResult(
         passed=all(result.passed for result in results),
-        score=min(result.score for result in results),
+        # Deterministic gate metrics (e.g. lexical similarity) are not a calibrated
+        # pedagogical score. Every passing hard gate is satisfied in full.
+        score=1.0 if all(result.passed for result in results) else 0.0,
         issues=issues,
         metrics={
             "deterministic_gate_count": len(results),
@@ -826,7 +878,7 @@ async def review_module(
         prompt_variables=variables,
         output_model=QualityReview,
         tier=tier,
-        max_tokens=6000,
+        max_tokens=CURRICULUM_STRUCTURED_MAX_TOKENS,
         metadata={
             "stage": f"{reviewer}_review",
             "repair_attempt": repair_attempt,

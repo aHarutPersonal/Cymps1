@@ -5,9 +5,17 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from app.services.tavily import is_direct_resource_url
+from app.services.practice.contracts import Workbook
 
 
 class StrictModel(BaseModel):
@@ -94,6 +102,47 @@ class EvidenceClaim(StrictModel):
         return value
 
 
+# Domains whose factual claims must be backed by an institution rather than by
+# practitioner writing. A learner can lose money acting on a wrong investing
+# claim, so regulatory and financial material keeps the strict bar. Craft domains
+# such as entrepreneurship are taught almost entirely by practitioners, and
+# demanding an academic citation there makes the lesson worse, not safer.
+#
+# Fail-closed by design: callers that supply no policy get the strict rule, so a
+# missing context can only over-restrict, never silently relax the standard.
+INSTITUTIONAL_EVIDENCE_DOMAINS: frozenset[str] = frozenset()
+
+# Multi-part public suffixes needed so "bbc.co.uk" and "news.bbc.co.uk" are not
+# mistaken for two independent publishers.
+_MULTIPART_SUFFIXES = (
+    "co.uk", "ac.uk", "gov.uk", "org.uk", "com.au", "edu.au", "gov.au",
+    "co.nz", "co.jp", "ac.jp", "com.br", "co.za", "ac.za", "com.sg", "edu.sg",
+)
+
+
+def registrable_host(url: str) -> str:
+    """Collapse a URL to its publisher identity for independence checks."""
+    from urllib.parse import urlsplit
+
+    host = (urlsplit(str(url or "")).hostname or "").casefold().strip(".")
+    if not host:
+        return ""
+    for suffix in _MULTIPART_SUFFIXES:
+        if host == suffix or host.endswith("." + suffix):
+            labels = host.split(".")
+            return ".".join(labels[-3:]) if len(labels) >= 3 else host
+    labels = host.split(".")
+    return ".".join(labels[-2:]) if len(labels) >= 2 else host
+
+
+def evidence_policy_for_domain(domain: str | None) -> str:
+    """Server-owned mapping from module domain to evidence strictness."""
+    normalized = str(domain or "").strip().casefold()
+    if not normalized or normalized in INSTITUTIONAL_EVIDENCE_DOMAINS:
+        return "institutional"
+    return "reputable"
+
+
 class ResearchManifest(StrictModel):
     research_question: str = Field(min_length=12, max_length=1000)
     sources: list[EvidenceSource] = Field(min_length=2, max_length=30)
@@ -101,7 +150,10 @@ class ResearchManifest(StrictModel):
     limitations: list[str] = Field(default_factory=list, max_length=20)
 
     @model_validator(mode="after")
-    def references_existing_sources(self) -> "ResearchManifest":
+    def references_existing_sources(self, info: ValidationInfo) -> "ResearchManifest":
+        context = info.context if isinstance(info.context, dict) else {}
+        # Absent an explicit policy the strict rule applies.
+        strict = context.get("evidence_policy", "institutional") == "institutional"
         source_ids = [source.source_id for source in self.sources]
         claim_ids = [claim.claim_id for claim in self.claims]
         if len(source_ids) != len(set(source_ids)):
@@ -118,7 +170,7 @@ class ResearchManifest(StrictModel):
         )
         if missing:
             raise ValueError(f"claims reference missing sources: {missing}")
-        if not any(
+        if strict and not any(
             source.source_type
             in {
                 SourceType.SYSTEMATIC_REVIEW,
@@ -163,13 +215,37 @@ class ResearchManifest(StrictModel):
                 SourceType.UNIVERSITY_RESOURCE,
             }
         }
-        if not any(
+        if strict and not any(
             qualified_live_ids.intersection(claim.source_ids)
             for claim in domain_claims
         ):
             raise ValueError(
                 "at least one domain claim requires a deterministically qualified live source"
             )
+        if not strict:
+            # Quality without an allowlist. A claim is acceptable when it is
+            # either backed by a qualified institution, or corroborated by two
+            # genuinely independent publishers. A single non-institutional page
+            # asserting something on its own is exactly the failure mode the
+            # institutional rule existed to prevent, and corroboration catches it
+            # without confining the catalogue to a handful of approved domains.
+            uncorroborated = []
+            for claim in domain_claims:
+                if qualified_live_ids.intersection(claim.source_ids):
+                    continue
+                publishers = {
+                    registrable_host(source_by_id[source_id].url)
+                    for source_id in claim.source_ids
+                    if source_id in source_by_id
+                }
+                publishers.discard("")
+                if len(publishers) < 2:
+                    uncorroborated.append(claim.claim_id)
+            if uncorroborated:
+                raise ValueError(
+                    "domain claims need one qualified source or two independent "
+                    f"publishers; uncorroborated: {uncorroborated}"
+                )
         return self
 
 
@@ -240,11 +316,19 @@ class TechniqueApplication(StrictModel):
     limitations: list[str] = Field(default_factory=list, max_length=8)
 
 
+class RubricCriterion(StrictModel):
+    criterion: str = Field(min_length=5, max_length=500)
+    evidence_required: str = Field(min_length=5, max_length=800)
+    passing_standard: str = Field(min_length=5, max_length=800)
+
+
+
 class TechniquePlan(StrictModel):
     learning_outcome: str = Field(min_length=12, max_length=1000)
     learner_level: Literal["beginner", "intermediate", "advanced"]
     applications: list[TechniqueApplication] = Field(min_length=2, max_length=8)
     assessment_strategy: str = Field(min_length=20, max_length=1500)
+    assessment_rubric: list[RubricCriterion] = Field(default_factory=list, max_length=12)
     spacing_follow_up_days: list[int] = Field(default_factory=list, max_length=8)
 
     @model_validator(mode="after")
@@ -343,10 +427,10 @@ class CurriculumOutline(StrictModel):
         return self
 
 
-class RubricCriterion(StrictModel):
-    criterion: str = Field(min_length=5, max_length=500)
-    evidence_required: str = Field(min_length=5, max_length=800)
-    passing_standard: str = Field(min_length=5, max_length=800)
+class SessionWorkbook(StrictModel):
+    """Private authoring contract shared by publication and the practice API."""
+    block_ids: list[str] = Field(min_length=4, max_length=40)
+    workbook: Workbook
 
 
 class CanonicalModuleDraft(StrictModel):
@@ -360,6 +444,7 @@ class CanonicalModuleDraft(StrictModel):
     prerequisites: list[str] = Field(default_factory=list, max_length=20)
     artifact_type: str = Field(min_length=3, max_length=100)
     blocks: list[LessonBlock] = Field(min_length=5, max_length=40)
+    session_workbooks: list[SessionWorkbook] = Field(default_factory=list, max_length=20)
     artifact_description: str = Field(min_length=20, max_length=1200)
     rubric: list[RubricCriterion] = Field(min_length=2, max_length=12)
     estimated_minutes: int = Field(ge=40, le=1200)

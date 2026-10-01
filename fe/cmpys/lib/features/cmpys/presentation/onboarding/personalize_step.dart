@@ -24,6 +24,19 @@ class CmpysPersonalizeStep extends StatefulWidget {
 class _CmpysPersonalizeStepState extends State<CmpysPersonalizeStep> {
   int _step = 0;
   static const int _steps = 3;
+  late final TextEditingController _name;
+
+  @override
+  void initState() {
+    super.initState();
+    _name = TextEditingController(text: widget.draft.name);
+  }
+
+  @override
+  void dispose() {
+    _name.dispose();
+    super.dispose();
+  }
 
   bool get _canNext {
     switch (_step) {
@@ -38,6 +51,7 @@ class _CmpysPersonalizeStepState extends State<CmpysPersonalizeStep> {
   }
 
   void _next() {
+    FocusManager.instance.primaryFocus?.unfocus();
     if (_step < _steps - 1) {
       setState(() => _step += 1);
     } else {
@@ -73,15 +87,15 @@ class _CmpysPersonalizeStepState extends State<CmpysPersonalizeStep> {
                           shape: BoxShape.circle,
                           border: Border.all(color: AppColors.hair),
                         ),
-                        child: const Icon(Icons.chevron_left_rounded,
-                            size: 22, color: AppColors.ink),
+                        child: const Icon(
+                          Icons.chevron_left_rounded,
+                          size: 22,
+                          color: AppColors.ink,
+                        ),
                       ),
                     ),
                   Expanded(child: _dots()),
-                  Text(
-                    '${_step + 1}/$_steps',
-                    style: AppTypography.kicker,
-                  ),
+                  Text('${_step + 1}/$_steps', style: AppTypography.kicker),
                 ],
               ),
             ),
@@ -160,23 +174,31 @@ class _CmpysPersonalizeStepState extends State<CmpysPersonalizeStep> {
           child: Text(
             'What should we call you?',
             style: AppTypography.display.copyWith(
-                fontSize: 30,
-                fontWeight: FontWeight.w500,
-                letterSpacing: -0.3,
-                height: 1.4),
+              fontSize: 30,
+              fontWeight: FontWeight.w500,
+              letterSpacing: -0.3,
+              height: 1.4,
+            ),
           ),
         ),
         const SizedBox(height: 20),
         Container(
-          height: 56,
-          padding: const EdgeInsets.symmetric(horizontal: 16),
+          constraints: const BoxConstraints(minHeight: 56),
+          alignment: Alignment.center,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           decoration: BoxDecoration(
             color: AppColors.card,
             borderRadius: BorderRadius.circular(14),
             border: Border.all(color: AppColors.hair2, width: 1.5),
           ),
           child: TextField(
-            autofocus: true,
+            controller: _name,
+            textCapitalization: TextCapitalization.words,
+            autofillHints: const [AutofillHints.givenName],
+            textInputAction: TextInputAction.done,
+            onSubmitted: (_) {
+              if (_canNext) _next();
+            },
             onChanged: (v) {
               widget.draft.name = v;
               widget.onUpdate(widget.draft);
@@ -184,8 +206,6 @@ class _CmpysPersonalizeStepState extends State<CmpysPersonalizeStep> {
             },
             style: AppTypography.body.copyWith(fontSize: 16),
             cursorColor: AppColors.green,
-            // The 56px pill gives the field tight constraints; without this the
-            // decorator top-aligns the text (InputBorder.none ⇒ non-outline).
             textAlignVertical: TextAlignVertical.center,
             decoration: InputDecoration(
               hintText: 'Your first name',
@@ -196,6 +216,8 @@ class _CmpysPersonalizeStepState extends State<CmpysPersonalizeStep> {
               border: InputBorder.none,
               enabledBorder: InputBorder.none,
               focusedBorder: InputBorder.none,
+              disabledBorder: InputBorder.none,
+              filled: false,
               isDense: true,
               contentPadding: EdgeInsets.zero,
             ),
@@ -203,7 +225,7 @@ class _CmpysPersonalizeStepState extends State<CmpysPersonalizeStep> {
         ),
         const SizedBox(height: 18),
         Text(
-          'How old are you? We’ll compare you to your mentor at this exact age.',
+          'Your age helps us find the right starting point.',
           style: AppTypography.bodyDim.copyWith(fontSize: 13.5),
         ),
         const SizedBox(height: 10),
@@ -217,13 +239,15 @@ class _CmpysPersonalizeStepState extends State<CmpysPersonalizeStep> {
           child: Row(
             children: [
               _ageStep(
-                  icon: '−',
-                  bg: AppColors.paper2,
-                  fg: AppColors.ink,
-                  onTap: () => setState(() {
-                        widget.draft.age =
-                            widget.draft.age > 16 ? widget.draft.age - 1 : 16;
-                      })),
+                icon: '−',
+                bg: AppColors.paper2,
+                fg: AppColors.ink,
+                onTap: () => setState(() {
+                  widget.draft.age = widget.draft.age > 16
+                      ? widget.draft.age - 1
+                      : 16;
+                }),
+              ),
               Expanded(
                 child: Center(
                   child: RichText(
@@ -249,13 +273,15 @@ class _CmpysPersonalizeStepState extends State<CmpysPersonalizeStep> {
                 ),
               ),
               _ageStep(
-                  icon: '+',
-                  bg: AppColors.greenSoft,
-                  fg: AppColors.green,
-                  onTap: () => setState(() {
-                        widget.draft.age =
-                            widget.draft.age < 80 ? widget.draft.age + 1 : 80;
-                      })),
+                icon: '+',
+                bg: AppColors.greenSoft,
+                fg: AppColors.green,
+                onTap: () => setState(() {
+                  widget.draft.age = widget.draft.age < 80
+                      ? widget.draft.age + 1
+                      : 80;
+                }),
+              ),
             ],
           ),
         ),
@@ -308,10 +334,11 @@ class _CmpysPersonalizeStepState extends State<CmpysPersonalizeStep> {
           child: Text(
             'Pick what you care about.',
             style: AppTypography.display.copyWith(
-                fontSize: 30,
-                fontWeight: FontWeight.w500,
-                letterSpacing: -0.3,
-                height: 1.4),
+              fontSize: 30,
+              fontWeight: FontWeight.w500,
+              letterSpacing: -0.3,
+              height: 1.4,
+            ),
           ),
         ),
         const SizedBox(height: 8),
@@ -355,10 +382,11 @@ class _CmpysPersonalizeStepState extends State<CmpysPersonalizeStep> {
           child: Text(
             'What matters most right now?',
             style: AppTypography.display.copyWith(
-                fontSize: 30,
-                fontWeight: FontWeight.w500,
-                letterSpacing: -0.3,
-                height: 1.4),
+              fontSize: 30,
+              fontWeight: FontWeight.w500,
+              letterSpacing: -0.3,
+              height: 1.4,
+            ),
           ),
         ),
         const SizedBox(height: 8),
@@ -425,8 +453,11 @@ class _CmpysPersonalizeStepState extends State<CmpysPersonalizeStep> {
                     : Border.all(color: AppColors.hair2, width: 2),
               ),
               child: on
-                  ? const Icon(Icons.check_rounded,
-                      size: 15, color: Colors.white)
+                  ? const Icon(
+                      Icons.check_rounded,
+                      size: 15,
+                      color: Colors.white,
+                    )
                   : null,
             ),
           ],

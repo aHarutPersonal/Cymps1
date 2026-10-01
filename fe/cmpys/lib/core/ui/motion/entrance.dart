@@ -1,5 +1,6 @@
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
-import 'package:flutter_animate/flutter_animate.dart';
 
 import '../../../app/design_tokens.dart';
 import 'motion_config.dart';
@@ -123,70 +124,109 @@ class _EntranceState extends State<Entrance> {
   @override
   Widget build(BuildContext context) {
     _checkVisitWindowOnce(context);
-    // A late-mounted child (list-shape change well after the screen's visit
-    // window) swaps straight to the bare child — no re-inflate-and-animate.
-    // This re-inflates the child subtree fresh each time, which is fine for
-    // stateless cards; don't put child-held State under Entrance.
-    if (_played) return widget.child;
-
-    final motionEnabled = MotionConfig.enabled(context);
-    final delay = motionEnabled
-        ? Entrance.delayFor(widget.index)
-        : Duration.zero;
-
-    final animated = widget.child.animate(
-      delay: delay,
-      onComplete: (_) {
-        if (mounted) setState(() => _played = true);
-      },
-    )..fadeIn(duration: AppDurations.normal, curve: AppCurves.easeOut);
-
-    if (motionEnabled) {
-      animated.move(
-        begin: const Offset(0, 12),
-        end: Offset.zero,
-        duration: AppDurations.normal,
-        curve: AppCurves.easeOut,
-      );
-    }
-    return animated;
+    return _StableReveal(
+      skip: _played,
+      delay: Entrance.delayFor(widget.index),
+      duration: AppDurations.normal,
+      distance: 12,
+      fadeWhenReduced: true,
+      child: widget.child,
+    );
   }
 }
 
 /// A short one-time reveal for content produced by a user interaction.
-///
-/// Unlike [Entrance], this intentionally plays even when it is mounted well
-/// after the screen's initial visit (for example, a newly sent chat message).
 /// Reduced-motion users see the child immediately with no transition.
-class FeedbackReveal extends StatefulWidget {
+class FeedbackReveal extends StatelessWidget {
   const FeedbackReveal({super.key, required this.child});
 
   final Widget child;
 
   @override
-  State<FeedbackReveal> createState() => _FeedbackRevealState();
+  Widget build(BuildContext context) =>
+      _StableReveal(duration: AppDurations.fast, distance: 8, child: child);
 }
 
-class _FeedbackRevealState extends State<FeedbackReveal> {
-  bool _played = false;
+/// Keep the same element hierarchy through completion and preference changes.
+/// Removing effect wrappers would dispose stateful children, including editors.
+class _StableReveal extends StatefulWidget {
+  const _StableReveal({
+    required this.duration,
+    required this.distance,
+    required this.child,
+    this.delay = Duration.zero,
+    this.skip = false,
+    this.fadeWhenReduced = false,
+  });
+
+  final Duration duration;
+  final Duration delay;
+  final double distance;
+  final bool skip;
+  final bool fadeWhenReduced;
+  final Widget child;
 
   @override
-  Widget build(BuildContext context) {
-    if (_played || !MotionConfig.enabled(context)) return widget.child;
+  State<_StableReveal> createState() => _StableRevealState();
+}
 
-    return widget.child.animate(
-        onComplete: (_) {
-          if (mounted) setState(() => _played = true);
-        },
-      )
-      ..fadeIn(duration: AppDurations.fast, curve: AppCurves.easeOut)
-      ..move(
-        begin: const Offset(0, 8),
-        end: Offset.zero,
-        duration: AppDurations.fast,
-        curve: AppCurves.easeOut,
-      );
+class _StableRevealState extends State<_StableReveal>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<double> _fade;
+  Timer? _delay;
+  bool _started = false;
+  bool _motionEnabled = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(vsync: this, duration: widget.duration);
+    _fade = _controller.drive(CurveTween(curve: AppCurves.easeOut));
   }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _motionEnabled = MotionConfig.enabled(context);
+    if (!_started) {
+      _started = true;
+      if (widget.skip || (!_motionEnabled && !widget.fadeWhenReduced)) {
+        _controller.value = 1;
+      } else if (_motionEnabled && widget.delay > Duration.zero) {
+        _delay = Timer(widget.delay, () => _controller.forward());
+      } else {
+        _controller.forward();
+      }
+    } else if (!_motionEnabled) {
+      // Enabling reduced motion also finishes a pending stagger immediately.
+      _delay?.cancel();
+      _controller.value = 1;
+    }
+  }
+
+  @override
+  void dispose() {
+    _delay?.cancel();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: _fade,
+    builder: (context, child) => FadeTransition(
+      opacity: _fade,
+      child: Transform.translate(
+        offset: Offset(
+          0,
+          _motionEnabled ? widget.distance * (1 - _fade.value) : 0,
+        ),
+        child: child,
+      ),
+    ),
+    child: widget.child,
+  );
 }
 
 /// Wraps a screen's top-level children in a staggered entrance cascade.

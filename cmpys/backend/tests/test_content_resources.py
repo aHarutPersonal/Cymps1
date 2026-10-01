@@ -2103,3 +2103,23 @@ async def test_sync_plan_item_content_resource_links_replaces_existing_links():
     assert second.material_index == 2
     assert second.metadata_json["search_query"] == "Warren Buffett interview"
     db.flush.assert_awaited_once()
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('error', [
+    'OpenLux request failed (TimeoutError; finish=missing)',
+    'OpenLux request failed (ValueError; finish=missing)',
+])
+async def test_transport_failure_is_not_retried_as_json_repair(monkeypatch, error):
+    from app.services.llm.client import LLMResponse as Response
+    client = SimpleNamespace(model='gpt-test', generate_json=AsyncMock(
+        return_value=Response(data={}, error=error, provider='openlux', model='gpt-test')))
+    recorded = AsyncMock()
+    monkeypatch.setattr('app.services.llm.client.get_llm_client', lambda **kw: client)
+    monkeypatch.setattr('app.services.llm.telemetry.record_usage_records', recorded)
+    with pytest.raises(RuntimeError, match='OpenLux request failed'):
+        await generate_book_module(title='Test', author='Author', user_goal='Learn')
+    assert client.generate_json.await_count == 1
+    records = recorded.call_args.args[0]
+    assert len(records) == 1
+    assert records[0].result_status == 'provider_unavailable'
+    assert not records[0].success

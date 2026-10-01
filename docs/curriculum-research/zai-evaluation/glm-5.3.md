@@ -1,0 +1,60 @@
+# Profit vs Cash: A Delivery Business Mini-Case
+
+Model: glm-5.3
+
+## Explanation
+
+This activity tracks a small business through eight transactions so you can see why profit and cash are different numbers. Profit is built from accrual measures: revenue is earned when goods are delivered, and the matching cost of those goods (cost of goods sold) is expensed at the same moment. Cash, by contrast, moves whenever money is actually received or paid, regardless of when the earning happens. Start with the income statement. Only one sale occurs: goods delivered for $900 (T4). Under the accrual convention, the full $900 is revenue at the moment of delivery, even though only $650 was collected immediately. The goods delivered cost $360 (T5), so cost of goods sold is $360 and gross profit is $900 minus $360, or $540. The only operating expense is $100 of rent (T6), so operating profit is $540 minus $100, or $440. Notice what is missing from the income statement. The $1,000 owner contribution (T1) is financing, not revenue. The $500 loan (T2) is also financing; borrowing is not earning. The $80 withdrawal (T8) is a drawing, which reduces equity, not profit. The $600 inventory purchase (T3) is not an expense either: unsold inventory is an asset, and only the $360 portion actually delivered to customers becomes cost of goods sold. Now track cash. The business received $1,000 from the owner, $500 from the lender, $650 from the customer at delivery, and $150 later (T7), totaling inflows of $2,300. Outflows were $600 for inventory, $100 for rent, and $80 withdrawn by the owner, totaling $780. Ending cash is $2,300 minus $780, or $1,520. That is far above the $440 operating profit, mainly because financing inflows of $1,500 arrived without touching profit. Two asset balances remain open: receivables of $100 (the $250 still owed after the $150 collection) and inventory of $240 (the $600 purchased minus the $360 sold). The balance sheet checks out: assets of $1,520 cash plus $100 receivables plus $240 inventory equal $1,860, which equals the $500 loan plus $1,360 equity (contributions of $1,000 plus $440 operating profit minus $80 drawings). The core lesson: profit measures earning performance; cash measures liquidity. A business can be profitable and short of cash, or cash-rich and unprofitable, depending on financing, collections, and inventory.
+
+## Transactions
+
+T1: Owner contributes $1,000 cash. Cash increases by $1,000 and equity (contributed capital) increases by $1,000. This is financing, not revenue, so profit is unaffected.
+
+T2: Business borrows $500 cash. Cash increases by $500 and a loan liability of $500 arises. Borrowing is financing, not revenue, so profit is unaffected.
+
+T3: Buys inventory for $600 cash. Cash decreases by $600 and the inventory asset increases by $600. Because the goods are unsold, nothing is expensed yet and profit is unaffected.
+
+T4: Delivers goods sold for $900, collecting $650 now with $250 receivable. Accrual revenue of $900 is earned at delivery. Cash increases by $650 and receivables increase by $250.
+
+T5: The delivered goods cost $360. This is the cost of goods sold, expensed at delivery. The inventory asset decreases by $360, leaving $240 of unsold inventory.
+
+T6: Pays rent of $100 cash. Cash decreases by $100 and rent of $100 is recorded as an operating expense, reducing profit.
+
+T7: Collects $150 of the T4 receivable. Cash increases by $150 and receivables decrease by $150 to $100. Revenue was already recorded at delivery, so profit is unaffected.
+
+T8: Owner withdraws $80 cash. Cash decreases by $80 and equity decreases by $80. Drawings are not an expense, so profit is unaffected.
+
+## Checked answers
+
+- revenue: 900
+- cogs: 360
+- gross_profit: 540
+- operating_expenses: 100
+- operating_profit: 440
+- ending_cash: 1520
+- receivables: 100
+- inventory: 240
+- loan_principal: 500
+- equity: 1360
+
+## Misconception feedback
+
+The claim confuses cash receipts with profit. The $500 loan (T2) is financing: it increases cash and a loan liability but is not revenue and does not touch profit. The $150 collected receivable (T7) is a partial collection of the $900 revenue already earned when the goods were delivered in T4. Recording that revenue at delivery is what increased profit; collecting the cash later just swaps $150 of receivables for $150 of cash. Neither transaction changes operating profit, which stays at $440.
+
+## Practice
+
+### Exercise 1
+
+Suppose the customer later pays the final $100 of the receivable, and nothing else changes. What happens to ending cash, receivables, and operating profit? Give the new cash balance and explain why profit does or does not change.
+
+Hint: Ask yourself when the revenue was earned. The goods were delivered in T4, and accrual revenue is recorded at delivery, not at collection. What asset and what asset only should shift when cash comes in?
+
+Solution: Ending cash rises by $100, from $1,520 to $1,620. Receivables fall from $100 to $0. Operating profit is unchanged at $440 because the full $900 of revenue was already earned and recorded when the goods were delivered; the final collection merely converts a receivable asset into cash. Collecting money you already earned affects liquidity, not profit.
+
+### Exercise 2
+
+In your own words, explain why buying another $120 of unsold inventory for cash would not reduce this period's profit, and state what does change on the balance sheet.
+
+Hint: Think about the convention: inventory purchases are assets until the goods are sold. Which statement does an inventory purchase affect immediately, the income statement or the balance sheet?
+
+Solution: Buying $120 of unsold inventory is not an expense because the goods have not been delivered to a customer, so no cost of goods sold arises and this period's profit stays at $440. What changes immediately is the balance sheet: cash decreases by $120 (from $1,520 to $1,400) and the inventory asset increases by $120 (from $240 to $360). Profit would only be affected later, when those goods are delivered, at which point their cost becomes cost of goods sold.

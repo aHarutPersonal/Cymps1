@@ -107,6 +107,7 @@ jobs:
           # libcrypto"). printf preserves the body, sed strips stray CRs, and the
           # format guarantees a trailing newline.
           umask 077
+          trap 'rm -f /tmp/deploy_key' EXIT
           printf '%s\n' "$SSH_PRIVATE_KEY" | sed 's/\r$//' > /tmp/deploy_key
           chmod 600 /tmp/deploy_key
 
@@ -120,25 +121,33 @@ jobs:
             exit 1
           fi
 
-          # Preserve the compose topology that matches the currently running
-          # image before replacing release tooling. The remote rollback path
-          # restores this file before it starts the previous image.
-          ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no \
-            ec2-user@$SERVER_IP \
-            "cp /opt/cmpys/docker-compose.prod.yml \
-             /opt/cmpys/docker-compose.prod.yml.rollback-$IMAGE_TAG"
-
-          # Copy updated compose file and deploy script to server.
+          # Upload into a unique release directory. The deployment script
+          # acquires the shared host lock before snapshotting or replacing the
+          # live Compose file; uploads cannot race a manual deployment.
+          RELEASE_DIR="$(ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no \
+            "ec2-user@$SERVER_IP" \
+            "mktemp -d /tmp/cmpys-release-$IMAGE_TAG.XXXXXX")"
           scp -i /tmp/deploy_key -o StrictHostKeyChecking=no \
             cmpys/infra/docker-compose.prod.yml \
             cmpys/infra/deploy.sh \
-            ec2-user@$SERVER_IP:/opt/cmpys/
+            "ec2-user@$SERVER_IP:$RELEASE_DIR/"
 
-          # Run the deploy script on the server
+          # Run this release's script, avoiding a shared mutable deploy.sh.
+          printf -v REMOTE_COMMAND '%q ' bash "$RELEASE_DIR/deploy.sh" \
+            "$ECR_URL" "$IMAGE_TAG" "$AWS_REGION" \
+            "$RELEASE_DIR/docker-compose.prod.yml"
           ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no \
-            ec2-user@$SERVER_IP \
-            "chmod +x /opt/cmpys/deploy.sh && \
-             /opt/cmpys/deploy.sh $ECR_URL $IMAGE_TAG ${{ env.AWS_REGION }}"
+            "ec2-user@$SERVER_IP" "$REMOTE_COMMAND"
+
+          # Remove only the two files uploaded by this run. Retain live
+          # rollback snapshots so an operator can recover a previous release.
+          printf -v CLEANUP_COMMAND '%q ' rm -f \
+            "$RELEASE_DIR/deploy.sh" "$RELEASE_DIR/docker-compose.prod.yml"
+          ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no \
+            "ec2-user@$SERVER_IP" "$CLEANUP_COMMAND" || echo "::warning::Release staging files were retained."
+          printf -v CLEANUP_COMMAND '%q ' rmdir "$RELEASE_DIR"
+          ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no \
+            "ec2-user@$SERVER_IP" "$CLEANUP_COMMAND" || echo "::warning::Release staging directory was retained."
 
           # The instance role is intentionally pull-only. Promote the stable
           # alias from CI, using its ECR write credentials, only after the

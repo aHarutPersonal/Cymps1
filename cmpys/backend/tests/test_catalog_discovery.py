@@ -18,6 +18,12 @@ from app.services.catalog_discovery import (
 from app.tasks import catalog
 
 
+@pytest.fixture(autouse=True)
+def _no_external_books_cache(monkeypatch):
+    from app.services import google_books
+    monkeypatch.setattr(google_books, "_cache_client", lambda: None)
+
+
 class _Response:
     def __init__(self, payload):
         self.payload = payload

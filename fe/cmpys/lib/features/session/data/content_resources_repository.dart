@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/dio_client.dart';
@@ -32,6 +33,8 @@ class ContentResourcesRepository {
         if (narratorProfile != null && narratorProfile.isNotEmpty)
           'narratorProfile': narratorProfile,
       },
+      // Synthesis may take 60s, followed by up to two 10s timing passes.
+      options: Options(receiveTimeout: const Duration(seconds: 90)),
     );
     final data = response.data as Map<String, dynamic>;
     final rawUrl = data['audioUrl']?.toString() ?? '';
@@ -252,6 +255,7 @@ enum BookNarrationAlignmentGranularity {
     String? value, {
     required bool hasAlignment,
   }) {
+    if (!hasAlignment) return BookNarrationAlignmentGranularity.none;
     return switch (value?.trim().toLowerCase()) {
       'word' || 'words' => BookNarrationAlignmentGranularity.word,
       'phrase' ||

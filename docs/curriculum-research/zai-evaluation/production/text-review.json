@@ -1,0 +1,15 @@
+{
+  "fields": [
+    {
+      "field_id": "d_read",
+      "criterion_met": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "feedback": "Excellent: you state the positive $480 profit, the $540 cash fall because outflows exceeded the advance, explain the gap via the uncollected invoice and unearned advance, and conclude that neither ledger alone is a verdict. Next step: quantify the timing gap if you want to go further — e.g., collections of the $1,200 receivable would reverse most of the cash decline.",
+      "uncertain": false
+    }
+  ]
+}

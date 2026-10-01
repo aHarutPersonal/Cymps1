@@ -27,6 +27,7 @@ from app.models.user_achievement import UserAchievement
 from app.models.user import User
 from app.models.user_profile import UserProfile
 from app.services.planning.generator import generate_plan
+from app.services.planning.lesson_review import REVIEW_VERSION, review_response_quality
 from app.services.planning.artifact_identity import (
     new_plan_item_detail_job,
     validated_lesson_materials,
@@ -66,6 +67,8 @@ from app.services.llm.schemas import (
 logger = logging.getLogger(__name__)
 
 WEEK_PREPARATION_STALE_AFTER = timedelta(minutes=10)
+PLAN_PIPELINE_TIMEOUT_SECONDS = 480
+PLAN_DETAIL_PIPELINE_TIMEOUT_SECONDS = 480
 MISSION_PLAN_ITEM_TYPES = frozenset(
     {PlanItemType.PROJECT, PlanItemType.COURSE, PlanItemType.READING}
 )
@@ -152,6 +155,12 @@ def _validate_plan_detail_outline_response(
 
             for step in payload.get("steps", []):
                 if isinstance(step, dict):
+                    # Heading length is a display constraint. Keep the full
+                    # learning objective in the description and shorten only
+                    # a generated heading at a word boundary.
+                    heading = step.get("title")
+                    if isinstance(heading, str) and len(heading) > 60:
+                        step["title"] = heading[:59].rsplit(" ", 1)[0].rstrip() + "…"
                     selected: list[str] = []
                     for resource in step.get("resources", []):
                         canonical = canonical_title(resource)
@@ -175,6 +184,7 @@ def _validate_plan_detail_step_response(
     *,
     expected_step_id: str,
     material_titles: set[str],
+    normalize_timing: bool = True,
 ) -> None:
     """Validate one targeted repair, including its draft-specific references."""
     if getattr(response, "error", None):
@@ -184,6 +194,7 @@ def _validate_plan_detail_step_response(
             response.data,
             expected_step_id=expected_step_id,
             material_titles=material_titles,
+            normalize_timing=normalize_timing,
         )
         if issues:
             raise ValueError("; ".join(issues))
@@ -197,10 +208,11 @@ def _plan_detail_step_payload_and_issues(
     *,
     expected_step_id: str,
     material_titles: set[str],
+    normalize_timing: bool = True,
 ) -> tuple[dict[str, Any], list[str]]:
     """Canonicalize one lesson and return its deterministic quality issues."""
     payload = raw_payload
-    if isinstance(payload, dict):
+    if isinstance(payload, dict) and normalize_timing:
         lesson_words = len(str(payload.get("lesson_content") or "").split())
         reading_minutes = max(8, min(30, round(lesson_words / 200)))
         try:
@@ -881,6 +893,7 @@ async def _generate_plan_item_details_parallel(
                 candidate,
                 expected_step_id=expected_id,
                 material_titles=material_titles,
+                normalize_timing=False,
             )
         except (ValidationError, ValueError):
             continue
@@ -900,7 +913,16 @@ async def _generate_plan_item_details_parallel(
         if on_checkpoint is not None:
             await on_checkpoint(checkpoint_payload(), stage)
 
-    await emit_checkpoint("outline_ready")
+    try:
+        await emit_checkpoint("outline_ready")
+    except DetailArtifactPublicationSuperseded:
+        raise
+    except Exception as exc:
+        logger.error(
+            "[PLAN_DETAILS] Outline checkpoint failed: %s",
+            exc.errors(include_input=False) if isinstance(exc, ValidationError) else type(exc).__name__,
+        )
+        return checkpoint_payload(), calls, f"Outline checkpoint failed: {type(exc).__name__}"
 
     async def write_lesson(
         step: dict[str, Any],
@@ -1145,7 +1167,31 @@ async def _generate_plan_item_details_parallel(
                             issues = [response.error[:2000]]
 
             if not response.error:
-                return response.data, step_calls, None
+                from app.services.planning.lesson_review import review_lesson
+                failures, review_response, review_client = await review_lesson(
+                    response.data, client_factory=factory,
+                    context={"goal": user_goal, "mentor_evidence": idol_evidence},
+                )
+                step_calls.append((
+                    f"parallel_lesson_{expected_id}_review_{attempt + 1}",
+                    review_response, "balanced", "independent_content_review",
+                    getattr(review_client, "model", None),
+                ))
+                if failures:
+                    response.error = "Content review failed: " + "; ".join(failures)
+                else:
+                    reading = max(1, round(len(response.data["lesson_content"].split()) / 200))
+                    response.data.update(
+                        reading_minutes=reading,
+                        practice_minutes=review_response.data["practice_minutes"],
+                        estimate_minutes=reading + review_response.data["practice_minutes"],
+                    )
+                    _validate_plan_detail_step_response(
+                        response, expected_step_id=expected_id,
+                        material_titles=material_titles, normalize_timing=False,
+                    )
+                    if not response.error:
+                        return response.data, step_calls, None
             prior_error = response.error[:3000]
 
         return None, step_calls, prior_error or "lesson generation failed"
@@ -1178,7 +1224,9 @@ async def _generate_plan_item_details_parallel(
                 continue
             ready_by_id[step_id] = lesson
             await emit_checkpoint(f"{step_id}_ready")
-    except Exception:
+    except BaseException:
+        # Cancellation is a BaseException. The outer deadline must stop every
+        # in-flight provider request before releasing its task's event loop.
         for pending_task in pending_tasks:
             if not pending_task.done():
                 pending_task.cancel()
@@ -1305,49 +1353,35 @@ def normalize_lesson_durations(
     *,
     mission_hours: int | float | None = None,
 ) -> dict[str, Any]:
-    """Make every lesson's time claim auditable from reading + practice.
-
-    Reading time is derived from actual words. When the mission has a stored
-    hour budget, divide it across the chosen lessons so the generated module is
-    sufficient for the work promised on the weekly plan.
-    """
-    steps = details.get("steps", [])
-    target_totals: list[int] = []
-    if steps and mission_hours:
-        total_budget = max(40 * len(steps), round(float(mission_hours) * 60))
-        base, remainder = divmod(total_budget, len(steps))
-        target_totals = [
-            min(180, base + (1 if index < remainder else 0))
-            for index in range(len(steps))
-        ]
-
-    for index, step in enumerate(steps):
-        lesson = str(step.get("lesson_content") or "")
-        word_count = len(lesson.split())
-        reading_minutes = max(1, round(word_count / 200))
-
-        requested_total = (
-            target_totals[index]
-            if target_totals
-            else int(step.get("estimate_minutes") or step.get("estimateMinutes") or 60)
-        )
-        requested_total = max(40, min(180, requested_total))
-        requested_practice = int(
-            step.get("practice_minutes") or requested_total - reading_minutes
-        )
-        practice_minutes = max(20, requested_practice)
-        if target_totals:
-            practice_minutes = max(20, requested_total - reading_minutes)
-        total_minutes = reading_minutes + practice_minutes
-        if total_minutes < 40:
-            practice_minutes += 40 - total_minutes
-        elif total_minutes > 180:
-            practice_minutes = max(20, 180 - reading_minutes)
-
-        step["reading_minutes"] = reading_minutes
-        step["practice_minutes"] = practice_minutes
-        step["estimate_minutes"] = reading_minutes + practice_minutes
+    """Preserve the reviewed workload; a plan allocation is not a time estimate."""
+    for step in details.get("steps", []):
+        reading = max(1, round(len(str(step.get("lesson_content") or "").split()) / 200))
+        practice = int(step.get("practice_minutes") or 20)
+        step["reading_minutes"] = reading
+        step["practice_minutes"] = practice
+        step["estimate_minutes"] = reading + practice
     return details
+
+
+def _normalized_outline_materials(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    from app.tasks.ingestion import _normalize_plan_item_details
+    # The storage normalizer moves outline fields and mutates steps in place.
+    # Feed it only an isolated material collection, never the live outline.
+    return _normalize_plan_item_details({"materials": copy.deepcopy(payload.get("materials", []))}).get("materials", [])
+
+
+def _plan_detail_checkpoint_payload(
+    payload: dict[str, Any],
+    resolved_materials: list[dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Keep the reusable scaffold separate from enriched delivery materials.
+
+    A resolved book may include its full reviewed text and ideas, which are
+    intentionally forbidden in the small LLM outline contract. Validating the
+    enriched storage artifact as an outline failed every cached-book mission.
+    """
+    outline = PlanItemDetailsOutlineOutput.model_validate(payload).model_dump(mode="json")
+    return outline, {**payload, "materials": resolved_materials}
 
 
 async def _resolve_plan_detail_materials(
@@ -1501,24 +1535,142 @@ async def _load_session_context(
             if legacy_hours is not None:
                 ctx["legacy_weekly_capacity_hours"] = legacy_hours
 
+    resolved_session_id = getattr(session, "id", None)
+    if user_id and idol_id and resolved_session_id:
+        from sqlalchemy.exc import SQLAlchemyError
+        from app.services.practice.evidence import load_recent_practice_evidence
+
+        # A failed optional enrichment must not discard the interview baseline
+        # or leave its surrounding generation transaction aborted.
+        try:
+            async with db.begin_nested():
+                evidence = await load_recent_practice_evidence(
+                    db, user_id=str(user_id), idol_id=str(idol_id),
+                    session_id=str(resolved_session_id),
+                )
+            if evidence:
+                baseline = ctx.setdefault("learner_baseline", build_interview_plan_inputs([], session_goal=session_goal))
+                baseline["practice_evidence"] = evidence
+        except SQLAlchemyError:
+            logger.warning("[PLANNING] Recent practice evidence is unavailable; retaining intake context")
+
     return ctx
 
 
-@celery_app.task(bind=True)
+@celery_app.task(bind=True, queue="high_priority", soft_time_limit=540, time_limit=600)
 def run_plan_generation(self, job_id: str) -> dict:
     """
     Run the plan generation pipeline as a background task.
     """
     logger.info(f"[PLANNING] Starting plan generation for job_id={job_id}")
     try:
-        result = run_async(_run_plan_generation_async(job_id))
+        # Production can use Celery's solo pool, which cannot enforce task
+        # time limits. Bound the coroutine itself, including provider retries.
+        result = run_async(_run_plan_generation_with_deadline(job_id))
         if result.get("error"):
             raise PlanGenerationUnavailableError(str(result["error"]))
         logger.info(f"[PLANNING] Completed job_id={job_id}, result={result}")
         return result
     except Exception as e:
         logger.exception(f"[PLANNING] Fatal error in job_id={job_id}: {e}")
+        try:
+            run_async(_mark_plan_generation_failed(job_id, e))
+        except Exception:
+            logger.exception("Could not persist failed plan job_id=%s", job_id)
         raise
+
+
+async def _run_plan_generation_with_deadline(job_id: str) -> dict:
+    return await asyncio.wait_for(
+        _run_plan_generation_async(job_id), timeout=PLAN_PIPELINE_TIMEOUT_SECONDS
+    )
+
+
+async def _mark_plan_generation_failed(job_id: str, error: Exception) -> None:
+    """Use a clean transaction even when the original DB connection failed."""
+    message = (
+        "Plan preparation took too long. Your progress is saved; please retry."
+        if isinstance(error, TimeoutError)
+        else "We couldn't finish your plan. Your progress is saved; please retry."
+    )
+    async with async_session_maker() as db:
+        await db.execute(
+            update(PlanGenerationJob)
+            .where(
+                PlanGenerationJob.id == job_id,
+                PlanGenerationJob.status.in_(["pending", "running"]),
+            )
+            .values(status="failed", step="error", error_message=message, thinking_text=None)
+        )
+        await db.commit()
+
+
+async def _finalize_generated_plan(db, job, plan, *, pipeline_started: float) -> dict:
+    """Resume publication of an existing plan without repeating model work."""
+    job.plan_id = plan.id
+    job.thinking_text = None
+    await _update_job(db, job, step="preparing_current_week", progress=95)
+    await _enqueue_all_details_generation_async(db, plan, job.user_id)
+    metrics = (plan.roadmap_json or {}).get("generation_metrics") or {}
+    plan.roadmap_json = {
+        **(plan.roadmap_json or {}),
+        "generation_metrics": {
+            **metrics,
+            "plan_ready_ms": metrics.get("plan_ready_ms")
+            or round((time.perf_counter() - pipeline_started) * 1000),
+        },
+    }
+    await _update_job(db, job, status="completed", step="done", progress=100)
+    return {"status": "completed", "plan_id": str(plan.id)}
+
+
+async def _update_plan_generation_stage(db, job, stage: str) -> None:
+    """Publish completed work, rather than advancing a timer during model calls."""
+    milestones = {
+        "context_ready": (
+            "structuring_curriculum", 15,
+            "Designing your roadmap around your goals, starting point and available time.",
+        ),
+        "backbone_ready": (
+            "preparing_first_week", 55,
+            "Your roadmap is ready. Preparing the missions and daily practice for your first week.",
+        ),
+        "week_one_ready": (
+            "finalizing_plan", 85,
+            "Your first week is ready. Saving your plan.",
+        ),
+    }
+    step, progress, message = milestones[stage]
+    job.thinking_text = message
+    await _update_job(db, job, step=step, progress=progress)
+
+
+async def _validated_plan_recovery(db, job):
+    """Operator recovery is scoped to a real recent outage of this learner's job."""
+    from types import SimpleNamespace
+    from app.models.llm_usage_event import LLMUsageEvent
+    from app.services.curriculum.hashing import sha256_json
+    from app.services.llm.recovery import operational_recovery_client
+    record = (getattr(job, "generation_checkpoint_json", None) or {}).get("operator_recovery")
+    if not record:
+        return None
+    if record.get("hash") != sha256_json(record.get("proof")):
+        raise ValueError("Plan recovery provenance hash mismatch")
+    proof = record["proof"]
+    source_job = await db.get(PlanGenerationJob, proof["source_job_id"])
+    event = await db.get(LLMUsageEvent, proof["source_usage_id"])
+    if (source_job is None or event is None or source_job.user_id != job.user_id
+        or source_job.session_id != job.session_id or source_job.idol_id != job.idol_id
+        or str((event.metadata_json or {}).get("plan_job_id")) != str(source_job.id)
+        or event.provider != "openlux" or event.success):
+        raise ValueError("Plan recovery is not bound to a recent matching outage")
+    if datetime.now(timezone.utc) - event.created_at > timedelta(hours=1):
+        return None
+    errors = (event.metadata_json or {}).get("contract_issues") or []
+    response = SimpleNamespace(provider=event.provider, error=str(errors[0]) if errors else "")
+    if operational_recovery_client(response, timeout=90, max_tokens=16000) is None:
+        raise ValueError("Plan recovery evidence is not an operational outage")
+    return response
 
 
 async def _run_plan_generation_async(job_id: str) -> dict:
@@ -1533,7 +1685,6 @@ async def _run_plan_generation_async(job_id: str) -> dict:
             .where(
                 PlanGenerationJob.id == job_id,
                 PlanGenerationJob.status == "pending",
-                PlanGenerationJob.plan_id.is_(None),
                 or_(
                     PlanGenerationJob.step.is_(None),
                     PlanGenerationJob.step != "waiting_for_strategy",
@@ -1544,6 +1695,7 @@ async def _run_plan_generation_async(job_id: str) -> dict:
                 step="analyzing_gaps",
                 progress_percent=10,
                 error_message=None,
+                thinking_text=None,
             )
         )
         await db.commit()
@@ -1574,6 +1726,17 @@ async def _run_plan_generation_async(job_id: str) -> dict:
 
         if not job:
             return {"error": "Job not found"}
+
+        # A worker may stop after atomically saving the complete plan but
+        # before dispatching lessons. Retrying that row finishes publication;
+        # its committed artifact and checkpoints must never be regenerated.
+        if job.plan_id:
+            plan = await db.get(Plan, job.plan_id)
+            if plan is None or plan.user_id != job.user_id or plan.idol_id != job.idol_id:
+                raise ValueError("The persisted plan does not match this job")
+            return await _finalize_generated_plan(
+                db, job, plan, pipeline_started=pipeline_started
+            )
 
         idol = job.idol
         if not idol:
@@ -1634,8 +1797,10 @@ async def _run_plan_generation_async(job_id: str) -> dict:
             idol_milestones = list(milestone_result.scalars().all())
 
             # Load user achievements
-            ach_stmt = select(UserAchievement).where(
-                UserAchievement.user_id == job.user_id
+            ach_stmt = (
+                select(UserAchievement)
+                .where(UserAchievement.user_id == job.user_id)
+                .order_by(UserAchievement.created_at.desc())
             )
             ach_result = await db.execute(ach_stmt)
             user_achievements = list(ach_result.scalars().all())
@@ -1647,11 +1812,6 @@ async def _run_plan_generation_async(job_id: str) -> dict:
             if not gaps:
                 gaps = ["learning", "career", "mindset"]
 
-            await _update_job(db, job, progress=30)
-
-            # Step 2: Structuring curriculum (30-60%)
-            await _update_job(db, job, step="structuring_curriculum", progress=40)
-
             idol_plan_context = _build_idol_plan_context(
                 idol=idol,
                 profile=idol_profile,
@@ -1659,24 +1819,6 @@ async def _run_plan_generation_async(job_id: str) -> dict:
                 milestones=idol_milestones,
                 gaps=gaps,
             )
-
-            await _update_job(db, job, progress=50)
-
-            # Step 3: Balancing workload (60-85%)
-            await _update_job(db, job, step="balancing_workload", progress=65)
-
-            # Keep progress copy deterministic. The previous implementation
-            # launched an untracked OpenAI stream even when Gemini was the
-            # configured provider; it was not metered and could be destroyed
-            # when the Celery event loop closed.
-            gap_summary = ", ".join(gaps[:3])
-            job.thinking_text = (
-                f"Analyzing {idol.name}'s journey and building a plan around "
-                f"your highest-priority gaps: {gap_summary}."
-            )
-            await db.commit()
-
-            await _update_job(db, job, progress=70)
 
             # Load user data for context
             user_stmt = select(User).where(User.id == job.user_id)
@@ -1687,14 +1829,7 @@ async def _run_plan_generation_async(job_id: str) -> dict:
             u_prof_res = await db.execute(u_prof_stmt)
             user_profile = u_prof_res.scalar_one_or_none()
 
-            u_ach_stmt = (
-                select(UserAchievement)
-                .where(UserAchievement.user_id == job.user_id)
-                .order_by(UserAchievement.created_at.desc())
-                .limit(5)
-            )
-            u_ach_res = await db.execute(u_ach_stmt)
-            recent_achieves = list(u_ach_res.scalars().all())
+            recent_achieves = user_achievements[:5]
 
             # Build Context String
             context_parts = []
@@ -1866,7 +2001,20 @@ async def _run_plan_generation_async(job_id: str) -> dict:
             # otherwise one slow generation occupies a pooled DB connection.
             await db.commit()
 
+            async def save_generation_checkpoint(value):
+                job.generation_checkpoint_json = value
+                await db.commit()
+
+            async def on_generation_stage(stage):
+                await _update_plan_generation_stage(db, job, stage)
+
+            recovery_response = await _validated_plan_recovery(db, job)
+            await _update_plan_generation_stage(db, job, "context_ready")
             roadmap = await generate_plan(
+                generation_checkpoint=getattr(job, "generation_checkpoint_json", None),
+                save_generation_checkpoint=save_generation_checkpoint,
+                on_generation_stage=on_generation_stage,
+                recovery_response=recovery_response,
                 idol_name=idol.name,
                 user_goal=user_goal,
                 weekly_hours=job.weekly_hours,
@@ -1913,6 +2061,10 @@ async def _run_plan_generation_async(job_id: str) -> dict:
                 duration_weeks=job.duration_weeks,
                 weekly_hours=job.weekly_hours,
                 roadmap_json={
+                    **({"operator_catalog_pilot_job_id": str(job.id)}
+                       if recovery_response is not None and
+                       ((getattr(job, "generation_checkpoint_json", None) or {}).get("operator_recovery", {}).get("proof", {}).get("catalog_only") is True)
+                       else {}),
                     "roadmap_thesis": roadmap.roadmap_thesis,
                     "anti_goals": roadmap.anti_goals,
                     "backbone_weeks": roadmap.backbone_weeks,
@@ -1969,43 +2121,17 @@ async def _run_plan_generation_async(job_id: str) -> dict:
             # Publish Week 1 lesson work before exposing the plan as complete.
             # This gives the background workers a head start and guarantees
             # that opening the current week is never the generation trigger.
-            job.plan_id = plan.id
-            await _update_job(
-                db,
-                job,
-                step="preparing_current_week",
-                progress=95,
+            return await _finalize_generated_plan(
+                db, job, plan, pipeline_started=pipeline_started
             )
-            await _enqueue_all_details_generation_async(db, plan, job.user_id)
-
-            plan.roadmap_json = {
-                **(plan.roadmap_json or {}),
-                "generation_metrics": {
-                    **((plan.roadmap_json or {}).get("generation_metrics") or {}),
-                    "plan_ready_ms": round(
-                        (time.perf_counter() - pipeline_started) * 1000
-                    ),
-                },
-            }
-
-            await _update_job(
-                db,
-                job,
-                status="completed",
-                step="done",
-                progress=100,
-            )
-
-            return {"status": "completed", "plan_id": str(plan.id)}
 
         except Exception as e:
             logger.exception(f"Plan generation failed for job {job_id}")
-            await _update_job(
-                db, job, status="failed", step="error", error_message=str(e)
-            )
+            # Flush/commit errors poison the transaction. Roll it back before
+            # using a separate connection to publish the terminal failure.
+            await db.rollback()
+            await _mark_plan_generation_failed(job_id, e)
             return {"error": str(e)}
-
-    await db.commit()
 
 
 @celery_app.task(bind=True, soft_time_limit=540, time_limit=600)
@@ -2015,7 +2141,7 @@ def regenerate_plan_item_details(self, job_id: str) -> dict:
     """
     logger.info(f"[PLAN_DETAILS] Starting regeneration for job_id={job_id}")
     try:
-        result = run_async(_regenerate_plan_item_details_async(job_id))
+        result = run_async(_regenerate_plan_item_details_with_deadline(job_id))
         if result.get("status") in {"completed", "skipped"}:
             logger.info(
                 "[PLAN_DETAILS] Finished job_id=%s status=%s",
@@ -2026,7 +2152,7 @@ def regenerate_plan_item_details(self, job_id: str) -> dict:
             logger.error(
                 "[PLAN_DETAILS] Artifact generation failed job_id=%s error=%s",
                 job_id,
-                result.get("error", "unknown error"),
+                result.get("error") or result.get("reason") or "unknown error",
             )
         return result
     except Exception as e:
@@ -2036,12 +2162,24 @@ def regenerate_plan_item_details(self, job_id: str) -> dict:
         # timeout) so the client receives a terminal retry state instead of a
         # job that says "running" forever.
         try:
-            run_async(_mark_plan_detail_job_failed(job_id, str(e)))
+            error = (
+                "Lesson preparation took too long. Your saved progress is safe; please retry."
+                if isinstance(e, TimeoutError) else str(e)
+            )
+            run_async(_mark_plan_detail_job_failed(job_id, error))
         except Exception:
             logger.exception(
                 "[PLAN_DETAILS] Could not persist failure job_id=%s", job_id
             )
         raise
+
+
+async def _regenerate_plan_item_details_with_deadline(job_id: str) -> dict:
+    """Enforce a real deadline when the Celery solo pool cannot enforce limits."""
+    return await asyncio.wait_for(
+        _regenerate_plan_item_details_async(job_id),
+        timeout=PLAN_DETAIL_PIPELINE_TIMEOUT_SECONDS,
+    )
 
 
 async def _mark_plan_detail_job_failed(job_id: str, error: str) -> None:
@@ -2058,6 +2196,7 @@ async def _mark_plan_detail_job_failed(job_id: str, error: str) -> None:
                 status="failed",
                 step="error",
                 error_message=error[:4000],
+                thinking_text=None,
             )
         )
         await db.commit()
@@ -2235,9 +2374,12 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                 idol_id=idol.id if idol else None,
                 session_id=roadmap.get("source_session_id"),
             )
+            from app.services.interview_inputs import compact_placement_context
+
             session_context = "\n\n".join(
                 p
                 for p in [
+                    compact_placement_context(sctx.get("learner_baseline") or baseline_snapshot),
                     sctx.get("blueprint_markdown") or "",
                     sctx.get("comparison_summary") or "",
                 ]
@@ -2251,6 +2393,14 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
         # The catalog pilot is strictly best-effort. Only a fully composed,
         # learner-bound artifact returns here; a taxonomy miss, weak match, or
         # failed quality gate continues into the proven bespoke pipeline below.
+        operator_catalog_pilot = roadmap.get("operator_catalog_pilot_job_id")
+        catalog_recovery = None
+        if operator_catalog_pilot:
+            pilot_job = await db.get(PlanGenerationJob, operator_catalog_pilot)
+            if (pilot_job is None or str(pilot_job.user_id) != str(user_id)
+                or str(pilot_job.plan_id) != str(plan.id)):
+                raise ValueError("Catalog pilot provenance does not match this plan")
+            catalog_recovery = await _validated_plan_recovery(db, pilot_job)
         if settings.lesson_catalog_first_enabled:
             try:
                 from app.services.planning.catalog_lessons import (
@@ -2264,16 +2414,18 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                     step="matching_catalog_lesson",
                     progress=61,
                 )
-                catalog_attempt = await try_catalog_personalized_lesson(
-                    db,
-                    user_id=str(user_id),
-                    plan=plan,
-                    item=item,
-                    user_profile=user_profile,
-                    session_context=sctx if "sctx" in locals() else {},
-                    idol=idol,
-                    idol_evidence=idol_evidence,
-                )
+                from app.services.llm.recovery import scoped_operational_recovery
+                with scoped_operational_recovery(catalog_recovery):
+                    catalog_attempt = await try_catalog_personalized_lesson(
+                        db,
+                        user_id=str(user_id),
+                        plan=plan,
+                        item=item,
+                        user_profile=user_profile,
+                        session_context=sctx if "sctx" in locals() else {},
+                        idol=idol,
+                        idol_evidence=idol_evidence,
+                    )
                 if catalog_attempt.details is not None:
                     # Catalog steps were already normalized before their exact
                     # immutable content hashes were persisted. Re-normalizing
@@ -2301,6 +2453,7 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                     generation.update(
                         {
                             "status": "ready",
+                            "practice_required": True,
                             "job_id": str(job.id),
                             "checkpoint_stage": "ready",
                             "updated_at": now_iso,
@@ -2357,10 +2510,12 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                         "materials_count": len(details.get("materials", [])),
                     }
                 logger.info(
-                    "[PLAN_DETAILS] Catalog abstained item_id=%s reason=%s; "
-                    "continuing bespoke generation",
+                    "[PLAN_DETAILS] Catalog abstained item_id=%s reason=%s; %s",
                     item.id,
                     catalog_attempt.reason,
+                    "reviewed-content pilot stops here"
+                    if operator_catalog_pilot
+                    else "continuing bespoke generation",
                 )
             except DetailArtifactPublicationSuperseded as stale_error:
                 await db.rollback()
@@ -2393,8 +2548,20 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                 progress=60,
             )
 
+        if operator_catalog_pilot:
+            # This explicit validation pilot may only reuse reviewed content.
+            # Do not silently spend its bounded reserve on unrelated new courses.
+            job.status = "failed"
+            job.step = "catalog_not_available"
+            job.error_message = "A suitable reviewed lesson is not available yet."
+            await db.commit()
+            return {"status": "failed", "reason": "operator_catalog_pilot_abstained"}
+
         input_contract = {
-            "version": 3,
+            "version": 4,
+            # The scaffold/blocking contract is unchanged; retain valid paid
+            # outlines and lessons across the additive advisory clarification.
+            "content_review_version": 1,
             "plan_item_id": str(item.id),
             "title": item.title,
             "description": item.description,
@@ -2426,6 +2593,9 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
         )
         first_lesson_ready_ms: int | None = None
         checkpoint_outline: dict[str, Any] | None = None
+        resolved_checkpoint_materials = None
+        if existing_checkpoint and saved_generation.get("materials_resolved"):
+            resolved_checkpoint_materials = existing_checkpoint.get("materials", [])
 
         try:
             # planner_system.txt, not extractor_system.txt: lesson/material
@@ -2448,11 +2618,30 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
             ) -> None:
                 """Persist each semantic chunk before starting the next one."""
                 nonlocal first_lesson_ready_ms, checkpoint_outline, item, job, plan
+                nonlocal resolved_checkpoint_materials
                 from app.tasks.ingestion import sanitize_for_postgres
 
-                checkpoint_outline = PlanItemDetailsOutlineOutput.model_validate(
-                    payload
-                ).model_dump(mode="json")
+                # References belong to the outline, not to the last successful
+                # lesson. Resolve once and preserve them across partial retries.
+                if resolved_checkpoint_materials is None:
+                    raw = _normalized_outline_materials(payload)
+                    try:
+                        resolved_checkpoint_materials = await asyncio.wait_for(
+                            _resolve_plan_detail_materials(
+                                db, plan_item_id=item.id, materials=raw, user_goal=user_goal,
+                            ), timeout=45,
+                        )
+                        await db.commit()
+                    except Exception as exc:
+                        await db.rollback()
+                        await db.refresh(item)
+                        await db.refresh(job)
+                        await db.refresh(plan)
+                        logger.warning("[PLAN_DETAILS] Reference preparation failed: %s", type(exc).__name__)
+                        resolved_checkpoint_materials = raw
+                checkpoint_outline, payload = _plan_detail_checkpoint_payload(
+                    payload, resolved_checkpoint_materials
+                )
                 ready_step_ids = [
                     str(step.get("id"))
                     for step in payload.get("steps", [])
@@ -2480,6 +2669,7 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                 generation_metadata = {
                     "version": 3,
                     "status": ("partial" if ready_step_ids else "generating"),
+                    "practice_required": True,
                     "input_hash": input_hash,
                     "outline": checkpoint_outline,
                     "ready_step_ids": ready_step_ids,
@@ -2487,6 +2677,11 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                     "total_lesson_count": total_lesson_count,
                     "job_id": str(job.id),
                     "checkpoint_stage": stage,
+                    "content_review_version": REVIEW_VERSION,
+                    "materials_resolved": any(
+                        m.get("url") or m.get("content_resource_id") or m.get("content_markdown")
+                        for m in (resolved_checkpoint_materials or [])
+                    ),
                     "updated_at": now_iso,
                     "queue_wait_ms": queue_wait_ms,
                     "elapsed_ms": elapsed_ms,
@@ -2620,9 +2815,11 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                 on_checkpoint=_checkpoint_details,
             )
             detail_llm_calls.extend(parallel_calls)
-            for stage, response, _, _, _ in parallel_calls:
+            for stage, response, _, route_reason, _ in parallel_calls:
                 if response.error:
                     call_quality[id(response)] = 0.0
+                elif route_reason == "independent_content_review":
+                    call_quality[id(response)] = review_response_quality(response)
                 elif stage.startswith("parallel_outline_") or (
                     "substeps_repair" in stage
                 ):
@@ -2655,7 +2852,7 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                     ),
                 }
 
-            details = parallel_payload
+            details = {**parallel_payload, "materials": resolved_checkpoint_materials or parallel_payload.get("materials", [])}
 
             # Normalize before URL/resource resolution so `kind` aliases become `type`
             # and book/video resources can be deduplicated reliably.
@@ -2672,7 +2869,7 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
             await _update_job(db, job, step="resolving_materials", progress=82)
             try:
                 raw_materials = details.get("materials", [])
-                if raw_materials:
+                if raw_materials and resolved_checkpoint_materials is None:
                     details["materials"] = await _resolve_plan_detail_materials(
                         db,
                         plan_item_id=item.id,
@@ -2711,6 +2908,7 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
             details["_generation"] = {
                 "version": 3,
                 "status": "ready",
+                "practice_required": True,
                 "input_hash": input_hash,
                 "outline": checkpoint_outline,
                 "ready_step_ids": ready_step_ids,
@@ -3095,6 +3293,11 @@ async def _enqueue_plan_week_details_generation_async(
         return (index, str(created_at or ""), str(item.id))
 
     items.sort(key=mission_order)
+    pilot_plan = await db.get(Plan, plan_id)
+    if pilot_plan is not None and (pilot_plan.roadmap_json or {}).get("operator_catalog_pilot_job_id"):
+        # Admit one mission for this explicitly bounded end-to-end pilot.
+        # Normal plans still prefetch every current-week mission.
+        items = items[:1]
     if not items:
         await db.commit()
         return []
@@ -3290,9 +3493,12 @@ async def _prepare_plan_week_items_async(
             idol_id=str(plan.idol_id) if plan.idol_id else None,
             session_id=roadmap.get("source_session_id"),
         )
+        from app.services.interview_inputs import compact_placement_context
+
         session_context = "\n\n".join(
             value
             for value in (
+                compact_placement_context(session_context_data.get("learner_baseline") or roadmap.get("learner_baseline") or {}),
                 session_context_data.get("comparison_summary"),
                 session_context_data.get("blueprint_markdown"),
             )

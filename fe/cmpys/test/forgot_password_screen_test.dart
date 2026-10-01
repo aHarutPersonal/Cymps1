@@ -3,22 +3,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('forgot password validates and confirms recovery', (
+  testWidgets('unavailable recovery never claims to send an email', (
     tester,
   ) async {
     await tester.pumpWidget(const MaterialApp(home: ForgotPasswordScreen()));
-
-    expect(find.text('Recover access'), findsOneWidget);
-
-    await tester.tap(find.text('Send Recovery Link'));
-    await tester.pump();
-    expect(find.text('Enter your account email'), findsOneWidget);
-
-    await tester.enterText(find.byType(TextFormField), 'person@example.com');
-    await tester.tap(find.text('Send Recovery Link'));
-    await tester.pump();
-
-    expect(find.text('Check your inbox'), findsOneWidget);
-    expect(find.text('Send Again'), findsOneWidget);
+    expect(find.text('Forgot your password?'), findsOneWidget);
+    expect(
+      find.text('Password reset by email is not available yet.'),
+      findsOneWidget,
+    );
+    expect(find.byType(TextFormField), findsNothing);
+    expect(find.text('Check your inbox'), findsNothing);
+    expect(find.text('Back to sign in'), findsOneWidget);
   });
 }

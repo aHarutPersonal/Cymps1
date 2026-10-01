@@ -5,6 +5,7 @@ import shlex
 import subprocess
 from pathlib import Path
 
+import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEPLOY_SCRIPTS = (
@@ -70,7 +71,7 @@ def test_ci_serializes_deploys_and_promotes_latest_only_after_health() -> None:
     assert 'docker push "$ECR_URL:latest"' not in script
     assert "docker buildx imagetools create" in workflow
     assert workflow.index("docker buildx imagetools create") > workflow.index(
-        "/opt/cmpys/deploy.sh $ECR_URL $IMAGE_TAG"
+        '"ec2-user@$SERVER_IP" "$REMOTE_COMMAND"'
     )
     assert "workflow_dispatch:" in workflow
     assert 'image: pgvector/pgvector:pg16' in workflow
@@ -78,7 +79,11 @@ def test_ci_serializes_deploys_and_promotes_latest_only_after_health() -> None:
     assert "python -m pytest -q" in workflow
     assert "--ignore=tests/test_catalog_migration.py" not in workflow
     assert '- "cmpys/prompts/**"' in workflow
-    assert "docker-compose.prod.yml.rollback-$IMAGE_TAG" in workflow
+    assert '"ec2-user@$SERVER_IP:$RELEASE_DIR/"' in workflow
+    assert "mktemp -d /tmp/cmpys-release-$IMAGE_TAG.XXXXXX" in workflow
+    assert "ec2-user@$SERVER_IP:/opt/cmpys/" not in workflow
+    assert "cp /opt/cmpys/docker-compose.prod.yml" not in workflow
+    assert '"$RELEASE_DIR/docker-compose.prod.yml"' in workflow
     assert script.index("if grep -q '^IMAGE_TAG='") > script.index(
         'wait_for_celery_worker "catalog-control" "catalog_control"'
     )
@@ -99,7 +104,7 @@ def test_deploy_quiesces_old_writers_and_restores_matching_topology() -> None:
 
     infra_script = (PROJECT_ROOT / "infra" / "deploy.sh").read_text()
     assert 'cp "$COMPOSE_BACKUP" "$COMPOSE"' in infra_script
-    assert 'rm -f "$COMPOSE_BACKUP"' in infra_script
+    assert 'rm -f "$COMPOSE_BACKUP"' not in infra_script
 
 
 def test_interactive_queues_have_reserved_worker_roles() -> None:
@@ -127,7 +132,7 @@ def test_small_host_uses_single_process_workers_and_cpu_priority() -> None:
     assert '--pool="${CATALOG_WORKER_POOL:-solo}"' in entrypoint
     assert '--concurrency="${CATALOG_WORKER_CONCURRENCY:-1}"' in entrypoint
     assert '--pool="${CURRICULUM_WORKER_POOL:-prefork}"' in entrypoint
-    assert '--concurrency="${CURRICULUM_WORKER_CONCURRENCY:-2}"' in entrypoint
+    assert '--concurrency="${CURRICULUM_WORKER_CONCURRENCY:-1}"' in entrypoint
     assert "cpu_shares: 2048" in compose
     assert "cpu_shares: 1536" in compose
     assert "cpu_shares: 256" in compose
@@ -160,3 +165,59 @@ def test_checked_in_env_example_matches_the_settings_schema() -> None:
     assert configured.curriculum_worker_pool
     assert configured.curriculum_worker_concurrency > 0
     assert configured.curriculum_control_pool
+
+
+def test_all_live_compose_writes_happen_under_shared_host_lock() -> None:
+    for path in DEPLOY_SCRIPTS:
+        script = path.read_text()
+        lock = script.index("flock -n 9")
+        live_copy = re.search(r'^cp .*\$(?:\{)?INCOMING_COMPOSE', script, re.MULTILINE)
+        assert live_copy is not None
+        assert lock < live_copy.start()
+        backup = re.search(r'^cp .*\$(?:\{)?COMPOSE(?:_FILE)?', script, re.MULTILINE)
+        assert backup is not None
+        assert lock < backup.start() < live_copy.start()
+        assert "docker image prune" not in script
+        rollback = re.search(r'^rollback_release\(\) \{.*?^\}', script, re.MULTILINE | re.DOTALL)
+        assert rollback is not None
+        assert "compose up -d --no-deps --force-recreate" in rollback.group()
+        assert '"${rollback_services[@]}" || return 1' in rollback.group()
+
+
+@pytest.mark.parametrize("path", DEPLOY_SCRIPTS, ids=["manual", "ci"])
+@pytest.mark.parametrize("armed,compose_fails", [(False, False), (True, False), (True, True)])
+def test_rollback_restores_topology_and_reports_restart_failure(tmp_path, path, armed, compose_fails):
+    """Exercise the real rollback body with harmless service stand-ins."""
+    script = path.read_text()
+    rollback = re.search(r'^rollback_release\(\) \{.*?^\}', script, re.MULTILINE | re.DOTALL)
+    assert rollback is not None
+    live = tmp_path / "compose.yml"
+    backup = tmp_path / "compose.previous.yml"
+    live.write_text("new release")
+    backup.write_text("previous release")
+    # The production host uses Bash 4+. Supply the one mapfile operation for
+    # macOS's Bash 3 so these isolated failure checks run on both platforms.
+    setup = f"""
+set -e
+COMPOSE={shlex.quote(str(live))}
+COMPOSE_FILE="$COMPOSE"
+COMPOSE_BACKUP={shlex.quote(str(backup))}
+COMPOSE_REPLACED=true
+ROLLBACK_ARMED={str(armed).lower()}
+PREVIOUS_TAG=old
+RELEASE_SERVICES=(web)
+mapfile() {{ rollback_services=(web); }}
+configured_release_services() {{ echo web; }}
+service_container() {{ echo current-web; }}
+compose() {{ return {1 if compose_fails else 0}; }}
+wait_for_web() {{ return 0; }}
+service_is_running() {{ return 0; }}
+verify_configured_workers() {{ return 0; }}
+"""
+    result = subprocess.run(
+        ["bash", "-c", setup + rollback.group() + "\nif rollback_release; then exit 0; else exit 17; fi\n"],
+        capture_output=True, text=True, timeout=5,
+    )
+    assert result.returncode == (17 if armed and compose_fails else 0), result.stderr
+    assert live.read_text() == "previous release"
+    assert backup.read_text() == "previous release"

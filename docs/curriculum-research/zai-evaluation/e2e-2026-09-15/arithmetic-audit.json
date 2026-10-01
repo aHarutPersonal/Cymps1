@@ -1,0 +1,53 @@
+{
+  "case": "Lakeside Coffee Cart",
+  "transactions": [
+    {
+      "event": "cash sales",
+      "cash_change": 475,
+      "profit_effect": 475
+    },
+    {
+      "event": "credit catering",
+      "cash_change": 0,
+      "profit_effect": 260
+    },
+    {
+      "event": "rent",
+      "cash_change": -150,
+      "profit_effect": -150
+    },
+    {
+      "event": "grinder",
+      "cash_change": -90,
+      "profit_effect": 0
+    },
+    {
+      "event": "beans on account",
+      "cash_change": 0,
+      "profit_effect": -70
+    },
+    {
+      "event": "cash sales",
+      "cash_change": 55,
+      "profit_effect": 55
+    }
+  ],
+  "correct": {
+    "cash_change": 290,
+    "profit": 570,
+    "ending_cash": 2590,
+    "profit_minus_cash": 280
+  },
+  "published_key": {
+    "cash_change": 555,
+    "profit": 610,
+    "gap": 55
+  },
+  "reconciliation": {
+    "credit_sale": 260,
+    "equipment_cash_outflow": 90,
+    "unpaid_beans": -70,
+    "sum": 280
+  },
+  "verdict": "FAIL"
+}

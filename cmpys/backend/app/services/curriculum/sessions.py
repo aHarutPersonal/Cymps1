@@ -20,6 +20,18 @@ def pack_session_blocks(
 ) -> tuple[tuple[LessonBlock, ...], ...]:
     """Find a contiguous 40–60 minute partition without splitting a block."""
     blocks = tuple(draft.blocks)
+    if draft.session_workbooks:
+        expected = [block.block_id for block in blocks]
+        actual = [block_id for session in draft.session_workbooks for block_id in session.block_ids]
+        if actual != expected:
+            raise SessionPackingError("Practice sessions must cover every block exactly once in teaching order")
+        by_id = {block.block_id: block for block in blocks}
+        sessions = tuple(tuple(by_id[block_id] for block_id in session.block_ids) for session in draft.session_workbooks)
+        for session in sessions:
+            minutes = sum(block.minutes for block in session)
+            if not MIN_SESSION_MINUTES <= minutes <= MAX_SESSION_MINUTES:
+                raise SessionPackingError("Each declared practice session must contain 40–60 minutes of whole blocks")
+        return sessions
 
     @lru_cache(maxsize=None)
     def solve(start: int) -> tuple[tuple[int, int], ...] | None:

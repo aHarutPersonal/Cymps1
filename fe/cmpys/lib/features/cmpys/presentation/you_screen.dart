@@ -50,9 +50,9 @@ class CmpysYouScreen extends ConsumerWidget {
         child: EntranceScope(
           child: ListView(
             padding: EdgeInsets.fromLTRB(
-              18,
+              AppSpacing.pageGutter(MediaQuery.sizeOf(context).width),
               14,
-              18,
+              AppSpacing.pageGutter(MediaQuery.sizeOf(context).width),
               AppShell.bottomNavClearance(context),
             ),
             children: EntranceGroup.wrap([
@@ -266,14 +266,14 @@ class CmpysYouScreen extends ConsumerWidget {
   }
 
   Widget _circleAction(IconData icon, VoidCallback onTap) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
+    return Tooltip(
+      message: 'Settings',
+      child: CmpysPressable(
+        semanticLabel: 'Settings',
         onTap: onTap,
-        borderRadius: BorderRadius.circular(999),
         child: Container(
-          width: 44,
-          height: 44,
+          width: 48,
+          height: 48,
           decoration: BoxDecoration(
             color: AppColors.card,
             shape: BoxShape.circle,
@@ -511,7 +511,7 @@ class CmpysYouScreen extends ConsumerWidget {
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
-                  'Your progress is saved to this device. You can pick up right where you left off.',
+                  'Your plan and completed progress stay in your account. Notes and saved items stored only on this device will be cleared.',
                   style: AppTypography.body.copyWith(
                     color: AppColors.ink2,
                     fontSize: 14,
@@ -531,7 +531,7 @@ class CmpysYouScreen extends ConsumerWidget {
               // user's mentor, achievements, notes, or saved items.
               await ref.read(cmpysStoreProvider.notifier).reset();
               await ref.read(authControllerProvider.notifier).logout();
-              ref.read(sessionControllerProvider.notifier).onLogout();
+              await ref.read(sessionControllerProvider.notifier).onLogout();
               if (context.mounted) context.go(AppRoutes.auth);
             },
             child: const Text('Log out'),

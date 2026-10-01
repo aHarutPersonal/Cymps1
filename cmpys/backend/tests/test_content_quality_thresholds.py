@@ -72,7 +72,7 @@ def test_lesson_duration_is_derived_from_reading_and_practice():
     assert step["estimate_minutes"] == 43
 
 
-def test_weekly_lesson_bundle_fills_the_mission_hour_budget():
+def test_plan_allocation_does_not_inflate_reviewed_lesson_workload():
     details = {
         "steps": [
             {
@@ -87,9 +87,9 @@ def test_weekly_lesson_bundle_fills_the_mission_hour_budget():
     normalized = normalize_lesson_durations(details, mission_hours=5)
 
     assert [step["reading_minutes"] for step in normalized["steps"]] == [13, 13, 13]
-    assert [step["estimate_minutes"] for step in normalized["steps"]] == [100, 100, 100]
-    assert [step["practice_minutes"] for step in normalized["steps"]] == [87, 87, 87]
-    assert sum(step["estimate_minutes"] for step in normalized["steps"]) == 5 * 60
+    assert [step["estimate_minutes"] for step in normalized["steps"]] == [60, 60, 60]
+    assert [step["practice_minutes"] for step in normalized["steps"]] == [47, 47, 47]
+    assert sum(step["estimate_minutes"] for step in normalized["steps"]) == 3 * 60
 
 
 def test_short_lessons_are_upgraded_and_variable_long_lesson_counts_are_ready():

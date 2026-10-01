@@ -1,8 +1,10 @@
+import asyncio
+from datetime import datetime, timedelta, timezone
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -505,9 +507,9 @@ async def get_job_status(
 
     if real_thinking:
         if isinstance(job, PlanGenerationJob):
-            # Only show LLM thinking during the balancing phase
-            if job.step == "balancing_workload":
-                use_real_thinking = True
+            # Plan workers publish deterministic status at validated stage
+            # boundaries; do not hide those messages behind simulated copy.
+            use_real_thinking = job.status in {"pending", "running"}
         elif isinstance(job, IdolImportJob):
             # Only show LLM thinking during profile extraction and collection
             if job.step in ["extracting_profile", "collecting_sources"]:
@@ -585,12 +587,14 @@ async def get_job_status(
 async def start_job(
     job_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> JobStatusResponse:
     """Manually trigger a queued job to start."""
     stmt = (
         select(IdolImportJob)
         .options(selectinload(IdolImportJob.idol))
-        .where(IdolImportJob.id == job_id)
+        .where(IdolImportJob.id == job_id, IdolImportJob.user_id == current_user.id)
+        .with_for_update(of=IdolImportJob)
     )
     result = await db.execute(stmt)
     job = result.scalar_one_or_none()
@@ -601,7 +605,7 @@ async def start_job(
             detail="Job not found",
         )
 
-    if job.status not in ["queued", "pending"]:
+    if job.status not in ["queued", "pending", "running", "completed", "done"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Job cannot be started, current status: {job.status}",
@@ -610,8 +614,35 @@ async def start_job(
     # Import here to avoid circular imports
     from app.tasks.ingestion import run_idol_ingestion
 
-    # Trigger the Celery task
-    run_idol_ingestion.delay(job_id)
+    updated_at = job.updated_at or job.created_at
+    if updated_at is not None and updated_at.tzinfo is None:
+        updated_at = updated_at.replace(tzinfo=timezone.utc)
+    recently_dispatched = (
+        job.step == "dispatching"
+        and updated_at is not None
+        and datetime.now(timezone.utc) - updated_at < timedelta(minutes=2)
+    )
+    if job.status in {"queued", "pending"} and not recently_dispatched:
+        # Persist a dispatch claim under the row lock; retries must not flood
+        # the worker queue while the first delivery is waiting to be consumed.
+        job.step = "dispatching"
+        await db.commit()
+        try:
+            await asyncio.to_thread(run_idol_ingestion.delay, job_id)
+        except Exception as exc:
+            await db.execute(
+                update(IdolImportJob)
+                .where(
+                    IdolImportJob.id == job_id,
+                    IdolImportJob.status.in_(["queued", "pending"]),
+                    IdolImportJob.step == "dispatching",
+                )
+                .values(step="queued")
+            )
+            await db.commit()
+            raise HTTPException(status_code=503, detail="Could not start preparation. Please retry.") from exc
+    else:
+        await db.commit()
 
     # Get idol name for personalized messages
     idol_name = job.idol.name if job.idol else "this person"

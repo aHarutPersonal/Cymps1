@@ -9,7 +9,7 @@ import '../../../core/ui/motion/motion_config.dart';
 import '../state/book_narration_remote_controller.dart';
 import 'book_narration.dart';
 
-enum _BookNarrationDockOption { stop }
+enum _BookNarrationDockOption { expressive, warm, grounded, stop }
 
 /// Compact, text-free playback surface shared by the reader and app shell.
 ///
@@ -23,6 +23,7 @@ class BookNarrationDock extends ConsumerWidget {
     this.backgroundColor,
     this.foregroundColor,
     this.maxWidth = 420,
+    this.onOpenNavigation,
   });
 
   static const double preferredHeight = 72;
@@ -34,6 +35,7 @@ class BookNarrationDock extends ConsumerWidget {
   final Color? backgroundColor;
   final Color? foregroundColor;
   final double maxWidth;
+  final VoidCallback? onOpenNavigation;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -114,11 +116,20 @@ class BookNarrationDock extends ConsumerWidget {
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                         children: [
-                          _styleMenu(
-                            remote: remote,
-                            background: background,
-                            foreground: foreground,
-                          ),
+                          if (onOpenNavigation != null)
+                            _iconAction(
+                              key: const Key('book-narration-app-menu'),
+                              tooltip: 'Open app menu',
+                              icon: Icons.grid_view_rounded,
+                              color: foreground,
+                              onPressed: onOpenNavigation!,
+                            )
+                          else
+                            _styleMenu(
+                              remote: remote,
+                              background: background,
+                              foreground: foreground,
+                            ),
                           _iconAction(
                             key: const Key('book-narration-previous'),
                             tooltip: 'Previous sentence',
@@ -338,9 +349,40 @@ class BookNarrationDock extends ConsumerWidget {
         onSelected: (option) {
           if (option == _BookNarrationDockOption.stop) {
             unawaited(remote.stop());
+          } else {
+            final style = switch (option) {
+              _BookNarrationDockOption.expressive =>
+                BookNarrationStyle.expressive,
+              _BookNarrationDockOption.warm => BookNarrationStyle.warm,
+              _BookNarrationDockOption.grounded => BookNarrationStyle.grounded,
+              _BookNarrationDockOption.stop => throw StateError(
+                'Handled above',
+              ),
+            };
+            unawaited(remote.setStyle(style));
           }
         },
         itemBuilder: (context) => [
+          if (onOpenNavigation != null) ...[
+            const PopupMenuItem<_BookNarrationDockOption>(
+              enabled: false,
+              child: Text('Narration style'),
+            ),
+            for (final (option, style) in const [
+              (
+                _BookNarrationDockOption.expressive,
+                BookNarrationStyle.expressive,
+              ),
+              (_BookNarrationDockOption.warm, BookNarrationStyle.warm),
+              (_BookNarrationDockOption.grounded, BookNarrationStyle.grounded),
+            ])
+              CheckedPopupMenuItem<_BookNarrationDockOption>(
+                value: option,
+                checked: remote.style == style,
+                child: Text(style.label),
+              ),
+            const PopupMenuDivider(),
+          ],
           PopupMenuItem<_BookNarrationDockOption>(
             value: _BookNarrationDockOption.stop,
             child: Row(

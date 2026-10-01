@@ -1034,6 +1034,7 @@ async def test_set_based_progress_surfaces_require_owned_current_job(
             _Result(scalar_one=None),
             _Result(scalar_one=response_plan),
             _Result(scalars=[]),
+            _Result(scalars=[]),
         ]
         response = await plans.get_current_plan(
             db,
@@ -1504,13 +1505,15 @@ async def test_manual_daily_item_persists_script_without_detail_generation(
 
 
 @pytest.mark.asyncio
-async def test_current_week_reserves_high_priority_for_first_mission() -> None:
+@pytest.mark.parametrize("pilot", [False, True])
+async def test_current_week_reserves_high_priority_for_first_mission(pilot) -> None:
     missions = [
         _item("mission-1", PlanItemType.PROJECT, 1),
         _item("mission-2", PlanItemType.READING, 1),
     ]
     db = AsyncMock()
     db.add = MagicMock()
+    db.get.return_value = SimpleNamespace(roadmap_json={"operator_catalog_pilot_job_id": "pilot"} if pilot else {})
     db.execute.side_effect = [
         _Result(scalars=missions),
         _Result(scalars=[]),
@@ -1531,20 +1534,11 @@ async def test_current_week_reserves_high_priority_for_first_mission() -> None:
             priority="high",
         )
 
-    assert job_ids == ["detail-job-1", "detail-job-2"]
-    assert [call.args[0].status for call in db.add.call_args_list] == [
-        "queued",
-        "queued",
-    ]
-    assert [call.args[0].step for call in db.add.call_args_list] == [
-        "background_queued",
-        "background_queued",
-    ]
-    assert enqueue.call_count == 2
-    assert [call.kwargs["queue"] for call in enqueue.call_args_list] == [
-        "high_priority",
-        "default",
-    ]
+    assert job_ids == (["detail-job-1"] if pilot else ["detail-job-1", "detail-job-2"])
+    assert [call.args[0].status for call in db.add.call_args_list] == ["queued"] * (1 if pilot else 2)
+    assert [call.args[0].step for call in db.add.call_args_list] == ["background_queued"] * (1 if pilot else 2)
+    assert enqueue.call_count == (1 if pilot else 2)
+    assert [call.kwargs["queue"] for call in enqueue.call_args_list] == (["high_priority"] if pilot else ["high_priority", "default"])
     db.commit.assert_awaited_once()
 
 
@@ -1587,6 +1581,7 @@ async def test_week_prefetch_reuses_active_jobs_instead_of_duplicating() -> None
         _item("mission-2", PlanItemType.READING, 2),
     ]
     db = AsyncMock()
+    db.get.return_value = SimpleNamespace(roadmap_json={})
     db.add = MagicMock()
     db.execute.side_effect = [
         _Result(scalars=missions),
@@ -1666,12 +1661,13 @@ async def test_prefetch_publish_failure_becomes_terminal() -> None:
 
 
 @pytest.mark.asyncio
-async def test_failed_detail_job_is_returned_instead_of_requeued_forever() -> None:
+@pytest.mark.parametrize("stage", ["error", "catalog_not_available"])
+async def test_failed_detail_job_is_returned_instead_of_requeued_forever(stage) -> None:
     item = _item("mission-1", PlanItemType.PROJECT, 1)
     failed_job = SimpleNamespace(
         id="job-1",
         status="failed",
-        step="error",
+        step=stage,
         progress_percent=60,
         error_message="provider failed",
         created_at=datetime.now(timezone.utc),
@@ -1699,6 +1695,10 @@ async def test_failed_detail_job_is_returned_instead_of_requeued_forever() -> No
     assert response.details_status == DetailsStatus.FAILED
     assert response.job_id == "job-1"
     assert response.details_error
+    if stage == "catalog_not_available":
+        assert "not available yet" in response.details_error
+        assert "retry" not in response.details_error
+        assert response.details_step == stage
     assert db.add.call_count == 0
 
 
@@ -2012,7 +2012,8 @@ async def test_catalog_outline_or_partial_artifact_cannot_create_completion_stat
 
 
 @pytest.mark.asyncio
-async def test_ready_partial_step_can_complete_but_item_toggle_stays_blocked() -> None:
+@pytest.mark.parametrize("pilot", [False, True])
+async def test_ready_partial_step_can_complete_but_item_toggle_stays_blocked(pilot) -> None:
     item = _item("mission-1", PlanItemType.COURSE, 1)
     item.details_json = {
         "steps": [
@@ -2026,11 +2027,12 @@ async def test_ready_partial_step_can_complete_but_item_toggle_stays_blocked() -
         },
     }
     plan = _plan()
+    plan.roadmap_json = {"operator_catalog_pilot_job_id": "pilot"} if pilot else {}
     now = datetime.now(timezone.utc)
     db = AsyncMock()
     db.add = MagicMock()
     db.execute.return_value = _Result(scalar_one=None)
-    db.scalar.side_effect = [now, 1]
+    db.scalar.side_effect = [now, 12]
     progress = ItemProgress(completed_steps=1, total_steps=2, percent=50)
 
     with (
@@ -2065,7 +2067,10 @@ async def test_ready_partial_step_can_complete_but_item_toggle_stays_blocked() -
     assert item.progress_percent == 50
     assert db.add.call_count == 1
     db.commit.assert_awaited_once_with()
-    prefetch.assert_not_called()
+    if pilot:
+        prefetch.assert_not_called()
+    else:
+        prefetch.assert_called_once()
 
     item_db = AsyncMock()
     item_db.add = MagicMock()
@@ -4178,3 +4183,34 @@ async def test_detail_generation_lock_uses_owned_plan_item_row() -> None:
     assert db.statement._for_update_arg is not None
     assert "plans.user_id" in str(db.statement)
     assert "user-1" in db.statement.compile().params.values()
+
+
+def test_plan_response_preserves_teach_then_apply_backbone_order():
+    course = _item('course', PlanItemType.COURSE, 1, meta_json={'backbone_task_index': 0})
+    project = _item('project', PlanItemType.PROJECT, 1, meta_json={'backbone_task_index': 1})
+    later = _item('later', PlanItemType.COURSE, 2, meta_json={'backbone_task_index': 0})
+    legacy = _item('legacy', PlanItemType.READING, 1, meta_json={'backbone_task_index': 'bad'})
+    plan = SimpleNamespace(id='plan', user_id='user', idol_id='idol', target_age=28,
+        duration_weeks=12, weekly_hours=8, cycle_number=1,
+        created_at=datetime.now(timezone.utc), roadmap_json={},
+        items=[later, project, legacy, course])
+    response = plans._plan_to_response(plan)
+    assert [item.id for item in response.items] == ['course', 'project', 'legacy', 'later']
+    assert [item.id for item in plan.items] == ['later', 'project', 'legacy', 'course']
+
+
+@pytest.mark.parametrize('ready', [False, True])
+def test_catalog_card_reports_assigned_workload_without_rewriting_plan(monkeypatch, ready):
+    item = _item('course', PlanItemType.COURSE, 1)
+    item.estimated_hours = 3
+    item.description = 'Copy an unspecified textbook on paper.'
+    item.details_json = {'catalog': {'module_version_id': 'version'}, 'steps': [
+        {'id': 'step_1', 'description': 'Trace an event across the three statements.', 'estimate_minutes': 60}
+    ]}
+    monkeypatch.setattr(plans, '_lesson_details_meet_quality', lambda details: ready)
+    monkeypatch.setattr(plans, '_validated_lesson_steps', lambda details: details['steps'])
+    response = plans._item_to_response(item)
+    assert response.estimatedHours == (1 if ready else 3)
+    assert ('inside the app' in response.description) is ready
+    assert item.estimated_hours == 3
+    assert item.description == 'Copy an unspecified textbook on paper.'

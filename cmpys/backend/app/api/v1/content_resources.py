@@ -1,6 +1,7 @@
 """Shared content resource and Vault endpoints."""
 
 from dataclasses import asdict
+import logging
 from datetime import datetime, timezone
 from typing import Annotated
 
@@ -49,6 +50,7 @@ from app.services.content_resources import (
 )
 
 router = APIRouter(prefix="/content-resources", tags=["content-resources"])
+logger = logging.getLogger(__name__)
 
 
 def _resource_response(
@@ -601,6 +603,11 @@ async def prepare_content_narration(
             data.narratorProfile.value,
         )
     except BookNarrationUnavailableError as exc:
+        # Do not log the passage, provider body, signed URLs or exception chain.
+        logger.warning(
+            "Book narration unavailable reason=%s http_status=%s provider_status=%s retryable=%s",
+            exc.reason_code, exc.http_status, exc.provider_status, exc.retryable,
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Expressive narration is temporarily unavailable",

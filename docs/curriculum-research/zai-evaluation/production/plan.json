@@ -1,0 +1,734 @@
+{
+  "roadmap_thesis": "Build bookkeeping competence from scratch through a fictional shop's escalating transactions, moving from account classification to journal entries, ledgers, trial balance, and basic financial statements, all practiced in-app with numeric answers and written reasoning.",
+  "anti_goals": [
+    "No real accounting software or real money; the learner has no business, so all practice uses supplied fictional shop cases.",
+    "Avoid premature tax or regulatory topics; they require foundations this cycle does not build.",
+    "Skip memorizing accounting standards; basic double-entry mechanics come first for a true beginner.",
+    "Do not outsource exercises to external spreadsheets or paper; all work stays in-app with provided data."
+  ],
+  "items": [
+    {
+      "title": "Classify fictional shop accounts by type: in-app course and 12-transaction worksheet",
+      "type": "course",
+      "description": "Complete an in-app lesson sequence introducing the accounting equation (Assets = Liabilities + Equity) and the definitions of asset, liability, and equity accounts, followed by a worked example where the owner invests cash into the fictional shop so the learner sees the entry on both sides of the equation. Then work through twelve escalating fictional shop transactions \u2014 such as owner cash investment, buying display shelves, taking a small bank loan, and purchasing inventory on credit \u2014 classifying each as asset, liability, or equity with a one-sentence written justification. A brief diagnostic at the start checks prerequisite arithmetic and the meaning of debit and credit sides, and targeted review is provided if needed. The lesson supplies all fictional data, worked examples, feedback, and a revision round after incorrect answers. This fits a true beginner because every concept is anchored to one concrete fictional shop rather than abstract definitions. Quality check: at least 11 of 12 correct on the final in-app attempt.",
+      "week_start": 1,
+      "week_end": 1,
+      "success_metric": "At least 11 of 12 fictional shop transactions correctly classified as asset, liability, or equity in the final in-app worksheet attempt.",
+      "estimated_hours": 2,
+      "resource_title": null,
+      "resource_url": null,
+      "meta_json": {
+        "primary_mission": "Learn the accounting equation and the five core account categories, then classify at least twelve fictional shop transactions into asset, liability, or equity accounts with written reasoning, producing a completed in-app classification worksheet that becomes the foundation for journal entries in week two.",
+        "predicted_friction": "As a complete beginner, the learner will confuse equity with assets when the fictional owner invests cash into the shop, seeing 'money in the business' and labeling it an asset only; prerequisites for debit/credit mechanics are also not yet established.",
+        "friction_solution": "Anchor every classification to the worked example where the owner's cash investment appears on both sides of the equation \u2014 cash (asset) up and owner's equity up \u2014 and include that exact case in the daily flash drill with immediate feedback. Add a brief in-app diagnostic before the worksheet and targeted review cards on equation structure, without claiming debit/credit mechanics are mastered this week.",
+        "daily_instructions": null,
+        "backbone_task_index": 0,
+        "week_content_status": "ready"
+      }
+    },
+    {
+      "title": "Daily account-type flash classification drill: five sets of eight items",
+      "type": "practice",
+      "description": "Run a five-day daily rhythm of short classification drills inside the CMPYS lesson. Each session presents eight quick fictional shop items \u2014 for example, 'cash register,' 'amount owed to a supplier,' 'owner's original investment' \u2014 drawn from a rotating item bank that deliberately mixes in the classic confuser: the owner investing cash, which increases an asset and equity simultaneously. Learners answer in-app by selecting the account type and writing a one-line justification for any item they miss. Session duration is about 10 minutes, keeping total weekly time near one hour. Recorded evidence is the in-app streak of completed sets plus short written explanations for missed items, which feed week two's journal-entry work. This cadence builds automatic classification, which is the raw material for journal entries.",
+      "week_start": 1,
+      "week_end": 1,
+      "success_metric": "Five consecutive daily short sets of eight classification items each answered in-app, with a written explanation recorded for every missed item.",
+      "estimated_hours": 1,
+      "resource_title": null,
+      "resource_url": null,
+      "meta_json": {
+        "primary_mission": "Learn the accounting equation and the five core account categories, then classify at least twelve fictional shop transactions into asset, liability, or equity accounts with written reasoning, producing a completed in-app classification worksheet that becomes the foundation for journal entries in week two.",
+        "predicted_friction": "As a complete beginner, the learner will confuse equity with assets when the fictional owner invests cash into the shop, seeing 'money in the business' and labeling it an asset only; prerequisites for debit/credit mechanics are also not yet established.",
+        "friction_solution": "Anchor every classification to the worked example where the owner's cash investment appears on both sides of the equation \u2014 cash (asset) up and owner's equity up \u2014 and include that exact case in the daily flash drill with immediate feedback. Add a brief in-app diagnostic before the worksheet and targeted review cards on equation structure, without claiming debit/credit mechanics are mastered this week.",
+        "daily_instructions": "Each day for five days, open the Today screen and start the flash classification set of eight items. Set a 10-minute timer. For each item, read the fictional shop description, choose asset, liability, or equity, and move on without second-guessing. When the timer ends or all eight are answered, review the feedback: for every incorrect item, write one sentence in the app explaining why the correct type applies, using the accounting equation as the anchor. If the same account type is missed twice across days, re-read that category's worked example before ending the session. Expected output: one completed eight-item set with recorded answers and explanations for misses. Stop when the set is finished or the timer hits 10 minutes, whichever comes first \u2014 no extra sets.",
+        "backbone_task_index": 1,
+        "week_content_status": "ready"
+      }
+    },
+    {
+      "title": "Apply debits and credits to five account types",
+      "type": "course",
+      "description": "Extend classification to revenue and expense accounts and apply debits and credits to the accounting equation. This task advances the approved outcome: Correct debit-credit direction assignments for simple fictional shop transactions across all five account types.",
+      "week_start": 2,
+      "week_end": 2,
+      "success_metric": "At least 11 of 12 transactions given correct debit and credit account directions in-app.",
+      "estimated_hours": 2,
+      "resource_title": null,
+      "resource_url": null,
+      "meta_json": {
+        "primary_mission": "Extend classification to revenue and expense accounts and apply debits and credits to the accounting equation.",
+        "predicted_friction": "Reversing the normal balance side for expenses versus revenues.",
+        "friction_solution": "Use a fixed mnemonic chart of normal balances shown beside every drill item and revisited after each error.",
+        "daily_instructions": null,
+        "backbone_task_index": 0,
+        "week_content_status": "backbone"
+      }
+    },
+    {
+      "title": "Daily debit-credit direction drill",
+      "type": "practice",
+      "description": "Extend classification to revenue and expense accounts and apply debits and credits to the accounting equation. This task advances the approved outcome: Correct debit-credit direction assignments for simple fictional shop transactions across all five account types.",
+      "week_start": 2,
+      "week_end": 2,
+      "success_metric": "Five daily in-app drills of ten items with at least eight correct each day.",
+      "estimated_hours": 1,
+      "resource_title": null,
+      "resource_url": null,
+      "meta_json": {
+        "primary_mission": "Extend classification to revenue and expense accounts and apply debits and credits to the accounting equation.",
+        "predicted_friction": "Reversing the normal balance side for expenses versus revenues.",
+        "friction_solution": "Use a fixed mnemonic chart of normal balances shown beside every drill item and revisited after each error.",
+        "daily_instructions": null,
+        "backbone_task_index": 1,
+        "week_content_status": "backbone"
+      }
+    },
+    {
+      "title": "Journalize first fictional shop week",
+      "type": "project",
+      "description": "Record a week of simple fictional shop transactions as full journal entries with dates, accounts, and amounts. This task advances the approved outcome: A complete journal page of at least ten fictional transactions with balanced debits and credits.",
+      "week_start": 3,
+      "week_end": 3,
+      "success_metric": "All ten journal entries balanced and dated correctly in the in-app journal exercise.",
+      "estimated_hours": 2,
+      "resource_title": null,
+      "resource_url": null,
+      "meta_json": {
+        "primary_mission": "Record a week of simple fictional shop transactions as full journal entries with dates, accounts, and amounts.",
+        "predicted_friction": "Omitting the second side of compound entries like buying inventory partly on credit.",
+        "friction_solution": "Require a pre-entry check that total debits equal total credits before submitting each entry.",
+        "daily_instructions": null,
+        "backbone_task_index": 0,
+        "week_content_status": "backbone"
+      }
+    },
+    {
+      "title": "Daily entry-writing on two transactions",
+      "type": "practice",
+      "description": "Record a week of simple fictional shop transactions as full journal entries with dates, accounts, and amounts. This task advances the approved outcome: A complete journal page of at least ten fictional transactions with balanced debits and credits.",
+      "week_start": 3,
+      "week_end": 3,
+      "success_metric": "Five daily in-app sessions writing two balanced journal entries each from new fictional slips.",
+      "estimated_hours": 1,
+      "resource_title": null,
+      "resource_url": null,
+      "meta_json": {
+        "primary_mission": "Record a week of simple fictional shop transactions as full journal entries with dates, accounts, and amounts.",
+        "predicted_friction": "Omitting the second side of compound entries like buying inventory partly on credit.",
+        "friction_solution": "Require a pre-entry check that total debits equal total credits before submitting each entry.",
+        "daily_instructions": null,
+        "backbone_task_index": 1,
+        "week_content_status": "backbone"
+      }
+    },
+    {
+      "title": "Post journal entries to T-accounts",
+      "type": "project",
+      "description": "Post journal entries from the fictional shop into T-accounts and compute running account balances. This task advances the approved outcome: A set of posted T-accounts for the shop's cash, inventory, and sales accounts with correct balances.",
+      "week_start": 4,
+      "week_end": 4,
+      "success_metric": "All posted T-account balances match the in-app answer key within the provided case.",
+      "estimated_hours": 2,
+      "resource_title": null,
+      "resource_url": null,
+      "meta_json": {
+        "primary_mission": "Post journal entries from the fictional shop into T-accounts and compute running account balances.",
+        "predicted_friction": "Losing track of running balances when many entries hit the cash account.",
+        "friction_solution": "Recalculate each account balance after every posting step instead of only at the end.",
+        "daily_instructions": null,
+        "backbone_task_index": 0,
+        "week_content_status": "backbone"
+      }
+    },
+    {
+      "title": "Daily T-account posting drill",
+      "type": "practice",
+      "description": "Post journal entries from the fictional shop into T-accounts and compute running account balances. This task advances the approved outcome: A set of posted T-accounts for the shop's cash, inventory, and sales accounts with correct balances.",
+      "week_start": 4,
+      "week_end": 4,
+      "success_metric": "Five daily in-app postings of three entries to one account with correct balances.",
+      "estimated_hours": 1,
+      "resource_title": null,
+      "resource_url": null,
+      "meta_json": {
+        "primary_mission": "Post journal entries from the fictional shop into T-accounts and compute running account balances.",
+        "predicted_friction": "Losing track of running balances when many entries hit the cash account.",
+        "friction_solution": "Recalculate each account balance after every posting step instead of only at the end.",
+        "daily_instructions": null,
+        "backbone_task_index": 1,
+        "week_content_status": "backbone"
+      }
+    },
+    {
+      "title": "Build four-column general ledger",
+      "type": "project",
+      "description": "Maintain a four-column general ledger for the fictional shop and cross-check it against the journal. This task advances the approved outcome: A completed general ledger for at least eight accounts with balances that reconcile to the journal total.",
+      "week_start": 5,
+      "week_end": 5,
+      "success_metric": "Every ledger account balance equals the sum of its journal postings in the in-app case.",
+      "estimated_hours": 2,
+      "resource_title": null,
+      "resource_url": null,
+      "meta_json": {
+        "primary_mission": "Maintain a four-column general ledger for the fictional shop and cross-check it against the journal.",
+        "predicted_friction": "Copy errors between journal and ledger that go unnoticed.",
+        "friction_solution": "Use a tick-mark cross-check habit where each posted amount is marked against its journal line before moving on.",
+        "daily_instructions": null,
+        "backbone_task_index": 0,
+        "week_content_status": "backbone"
+      }
+    },
+    {
+      "title": "Daily ledger-to-journal cross-check",
+      "type": "practice",
+      "description": "Maintain a four-column general ledger for the fictional shop and cross-check it against the journal. This task advances the approved outcome: A completed general ledger for at least eight accounts with balances that reconcile to the journal total.",
+      "week_start": 5,
+      "week_end": 5,
+      "success_metric": "Five daily in-app reconciliations of one account against its journal entries, all matching.",
+      "estimated_hours": 1,
+      "resource_title": null,
+      "resource_url": null,
+      "meta_json": {
+        "primary_mission": "Maintain a four-column general ledger for the fictional shop and cross-check it against the journal.",
+        "predicted_friction": "Copy errors between journal and ledger that go unnoticed.",
+        "friction_solution": "Use a tick-mark cross-check habit where each posted amount is marked against its journal line before moving on.",
+        "daily_instructions": null,
+        "backbone_task_index": 1,
+        "week_content_status": "backbone"
+      }
+    },
+    {
+      "title": "Prepare trial balance and fix error",
+      "type": "project",
+      "description": "Prepare a trial balance from the fictional shop's ledger and locate a planted imbalance. This task advances the approved outcome: A balanced trial balance plus a corrected version after finding one seeded posting error in-app.",
+      "week_start": 6,
+      "week_end": 6,
+      "success_metric": "Trial balance totals equal and the planted transposition error is identified and corrected in-app.",
+      "estimated_hours": 2,
+      "resource_title": null,
+      "resource_url": null,
+      "meta_json": {
+        "primary_mission": "Prepare a trial balance from the fictional shop's ledger and locate a planted imbalance.",
+        "predicted_friction": "Believing an unbalanced trial balance proves the books are correct when it balances.",
+        "friction_solution": "Study a case with a balanced-but-wrong trial balance where an entry was posted to the wrong account.",
+        "daily_instructions": null,
+        "backbone_task_index": 0,
+        "week_content_status": "backbone"
+      }
+    },
+    {
+      "title": "Daily error-hunting mini case",
+      "type": "practice",
+      "description": "Prepare a trial balance from the fictional shop's ledger and locate a planted imbalance. This task advances the approved outcome: A balanced trial balance plus a corrected version after finding one seeded posting error in-app.",
+      "week_start": 6,
+      "week_end": 6,
+      "success_metric": "Five daily in-app mini cases, each with one planted imbalance located and explained in writing.",
+      "estimated_hours": 1,
+      "resource_title": null,
+      "resource_url": null,
+      "meta_json": {
+        "primary_mission": "Prepare a trial balance from the fictional shop's ledger and locate a planted imbalance.",
+        "predicted_friction": "Believing an unbalanced trial balance proves the books are correct when it balances.",
+        "friction_solution": "Study a case with a balanced-but-wrong trial balance where an entry was posted to the wrong account.",
+        "daily_instructions": null,
+        "backbone_task_index": 1,
+        "week_content_status": "backbone"
+      }
+    },
+    {
+      "title": "Record full fictional shop month",
+      "type": "project",
+      "description": "Record a full month of fictional shop sales, purchases, and payments in journals and ledgers. This task advances the approved outcome: A complete monthly bookkeeping set for the fictional shop ready for statement preparation.",
+      "week_start": 7,
+      "week_end": 7,
+      "success_metric": "All month transactions journalized and posted with the ledger balancing against the in-app key.",
+      "estimated_hours": 2,
+      "resource_title": null,
+      "resource_url": null,
+      "meta_json": {
+        "primary_mission": "Record a full month of fictional shop sales, purchases, and payments in journals and ledgers.",
+        "predicted_friction": "Volume fatigue causing skipped entries or sloppy amounts.",
+        "friction_solution": "Use a daily transaction checklist and stop-and-verify rule after every fifth entry.",
+        "daily_instructions": null,
+        "backbone_task_index": 0,
+        "week_content_status": "backbone"
+      }
+    },
+    {
+      "title": "Daily batch-entry timed practice",
+      "type": "practice",
+      "description": "Record a full month of fictional shop sales, purchases, and payments in journals and ledgers. This task advances the approved outcome: A complete monthly bookkeeping set for the fictional shop ready for statement preparation.",
+      "week_start": 7,
+      "week_end": 7,
+      "success_metric": "Five daily in-app timed batches of five entries each with at least 90% accuracy.",
+      "estimated_hours": 1,
+      "resource_title": null,
+      "resource_url": null,
+      "meta_json": {
+        "primary_mission": "Record a full month of fictional shop sales, purchases, and payments in journals and ledgers.",
+        "predicted_friction": "Volume fatigue causing skipped entries or sloppy amounts.",
+        "friction_solution": "Use a daily transaction checklist and stop-and-verify rule after every fifth entry.",
+        "daily_instructions": null,
+        "backbone_task_index": 1,
+        "week_content_status": "backbone"
+      }
+    },
+    {
+      "title": "Journalize returns, discounts, and drawings",
+      "type": "project",
+      "description": "Handle shop-specific cases: sales returns, purchase discounts, and owner drawings in the journal. This task advances the approved outcome: Correct journal entries for returns, discounts, and drawings within an expanded fictional case.",
+      "week_start": 8,
+      "week_end": 8,
+      "success_metric": "All eight special-case entries balanced and posted to the correct contra and equity accounts in-app.",
+      "estimated_hours": 2,
+      "resource_title": null,
+      "resource_url": null,
+      "meta_json": {
+        "primary_mission": "Handle shop-specific cases: sales returns, purchase discounts, and owner drawings in the journal.",
+        "predicted_friction": "Misclassifying sales returns as expenses rather than contra-revenue.",
+        "friction_solution": "Walk through the contra-account logic once with a worked example before each drill set.",
+        "daily_instructions": null,
+        "backbone_task_index": 0,
+        "week_content_status": "backbone"
+      }
+    },
+    {
+      "title": "Daily special-case entry drill",
+      "type": "practice",
+      "description": "Handle shop-specific cases: sales returns, purchase discounts, and owner drawings in the journal. This task advances the approved outcome: Correct journal entries for returns, discounts, and drawings within an expanded fictional case.",
+      "week_start": 8,
+      "week_end": 8,
+      "success_metric": "Five daily in-app drills covering one special case type each with correct entries.",
+      "estimated_hours": 1,
+      "resource_title": null,
+      "resource_url": null,
+      "meta_json": {
+        "primary_mission": "Handle shop-specific cases: sales returns, purchase discounts, and owner drawings in the journal.",
+        "predicted_friction": "Misclassifying sales returns as expenses rather than contra-revenue.",
+        "friction_solution": "Walk through the contra-account logic once with a worked example before each drill set.",
+        "daily_instructions": null,
+        "backbone_task_index": 1,
+        "week_content_status": "backbone"
+      }
+    },
+    {
+      "title": "Record adjusting entries and adjusted trial balance",
+      "type": "project",
+      "description": "Adjust the fictional shop's accounts for accrued wages, prepaid rent, and depreciation before statements. This task advances the approved outcome: Completed adjusting entries and an adjusted trial balance for the fictional shop.",
+      "week_start": 9,
+      "week_end": 9,
+      "success_metric": "All five adjusting entries correct and the adjusted trial balance totals equal in-app.",
+      "estimated_hours": 2,
+      "resource_title": null,
+      "resource_url": null,
+      "meta_json": {
+        "primary_mission": "Adjust the fictional shop's accounts for accrued wages, prepaid rent, and depreciation before statements.",
+        "predicted_friction": "Confusing when an adjustment touches a balance sheet versus income statement account.",
+        "friction_solution": "Label each adjustment with which statement its two accounts affect before recording it.",
+        "daily_instructions": null,
+        "backbone_task_index": 0,
+        "week_content_status": "backbone"
+      }
+    },
+    {
+      "title": "Daily adjustment reasoning practice",
+      "type": "practice",
+      "description": "Adjust the fictional shop's accounts for accrued wages, prepaid rent, and depreciation before statements. This task advances the approved outcome: Completed adjusting entries and an adjusted trial balance for the fictional shop.",
+      "week_start": 9,
+      "week_end": 9,
+      "success_metric": "Five daily in-app adjustment items with correct entries and one-sense written justification each.",
+      "estimated_hours": 1,
+      "resource_title": null,
+      "resource_url": null,
+      "meta_json": {
+        "primary_mission": "Adjust the fictional shop's accounts for accrued wages, prepaid rent, and depreciation before statements.",
+        "predicted_friction": "Confusing when an adjustment touches a balance sheet versus income statement account.",
+        "friction_solution": "Label each adjustment with which statement its two accounts affect before recording it.",
+        "daily_instructions": null,
+        "backbone_task_index": 1,
+        "week_content_status": "backbone"
+      }
+    },
+    {
+      "title": "Prepare shop income statement",
+      "type": "project",
+      "description": "Prepare an income statement for the fictional shop from the adjusted trial balance. This task advances the approved outcome: A complete fictional shop income statement with correct revenue, expense totals, and net income.",
+      "week_start": 10,
+      "week_end": 10,
+      "success_metric": "Income statement net income matches the in-app answer key exactly.",
+      "estimated_hours": 2,
+      "resource_title": null,
+      "resource_url": null,
+      "meta_json": {
+        "primary_mission": "Prepare an income statement for the fictional shop from the adjusted trial balance.",
+        "predicted_friction": "Placing owner drawings or balance sheet items on the income statement.",
+        "friction_solution": "Apply a pre-sorting checklist that classifies every adjusted balance by statement before building the statement.",
+        "daily_instructions": null,
+        "backbone_task_index": 0,
+        "week_content_status": "backbone"
+      }
+    },
+    {
+      "title": "Daily income statement line sorting",
+      "type": "practice",
+      "description": "Prepare an income statement for the fictional shop from the adjusted trial balance. This task advances the approved outcome: A complete fictional shop income statement with correct revenue, expense totals, and net income.",
+      "week_start": 10,
+      "week_end": 10,
+      "success_metric": "Five daily in-app sorting drills of adjusted balances into statement lines with zero errors.",
+      "estimated_hours": 1,
+      "resource_title": null,
+      "resource_url": null,
+      "meta_json": {
+        "primary_mission": "Prepare an income statement for the fictional shop from the adjusted trial balance.",
+        "predicted_friction": "Placing owner drawings or balance sheet items on the income statement.",
+        "friction_solution": "Apply a pre-sorting checklist that classifies every adjusted balance by statement before building the statement.",
+        "daily_instructions": null,
+        "backbone_task_index": 1,
+        "week_content_status": "backbone"
+      }
+    },
+    {
+      "title": "Close accounts and build balance sheet",
+      "type": "project",
+      "description": "Prepare the fictional shop's balance sheet and verify the accounting equation after closing entries. This task advances the approved outcome: A balance sheet where assets equal liabilities plus equity, supported by closing entries done in-app.",
+      "week_start": 11,
+      "week_end": 11,
+      "success_metric": "Closing entries correct and the balance sheet totals balance in the in-app exercise.",
+      "estimated_hours": 2,
+      "resource_title": null,
+      "resource_url": null,
+      "meta_json": {
+        "primary_mission": "Prepare the fictional shop's balance sheet and verify the accounting equation after closing entries.",
+        "predicted_friction": "Forgetting to close income summary into capital after closing revenue and expenses.",
+        "friction_solution": "Follow a four-step closing sequence card shown with every practice set.",
+        "daily_instructions": null,
+        "backbone_task_index": 0,
+        "week_content_status": "backbone"
+      }
+    },
+    {
+      "title": "Daily closing-entry flow practice",
+      "type": "practice",
+      "description": "Prepare the fictional shop's balance sheet and verify the accounting equation after closing entries. This task advances the approved outcome: A balance sheet where assets equal liabilities plus equity, supported by closing entries done in-app.",
+      "week_start": 11,
+      "week_end": 11,
+      "success_metric": "Five daily in-app runs of closing one small revenue or expense account with correct entries.",
+      "estimated_hours": 1,
+      "resource_title": null,
+      "resource_url": null,
+      "meta_json": {
+        "primary_mission": "Prepare the fictional shop's balance sheet and verify the accounting equation after closing entries.",
+        "predicted_friction": "Forgetting to close income summary into capital after closing revenue and expenses.",
+        "friction_solution": "Follow a four-step closing sequence card shown with every practice set.",
+        "daily_instructions": null,
+        "backbone_task_index": 1,
+        "week_content_status": "backbone"
+      }
+    },
+    {
+      "title": "Complete capstone fictional shop cycle",
+      "type": "project",
+      "description": "Run a fresh fictional shop case end-to-end, from journal to financial statements, as a capstone. This task advances the approved outcome: A complete capstone bookkeeping cycle for a new fictional shop with a balanced trial balance and statements.",
+      "week_start": 12,
+      "week_end": 12,
+      "success_metric": "Capstone case journal, ledger, adjusted trial balance, income statement, and balance sheet all correct in-app.",
+      "estimated_hours": 2,
+      "resource_title": null,
+      "resource_url": null,
+      "meta_json": {
+        "primary_mission": "Run a fresh fictional shop case end-to-end, from journal to financial statements, as a capstone.",
+        "predicted_friction": "Time pressure leading to skipped cross-checks across the long cycle.",
+        "friction_solution": "Impose a stage-gate rule where each phase is verified against its subtotal before continuing.",
+        "daily_instructions": null,
+        "backbone_task_index": 0,
+        "week_content_status": "backbone"
+      }
+    },
+    {
+      "title": "Daily capstone error review",
+      "type": "habit",
+      "description": "Run a fresh fictional shop case end-to-end, from journal to financial statements, as a capstone. This task advances the approved outcome: A complete capstone bookkeeping cycle for a new fictional shop with a balanced trial balance and statements.",
+      "week_start": 12,
+      "week_end": 12,
+      "success_metric": "Five daily written error-log entries naming the mistake type and its fix from capstone work.",
+      "estimated_hours": 1,
+      "resource_title": null,
+      "resource_url": null,
+      "meta_json": {
+        "primary_mission": "Run a fresh fictional shop case end-to-end, from journal to financial statements, as a capstone.",
+        "predicted_friction": "Time pressure leading to skipped cross-checks across the long cycle.",
+        "friction_solution": "Impose a stage-gate rule where each phase is verified against its subtotal before continuing.",
+        "daily_instructions": null,
+        "backbone_task_index": 1,
+        "week_content_status": "backbone"
+      }
+    }
+  ],
+  "backbone_weeks": [
+    {
+      "week_number": 1,
+      "phase": "foundation",
+      "primary_mission": "Understand the accounting equation and classify fictional shop transactions into asset, liability, and equity accounts.",
+      "outcome": "A completed in-app classification of at least twelve fictional shop transactions with correct account types.",
+      "tasks": [
+        {
+          "title": "Classify shop accounts by type",
+          "type": "course",
+          "estimated_hours": 2.0,
+          "success_metric": "At least 11 of 12 fictional transactions correctly classified as asset, liability, or equity in-app."
+        },
+        {
+          "title": "Daily account-type flash classification",
+          "type": "practice",
+          "estimated_hours": 1.0,
+          "success_metric": "Five consecutive daily short sets of eight classification items each answered in-app."
+        }
+      ],
+      "predicted_friction": "Confusing equity with assets when the owner invests cash into the fictional shop.",
+      "friction_solution": "Anchor each classification to a worked example where the owner's investment appears on both sides of the equation."
+    },
+    {
+      "week_number": 2,
+      "phase": "foundation",
+      "primary_mission": "Extend classification to revenue and expense accounts and apply debits and credits to the accounting equation.",
+      "outcome": "Correct debit-credit direction assignments for simple fictional shop transactions across all five account types.",
+      "tasks": [
+        {
+          "title": "Apply debits and credits to five account types",
+          "type": "course",
+          "estimated_hours": 2.0,
+          "success_metric": "At least 11 of 12 transactions given correct debit and credit account directions in-app."
+        },
+        {
+          "title": "Daily debit-credit direction drill",
+          "type": "practice",
+          "estimated_hours": 1.0,
+          "success_metric": "Five daily in-app drills of ten items with at least eight correct each day."
+        }
+      ],
+      "predicted_friction": "Reversing the normal balance side for expenses versus revenues.",
+      "friction_solution": "Use a fixed mnemonic chart of normal balances shown beside every drill item and revisited after each error."
+    },
+    {
+      "week_number": 3,
+      "phase": "foundation",
+      "primary_mission": "Record a week of simple fictional shop transactions as full journal entries with dates, accounts, and amounts.",
+      "outcome": "A complete journal page of at least ten fictional transactions with balanced debits and credits.",
+      "tasks": [
+        {
+          "title": "Journalize first fictional shop week",
+          "type": "project",
+          "estimated_hours": 2.0,
+          "success_metric": "All ten journal entries balanced and dated correctly in the in-app journal exercise."
+        },
+        {
+          "title": "Daily entry-writing on two transactions",
+          "type": "practice",
+          "estimated_hours": 1.0,
+          "success_metric": "Five daily in-app sessions writing two balanced journal entries each from new fictional slips."
+        }
+      ],
+      "predicted_friction": "Omitting the second side of compound entries like buying inventory partly on credit.",
+      "friction_solution": "Require a pre-entry check that total debits equal total credits before submitting each entry."
+    },
+    {
+      "week_number": 4,
+      "phase": "core_skills",
+      "primary_mission": "Post journal entries from the fictional shop into T-accounts and compute running account balances.",
+      "outcome": "A set of posted T-accounts for the shop's cash, inventory, and sales accounts with correct balances.",
+      "tasks": [
+        {
+          "title": "Post journal entries to T-accounts",
+          "type": "project",
+          "estimated_hours": 2.0,
+          "success_metric": "All posted T-account balances match the in-app answer key within the provided case."
+        },
+        {
+          "title": "Daily T-account posting drill",
+          "type": "practice",
+          "estimated_hours": 1.0,
+          "success_metric": "Five daily in-app postings of three entries to one account with correct balances."
+        }
+      ],
+      "predicted_friction": "Losing track of running balances when many entries hit the cash account.",
+      "friction_solution": "Recalculate each account balance after every posting step instead of only at the end."
+    },
+    {
+      "week_number": 5,
+      "phase": "core_skills",
+      "primary_mission": "Maintain a four-column general ledger for the fictional shop and cross-check it against the journal.",
+      "outcome": "A completed general ledger for at least eight accounts with balances that reconcile to the journal total.",
+      "tasks": [
+        {
+          "title": "Build four-column general ledger",
+          "type": "project",
+          "estimated_hours": 2.0,
+          "success_metric": "Every ledger account balance equals the sum of its journal postings in the in-app case."
+        },
+        {
+          "title": "Daily ledger-to-journal cross-check",
+          "type": "practice",
+          "estimated_hours": 1.0,
+          "success_metric": "Five daily in-app reconciliations of one account against its journal entries, all matching."
+        }
+      ],
+      "predicted_friction": "Copy errors between journal and ledger that go unnoticed.",
+      "friction_solution": "Use a tick-mark cross-check habit where each posted amount is marked against its journal line before moving on."
+    },
+    {
+      "week_number": 6,
+      "phase": "core_skills",
+      "primary_mission": "Prepare a trial balance from the fictional shop's ledger and locate a planted imbalance.",
+      "outcome": "A balanced trial balance plus a corrected version after finding one seeded posting error in-app.",
+      "tasks": [
+        {
+          "title": "Prepare trial balance and fix error",
+          "type": "project",
+          "estimated_hours": 2.0,
+          "success_metric": "Trial balance totals equal and the planted transposition error is identified and corrected in-app."
+        },
+        {
+          "title": "Daily error-hunting mini case",
+          "type": "practice",
+          "estimated_hours": 1.0,
+          "success_metric": "Five daily in-app mini cases, each with one planted imbalance located and explained in writing."
+        }
+      ],
+      "predicted_friction": "Believing an unbalanced trial balance proves the books are correct when it balances.",
+      "friction_solution": "Study a case with a balanced-but-wrong trial balance where an entry was posted to the wrong account."
+    },
+    {
+      "week_number": 7,
+      "phase": "applied_practice",
+      "primary_mission": "Record a full month of fictional shop sales, purchases, and payments in journals and ledgers.",
+      "outcome": "A complete monthly bookkeeping set for the fictional shop ready for statement preparation.",
+      "tasks": [
+        {
+          "title": "Record full fictional shop month",
+          "type": "project",
+          "estimated_hours": 2.0,
+          "success_metric": "All month transactions journalized and posted with the ledger balancing against the in-app key."
+        },
+        {
+          "title": "Daily batch-entry timed practice",
+          "type": "practice",
+          "estimated_hours": 1.0,
+          "success_metric": "Five daily in-app timed batches of five entries each with at least 90% accuracy."
+        }
+      ],
+      "predicted_friction": "Volume fatigue causing skipped entries or sloppy amounts.",
+      "friction_solution": "Use a daily transaction checklist and stop-and-verify rule after every fifth entry."
+    },
+    {
+      "week_number": 8,
+      "phase": "applied_practice",
+      "primary_mission": "Handle shop-specific cases: sales returns, purchase discounts, and owner drawings in the journal.",
+      "outcome": "Correct journal entries for returns, discounts, and drawings within an expanded fictional case.",
+      "tasks": [
+        {
+          "title": "Journalize returns, discounts, and drawings",
+          "type": "project",
+          "estimated_hours": 2.0,
+          "success_metric": "All eight special-case entries balanced and posted to the correct contra and equity accounts in-app."
+        },
+        {
+          "title": "Daily special-case entry drill",
+          "type": "practice",
+          "estimated_hours": 1.0,
+          "success_metric": "Five daily in-app drills covering one special case type each with correct entries."
+        }
+      ],
+      "predicted_friction": "Misclassifying sales returns as expenses rather than contra-revenue.",
+      "friction_solution": "Walk through the contra-account logic once with a worked example before each drill set."
+    },
+    {
+      "week_number": 9,
+      "phase": "applied_practice",
+      "primary_mission": "Adjust the fictional shop's accounts for accrued wages, prepaid rent, and depreciation before statements.",
+      "outcome": "Completed adjusting entries and an adjusted trial balance for the fictional shop.",
+      "tasks": [
+        {
+          "title": "Record adjusting entries and adjusted trial balance",
+          "type": "project",
+          "estimated_hours": 2.0,
+          "success_metric": "All five adjusting entries correct and the adjusted trial balance totals equal in-app."
+        },
+        {
+          "title": "Daily adjustment reasoning practice",
+          "type": "practice",
+          "estimated_hours": 1.0,
+          "success_metric": "Five daily in-app adjustment items with correct entries and one-sense written justification each."
+        }
+      ],
+      "predicted_friction": "Confusing when an adjustment touches a balance sheet versus income statement account.",
+      "friction_solution": "Label each adjustment with which statement its two accounts affect before recording it."
+    },
+    {
+      "week_number": 10,
+      "phase": "integration",
+      "primary_mission": "Prepare an income statement for the fictional shop from the adjusted trial balance.",
+      "outcome": "A complete fictional shop income statement with correct revenue, expense totals, and net income.",
+      "tasks": [
+        {
+          "title": "Prepare shop income statement",
+          "type": "project",
+          "estimated_hours": 2.0,
+          "success_metric": "Income statement net income matches the in-app answer key exactly."
+        },
+        {
+          "title": "Daily income statement line sorting",
+          "type": "practice",
+          "estimated_hours": 1.0,
+          "success_metric": "Five daily in-app sorting drills of adjusted balances into statement lines with zero errors."
+        }
+      ],
+      "predicted_friction": "Placing owner drawings or balance sheet items on the income statement.",
+      "friction_solution": "Apply a pre-sorting checklist that classifies every adjusted balance by statement before building the statement."
+    },
+    {
+      "week_number": 11,
+      "phase": "integration",
+      "primary_mission": "Prepare the fictional shop's balance sheet and verify the accounting equation after closing entries.",
+      "outcome": "A balance sheet where assets equal liabilities plus equity, supported by closing entries done in-app.",
+      "tasks": [
+        {
+          "title": "Close accounts and build balance sheet",
+          "type": "project",
+          "estimated_hours": 2.0,
+          "success_metric": "Closing entries correct and the balance sheet totals balance in the in-app exercise."
+        },
+        {
+          "title": "Daily closing-entry flow practice",
+          "type": "practice",
+          "estimated_hours": 1.0,
+          "success_metric": "Five daily in-app runs of closing one small revenue or expense account with correct entries."
+        }
+      ],
+      "predicted_friction": "Forgetting to close income summary into capital after closing revenue and expenses.",
+      "friction_solution": "Follow a four-step closing sequence card shown with every practice set."
+    },
+    {
+      "week_number": 12,
+      "phase": "integration",
+      "primary_mission": "Run a fresh fictional shop case end-to-end, from journal to financial statements, as a capstone.",
+      "outcome": "A complete capstone bookkeeping cycle for a new fictional shop with a balanced trial balance and statements.",
+      "tasks": [
+        {
+          "title": "Complete capstone fictional shop cycle",
+          "type": "project",
+          "estimated_hours": 2.0,
+          "success_metric": "Capstone case journal, ledger, adjusted trial balance, income statement, and balance sheet all correct in-app."
+        },
+        {
+          "title": "Daily capstone error review",
+          "type": "habit",
+          "estimated_hours": 1.0,
+          "success_metric": "Five daily written error-log entries naming the mistake type and its fix from capstone work."
+        }
+      ],
+      "predicted_friction": "Time pressure leading to skipped cross-checks across the long cycle.",
+      "friction_solution": "Impose a stage-gate rule where each phase is verified against its subtotal before continuing."
+    }
+  ],
+  "generation_source": "llm"
+}

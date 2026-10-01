@@ -3,8 +3,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 
 import 'package:cmpys/core/network/api_error.dart';
+import 'package:cmpys/core/ui/app_shell.dart';
+import 'package:cmpys/features/cmpys/state/cmpys_backend_sync.dart';
 import 'package:cmpys/features/plan/data/plan_repository.dart';
 import 'package:cmpys/features/plan/models/plan_models.dart';
 import 'package:cmpys/features/plan/presentation/plan_item_detail_screen.dart';
@@ -199,6 +202,120 @@ Widget _app(PlanRepository repo) => ProviderScope(
 );
 
 void main() {
+  for (final scale in [1.0, 2.0]) {
+    testWidgets('detail actions clear floating navigation at $scale text scale', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      tester.view.padding = const FakeViewPadding(top: 47, bottom: 34);
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.view.resetPadding);
+      final background = List.filled(
+        18,
+        'Use this mission to build a repeatable process and review its results.',
+      ).join(' ');
+      final repo = _ScriptedRepo([
+        PlanItemDetailed(
+          item: BackendPlanItem.fromJson({
+            'id': 'x',
+            'title': 'Build the prototype',
+            'type': 'project',
+            'description': background,
+            'successMetric':
+                'Deliver one working prototype and record the result.',
+          }),
+          detailsStatus: 'failed',
+          detailsError: 'This lesson could not be prepared.',
+        ),
+      ]);
+      final router = GoRouter(
+        initialLocation: '/detail',
+        routes: [
+          StatefulShellRoute.indexedStack(
+            builder: (_, _, navigationShell) =>
+                AppShell(navigationShell: navigationShell),
+            branches: [
+              StatefulShellBranch(
+                routes: [
+                  GoRoute(
+                    path: '/detail',
+                    builder: (_, _) => const PlanItemDetailScreen(itemId: 'x'),
+                  ),
+                ],
+              ),
+              for (var i = 1; i < 5; i++)
+                StatefulShellBranch(
+                  routes: [
+                    GoRoute(
+                      path: '/other-$i',
+                      builder: (_, _) => const SizedBox(),
+                    ),
+                  ],
+                ),
+            ],
+          ),
+        ],
+      );
+      addTearDown(router.dispose);
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            planRepositoryProvider.overrideWithValue(repo),
+            cmpysBackendSyncProvider.overrideWith((ref) async {}),
+          ],
+          child: MaterialApp.router(
+            routerConfig: router,
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(
+                context,
+              ).copyWith(textScaler: TextScaler.linear(scale)),
+              child: child!,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final viewport = find.byKey(const Key('plan-detail-scroll'));
+      final nav = find.byKey(const ValueKey('floating-nav-item-0'));
+      expect(
+        tester.getBottomRight(viewport).dy,
+        lessThan(tester.getTopLeft(nav).dy),
+      );
+      final retry = find.byKey(const Key('plan-detail-regenerate'));
+      await tester.ensureVisible(retry);
+      await tester.pumpAndSettle();
+      expect(retry.hitTestable(), findsOneWidget);
+      expect(
+        tester.getBottomRight(retry).dy,
+        lessThan(tester.getTopLeft(nav).dy),
+      );
+      expect(tester.takeException(), isNull);
+
+      final toggle = find.byKey(const Key('mission-background-toggle'));
+      await tester.ensureVisible(toggle);
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<Text>(find.byKey(const Key('mission-background')))
+            .maxLines,
+        4,
+      );
+      await tester.tap(toggle);
+      await tester.pump();
+      expect(
+        tester
+            .widget<Text>(find.byKey(const Key('mission-background')))
+            .maxLines,
+        isNull,
+      );
+      expect(find.text(background), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    });
+  }
+
   testWidgets('network failure shows the connection error copy', (
     tester,
   ) async {
@@ -257,6 +374,29 @@ void main() {
     await tester.pump();
     expect(repo.retries, 1);
 
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('missing reviewed lesson offers no generation retry or polling', (
+    tester,
+  ) async {
+    final repo = _ScriptedRepo([
+      PlanItemDetailed(
+        item: BackendPlanItem.fromJson(const {'id': 'x', 'title': 'Practice'}),
+        detailsStatus: 'failed',
+        detailsStep: 'catalog_not_available',
+        jobId: 'catalog-job',
+      ),
+    ]);
+    await tester.pumpWidget(_app(repo));
+    await tester.pumpAndSettle();
+    expect(find.text('This lesson isn’t available yet.'), findsOneWidget);
+    expect(find.text('Generate again'), findsNothing);
+    expect(find.text('Back to plan'), findsOneWidget);
+    await tester.pump(const Duration(minutes: 1));
+    expect(repo.calls, 1);
+    expect(repo.jobCalls, 0);
+    expect(repo.retries, 0);
     await tester.pumpWidget(const SizedBox());
   });
 

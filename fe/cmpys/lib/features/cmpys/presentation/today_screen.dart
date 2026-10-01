@@ -13,7 +13,6 @@ import '../../plan/data/plan_repository.dart';
 import '../../plan/models/plan_models.dart';
 import '../../plan/presentation/backend_plan_widgets.dart';
 import '../../plan/state/current_plan_provider.dart';
-import '../data/cmpys_ideas_provider.dart';
 import '../data/cmpys_seed.dart';
 import '../state/cmpys_backend_sync.dart';
 import '../state/cmpys_store.dart';
@@ -72,8 +71,6 @@ class CmpysTodayScreen extends ConsumerWidget {
         backendToday?.completedToday ??
         backendItems.where((i) => i.completedToday).length;
     final pct = totalToday == 0 ? 0.0 : doneToday / totalToday * 100;
-    // AI-generated idea cards — no static fallback.
-    final ideasAsync = ref.watch(cmpysIdeasProvider);
     final name = storeView.user.name.isEmpty ? 'friend' : storeView.user.name;
 
     final backendUndone = backendItems.where((i) => !i.completedToday).toList();
@@ -86,9 +83,9 @@ class CmpysTodayScreen extends ConsumerWidget {
         child: EntranceScope(
           child: ListView(
             padding: EdgeInsets.fromLTRB(
-              18,
+              AppSpacing.pageGutter(MediaQuery.sizeOf(context).width),
               14,
-              18,
+              AppSpacing.pageGutter(MediaQuery.sizeOf(context).width),
               AppShell.bottomNavClearance(context),
             ),
             children: EntranceGroup.wrap([
@@ -141,22 +138,6 @@ class CmpysTodayScreen extends ConsumerWidget {
                     style: AppTypography.bodyDim,
                   ),
               ],
-              const SizedBox(height: 22),
-              ideasAsync.when(
-                data: (ideas) {
-                  final now = DateTime.now();
-                  final calendarDay =
-                      DateTime(
-                        now.year,
-                        now.month,
-                        now.day,
-                      ).millisecondsSinceEpoch ~/
-                      Duration.millisecondsPerDay;
-                  return _ideaCard(context, ideas[calendarDay % ideas.length]);
-                },
-                loading: () => _ideaLoadingCard(),
-                error: (_, _) => _ideaErrorCard(ref),
-              ),
               const SizedBox(height: 22),
               _compareNudge(context, storeView.user, idol, name),
             ]),
@@ -336,7 +317,8 @@ class CmpysTodayScreen extends ConsumerWidget {
   /// Next-best-action card for a plan-generated daily task, including the
   /// mentor's daily instructions when present.
   Widget _backendNextActionCard(BuildContext context, TodayTaskItem item) {
-    return GestureDetector(
+    return CmpysPressable(
+      semanticLabel: 'Start ${item.title}',
       onTap: () => openBackendPlanItemById(context, item.id),
       child: Container(
         padding: const EdgeInsets.fromLTRB(20, 18, 18, 18),
@@ -441,37 +423,40 @@ class CmpysTodayScreen extends ConsumerWidget {
       ),
       child: Row(
         children: [
-          GestureDetector(
-            onTap: () => _toggleDaily(context, ref, item),
-            behavior: HitTestBehavior.opaque,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(8, 14, 12, 14),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                width: 26,
-                height: 26,
-                decoration: BoxDecoration(
-                  color: done ? AppColors.green : Colors.transparent,
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: done ? AppColors.green : AppColors.hair2,
-                    width: 2,
+          Semantics(
+            checked: done,
+            label: item.title,
+            child: CmpysPressable(
+              semanticLabel: done ? 'Mark as incomplete' : 'Mark as complete',
+              onTap: () => _toggleDaily(context, ref, item),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(8, 14, 12, 14),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  width: 26,
+                  height: 26,
+                  decoration: BoxDecoration(
+                    color: done ? AppColors.green : Colors.transparent,
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: done ? AppColors.green : AppColors.hair2,
+                      width: 2,
+                    ),
                   ),
+                  child: done
+                      ? const Icon(
+                          Icons.check_rounded,
+                          size: 15,
+                          color: Colors.white,
+                        )
+                      : null,
                 ),
-                child: done
-                    ? const Icon(
-                        Icons.check_rounded,
-                        size: 15,
-                        color: Colors.white,
-                      )
-                    : null,
               ),
             ),
           ),
           Expanded(
-            child: GestureDetector(
+            child: CmpysPressable(
               onTap: () => openBackendPlanItemById(context, item.id),
-              behavior: HitTestBehavior.opaque,
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 12),
                 child: Column(
@@ -531,7 +516,7 @@ class CmpysTodayScreen extends ConsumerWidget {
               ),
               const SizedBox(height: 6),
               Text(
-                '${_greeting()}, $name.',
+                '${_greeting()}, ${name.trim().split(RegExp(r'\s+')).first}.',
                 style: AppTypography.display.copyWith(
                   fontSize: 30,
                   letterSpacing: -0.6,
@@ -545,7 +530,7 @@ class CmpysTodayScreen extends ConsumerWidget {
         Padding(
           padding: const EdgeInsets.only(top: 4),
           child: _circleAction(
-            icon: PhosphorIconsRegular.bellSimple,
+            icon: PhosphorIconsRegular.lightbulb,
             onTap: () => context.goToIdeas(),
           ),
         ),
@@ -554,11 +539,11 @@ class CmpysTodayScreen extends ConsumerWidget {
   }
 
   Widget _circleAction({required IconData icon, required VoidCallback onTap}) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
+    return Tooltip(
+      message: 'Explore ideas',
+      child: CmpysPressable(
+        semanticLabel: 'Explore ideas',
         onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
         child: Container(
           width: 44,
           height: 44,
@@ -574,19 +559,13 @@ class CmpysTodayScreen extends ConsumerWidget {
   }
 
   Widget _heroCard(double pct, int doneToday, int total, int streak) {
-    final left = total - doneToday;
+    final left = (total - doneToday).clamp(0, total);
     return Container(
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 22),
       decoration: BoxDecoration(
-        gradient: AppColors.gradGreen,
-        borderRadius: AppRadii.lg,
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.green2.withValues(alpha: 0.25),
-            blurRadius: 20,
-            offset: const Offset(0, 10),
-          ),
-        ],
+        color: AppColors.card,
+        borderRadius: AppRadii.card,
+        border: Border.all(color: AppColors.hair),
       ),
       child: Row(
         children: [
@@ -594,15 +573,15 @@ class CmpysTodayScreen extends ConsumerWidget {
             value: pct,
             size: 80,
             stroke: 7,
-            color: const Color(0xFFEBC24A),
-            track: Colors.white.withValues(alpha: 0.22),
+            color: AppColors.green2,
+            track: AppColors.greenSoft,
             child: RichText(
               text: TextSpan(
                 children: [
                   TextSpan(
                     text: '$doneToday',
                     style: AppTypography.h2.copyWith(
-                      color: Colors.white,
+                      color: AppColors.ink,
                       fontSize: 23,
                       height: 1,
                     ),
@@ -610,7 +589,7 @@ class CmpysTodayScreen extends ConsumerWidget {
                   TextSpan(
                     text: '/$total',
                     style: AppTypography.caption.copyWith(
-                      color: Colors.white.withValues(alpha: 0.7),
+                      color: AppColors.ink2,
                       fontSize: 13,
                     ),
                   ),
@@ -627,10 +606,10 @@ class CmpysTodayScreen extends ConsumerWidget {
                   total == 0
                       ? 'No habits scheduled today.'
                       : pct >= 100
-                      ? 'Today is done. Well held.'
+                      ? 'Today’s habits are complete'
                       : '$left ${left == 1 ? 'habit' : 'habits'} left today',
                   style: AppTypography.h4.copyWith(
-                    color: Colors.white,
+                    color: AppColors.ink,
                     fontSize: 17,
                     height: 1.2,
                   ),
@@ -640,10 +619,10 @@ class CmpysTodayScreen extends ConsumerWidget {
                   total == 0
                       ? 'Use the roadmap to see what’s ahead.'
                       : pct >= 100
-                      ? 'Consistency is the whole game.'
+                      ? 'A little progress, every day.'
                       : 'Small things, done daily.',
                   style: AppTypography.caption.copyWith(
-                    color: Colors.white.withValues(alpha: 0.85),
+                    color: AppColors.ink2,
                     fontSize: 13.5,
                   ),
                 ),
@@ -655,7 +634,7 @@ class CmpysTodayScreen extends ConsumerWidget {
                       vertical: 5,
                     ),
                     decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.16),
+                      color: AppColors.ochreSoft,
                       borderRadius: BorderRadius.circular(999),
                     ),
                     child: Row(
@@ -663,7 +642,7 @@ class CmpysTodayScreen extends ConsumerWidget {
                         Icon(
                           PhosphorIconsFill.flame,
                           size: 16,
-                          color: const Color(0xFFEBC24A),
+                          color: AppColors.green2,
                         ),
                         const SizedBox(width: 6),
                         Flexible(
@@ -671,7 +650,7 @@ class CmpysTodayScreen extends ConsumerWidget {
                             '$streak-day streak',
                             maxLines: 2,
                             style: AppTypography.captionMedium.copyWith(
-                              color: Colors.white,
+                              color: AppColors.ink,
                               fontSize: 13.5,
                               fontWeight: FontWeight.w600,
                             ),
@@ -720,150 +699,26 @@ class CmpysTodayScreen extends ConsumerWidget {
   }) {
     return Padding(
       padding: const EdgeInsets.only(left: 2),
-      child: Row(
+      child: Wrap(
+        alignment: WrapAlignment.spaceBetween,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 16,
+        runSpacing: 6,
         children: [
           CmpysKicker(title),
-          const Spacer(),
           if (onFullPlan != null)
-            GestureDetector(
-              onTap: onFullPlan,
+            TextButton(
+              onPressed: onFullPlan,
               child: Text(
                 'Full plan',
                 style: AppTypography.captionMedium.copyWith(
-                  color: AppColors.green,
+                  color: AppColors.green2,
                   fontWeight: FontWeight.w600,
                 ),
               ),
             ),
         ],
       ),
-    );
-  }
-
-  Widget _ideaLoadingCard() {
-    return const Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: EdgeInsets.only(left: 2, bottom: 12),
-          child: CmpysKicker('Idea for you today'),
-        ),
-        CmpysSkeleton.block(height: 120),
-      ],
-    );
-  }
-
-  Widget _ideaErrorCard(WidgetRef ref) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Padding(
-          padding: EdgeInsets.only(left: 2, bottom: 12),
-          child: CmpysKicker('Idea for you today'),
-        ),
-        CmpysCardSurface(
-          onTap: () => ref.invalidate(cmpysIdeasProvider),
-          child: Row(
-            children: [
-              const Icon(
-                Icons.refresh_rounded,
-                size: 18,
-                color: AppColors.ink3,
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  'Couldn’t load today’s idea — tap to retry.',
-                  style: AppTypography.caption.copyWith(
-                    color: AppColors.ink2,
-                    fontSize: 13.5,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _ideaCard(BuildContext context, CmpysIdea idea) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Padding(
-          padding: EdgeInsets.only(left: 2, bottom: 12),
-          child: CmpysKicker('Idea for you today'),
-        ),
-        GestureDetector(
-          onTap: () => context.goToIdeas(),
-          child: Container(
-            padding: const EdgeInsets.all(22),
-            decoration: BoxDecoration(
-              color: idea.tone,
-              borderRadius: AppRadii.lg,
-              boxShadow: [
-                BoxShadow(
-                  color: idea.tone.withValues(alpha: 0.25),
-                  blurRadius: 18,
-                  offset: const Offset(0, 8),
-                ),
-              ],
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(
-                  PhosphorIconsFill.quotes,
-                  size: 26,
-                  color: Colors.white.withValues(alpha: 0.55),
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  idea.text,
-                  style: AppTypography.h3.copyWith(
-                    color: Colors.white,
-                    fontSize: 20,
-                    height: 1.35,
-                    letterSpacing: -0.2,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Flexible(
-                      child: Text(
-                        '— ${idea.author}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: AppTypography.caption.copyWith(
-                          color: Colors.white.withValues(alpha: 0.8),
-                          fontSize: 13,
-                        ),
-                      ),
-                    ),
-                    if (idea.isSourced) ...[
-                      const SizedBox(width: 5),
-                      Tooltip(
-                        message: idea.isVerified
-                            ? 'Independently cross-checked'
-                            : 'Source-backed quote',
-                        child: Icon(
-                          idea.isVerified
-                              ? Icons.verified
-                              : Icons.verified_outlined,
-                          size: 15,
-                          color: Colors.white.withValues(alpha: 0.78),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
     );
   }
 

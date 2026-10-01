@@ -40,12 +40,15 @@ final dioClientProvider = Provider<DioClient>((ref) {
 /// final response = await client.get('/users/me');
 /// ```
 class DioClient {
-  DioClient({required TokenStore tokenStore}) : _tokenStore = tokenStore {
+  DioClient({required TokenStore tokenStore, Dio? refreshDio})
+    : _tokenStore = tokenStore,
+      _refreshDio = refreshDio {
     _dio = Dio(_createBaseOptions());
     _setupInterceptors();
   }
 
   final TokenStore _tokenStore;
+  final Dio? _refreshDio;
   late final Dio _dio;
   static const _maxErrorBodyBytes = 64 * 1024;
 
@@ -121,27 +124,34 @@ class DioClient {
     onError: (error, handler) async {
       final alreadyRetried = error.requestOptions.extra[_retryMarker] == true;
 
-      if (error.response?.statusCode == 401 && !alreadyRetried) {
-        if (await _refreshToken()) {
-          try {
+      final needsAuth = error.requestOptions.extra['skipAuth'] != true;
+      if (needsAuth && error.response?.statusCode == 401 && !alreadyRetried) {
+        try {
+          if (await _refreshToken()) {
             final options = error.requestOptions;
             options.extra[_retryMarker] = true;
             final newToken = await _tokenStore.readAccessToken();
-            if (newToken != null) {
-              options.headers['Authorization'] = 'Bearer $newToken';
-            }
-
+            options.headers['Authorization'] = 'Bearer $newToken';
             final response = await _dio.fetch(options);
             return handler.resolve(response);
-          } catch (_) {
-            // Retry also failed; fall through to logout below.
           }
+          await _tokenStore.clear();
+        } on DioException catch (retryError) {
+          // Preserve a valid session on network errors, 429s or 5xxs, and
+          // surface the actual failure so the UI offers retry instead of login.
+          await _decodeStreamingErrorBody(retryError);
+          return handler.reject(
+            DioException(
+              requestOptions: error.requestOptions,
+              response: retryError.response,
+              type: retryError.type,
+              error: _mapError(retryError),
+            ),
+          );
         }
-        // Refresh failed, or refresh succeeded but the retry still 401'd —
-        // either way the session is unrecoverable on this backend.
-        await _tokenStore.clear();
-      } else if (error.response?.statusCode == 401 && alreadyRetried) {
-        // Second 401 in the same request chain → don't try to refresh again.
+      } else if (needsAuth &&
+          error.response?.statusCode == 401 &&
+          alreadyRetried) {
         await _tokenStore.clear();
       }
 
@@ -185,34 +195,40 @@ class DioClient {
   Future<bool> _refreshToken() => _refreshFlight.run(_performTokenRefresh);
 
   Future<bool> _performTokenRefresh() async {
+    final refreshToken = await _tokenStore.readRefreshToken();
+    if (refreshToken == null || refreshToken.isEmpty) return false;
+    final refreshDio = _refreshDio ?? Dio(_createBaseOptions());
     try {
-      final refreshToken = await _tokenStore.readRefreshToken();
-      if (refreshToken == null) return false;
-
-      // Use a new Dio instance to avoid interceptor loops
-      final refreshDio = Dio(BaseOptions(baseUrl: Env.apiBaseUrl));
-
       final response = await refreshDio.post(
         '/auth/refresh',
         data: {'refreshToken': refreshToken},
       );
-
-      if (response.statusCode == 200) {
-        final data = response.data;
-        final newAccessToken = data['accessToken']?.toString();
-        final newRefreshToken = data['refreshToken']?.toString();
-
-        if (newAccessToken != null) {
-          await _tokenStore.saveAccessToken(newAccessToken);
-        }
-        if (newRefreshToken != null) {
-          await _tokenStore.saveRefreshToken(newRefreshToken);
-        }
-        return true;
+      final data = response.data;
+      final access = data is Map ? data['accessToken'] : null;
+      final refresh = data is Map ? data['refreshToken'] : null;
+      if (access is! String ||
+          access.isEmpty ||
+          refresh is! String ||
+          refresh.isEmpty) {
+        throw DioException(
+          requestOptions: response.requestOptions,
+          type: DioExceptionType.unknown,
+          error: const ApiError(
+            message: 'Invalid session refresh response. Please retry.',
+          ),
+        );
       }
-      return false;
-    } catch (e) {
-      return false;
+      await _tokenStore.saveTokens(
+        accessToken: access,
+        refreshToken: refresh,
+        apiBase: Env.apiBaseUrl,
+      );
+      return true;
+    } on DioException catch (error) {
+      if (error.response?.statusCode == 401) return false;
+      rethrow;
+    } finally {
+      if (_refreshDio == null) refreshDio.close();
     }
   }
 

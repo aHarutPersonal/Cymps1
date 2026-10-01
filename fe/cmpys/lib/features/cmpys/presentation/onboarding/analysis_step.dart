@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../app/design_tokens.dart';
 import '../../../../core/ui/cmpys/cmpys_markdown.dart';
 import '../../../../core/ui/cmpys/cmpys_primitives.dart';
+import '../../../../core/ui/motion/motion_config.dart';
 import '../../../session/data/session_repository.dart';
 import '../../data/cmpys_seed.dart';
 import 'results_streamer.dart';
@@ -58,7 +59,7 @@ class _CmpysAnalysisStepState extends ConsumerState<CmpysAnalysisStep>
     _bob = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 2600),
-    )..repeat(reverse: true);
+    );
 
     final existing = widget.draft.comparisonMd;
     if (existing != null && existing.isNotEmpty) {
@@ -68,6 +69,17 @@ class _CmpysAnalysisStepState extends ConsumerState<CmpysAnalysisStep>
       _comparisonDone = true;
     } else {
       _start();
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MotionConfig.enabled(context)) {
+      if (!_bob.isAnimating) _bob.repeat(reverse: true);
+    } else {
+      _bob.stop();
+      _bob.value = 0;
     }
   }
 
@@ -85,7 +97,9 @@ class _CmpysAnalysisStepState extends ConsumerState<CmpysAnalysisStep>
     if (_throttle?.isActive ?? false) return; // gate closed — timer flushes
     _applyPendingComparison();
     _throttle = Timer(
-        const Duration(milliseconds: 120), _applyPendingComparison);
+      const Duration(milliseconds: 120),
+      _applyPendingComparison,
+    );
   }
 
   void _applyPendingComparison() {
@@ -141,8 +155,10 @@ class _CmpysAnalysisStepState extends ConsumerState<CmpysAnalysisStep>
       if (!mounted) return;
       _flushComparison();
       if (_comparison.value.isEmpty) {
-        setState(() => _error =
-            'The analysis didn’t come through. Check your connection and try again.');
+        setState(
+          () => _error =
+              'The analysis didn’t come through. Check your connection and try again.',
+        );
       } else {
         // Comparison made it; blueprint failed — plan-gen step offers retry.
         setState(() => _comparisonDone = true);
@@ -167,13 +183,21 @@ class _CmpysAnalysisStepState extends ConsumerState<CmpysAnalysisStep>
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.wifi_off_rounded,
-                    size: 36, color: Colors.white),
+                const Icon(
+                  Icons.wifi_off_rounded,
+                  size: 36,
+                  color: Colors.white,
+                ),
                 const SizedBox(height: 16),
-                Text(_error!,
-                    textAlign: TextAlign.center,
-                    style: AppTypography.bodyLarge.copyWith(
-                        color: Colors.white, fontSize: 16, height: 1.5)),
+                Text(
+                  _error!,
+                  textAlign: TextAlign.center,
+                  style: AppTypography.bodyLarge.copyWith(
+                    color: Colors.white,
+                    fontSize: 16,
+                    height: 1.5,
+                  ),
+                ),
                 const SizedBox(height: 22),
                 CmpysButton(
                   variant: CmpysBtnVariant.dark,
@@ -231,13 +255,17 @@ class _CmpysAnalysisStepState extends ConsumerState<CmpysAnalysisStep>
                 ),
                 child: Row(
                   children: [
-                    const SizedBox(
+                    SizedBox(
                       width: 16,
                       height: 16,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        valueColor:
-                            AlwaysStoppedAnimation<Color>(Color(0xFFFFD166)),
+                      child: TickerMode(
+                        enabled: MotionConfig.enabled(context),
+                        child: const CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            Color(0xFFFFD166),
+                          ),
+                        ),
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -277,10 +305,11 @@ class _CmpysAnalysisStepState extends ConsumerState<CmpysAnalysisStep>
                   child: Text(
                     'You vs ${widget.idol.short}, in plain terms.',
                     style: AppTypography.display.copyWith(
-                        fontSize: 28,
-                        fontWeight: FontWeight.w500,
-                        letterSpacing: -0.4,
-                        height: 1.3),
+                      fontSize: 28,
+                      fontWeight: FontWeight.w500,
+                      letterSpacing: -0.4,
+                      height: 1.3,
+                    ),
                   ),
                 ),
                 CmpysCardSurface(
@@ -296,19 +325,27 @@ class _CmpysAnalysisStepState extends ConsumerState<CmpysAnalysisStep>
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      const SizedBox(
+                      SizedBox(
                         width: 13,
                         height: 13,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation<Color>(
-                              AppColors.green),
+                        child: TickerMode(
+                          enabled: MotionConfig.enabled(context),
+                          child: const CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              AppColors.green,
+                            ),
+                          ),
                         ),
                       ),
                       const SizedBox(width: 8),
-                      Text('${widget.idol.short} is still writing…',
-                          style: AppTypography.caption.copyWith(
-                              color: AppColors.ink3, fontSize: 12.5)),
+                      Text(
+                        '${widget.idol.short} is still writing…',
+                        style: AppTypography.caption.copyWith(
+                          color: AppColors.ink3,
+                          fontSize: 12.5,
+                        ),
+                      ),
                     ],
                   ),
                 ],

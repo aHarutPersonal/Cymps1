@@ -52,6 +52,10 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
   static const _detailFailureMessage =
       'This lesson could not be prepared. Please generate it again.';
 
+  final _reflection = TextEditingController();
+  bool _reflectionLoaded = false;
+  bool _savingReflection = false;
+  String? _reflectionStatus;
   PlanItemDetailed? _detailed;
   PlanJobStatus? _detailJob;
   String? _activeDetailJobId;
@@ -63,6 +67,7 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
   bool _pollingJob = false;
   bool _detailJobPollingUnsupported = false;
   bool _takingLong = false;
+  bool _descriptionExpanded = false;
   DateTime? _pollStartedAt;
   int _pollAttempt = 0;
   Timer? _poll;
@@ -78,6 +83,7 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
   @override
   void dispose() {
     _poll?.cancel();
+    _reflection.dispose();
     super.dispose();
   }
 
@@ -100,6 +106,10 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
       if (!mounted) return;
       setState(() {
         _detailed = detailed;
+        if (!_reflectionLoaded && detailed.item.isDailyRhythm) {
+          _reflection.text = detailed.dailyReflection;
+          _reflectionLoaded = true;
+        }
         _error = null;
         if (detailed.detailsReady || detailed.completed) {
           _activeDetailJobId = null;
@@ -159,6 +169,10 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
         detailed.completed ||
         detailed.detailsReady ||
         _terminalDetailError != null) {
+      return false;
+    }
+    if (detailed.detailsFailed &&
+        detailed.detailsStep == 'catalog_not_available') {
       return false;
     }
     return detailed.detailsLoading || _pollingDetailJobId != null;
@@ -411,20 +425,29 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
           onPressed: () => Navigator.of(context).pop(),
         ),
       ),
-      body: _error != null
-          ? _errorView()
-          : _detailed == null
-          ? const Center(
-              child: SizedBox(
-                width: 22,
-                height: 22,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  valueColor: AlwaysStoppedAnimation<Color>(AppColors.green),
+      // Reserve the floating dock outside the scroll viewport. End padding
+      // alone lets a retry button sit under the dock partway through a scroll.
+      body: Padding(
+        padding: EdgeInsets.only(
+          bottom: AppShell.isWithinShell(context)
+              ? AppShell.bottomNavClearance(context)
+              : 0,
+        ),
+        child: _error != null
+            ? _errorView()
+            : _detailed == null
+            ? const Center(
+                child: SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    valueColor: AlwaysStoppedAnimation<Color>(AppColors.green),
+                  ),
                 ),
-              ),
-            )
-          : _content(_detailed!),
+              )
+            : _content(_detailed!),
+      ),
     );
   }
 
@@ -459,12 +482,17 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
   Widget _content(PlanItemDetailed d) {
     final item = d.item;
     final done = item.isDailyRhythm ? d.completedToday : d.completed;
+    final showPreparation =
+        !item.isDailyRhythm && !d.completed && !d.detailsReady;
     return ListView(
+      key: const Key('plan-detail-scroll'),
       padding: EdgeInsets.fromLTRB(
         22,
         4,
         22,
-        AppShell.bottomNavClearance(context),
+        AppShell.isWithinShell(context)
+            ? 24
+            : AppShell.bottomNavClearance(context),
       ),
       children: [
         CmpysKicker(
@@ -483,22 +511,23 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
           ),
         ),
         const SizedBox(height: 10),
-        Row(
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
           children: [
             _chip(_typeMeta(item.type).icon, _typeMeta(item.type).label),
-            const SizedBox(width: 8),
             _chip(PhosphorIconsRegular.clock, '~${item.estimatedHours}h'),
             if (done) ...[
-              const SizedBox(width: 8),
               _chip(Icons.check_rounded, 'Done', tone: AppColors.green),
             ],
           ],
         ),
+        if (showPreparation) ...[
+          const SizedBox(height: 18),
+          _generatingCard(d),
+        ],
         const SizedBox(height: 18),
-        Text(
-          item.description,
-          style: AppTypography.body.copyWith(fontSize: 15, height: 1.55),
-        ),
+        _missionBackground(item),
         if (item.successMetric.isNotEmpty) ...[
           const SizedBox(height: 16),
           CmpysCardSurface(
@@ -532,13 +561,7 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
           _dailyRhythmCard(d)
         else if (d.completed && d.steps.isEmpty)
           _completedWithoutLessonCard()
-        else if (!d.detailsReady && !d.hasReadyLesson)
-          _generatingCard(d)
-        else ...[
-          if (!d.detailsReady) ...[
-            _generatingCard(d),
-            const SizedBox(height: 18),
-          ],
+        else if (d.detailsReady || d.hasReadyLesson) ...[
           if (d.steps.isNotEmpty) ...[
             Row(
               children: [
@@ -657,6 +680,73 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
     );
   }
 
+  Widget _missionBackground(BackendPlanItem item) {
+    final description = item.description.trim();
+    final collapsible =
+        item.isMissionTask &&
+        (description.length > 300 || '\n'.allMatches(description).length > 3);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          description,
+          key: const Key('mission-background'),
+          maxLines: collapsible && !_descriptionExpanded ? 4 : null,
+          overflow: collapsible && !_descriptionExpanded
+              ? TextOverflow.ellipsis
+              : null,
+          style: AppTypography.body.copyWith(fontSize: 15, height: 1.55),
+        ),
+        if (collapsible)
+          TextButton(
+            key: const Key('mission-background-toggle'),
+            style: TextButton.styleFrom(
+              foregroundColor: AppColors.green2,
+              padding: EdgeInsets.zero,
+              alignment: Alignment.centerLeft,
+            ),
+            onPressed: () =>
+                setState(() => _descriptionExpanded = !_descriptionExpanded),
+            child: Text(
+              _descriptionExpanded
+                  ? 'Show less background'
+                  : 'Read full mission background',
+            ),
+          ),
+      ],
+    );
+  }
+
+  Future<void> _saveReflection() async {
+    if (_savingReflection) return;
+    setState(() {
+      _savingReflection = true;
+      _reflectionStatus = null;
+    });
+    final text = _reflection.text;
+    try {
+      await ref
+          .read(planRepositoryProvider)
+          .saveDailyReflection(widget.itemId, text);
+      if (mounted) {
+        setState(
+          () => _reflectionStatus = _reflection.text == text
+              ? 'Saved'
+              : 'New changes are not saved yet',
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(
+          () => _reflectionStatus =
+              'Couldn’t save. Your text is still here; please retry.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _savingReflection = false);
+    }
+  }
+
   Widget _dailyRhythmCard(PlanItemDetailed detailed) {
     final instructions = detailed.dailyInstructions?.trim();
     return CmpysCardSurface(
@@ -695,6 +785,26 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
               fontSize: 12.5,
             ),
           ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _reflection,
+            minLines: 4,
+            maxLines: 10,
+            maxLength: 8000,
+            onChanged: (_) =>
+                setState(() => _reflectionStatus = 'Unsaved changes'),
+            decoration: const InputDecoration(
+              labelText: 'Your reflection today',
+              hintText:
+                  'What did you try, what did you notice, and what will you change?',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          TextButton(
+            onPressed: _savingReflection ? null : _saveReflection,
+            child: Text(_savingReflection ? 'Saving…' : 'Save reflection'),
+          ),
+          if (_reflectionStatus != null) Text(_reflectionStatus!),
         ],
       ),
     );
@@ -729,6 +839,43 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
   Widget _generatingCard(PlanItemDetailed detailed) {
     final activeRetry =
         _activeDetailJobId != null && _terminalDetailError == null;
+    final catalogUnavailable =
+        !activeRetry &&
+        ((detailed.detailsFailed &&
+                detailed.detailsStep == 'catalog_not_available') ||
+            (_detailJob?.isFailed == true &&
+                _detailJob?.step == 'catalog_not_available'));
+    if (catalogUnavailable) {
+      return CmpysCardSurface(
+        pad: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'This lesson isn’t available yet.',
+              style: AppTypography.bodyMedium,
+            ),
+            const SizedBox(height: 10),
+            Text(
+              'The learning materials and practice for this task aren’t ready. '
+              'Retrying now won’t prepare them. Your completed work is saved.',
+              style: AppTypography.body.copyWith(
+                fontSize: 13.5,
+                color: AppColors.ink2,
+                height: 1.45,
+              ),
+            ),
+            const SizedBox(height: 14),
+            CmpysButton(
+              variant: CmpysBtnVariant.primary,
+              size: CmpysBtnSize.md,
+              onTap: () => Navigator.of(context).maybePop(),
+              child: const Text('Back to plan'),
+            ),
+          ],
+        ),
+      );
+    }
     final failureMessage = _terminalDetailError ?? detailed.detailsError;
     if (_terminalDetailError != null ||
         (detailed.detailsFailed && !activeRetry)) {
@@ -754,6 +901,7 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
             ),
             const SizedBox(height: 14),
             CmpysButton(
+              key: const Key('plan-detail-regenerate'),
               variant: CmpysBtnVariant.primary,
               size: CmpysBtnSize.md,
               leadingIcon: Icons.refresh_rounded,
@@ -1002,7 +1150,7 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
                       ),
                       _lessonMeta(
                         PhosphorIconsRegular.timer,
-                        '${step.practiceMinutes ?? _lessonPracticeMinutes(step)} min practice',
+                        'Practice in app',
                       ),
                       if (step.resources.isNotEmpty)
                         _lessonMeta(
@@ -1060,16 +1208,13 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
     return (words / 200).ceil().clamp(1, 60);
   }
 
-  int _lessonPracticeMinutes(PlanStepDetail step) =>
-      ((step.estimateMinutes ?? 45) - _lessonReadMinutes(step)).clamp(20, 55);
-
   Future<void> _openLesson(
     PlanItemDetailed detailed,
     PlanStepDetail step,
     int index,
   ) async {
     final completed = detailed.isStepCompleted(step.id);
-    final changed = await Navigator.of(context).push<bool>(
+    final changed = await Navigator.of(context, rootNavigator: true).push<bool>(
       CmpysPageRoute<bool>(
         builder: (_) => LessonReaderScreen(
           itemId: detailed.item.id,
@@ -1152,7 +1297,10 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
     final videoId = m.youtubeVideoId;
     final canonicalKey = (m.canonicalKey ?? '').trim();
     var bookResourceId = _bookResourceId(m);
-    if (m.type == 'book' && bookResourceId == null && canonicalKey.isNotEmpty) {
+    if (m.type == 'book' &&
+        bookResourceId == null &&
+        m.directUrl == null &&
+        canonicalKey.isNotEmpty) {
       if (_preparingBookGuideKeys.contains(canonicalKey)) return;
       setState(() => _preparingBookGuideKeys.add(canonicalKey));
       try {
@@ -1246,6 +1394,9 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
     if (m.type == 'book' && _bookResourceId(m) != null) {
       return (icon: PhosphorIconsRegular.bookOpen, label: 'Read');
     }
+    if (m.type == 'book' && m.directUrl != null) {
+      return (icon: PhosphorIconsRegular.globe, label: 'Open source');
+    }
     if (m.type == 'book' && (m.canonicalKey ?? '').trim().isNotEmpty) {
       if (_isPreparingBookGuide(m)) {
         return (icon: PhosphorIconsRegular.hourglass, label: 'Preparing…');
@@ -1307,10 +1458,12 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen> {
                     ),
                   ),
                 ],
-                if (m.exactLinkUnavailable && action == null) ...[
+                if (action == null) ...[
                   const SizedBox(height: 6),
                   Text(
-                    'Exact source link unavailable',
+                    m.exactLinkUnavailable
+                        ? 'Exact source link unavailable'
+                        : 'Reference is still being prepared',
                     style: AppTypography.caption.copyWith(
                       color: AppColors.ink3,
                       fontSize: 12,

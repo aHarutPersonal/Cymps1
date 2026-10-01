@@ -48,7 +48,7 @@ abstract final class AppColors {
   // ── Typography Colors — reference ink scale (Cmpys.zip) ──
   static const Color textPrimary = ink; //               --ink   #16161C
   static const Color textSecondary = Color(0xFF5B5C66); // --ink-2
-  static const Color textTertiary = Color(0xFF9A9BA6); //  --ink-3
+  static const Color textTertiary = ink3; //  --ink-3
 
   // ── Typography Colors (dark backgrounds — auth/splash) ──
   static const Color textOnDarkPrimary = Color(0xFFFFFFFF);
@@ -114,11 +114,12 @@ abstract final class AppColors {
   static const Color card = Color(0xFFFFFFFF);
   static const Color ink = Color(0xFF16161C);
   static const Color ink2 = Color(0xFF5B5C66);
-  static const Color ink3 = Color(0xFF9A9BA6);
+  static const Color ink3 = Color(0xFF676975);
   static const Color hair = Color(0xFFECECEF);
   static const Color hair2 = Color(0xFFDDDDE3);
   static const Color green = Color(0xFF10B36B);
-  static const Color green2 = Color(0xFF0B9156);
+  // Accessible foreground/action green; bright green remains a visual accent.
+  static const Color green2 = Color(0xFF087547);
   static const Color greenSoft = Color(0xFFD9F5E7);
   static const Color ochre = Color(0xFFF59E0B);
   static const Color ochre2 = Color(0xFFB45309);
@@ -137,7 +138,7 @@ abstract final class AppColors {
   static const LinearGradient gradGreen = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [Color(0xFF14C779), Color(0xFF0A9D5A)],
+    colors: [Color(0xFF087547), Color(0xFF075C3B)],
   );
   static const LinearGradient gradViolet = LinearGradient(
     begin: Alignment.topLeft,
@@ -177,6 +178,10 @@ abstract final class AppRadii {
 
 /// Spacing tokens
 abstract final class AppSpacing {
+  /// Keep reading and task lists comfortable on tablets and landscape screens.
+  static double pageGutter(double width) =>
+      ((width - 720) / 2).clamp(18.0, double.infinity);
+
   static const double s2 = 2.0;
   static const double s4 = 4.0;
   static const double s6 = 6.0;
@@ -218,8 +223,9 @@ abstract final class AppSpacing {
   static const double floatingNavBarHeight = 96.0;
 
   // EdgeInsets to apply as bottom padding on scrollable content inside tabs.
-  static const EdgeInsets floatingNavBarBottom =
-      EdgeInsets.only(bottom: floatingNavBarHeight);
+  static const EdgeInsets floatingNavBarBottom = EdgeInsets.only(
+    bottom: floatingNavBarHeight,
+  );
 }
 
 /// Typography tokens — prototype font system.
@@ -442,11 +448,13 @@ abstract final class AppDurations {
   static const Duration fast = Duration(milliseconds: 200);
   static const Duration normal = Duration(milliseconds: 300);
   static const Duration slow = Duration(milliseconds: 500);
+
   /// Deprecated in practice: page transitions actually use [normal] via
   /// `CmpysPageTransition.duration`, not this token. Kept for backwards
   /// compatibility with any existing call sites — don't "fix" the motion
   /// kit to consume this instead; that would change the shipped timing.
   static const Duration pageTransition = Duration(milliseconds: 400);
+
   /// Per-item delay for staggered list entrances (motion kit).
   static const Duration stagger = Duration(milliseconds: 50);
 }

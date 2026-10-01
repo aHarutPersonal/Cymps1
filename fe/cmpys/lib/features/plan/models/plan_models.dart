@@ -662,6 +662,7 @@ class PlanItemDetailed {
     this.detailsProgress = 0,
     this.detailsStep,
     this.dailyInstructions,
+    this.dailyReflection = '',
     this.completedToday = false,
   });
 
@@ -683,6 +684,7 @@ class PlanItemDetailed {
   final int detailsProgress;
   final String? detailsStep;
   final String? dailyInstructions;
+  final String dailyReflection;
   final bool completedToday;
 
   bool get detailsReady => detailsStatus == 'available';
@@ -744,6 +746,7 @@ class PlanItemDetailed {
       detailsProgress: (j['details_progress'] as num?)?.toInt() ?? 0,
       detailsStep: j['details_step']?.toString(),
       dailyInstructions: j['daily_instructions']?.toString(),
+      dailyReflection: j['daily_reflection']?.toString() ?? '',
       completedToday: j['completed_today'] as bool? ?? false,
     );
   }

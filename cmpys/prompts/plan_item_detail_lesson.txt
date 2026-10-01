@@ -26,13 +26,17 @@ Write one standalone skill-building lesson targeting 2,400-2,800 substantive
 words across the seven required section fields below. The backend accepts a
 complete, well-structured near miss from 1,900 through 4,200 words; never aim
 for either safety boundary. This is an intentionally scoped part of a
-week-sized mission, not a short article. The complete lesson
-must support approximately {target_lesson_minutes} minutes of study and
-application, including about {target_practice_minutes} minutes of deliberate
-practice. This is one intentionally scoped part of the mission, not a short
+week-sized mission, not a short article. Use {target_lesson_minutes} minutes
+of study and application, including about {target_practice_minutes} minutes
+of deliberate practice, as planning guidance. Design concrete exercises first;
+never pad time or advertise that allocation as a measured duration. An
+independent reviewer will estimate the actual workload. This is one scoped part of the mission, not a short
 article. The backend attaches the approved id, title, description, resources,
 and final auditable time split. Do not redesign neighboring lessons. Never
 abbreviate or return an outline.
+Provide enough real work for at least 40 minutes of reading and practice
+combined. Reading is calculated at 200 words per minute; only concrete
+exercises, checking, and revision count toward the reviewed practice estimate.
 
 Every section field is required. Write approximately this many substantive
 words in each value so the completed lesson stays safely inside the total:
@@ -50,13 +54,18 @@ CONTENT CONTRACT:
 - The worked example must show complete reasoning. Use documented mentor
   evidence only when supplied; otherwise label it **Practical scenario**.
 - Cover at least three failure modes with symptoms and corrections.
-- Guided Practice contains 4-7 numbered phases totaling approximately
-  {target_practice_minutes} minutes. Every phase names a timer, tool/template,
+- Guided Practice contains 4-7 numbered phases designed for approximately
+  {target_practice_minutes} minutes. Every phase names a concrete scope or
+  approximate time budget, a supported action,
   expected output, and success criterion. Include independent application,
   feedback or self-checking, and one revision pass; reading alone is never the
   practice workload.
 - Check Your Understanding contains three diagnostic questions and an answer
   or checking rubric.
+- Supply every promised question, case fact, classification item, worked
+  answer, and rubric in this lesson. If an exercise says to classify ten
+  questions, include all ten plus their answer key. Never promise the app will
+  supply missing exercise content or an answer "below" that you did not write.
 - References name only this step's approved resource titles and explain exactly
   what to use from each one.
 - Never invent mentor quotations, chapter numbers, dates, or anecdotes.
@@ -67,7 +76,7 @@ ACTION CONTRACT:
   the lesson genuinely needs; never merge, omit, or invent actions to hit a
   fixed count. Each contains at least 12 substantive words and targets 20-60.
   Longer actions are allowed when genuinely needed; never truncate useful
-  detail merely to satisfy a word count. Each names a timer or concrete scope,
+  detail merely to satisfy a word count. Each names a time budget or concrete scope,
   tool/template or behavior, expected output, and success criterion.
 - substeps is an array of JSON strings, never objects. Guided-practice phases
   may map one-to-one to substeps when each phase is a meaningful user-visible
@@ -81,3 +90,10 @@ guided_practice, check_your_understanding, references, and substeps. The first
 seven values must contain the completed prose itself, never a word-count label,
 template phrase, ellipsis, or description of what should be written. substeps
 must contain every necessary completed action string without a fixed count.
+
+APP CAPABILITIES AND ANSWER QUALITY:
+The app provides labelled numeric/choice/text fields, a schematic geometry diagram, saved answers and feedback. Do not promise an embedded spreadsheet, automatic timer, downloadable dataset or a form with more than ten fields. Supply every input inside the lesson. Practice has one guided case and one independent transfer case; map phases to solving, explaining, checking and revising those cases. Explicitly state fictional case assumptions (including depreciation, taxes, units and rounding). Recompute every result from the raw inputs. The answer key, rubric and worked solution must agree; never blame the learner for a discrepancy in your own answer key.
+Use "budget about eight minutes" for timing guidance. An external clock may
+be optional; never require a timer or claim the app provides one. When a later
+lesson uses a learner's saved draft from an earlier step, state that prerequisite
+clearly. Provide a self-check rubric when live peer feedback is unavailable.

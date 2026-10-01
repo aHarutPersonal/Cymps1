@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 # Runs on the EC2 server. Called by GitHub Actions via SSH.
-# Usage: ./deploy.sh <ecr-url> <image-tag> <aws-region>
+# Usage: ./deploy.sh <ecr-url> <image-tag> <aws-region> <staged-compose>
 set -euo pipefail
 
 ECR_URL="${1:?ECR_URL required}"
 IMAGE_TAG="${2:-latest}"
 AWS_REGION="${3:-us-east-1}"
+INCOMING_COMPOSE="${4:?Staged Compose path required}"
 
 APP_DIR="/opt/cmpys"
 ENV_FILE="$APP_DIR/.env"
 COMPOSE="$APP_DIR/docker-compose.prod.yml"
-COMPOSE_BACKUP="$APP_DIR/docker-compose.prod.yml.rollback-$IMAGE_TAG"
+RELEASE_ID="$(basename "$(dirname "$INCOMING_COMPOSE")")"
+COMPOSE_BACKUP="$APP_DIR/docker-compose.prod.yml.rollback-$RELEASE_ID"
 RELEASE_SERVICES=(web worker worker-high worker-low catalog-worker catalog-control curriculum-worker curriculum-control beat)
 
 # Serialize deployments on the host as a second line of defense beyond the CI
@@ -22,14 +24,19 @@ if ! flock -n 9; then
   exit 1
 fi
 
-if [[ ! -s "$ENV_FILE" ]]; then
-  echo "ERROR: production environment file is missing or empty" >&2
+if [[ ! -s "$ENV_FILE" || ! -s "$COMPOSE" || ! -s "$INCOMING_COMPOSE" ]]; then
+  echo "ERROR: production environment, live Compose, or staged Compose is missing" >&2
+  exit 1
+fi
+if [[ "$INCOMING_COMPOSE" -ef "$COMPOSE" ]]; then
+  echo "ERROR: incoming Compose must be staged separately from the live file" >&2
   exit 1
 fi
 
 PREVIOUS_TAG="$(sed -n 's/^IMAGE_TAG=//p' "$ENV_FILE" | tail -1)"
 PREVIOUS_TAG="${PREVIOUS_TAG:-latest}"
 ROLLBACK_ARMED=false
+COMPOSE_REPLACED=false
 
 compose() {
   docker compose -p cmpys -f "$COMPOSE" --env-file "$ENV_FILE" "$@"
@@ -49,6 +56,13 @@ rollback_release() {
   local rollback_services=() service container
   local -a new_service_containers=()
   trap - ERR
+  if [[ "$COMPOSE_REPLACED" != "true" ]]; then
+    return 0
+  fi
+  if [[ ! -s "$COMPOSE_BACKUP" ]]; then
+    echo "ERROR: matching rollback Compose file is missing" >&2
+    return 1
+  fi
   if [[ "$ROLLBACK_ARMED" == "true" ]]; then
     for service in "${RELEASE_SERVICES[@]}"; do
       container="$(service_container "$service" 2>/dev/null || true)"
@@ -56,15 +70,14 @@ rollback_release() {
         new_service_containers+=("$service:$container")
       fi
     done
-    if [[ ! -s "$COMPOSE_BACKUP" ]]; then
-      echo "ERROR: matching rollback Compose file is missing" >&2
-      return 1
-    fi
-    cp "$COMPOSE_BACKUP" "$COMPOSE"
+  fi
+  cp "$COMPOSE_BACKUP" "$COMPOSE" || return 1
+  if [[ "$ROLLBACK_ARMED" == "true" ]]; then
     mapfile -t rollback_services < <(configured_release_services)
+    [[ ${#rollback_services[@]} -gt 0 ]] || return 1
     echo "Rolling back services to $PREVIOUS_TAG..." >&2
     IMAGE_TAG="$PREVIOUS_TAG" compose up -d --no-deps --force-recreate \
-      "${rollback_services[@]}"
+      "${rollback_services[@]}" || return 1
 
     for entry in "${new_service_containers[@]}"; do
       service="${entry%%:*}"
@@ -74,15 +87,14 @@ rollback_release() {
       fi
     done
 
-    wait_for_web
+    wait_for_web || return 1
     for service in "${rollback_services[@]}"; do
       if ! service_is_running "$service"; then
         echo "ERROR: rollback service $service is not running" >&2
         return 1
       fi
     done
-    verify_configured_workers "${rollback_services[@]}"
-    rm -f "$COMPOSE_BACKUP"
+    verify_configured_workers "${rollback_services[@]}" || return 1
   fi
 }
 
@@ -169,19 +181,25 @@ verify_configured_workers() {
 aws ecr get-login-password --region "$AWS_REGION" | \
   docker login --username AWS --password-stdin "$ECR_URL"
 
-# Release images are large enough that accumulated, unused revisions can fill
-# the small production root volume before the next image finishes extracting.
-# Prune only images that are not referenced by a container. The currently
-# running release (and therefore the rollback target) remains protected.
-docker image prune -a -f
-
 # Pull the new image
 docker pull "$ECR_URL:$IMAGE_TAG"
+
+# Validate the staged topology before replacing any live release file. Both
+# the snapshot and replacement happen while holding the shared host lock.
+IMAGE_TAG="$IMAGE_TAG" docker compose -p cmpys -f "$INCOMING_COMPOSE" \
+  --env-file "$ENV_FILE" config --quiet
+mapfile -t current_release_services < <(configured_release_services)
+if [[ ${#current_release_services[@]} -eq 0 ]]; then
+  echo "ERROR: no runtime services were resolved; refusing to stop dependencies" >&2
+  false
+fi
+cp "$COMPOSE" "$COMPOSE_BACKUP"
+COMPOSE_REPLACED=true
+cp "$INCOMING_COMPOSE" "$COMPOSE"
 
 # Stop every old writer before the schema transition. PostgreSQL and Redis stay
 # online, but API completion writes, workers, and Beat cannot race the migration.
 ROLLBACK_ARMED=true
-mapfile -t current_release_services < <(configured_release_services)
 compose stop "${current_release_services[@]}"
 
 # Run migration from the new image while old writers are quiesced.
@@ -203,7 +221,7 @@ for service in "${RELEASE_SERVICES[@]}"; do
   if ! service_is_running "$service"; then
     echo "ERROR: $service is not running" >&2
     compose logs --tail=60 "$service" >&2 || true
-    exit 1
+    false # Trigger ERR and restore the previous release.
   fi
 done
 
@@ -226,10 +244,9 @@ else
   printf '\nIMAGE_TAG=%s\n' "$IMAGE_TAG" >> "$ENV_FILE"
 fi
 ROLLBACK_ARMED=false
+COMPOSE_REPLACED=false
 trap - ERR
-rm -f "$COMPOSE_BACKUP"
-
-# Clean up old images (dangling only) once the new one is confirmed good.
-docker image prune -f
+# Preserve the previous topology and images for operator recovery. Storage
+# maintenance is separate from a deployment and must not prune other releases.
 
 echo "Deploy complete: $ECR_URL:$IMAGE_TAG"

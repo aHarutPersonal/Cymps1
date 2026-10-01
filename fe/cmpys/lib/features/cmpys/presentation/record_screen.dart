@@ -150,8 +150,9 @@ class _CmpysRecordScreenState extends ConsumerState<CmpysRecordScreen> {
 
   Widget _logWinFab() {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 90),
-      child: GestureDetector(
+      padding: EdgeInsets.only(bottom: AppShell.isWithinShell(context)
+          ? AppShell.bottomNavClearance(context) : 12),
+      child: CmpysPressable(
         onTap: _openAddWin,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
@@ -168,8 +169,9 @@ class _CmpysRecordScreenState extends ConsumerState<CmpysRecordScreen> {
             children: [
               const Icon(Icons.add_rounded, size: 20, color: Colors.white),
               const SizedBox(width: 6),
-              Text('Log a win',
-                  style: AppTypography.button.copyWith(fontSize: 15)),
+              Flexible(child: Text('Log a win',
+                  textAlign: TextAlign.center,
+                  style: AppTypography.button.copyWith(fontSize: 15))),
             ],
           ),
         ),
@@ -210,7 +212,7 @@ class _CmpysRecordScreenState extends ConsumerState<CmpysRecordScreen> {
 
   Widget _filterChips() {
     return SizedBox(
-      height: 44,
+      height: MediaQuery.textScalerOf(context).scale(14) * 1.5 + 22,
       child: ListView(
         scrollDirection: Axis.horizontal,
         children: [

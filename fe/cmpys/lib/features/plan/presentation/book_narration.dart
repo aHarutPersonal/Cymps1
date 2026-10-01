@@ -241,18 +241,25 @@ final class ExpressiveBookNarrator
     required ContentResourcesRepository repository,
     required String resourceId,
     this.narratorProfile = 'expressive_narrator',
+    AudioPlayer? audioPlayer,
+    Future<void> Function()? configureAudioSession,
   }) : _repository = repository,
-       _resourceId = resourceId;
+       _resourceId = resourceId,
+       _player = audioPlayer,
+       _configureAudioSession =
+           configureAudioSession ?? _configureSpeechSession;
 
   final ContentResourcesRepository _repository;
   final String _resourceId;
   final String narratorProfile;
+  final Future<void> Function() _configureAudioSession;
   final LinkedHashMap<String, Future<BookNarrationAudio>> _prepared =
       LinkedHashMap();
   AudioPlayer? _player;
   StreamSubscription<Duration>? _positionSubscription;
   StreamSubscription<int?>? _trackIndexSubscription;
   StreamSubscription<PlayerState>? _trackStateSubscription;
+  StreamSubscription<PlayerException>? _trackErrorSubscription;
   BookNarrationProgressHandler? _progressHandler;
   BookNarrationErrorHandler? _errorHandler;
   BookNarrationTrackHandler? _trackHandler;
@@ -264,9 +271,12 @@ final class ExpressiveBookNarrator
   int _trackSessionId = 0;
   int _trackQueueIndex = 0;
   int _trackSegmentIndex = 0;
+  int? _trackFillRun;
+  int? _trackResumeQueueIndex;
   bool _trackWantsPlayback = false;
   Object? _trackAppendError;
   bool _trackAppendErrorReported = false;
+  Object? _trackPlaybackError;
   String _lastTrackEventKey = '';
   List<_NarrationTrackEntry> _trackEntries = const [];
   final List<BookNarrationAudio> _trackAssets = [];
@@ -298,10 +308,14 @@ final class ExpressiveBookNarrator
 
   @override
   Future<void> initialize({required double speed}) async {
-    final session = await AudioSession.instance;
-    await session.configure(AudioSessionConfiguration.speech());
+    await _configureAudioSession();
     _player ??= AudioPlayer();
     await setSpeed(speed);
+  }
+
+  static Future<void> _configureSpeechSession() async {
+    final session = await AudioSession.instance;
+    await session.configure(AudioSessionConfiguration.speech());
   }
 
   @override
@@ -350,6 +364,7 @@ final class ExpressiveBookNarrator
     final request = _loadTrackChunkWithRetry(
       _trackEntries[index].chunk.text,
       run: run,
+      isPrefetch: index > 0,
     );
     _trackChunkLoads[index] = request;
     return request;
@@ -358,6 +373,7 @@ final class ExpressiveBookNarrator
   Future<BookNarrationAudio> _loadTrackChunkWithRetry(
     String text, {
     required int run,
+    required bool isPrefetch,
   }) async {
     try {
       return await _load(text);
@@ -366,7 +382,9 @@ final class ExpressiveBookNarrator
       // One short, bounded retry keeps a temporary transport/provider miss
       // from breaking the track without multiplying paid synthesis requests.
       await Future<void>.delayed(_bookNarrationRetryDelay);
-      if (run != _trackRun) Error.throwWithStackTrace(error, stackTrace);
+      if (run != _trackRun || (isPrefetch && !_trackWantsPlayback)) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
       return _load(text);
     }
   }
@@ -384,19 +402,30 @@ final class ExpressiveBookNarrator
     _playRun++;
     _trackWantsPlayback = false;
     _releaseQueuedChunks();
-    await _positionSubscription?.cancel();
-    await _trackIndexSubscription?.cancel();
-    await _trackStateSubscription?.cancel();
+    await Future.wait([
+      if (_positionSubscription case final subscription?) subscription.cancel(),
+      if (_trackIndexSubscription case final subscription?)
+        subscription.cancel(),
+      if (_trackStateSubscription case final subscription?)
+        subscription.cancel(),
+      if (_trackErrorSubscription case final subscription?)
+        subscription.cancel(),
+    ]);
+    if (run != _trackRun) return;
     _positionSubscription = null;
     _trackIndexSubscription = null;
     _trackStateSubscription = null;
+    _trackErrorSubscription = null;
     await _player!.stop();
+    if (run != _trackRun) return;
 
     _trackSessionId = sessionId;
     _trackQueueIndex = 0;
+    _trackResumeQueueIndex = null;
     _trackSegmentIndex = initialSegmentIndex;
     _trackAppendError = null;
     _trackAppendErrorReported = false;
+    _trackPlaybackError = null;
     _lastTrackEventKey = '';
     _trackAssets.clear();
     _trackChunkLoads.clear();
@@ -424,10 +453,14 @@ final class ExpressiveBookNarrator
       segmentIndex: initialSegmentIndex,
     );
 
-    _warmTrackAhead(0, run: run);
     final firstAudio = await _requestTrackChunk(0, run: run);
     if (run != _trackRun) return;
     final player = _player!;
+    // Native errors can arrive after a source has loaded successfully. They
+    // are not reliably reported by play() or playerStateStream.
+    _trackErrorSubscription = player.errorStream.listen(
+      (error) => _failTrackPlayback(error, run: run),
+    );
     await player.setAudioSources([
       AudioSource.uri(firstAudio.audioUri, tag: _trackEntries.first),
     ]);
@@ -438,11 +471,22 @@ final class ExpressiveBookNarrator
 
     _trackIndexSubscription = player.currentIndexStream.listen((index) {
       if (run != _trackRun || index == null) return;
-      _trackQueueIndex = index.clamp(0, _trackEntries.length - 1).toInt();
+      final nextIndex = index.clamp(0, _trackEntries.length - 1).toInt();
+      if (nextIndex != _trackQueueIndex) {
+        _trackQueueIndex = nextIndex;
+        _trackSegmentIndex =
+            _trackEntries[nextIndex].chunk.segments.first.segmentIndex;
+      }
+      _bufferTrackAhead(run);
       final entry = _trackEntries[_trackQueueIndex];
-      _trackSegmentIndex = entry.chunk.segments.first.segmentIndex;
-      if (player.playing && player.processingState == ProcessingState.ready) {
-        _emitTrackPosition(player.position, run: run);
+      if (player.processingState == ProcessingState.ready) {
+        _emitTrackPosition(
+          player.position,
+          run: run,
+          phase: player.playing
+              ? BookNarrationPlaybackPhase.playing
+              : BookNarrationPlaybackPhase.paused,
+        );
       } else {
         _emitTrackEvent(
           phase: player.playing
@@ -488,11 +532,11 @@ final class ExpressiveBookNarrator
       segmentIndex: initialSegmentIndex,
       audio: firstAudio,
     );
-    unawaited(_appendRemainingTrack(run));
   }
 
   @override
   Future<void> playTrack() async {
+    if (_trackPlaybackError case final error?) throw error;
     if (_trackEntries.isEmpty || _player == null) {
       throw StateError('Narration track is not loaded');
     }
@@ -500,24 +544,56 @@ final class ExpressiveBookNarrator
     final run = _trackRun;
     _reportTrackAppendErrorIfExhausted(run: run);
     if (_trackAppendErrorReported) return;
+    if (_trackResumeQueueIndex != null) {
+      await _resumeQueuedTrack(run);
+    } else {
+      _playTrackPlayer(run);
+    }
+    _bufferTrackAhead(run);
+  }
+
+  Future<void> _resumeQueuedTrack(int run) async {
+    final index = _trackResumeQueueIndex;
+    if (index == null || run != _trackRun || !_trackWantsPlayback) return;
+    _trackResumeQueueIndex = null;
+    _trackQueueIndex = index;
+    _trackSegmentIndex = _trackEntries[index].chunk.segments.first.segmentIndex;
+    await _player!.seek(Duration.zero, index: index);
+    if (run == _trackRun && _trackWantsPlayback) _playTrackPlayer(run);
+  }
+
+  void _playTrackPlayer(int run) {
+    if (run != _trackRun || !_trackWantsPlayback) return;
     unawaited(
       _player!.play().catchError((Object error, StackTrace _) {
-        if (run == _trackRun) _errorHandler?.call(error);
+        _failTrackPlayback(error, run: run);
       }),
     );
   }
 
+  void _failTrackPlayback(Object error, {required int run}) {
+    if (run != _trackRun) return;
+    // Retire this run before notifying the reader. Late native callbacks and
+    // pending prefetches cannot put a failed player back into buffering.
+    _trackRun++;
+    _trackPlaybackError = error;
+    _trackWantsPlayback = false;
+    _releaseQueuedChunks();
+    unawaited(_player!.pause().catchError((_) {}));
+    _errorHandler?.call(error);
+  }
+
   @override
   Future<void> pauseTrack() async {
+    final run = _trackRun;
     _trackWantsPlayback = false;
     await _player?.pause();
-    if (_trackEntries.isEmpty) return;
-    final entry = _trackEntries[_trackQueueIndex];
-    _emitTrackEvent(
+    if (run != _trackRun || _trackEntries.isEmpty) return;
+    _emitTrackPosition(
+      _player!.position,
+      run: run,
       phase: BookNarrationPlaybackPhase.paused,
-      chapterIndex: entry.chapterIndex,
-      segmentIndex: _trackSegmentIndex,
-      audio: _trackAudioAt(_trackQueueIndex),
+      force: true,
     );
   }
 
@@ -531,8 +607,10 @@ final class ExpressiveBookNarrator
           entry.chapterIndex == chapterIndex &&
           entry.chunk.containsSegment(segmentIndex),
     );
-    if (targetIndex < 0) {
-      throw RangeError('Sentence is outside the loaded narration track');
+    if (targetIndex < 0 || targetIndex >= _trackAssets.length) {
+      // The reader reloads at this sentence. Do not synthesize every skipped
+      // passage merely to preserve a contiguous native playlist.
+      throw RangeError('Sentence is outside the prepared narration track');
     }
     final run = _trackRun;
     final targetAvailability = _queuedChunks[targetIndex];
@@ -553,6 +631,7 @@ final class ExpressiveBookNarrator
     }
     final asset = _trackAssets[targetIndex];
     final entry = _trackEntries[targetIndex];
+    _trackResumeQueueIndex = null;
     _trackQueueIndex = targetIndex;
     _trackSegmentIndex = segmentIndex;
     await _player!.seek(
@@ -572,14 +651,34 @@ final class ExpressiveBookNarrator
       );
     }
     if (_trackWantsPlayback && !_player!.playing) {
-      unawaited(_player!.play());
+      _playTrackPlayer(run);
     }
   }
 
-  void _warmTrackAhead(int index, {required int run}) {
+  bool _canBufferTrackAhead(int run) =>
+      run == _trackRun &&
+      _trackWantsPlayback &&
+      _trackAppendError == null &&
+      _trackAssets.length < _trackEntries.length &&
+      _trackAssets.length <= _trackQueueIndex + 2;
+
+  void _bufferTrackAhead(int run) {
+    if (!_canBufferTrackAhead(run) || _trackFillRun == run) return;
+    _trackFillRun = run;
+    unawaited(
+      _appendRemainingTrack(run).whenComplete(() {
+        if (_trackFillRun != run) return;
+        _trackFillRun = null;
+        // An index change may have arrived as the prior fill was finishing.
+        _bufferTrackAhead(run);
+      }),
+    );
+  }
+
+  void _warmTrackAhead({required int run}) {
     for (
-      var candidate = index;
-      candidate < _trackEntries.length && candidate <= index + 2;
+      var candidate = _trackAssets.length;
+      candidate < _trackEntries.length && candidate <= _trackQueueIndex + 2;
       candidate++
     ) {
       // Attach an error listener immediately: this is speculative work, and
@@ -594,15 +693,16 @@ final class ExpressiveBookNarrator
   }
 
   Future<void> _appendRemainingTrack(int run) async {
-    for (var index = 1; index < _trackEntries.length; index++) {
-      if (run != _trackRun) return;
+    // Only the current passage and its next two clips may be prepared. Pause
+    // lets existing requests finish, but starts no additional synthesis.
+    while (_canBufferTrackAhead(run)) {
+      final index = _trackAssets.length;
       try {
-        _warmTrackAhead(index, run: run);
+        _warmTrackAhead(run: run);
         final audio = await _requestTrackChunk(index, run: run);
         if (run != _trackRun) return;
         final player = _player!;
         final resumeFromExhaustedQueue =
-            _trackWantsPlayback &&
             player.processingState == ProcessingState.completed;
         await player.addAudioSource(
           AudioSource.uri(audio.audioUri, tag: _trackEntries[index]),
@@ -613,12 +713,10 @@ final class ExpressiveBookNarrator
           _queuedChunks[index].complete(null);
         }
         if (resumeFromExhaustedQueue) {
-          _trackQueueIndex = index;
-          _trackSegmentIndex =
-              _trackEntries[index].chunk.segments.first.segmentIndex;
-          await player.seek(Duration.zero, index: index);
-          if (run != _trackRun) return;
-          unawaited(player.play());
+          // Pausing during native append must preserve the next clip for a
+          // later manual Play, without restarting audio after the pause.
+          _trackResumeQueueIndex ??= index;
+          if (_trackWantsPlayback) await _resumeQueuedTrack(run);
         }
       } catch (error) {
         if (run != _trackRun) return;
@@ -674,6 +772,7 @@ final class ExpressiveBookNarrator
           return;
         }
         if (_trackAssets.length < _trackEntries.length) {
+          _bufferTrackAhead(run);
           _emitTrackEvent(
             phase: BookNarrationPlaybackPhase.buffering,
             chapterIndex: entry.chapterIndex,
@@ -690,16 +789,14 @@ final class ExpressiveBookNarrator
         }
         return;
       case ProcessingState.ready:
-        if (state.playing) {
-          _emitTrackPosition(_player!.position, run: run, force: true);
-        } else {
-          _emitTrackEvent(
-            phase: BookNarrationPlaybackPhase.paused,
-            chapterIndex: entry.chapterIndex,
-            segmentIndex: _trackSegmentIndex,
-            audio: _trackAudioAt(_trackQueueIndex),
-          );
-        }
+        _emitTrackPosition(
+          _player!.position,
+          run: run,
+          phase: state.playing
+              ? BookNarrationPlaybackPhase.playing
+              : BookNarrationPlaybackPhase.paused,
+          force: true,
+        );
         return;
       case ProcessingState.idle:
         _emitTrackEvent(
@@ -715,6 +812,7 @@ final class ExpressiveBookNarrator
   void _emitTrackPosition(
     Duration position, {
     required int run,
+    BookNarrationPlaybackPhase phase = BookNarrationPlaybackPhase.playing,
     bool force = false,
   }) {
     if (run != _trackRun ||
@@ -736,7 +834,7 @@ final class ExpressiveBookNarrator
         if (estimate != null) {
           _trackSegmentIndex = estimate.segmentIndex;
           _emitTrackEvent(
-            phase: BookNarrationPlaybackPhase.playing,
+            phase: phase,
             chapterIndex: entry.chapterIndex,
             segmentIndex: estimate.segmentIndex,
             highlightStart: estimate.highlightStart,
@@ -748,7 +846,7 @@ final class ExpressiveBookNarrator
         }
       }
       _emitTrackEvent(
-        phase: BookNarrationPlaybackPhase.playing,
+        phase: phase,
         chapterIndex: entry.chapterIndex,
         segmentIndex: _trackSegmentIndex,
         audio: audio,
@@ -759,7 +857,7 @@ final class ExpressiveBookNarrator
     final slice = entry.chunk.segmentAtOffset(cue.start);
     if (slice == null) {
       _emitTrackEvent(
-        phase: BookNarrationPlaybackPhase.playing,
+        phase: phase,
         chapterIndex: entry.chapterIndex,
         segmentIndex: _trackSegmentIndex,
         audio: audio,
@@ -775,7 +873,7 @@ final class ExpressiveBookNarrator
         .clamp(highlightStart, slice.segmentEnd)
         .toInt();
     _emitTrackEvent(
-      phase: BookNarrationPlaybackPhase.playing,
+      phase: phase,
       chapterIndex: entry.chapterIndex,
       segmentIndex: slice.segmentIndex,
       highlightStart: highlightStart,
@@ -937,20 +1035,30 @@ final class ExpressiveBookNarrator
   @override
   Future<void> stop() async {
     _playRun++;
-    _trackRun++;
+    final run = ++_trackRun;
     _trackWantsPlayback = false;
     _releaseQueuedChunks();
-    await _positionSubscription?.cancel();
-    await _trackIndexSubscription?.cancel();
-    await _trackStateSubscription?.cancel();
+    await Future.wait([
+      if (_positionSubscription case final subscription?) subscription.cancel(),
+      if (_trackIndexSubscription case final subscription?)
+        subscription.cancel(),
+      if (_trackStateSubscription case final subscription?)
+        subscription.cancel(),
+      if (_trackErrorSubscription case final subscription?)
+        subscription.cancel(),
+    ]);
+    if (run != _trackRun) return;
     _positionSubscription = null;
     _trackIndexSubscription = null;
     _trackStateSubscription = null;
+    _trackErrorSubscription = null;
     _trackEntries = const [];
     _trackAssets.clear();
     _trackChunkLoads.clear();
     _trackAppendError = null;
     _trackAppendErrorReported = false;
+    _trackPlaybackError = null;
+    _trackResumeQueueIndex = null;
     await _player?.stop();
   }
 

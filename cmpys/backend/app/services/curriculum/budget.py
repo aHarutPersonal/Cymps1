@@ -133,6 +133,8 @@ def _job_unreconciled_reserve_today(
                 current=current,
             ):
                 continue
+            if attempt.get("settled_from_complete_usage") is True:
+                continue
             reserve = max(float(attempt.get("reserve_usd") or 0), 0.0)
             actual = max(float(attempt.get("actual_cost_usd") or 0), 0.0)
             today_gap += max(reserve - actual, 0.0)
@@ -243,10 +245,52 @@ async def _durable_unreconciled_reserve_today(
     )
 
 
+# Stages whose spend is grounded Google Search, which is billed by Gemini no
+# matter which provider serves generation. Every other stage runs on the
+# configured generation route.
+_SEARCH_BILLED_STAGES = frozenset({"source_research", "mentor_evidence"})
+# Floor kept for a zero-rated route so a provider switch or an unpriced model
+# cannot make admission believe work is literally free.
+_FREE_ROUTE_STAGE_RESERVE_USD = 0.005
+
+
+def generation_route_bills() -> bool:
+    """Whether the configured generation provider actually charges per token."""
+    from app.services.llm.pricing import price_card_for_model
+
+    provider = str(settings.llm_provider or "").casefold()
+    model = {
+        "openrouter": settings.openrouter_model,
+        "yunwu": settings.yunwu_model,
+        "gemini": settings.gemini_model,
+        "openai": settings.openai_model,
+    }.get(provider)
+    if not model:
+        return True
+    try:
+        card = price_card_for_model(str(model), provider=provider)
+        input_rate, output_rate = card.token_rates(1000)
+    except Exception:
+        # Unknown pricing must not be mistaken for free.
+        return True
+    return bool(input_rate > 0 or output_rate > 0)
+
+
 def curriculum_stage_reserve_usd(stage: str | None = None) -> float:
     limit = max(float(settings.curriculum_daily_budget_usd), 0.0)
     if stage is not None:
-        return min(limit, _STAGE_RESERVE_USD.get(stage, 0.05))
+        base = _STAGE_RESERVE_USD.get(stage, 0.05)
+        # Reserving Gemini-sized money for stages served by a free route starves
+        # admission on spend that will never happen: with OpenRouter serving
+        # generation, ~$0.225 per job was held against ~$0.06 of real search
+        # cost, so the daily ceiling was reached having spent a fraction of it.
+        if (
+            base > 0.0
+            and stage not in _SEARCH_BILLED_STAGES
+            and not generation_route_bills()
+        ):
+            base = _FREE_ROUTE_STAGE_RESERVE_USD
+        return min(limit, base)
     daily_jobs = max(int(settings.curriculum_daily_job_limit), 1)
     return min(limit, max(0.01, min(0.025, limit / daily_jobs)))
 

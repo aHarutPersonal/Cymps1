@@ -1,0 +1,35 @@
+{
+  "grading_checks": [
+    {
+      "activity": "lena_classification",
+      "fixed_fields": 6,
+      "correct_accepted": true,
+      "incorrect_rejected": true
+    },
+    {
+      "activity": "lena_timing_calcs",
+      "fixed_fields": 3,
+      "correct_accepted": true,
+      "incorrect_rejected": true
+    },
+    {
+      "activity": "lena_two_column",
+      "fixed_fields": 2,
+      "correct_accepted": true,
+      "incorrect_rejected": true
+    },
+    {
+      "activity": "devon_transfer",
+      "fixed_fields": 6,
+      "correct_accepted": true,
+      "incorrect_rejected": true
+    }
+  ],
+  "manual_review_passed": false,
+  "issues": [
+    "The Lena cash-profit reconciliation omits the 100 collection of an opening receivable: 500 deposit minus 250 additional prepaid insurance outflow plus 100 opening receivable collection = 350. Both lesson and workbook explanation omit that third term.",
+    "The workbook requests transaction-by-transaction column entry but exposes only total fields in that activity.",
+    "Clean slate wording conflicts with the explicitly stated prior-period receivable."
+  ],
+  "publication": "Synthetic test artifacts only; not published to learner accounts."
+}

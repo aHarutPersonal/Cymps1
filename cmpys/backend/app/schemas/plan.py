@@ -35,7 +35,7 @@ class PlanGenerateRequest(BaseModel):
     # required daily rhythm needs one more. Anything lower would mislabel the
     # actual workload.
     weeklyHours: int = Field(default=10, ge=3, le=168)
-    focus: str | None = Field(default=None, max_length=200)
+    focus: str | None = Field(default=None, max_length=10000)
     # Optional: the agentic session this plan continues. When provided, the
     # interview transcript / comparison / blueprint from that exact session are
     # threaded into generation; when omitted, the task falls back to the user's
@@ -216,6 +216,7 @@ class PlanItemDetailedResponse(BaseModel):
     # plan items. These fields let the same detail route render them instantly
     # without sending a habit/practice through long-form lesson generation.
     daily_instructions: str | None = None
+    daily_reflection: str = ""
     completed_today: bool | None = None
 
 

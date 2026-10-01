@@ -6,6 +6,7 @@ import 'package:phosphor_flutter/phosphor_flutter.dart';
 
 import '../../../../app/design_tokens.dart';
 import '../../../../core/ui/cmpys/cmpys_primitives.dart';
+import '../../../../core/ui/motion/motion_config.dart';
 import '../../../session/data/session_repository.dart';
 import '../../data/cmpys_seed.dart';
 import 'results_streamer.dart';
@@ -54,7 +55,7 @@ class _CmpysPlanGenStepState extends ConsumerState<CmpysPlanGenStep>
     _bob = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 2600),
-    )..repeat(reverse: true);
+    );
     // The analysis step's stream may still be writing into the draft; poll —
     // but only rebuild when a value the build actually reads has changed
     // (status changes go through their own setState in [_retry]).
@@ -69,6 +70,17 @@ class _CmpysPlanGenStepState extends ConsumerState<CmpysPlanGenStep>
       lastFailed = failed;
       setState(() {});
     });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MotionConfig.enabled(context)) {
+      if (!_bob.isAnimating) _bob.repeat(reverse: true);
+    } else {
+      _bob.stop();
+      _bob.value = 0;
+    }
   }
 
   @override
@@ -123,14 +135,20 @@ class _CmpysPlanGenStepState extends ConsumerState<CmpysPlanGenStep>
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.wifi_off_rounded,
-                    size: 36, color: Colors.white),
+                const Icon(
+                  Icons.wifi_off_rounded,
+                  size: 36,
+                  color: Colors.white,
+                ),
                 const SizedBox(height: 16),
                 Text(
                   'Your blueprint didn’t come through. Check your connection and try again.',
                   textAlign: TextAlign.center,
                   style: AppTypography.bodyLarge.copyWith(
-                      color: Colors.white, fontSize: 16, height: 1.5),
+                    color: Colors.white,
+                    fontSize: 16,
+                    height: 1.5,
+                  ),
                 ),
                 const SizedBox(height: 22),
                 CmpysButton(
@@ -170,8 +188,11 @@ class _CmpysPlanGenStepState extends ConsumerState<CmpysPlanGenStep>
                     color: Colors.white.withValues(alpha: 0.08),
                     shape: BoxShape.circle,
                   ),
-                  child: const Icon(PhosphorIconsBold.signpost,
-                      color: AppColors.green, size: 38),
+                  child: const Icon(
+                    PhosphorIconsBold.signpost,
+                    color: AppColors.green,
+                    size: 38,
+                  ),
                 ),
               ),
               const SizedBox(height: 28),
@@ -189,17 +210,22 @@ class _CmpysPlanGenStepState extends ConsumerState<CmpysPlanGenStep>
                   color: Colors.white.withValues(alpha: 0.06),
                   borderRadius: BorderRadius.circular(20),
                   border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.09)),
+                    color: Colors.white.withValues(alpha: 0.09),
+                  ),
                 ),
                 child: Row(
                   children: [
-                    const SizedBox(
+                    SizedBox(
                       width: 16,
                       height: 16,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        valueColor:
-                            AlwaysStoppedAnimation<Color>(AppColors.green),
+                      child: TickerMode(
+                        enabled: MotionConfig.enabled(context),
+                        child: const CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            AppColors.green,
+                          ),
+                        ),
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -233,7 +259,9 @@ class _CmpysPlanGenStepState extends ConsumerState<CmpysPlanGenStep>
           children: [
             TweenAnimationBuilder<double>(
               tween: Tween(begin: 0.5, end: 1.0),
-              duration: const Duration(milliseconds: 500),
+              duration: MotionConfig.enabled(context)
+                  ? const Duration(milliseconds: 500)
+                  : Duration.zero,
               curve: AppCurves.spring,
               builder: (_, scale, child) =>
                   Transform.scale(scale: scale, child: child),
@@ -244,21 +272,27 @@ class _CmpysPlanGenStepState extends ConsumerState<CmpysPlanGenStep>
                   color: AppColors.greenSoft,
                   shape: BoxShape.circle,
                 ),
-                child: const Icon(Icons.check_rounded,
-                    size: 44, color: AppColors.green),
+                child: const Icon(
+                  Icons.check_rounded,
+                  size: 44,
+                  color: AppColors.green,
+                ),
               ),
             ),
             const SizedBox(height: 26),
-            const CmpysKicker('Your blueprint is ready',
-                color: AppColors.green),
+            const CmpysKicker(
+              'Your blueprint is ready',
+              color: AppColors.green,
+            ),
             const SizedBox(height: 10),
             Text(
               'Written by ${widget.idol.short}, for you.',
               style: AppTypography.display.copyWith(
-                  fontSize: 30,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: -0.4,
-                  height: 1.3),
+                fontSize: 30,
+                fontWeight: FontWeight.w700,
+                letterSpacing: -0.4,
+                height: 1.3,
+              ),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 8),

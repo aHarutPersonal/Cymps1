@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../../../app/design_tokens.dart';
 import '../../../../core/ui/cmpys/cmpys_primitives.dart';
@@ -34,7 +35,10 @@ class CmpysIdolPreviewStep extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _header(context),
+          AnnotatedRegion<SystemUiOverlayStyle>(
+            value: SystemUiOverlayStyle.light,
+            child: _header(context),
+          ),
           Padding(
             padding: const EdgeInsets.fromLTRB(22, 22, 22, 16),
             child: Column(
@@ -92,12 +96,13 @@ class CmpysIdolPreviewStep extends StatelessWidget {
                       for (final p in idol.pillars)
                         Container(
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 8),
+                            horizontal: 14,
+                            vertical: 8,
+                          ),
                           decoration: BoxDecoration(
                             color: AppColors.card,
                             borderRadius: BorderRadius.circular(999),
-                            border:
-                                Border.all(color: AppColors.hair, width: 1),
+                            border: Border.all(color: AppColors.hair, width: 1),
                           ),
                           child: Text(
                             p,
@@ -135,20 +140,27 @@ class CmpysIdolPreviewStep extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Material(
-            color: Colors.transparent,
-            child: InkWell(
-              onTap: onBack,
-              borderRadius: BorderRadius.circular(999),
-              child: Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.16),
-                  shape: BoxShape.circle,
+          Semantics(
+            button: true,
+            label: 'Back to mentor matches',
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: onBack,
+                borderRadius: BorderRadius.circular(999),
+                child: Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.16),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.chevron_left_rounded,
+                    size: 22,
+                    color: Colors.white,
+                  ),
                 ),
-                child: const Icon(Icons.chevron_left_rounded,
-                    size: 22, color: Colors.white),
               ),
             ),
           ),
@@ -167,6 +179,7 @@ class CmpysIdolPreviewStep extends StatelessWidget {
           Center(
             child: Text(
               idol.name,
+              textAlign: TextAlign.center,
               style: AppTypography.display.copyWith(
                 color: Colors.white,
                 fontSize: 30,
@@ -179,6 +192,7 @@ class CmpysIdolPreviewStep extends StatelessWidget {
           Center(
             child: Text(
               '${idol.title} · ${idol.era} · ${idol.tag}',
+              textAlign: TextAlign.center,
               style: AppTypography.caption.copyWith(
                 color: Colors.white.withValues(alpha: 0.85),
                 fontSize: 13.5,
@@ -195,9 +209,7 @@ class CmpysIdolPreviewStep extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(22, 14, 22, 28),
       decoration: const BoxDecoration(
         color: AppColors.paper,
-        border: Border(
-          top: BorderSide(color: AppColors.hair, width: 1),
-        ),
+        border: Border(top: BorderSide(color: AppColors.hair, width: 1)),
       ),
       child: CmpysButton(
         variant: CmpysBtnVariant.primary,

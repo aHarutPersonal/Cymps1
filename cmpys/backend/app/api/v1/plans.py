@@ -11,13 +11,14 @@ PROMPT MAPPING:
 - All other endpoints: NO LLM (database operations only)
 """
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import and_, select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -95,6 +96,7 @@ router = APIRouter(prefix="/plans", tags=["plans"])
 MISSION_TYPES = {PlanItemType.PROJECT, PlanItemType.COURSE, PlanItemType.READING}
 DAILY_TYPES = {PlanItemType.HABIT, PlanItemType.PRACTICE}
 PLAN_JOB_STALE_AFTER = timedelta(minutes=15)
+PLAN_JOB_QUEUE_STALE_AFTER = timedelta(minutes=2)
 DETAIL_JOB_QUEUE_STALE_AFTER = timedelta(minutes=2)
 DETAIL_JOB_RUNNING_STALE_AFTER = timedelta(minutes=10)
 ACTIVE_DETAIL_JOB_STATUSES = frozenset({"pending", "queued", "running"})
@@ -433,7 +435,42 @@ def _plan_job_is_stale(
         return True
     if last_update.tzinfo is None:
         last_update = last_update.replace(tzinfo=timezone.utc)
-    return (now or datetime.now(timezone.utc)) - last_update >= PLAN_JOB_STALE_AFTER
+    stale_after = (
+        PLAN_JOB_QUEUE_STALE_AFTER
+        if getattr(job, "status", None) == "pending"
+        else PLAN_JOB_STALE_AFTER
+    )
+    return (now or datetime.now(timezone.utc)) - last_update >= stale_after
+
+
+async def publish_plan_generation_job(db: AsyncSession, job: PlanGenerationJob) -> str:
+    """Publish a committed job without blocking requests or stranding a retry.
+
+    A lost broker acknowledgement can follow a successful delivery. Only mark
+    an unclaimed row failed, so a worker that has already started keeps ownership.
+    """
+    from app.tasks.plans import run_plan_generation
+
+    try:
+        await asyncio.to_thread(run_plan_generation.delay, str(job.id))
+    except Exception:
+        logger.exception("Could not publish plan generation job_id=%s", job.id)
+        await db.execute(
+            update(PlanGenerationJob)
+            .where(
+                PlanGenerationJob.id == job.id,
+                PlanGenerationJob.status == "pending",
+            )
+            .values(
+                status="failed",
+                step="error",
+                thinking_text=None,
+                error_message="We couldn't start your plan. Your answers are saved; please retry.",
+            )
+        )
+        await db.commit()
+        await db.refresh(job)
+    return job.status
 
 
 def _detail_job_is_stale(
@@ -580,16 +617,30 @@ def _item_to_response(
             stored_progress = 0
         else:
             stored_progress = min(stored_progress, 99)
+    description, metric, hours = item.description, item.success_metric, item.estimated_hours
+    loaded_details = vars(item).get("details_json")
+    details = loaded_details if isinstance(loaded_details, dict) else {}
+    if details.get("catalog") and _lesson_details_meet_quality(details):
+        steps = _validated_lesson_steps(details) or []
+        minutes = sum(int(step.get("estimate_minutes") or 0) for step in steps)
+        if minutes > 0:
+            # A reviewed catalog assignment replaces the speculative course
+            # outline. Report the assigned workload, without mutating the
+            # planning inputs that bind its personalization/provenance hash.
+            hours = (minutes + 59) // 60
+            description = "\n\n".join(str(step.get("description") or step.get("title") or "") for step in steps)
+            description += "\n\nStudy the prepared lessons and complete their required practice inside the app."
+            metric = "Complete all assigned in-app cases and explanations, including the new transfer case. Correct errors using the feedback."
     return PlanItemResponse(
         id=item.id,
         planId=item.plan_id,
         title=item.title,
         type=item.type,
-        description=item.description,
+        description=description,
         weekStart=item.week_start,
         weekEnd=item.week_end,
-        successMetric=item.success_metric,
-        estimatedHours=item.estimated_hours,
+        successMetric=metric,
+        estimatedHours=hours,
         status=(
             PlanItemStatus.NOT_STARTED
             if is_daily
@@ -622,8 +673,20 @@ def _plan_to_response(
     completed_item_ids: set[str] | None = None,
 ) -> PlanResponse:
     """Convert plan model to response."""
+    def learning_order(item):
+        raw = (item.meta_json or {}).get("backbone_task_index")
+        try:
+            index = int(raw)
+        except (TypeError, ValueError):
+            index = 10_000
+        return (item.week_start, index, str(item.created_at or ""), str(item.id))
+
+    # Relationship/database row order is not the intended learning sequence.
+    # Use the same backbone index as background preparation so the first
+    # actionable card opens the lesson that was prepared first.
     items = [
-        _item_to_response(i, completed_item_ids=completed_item_ids) for i in plan.items
+        _item_to_response(i, completed_item_ids=completed_item_ids)
+        for i in sorted(plan.items, key=learning_order)
     ]
     completed = sum(1 for item in items if item.status == PlanItemStatus.COMPLETED)
     total = len(plan.items)
@@ -825,7 +888,7 @@ async def generate_plan_endpoint(
                     PlanGenerationJob.user_id == current_user.id,
                     PlanGenerationJob.idol_id == canonical_idol_id,
                     PlanGenerationJob.session_id == data.sessionId,
-                    PlanGenerationJob.status.in_(["pending", "running", "completed"]),
+                    PlanGenerationJob.status.in_(["pending", "running", "completed", "failed"]),
                 )
                 .order_by(PlanGenerationJob.created_at.desc())
                 .limit(1)
@@ -837,7 +900,7 @@ async def generate_plan_endpoint(
                 jobId=str(existing.id),
                 status=existing.status,
             )
-        if existing and existing.status in {"pending", "running"}:
+        if existing and existing.status in {"pending", "running", "failed"}:
             if existing.status == "pending" and existing.step == "waiting_for_strategy":
                 # generate-results stages this row before writing strategy. If
                 # its terminal dispatch was lost, publish the same durable job
@@ -851,16 +914,14 @@ async def generate_plan_endpoint(
                 existing.error_message = None
                 await db.commit()
 
-                from app.tasks.plans import run_plan_generation
-
-                run_plan_generation.delay(str(existing.id))
+                published_status = await publish_plan_generation_job(db, existing)
                 return IdolImportResponse(
                     idolId=canonical_idol_id,
                     jobId=str(existing.id),
-                    status="pending",
+                    status=published_status,
                 )
 
-            if not _plan_job_is_stale(existing):
+            if existing.status != "failed" and not _plan_job_is_stale(existing):
                 return IdolImportResponse(
                     idolId=canonical_idol_id,
                     jobId=str(existing.id),
@@ -874,11 +935,10 @@ async def generate_plan_endpoint(
             existing.progress_percent = 0
             existing.step = "analyzing_gaps"
             existing.error_message = None
+            existing.thinking_text = None
             await db.commit()
 
-            from app.tasks.plans import run_plan_generation
-
-            run_plan_generation.delay(str(existing.id))
+            published_status = await publish_plan_generation_job(db, existing)
             logger.warning(
                 "[PLAN_GENERATE] Requeued stale job id=%s session_id=%s",
                 existing.id,
@@ -887,7 +947,7 @@ async def generate_plan_endpoint(
             return IdolImportResponse(
                 idolId=canonical_idol_id,
                 jobId=str(existing.id),
-                status="pending",
+                status=published_status,
             )
 
     # Create the job record
@@ -907,15 +967,12 @@ async def generate_plan_endpoint(
     await db.commit()
     await db.refresh(job)
 
-    # Import and trigger the task
-    from app.tasks.plans import run_plan_generation
-
-    run_plan_generation.delay(str(job.id))
+    published_status = await publish_plan_generation_job(db, job)
 
     return IdolImportResponse(
         idolId=canonical_idol_id,
         jobId=str(job.id),
-        status="pending",
+        status=published_status,
     )
 
 
@@ -953,8 +1010,8 @@ async def get_current_plan(
     ).scalar_one_or_none()
 
     # This endpoint is polled by the Plan/Today screens and its response never
-    # includes item details — defer the multi-KB-per-item JSONB columns so a
-    # 30-item plan doesn't drag hundreds of KB out of the DB per poll.
+    # includes lesson prose — defer it so a 30-item plan does not fetch every
+    # future lesson per poll. Small task metadata is needed for stable ordering.
     from sqlalchemy.orm import defer
 
     stmt = (
@@ -962,7 +1019,6 @@ async def get_current_plan(
         .options(
             selectinload(Plan.items).options(
                 defer(PlanItem.details_json),
-                defer(PlanItem.meta_json),
             ),
             selectinload(Plan.idol),
         )
@@ -994,6 +1050,22 @@ async def get_current_plan(
         completed_item_ids = {
             str(item_id) for item_id in completion_result.scalars().all()
         }
+
+    active_week = min(
+        (item.week_start for item in plan.items
+         if item.type in MISSION_TYPES and str(item.id) not in completed_item_ids),
+        default=None,
+    )
+    if active_week is not None:
+        # Load assigned catalog content only for the actionable week, so its
+        # cards reflect the prepared scope instead of speculative plan hours.
+        current_catalog = await db.execute(select(PlanItem).where(
+            PlanItem.plan_id == plan.id,
+            PlanItem.week_start <= active_week,
+            PlanItem.week_end >= active_week,
+            PlanItem.details_json["catalog"].astext.is_not(None),
+        ))
+        current_catalog.scalars().all()
 
     idol_name = plan.idol.name if plan.idol else None
     return _plan_to_response(
@@ -1201,6 +1273,29 @@ async def update_plan_item(
 # =============================================================================
 # Plan Item Details & Completion Endpoints
 # =============================================================================
+
+
+class DailyReflectionRequest(BaseModel):
+    text: str = Field(max_length=8000)
+
+
+@items_router.put("/{item_id}/reflection")
+async def save_daily_reflection(
+    item_id: str,
+    data: DailyReflectionRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    item = await _get_item_for_user(db, item_id, current_user.id, for_update=True)
+    if item.type not in {PlanItemType.HABIT, PlanItemType.PRACTICE}:
+        raise HTTPException(422, "Reflections belong to daily rhythms")
+    today = datetime.now(timezone.utc).date().isoformat()
+    meta = dict(item.meta_json or {})
+    reflections = dict(meta.get("daily_reflections") or {})
+    reflections[today] = data.text
+    item.meta_json = {**meta, "daily_reflections": reflections}
+    await db.commit()
+    return {"date": today, "text": data.text}
 
 
 async def _get_item_for_user(
@@ -1683,6 +1778,8 @@ async def _require_completion_artifact_ready(
                 plan_item_id=str(item.id),
             )
     if ready:
+        from app.api.v1.practice import require_practice_complete
+        await require_practice_complete(db, item, user_id, selected_step)
         return
     raise HTTPException(
         status_code=status.HTTP_409_CONFLICT,
@@ -1774,6 +1871,7 @@ async def get_plan_item_detailed(
             details_status=DetailsStatus.AVAILABLE,
             job_id=None,
             daily_instructions=_daily_instructions_for_plan_item(item),
+            daily_reflection=((item.meta_json or {}).get("daily_reflections") or {}).get(datetime.now(timezone.utc).date().isoformat(), ""),
             completed_today=bool(completed_today),
         )
 
@@ -1996,7 +2094,9 @@ async def get_plan_item_detailed(
             details_progress=existing_job.progress_percent,
             details_step=existing_job.step,
             details_error=(
-                "This lesson could not be prepared. Generate it again to retry."
+                "This lesson is not available yet. Its learning materials and practice are not ready."
+                if existing_job.step == "catalog_not_available"
+                else "This lesson could not be prepared. Generate it again to retry."
             ),
         )
 
@@ -2541,7 +2641,8 @@ async def toggle_step_complete(
     # next week's missions at low priority. This gives the background workers
     # the rest of the current week to finish, while current user-facing work
     # always retains queue priority. The organizer is idempotent.
-    if new_step_completed and step_index == 0:
+    operator_pilot = (getattr(plan, "roadmap_json", None) or {}).get("operator_catalog_pilot_job_id")
+    if new_step_completed and step_index == 0 and not operator_pilot:
         duration_weeks = await db.scalar(
             select(Plan.duration_weeks).where(Plan.id == item.plan_id)
         )

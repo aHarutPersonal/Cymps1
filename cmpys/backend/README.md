@@ -29,12 +29,35 @@ cp .env.example .env        # fill in keys
 .venv/bin/celery -A app.core.celery.celery_app worker -n low@%h --concurrency=1 -Q low_priority
 .venv/bin/celery -A app.core.celery.celery_app worker -n catalog@%h --concurrency=2 -Q catalog
 .venv/bin/celery -A app.core.celery.celery_app worker -n catalog-control@%h --concurrency=1 -Q catalog_control
-.venv/bin/celery -A app.core.celery.celery_app worker -n curriculum@%h --pool=prefork --concurrency=2 -Q curriculum
+.venv/bin/celery -A app.core.celery.celery_app worker -n curriculum@%h --pool=prefork --concurrency=1 -Q curriculum
 .venv/bin/celery -A app.core.celery.celery_app worker -n curriculum-control@%h --concurrency=1 -Q curriculum_control
 .venv/bin/celery -A app.core.celery.celery_app beat
 ```
 
 Health check: `curl http://localhost:8000/health`
+
+## Book narration
+
+Narration selects its provider independently of the planning LLM. The default
+`BOOK_NARRATION_PROVIDER=gemini` uses `GEMINI_API_KEY` and direct Google
+`gemini-3.8-flash-tts`. Configure the model with `BOOK_NARRATION_GEMINI_MODEL`,
+the expressive voice with `BOOK_NARRATION_GEMINI_VOICE` (Sulafat), and the generic
+mentor voice with `BOOK_NARRATION_GEMINI_MENTOR_VOICE` (Gacrux). Delivery guidance
+is supplied as speech metadata so it is not read as part of the passage.
+Gemini returns validated WAV recordings; MiniMax-specific settings are ignored.
+
+Legacy MiniMax routes remain available. Keep `BOOK_NARRATION_PROVIDER`,
+`BOOK_NARRATION_API_BASE_URL`, and the credential matched: `yunwu` uses
+`YUNWU_API_KEY`; `openlux` uses `OPENLUX_API_KEY` or `OPENLUX_SECRET_ID` with
+`https://api.openlux.ai/minimax/v1`. Text-model access alone does not establish
+speech access.
+
+Valid recordings are cached even when word timing is unavailable. Those clips
+play with estimated progress, without claiming synchronized highlighting.
+Gemini currently supplies no word timestamps. Cached recordings can be
+replayed while credentials are unavailable; new recordings still require an
+active speech channel. Failure logs include bounded reason/status fields,
+never passage text, API keys, or provider response bodies.
 
 ## Environment (`.env`)
 
@@ -76,7 +99,7 @@ Health check: `curl http://localhost:8000/health`
 | `CURRICULUM_JOB_BUDGET_USD` | Independent per-job admission limit, including persisted reserves for failed attempts (default 0.60); two repairs are a ceiling, so the budget can stop a later repair |
 | `CURRICULUM_DAILY_JOB_LIMIT` | Maximum curriculum jobs admitted per UTC day |
 | `CURRICULUM_MAX_RUNNING_JOBS` | Maximum durable curriculum leases, including mentor curation (default 2) |
-| `CURRICULUM_WORKER_CONCURRENCY` | Dedicated curriculum execution slots (default 2) |
+| `CURRICULUM_WORKER_CONCURRENCY` | Dedicated curriculum execution slots (default 1) |
 | `CURRICULUM_DURABLE_SPACING_SCHEDULER_ENABLED` | Allow spaced-practice modules only when durable follow-up delivery exists (default false) |
 | `LESSON_CATALOG_FIRST_ENABLED` | Try a fully personalized published module before the bespoke lesson fallback |
 | `CATALOG_IDLE_DISCOVERY_INTERVAL_SECONDS` | Idle-discovery Beat cadence and deterministic UTC bucket width (default 900) |

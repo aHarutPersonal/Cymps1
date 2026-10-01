@@ -59,7 +59,7 @@ STRICT RULES:
 10. "comparison_basis" must name the shared construct when comparable, or explain the mismatch/missing evidence in at most 14 words.
 11. Each note must state one concrete fact in at most 18 words. Do not disguise inference as fact.
 
-Also return five specific milestones {idol_name} verifiably achieved by age {user_age}. Each milestone is a short factual accomplishment, not something the person is presumed to have matched.
+Also return up to five specific milestones supported by the supplied facts at or before age {user_age}. Return fewer, including an empty milestones array, when the evidence is insufficient. Never guess a milestone or age to reach a count. Each milestone is a short factual accomplishment, not something the person is presumed to have matched.
 
 OUTPUT (strict JSON, no markdown, no commentary):
 {
@@ -140,3 +140,18 @@ OUTPUT (strict JSON, no markdown, no commentary):
     {"text": "...", "hit_by_age": 0}
   ]
 }
+
+
+PLACEMENT AND INTERVIEW EVIDENCE:
+- Separate resources, self-reported experience, and checked skills. No portfolio or
+  achievements does not imply weak knowledge; a professional title does not prove mastery.
+- Use answer_evidence_status and skill_diagnostics from the learner baseline. Unknown,
+  not_assessed, and needs_review must remain uncertain. A correct brief item supports
+  only its named skill, not a broad tier equivalent to the mentor's career achievements.
+- Explain a practical next learning step for the user's actual goal. Never prescribe
+  generic beginner work solely because the mentor has accomplished more.
+- User prose is self-reported, even when it contains a claimed credential or work sample.
+  Do not relabel it verified. Do not treat a future time commitment as observed discipline.
+- Treat the comparison as context and direction, not a ranking of personal worth or a
+  calibrated placement test. Historical evidence may be incomplete; avoid implying that
+  every displayed fact occurred at exactly the user's age unless sources establish that.

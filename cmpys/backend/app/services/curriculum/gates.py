@@ -22,11 +22,13 @@ from app.services.curriculum.schemas import (
 from app.services.curriculum.sessions import SessionPackingError, pack_session_blocks
 
 
-QUALITY_GATE_VERSION = "curriculum-gates-v3"
+QUALITY_GATE_VERSION = "curriculum-gates-v4-workbooks"
 MIN_REVIEW_SCORE = 0.82
 MAX_SHINGLE_SIMILARITY = 0.72
 MAX_SOURCE_SHINGLE_CONTAINMENT = 0.55
 MAX_CANONICAL_SHINGLE_CONTAINMENT = 0.72
+MAX_SOURCE_COPYING_ISSUES = 30
+MAX_SOURCE_COPYING_CONTRIBUTORS = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -393,6 +395,42 @@ def validate_module_target(
     )
 
 
+def validate_in_app_contract(draft: CanonicalModuleDraft, plan: TechniquePlan, target: Mapping[str, Any] | None) -> GateResult:
+    issues = []
+    required = bool((target or {}).get("in_app_practice_required"))
+    if required and not draft.session_workbooks:
+        issues.append(_issue("practice_workbooks_missing", "Every new session needs its prepared in-app workbook.", "Include complete private workbooks with tasks, data, formulas, criteria and transfer cases."))
+    if plan.assessment_rubric and draft.rubric != plan.assessment_rubric:
+        issues.append(_issue("planned_rubric_changed", "The lesson rubric differs from the pinned technique-plan rubric.", "Copy assessment_rubric exactly from the technique plan; map exercise fields to these same criteria."))
+    if required and not plan.assessment_rubric:
+        issues.append(_issue("planned_rubric_missing", "The technique plan lacks a structured assessment rubric.", "Create the shared rubric before writing lesson or workbook content."))
+    if draft.session_workbooks:
+        try:
+            sessions = pack_session_blocks(draft)
+        except SessionPackingError as exc:
+            issues.append(_issue("workbook_partition_invalid", str(exc), "Cover every block once using complete 40–60 minute sessions."))
+            sessions = ()
+        rubric_names = {row.criterion for row in draft.rubric}
+        mapped = set()
+        for blocks, session in zip(sessions, draft.session_workbooks):
+            kinds = {block.block_type.value for block in blocks}
+            if not {"explanation", "worked_example", "independent_practice", "assessment"}.issubset(kinds):
+                issues.append(_issue("incomplete_reusable_session", "A prepared session lacks a complete teaching and practice cycle.", "Include explanation, worked example, independent practice and assessment inside each declared session."))
+            exercise_minutes = sum(a.minutes_max for a in session.workbook.activities)
+            total_minutes = sum(b.minutes for b in blocks)
+            if exercise_minutes > total_minutes - 5 or exercise_minutes < 10:
+                issues.append(_issue("practice_time_mismatch", "Prepared activity time leaves no realistic reading time or too little practice.", "Use at least 10 minutes of executable practice and leave at least 5 minutes for the lesson within its duration."))
+            for activity in session.workbook.activities:
+                for field in activity.fields:
+                    if field.rubric_criterion:
+                        mapped.add(field.rubric_criterion)
+                        if field.rubric_criterion not in rubric_names:
+                            issues.append(_issue("unknown_practice_rubric", "An exercise uses a rubric criterion outside the canonical rubric.", "Bind fields to exact canonical rubric criterion names."))
+        if sessions and not rubric_names.issubset(mapped):
+            issues.append(_issue("unassessed_rubric_criteria", "Some promised rubric criteria are never assessed by an in-app answer field.", "Map at least one executable answer field to every rubric criterion."))
+    return GateResult(passed=not issues,score=1.0 if not issues else 0.0,issues=tuple(issues),metrics={"prepared_workbooks":len(draft.session_workbooks)})
+
+
 def validate_structure(draft: CanonicalModuleDraft) -> GateResult:
     issues: list[ReviewIssue] = []
     types = {block.block_type for block in draft.blocks}
@@ -551,6 +589,25 @@ def _ordered_token_containment(
     return state.bit_count() / len(source_tokens)
 
 
+def _localized_ordered_containment(source_tokens: list[str], candidate_tokens: list[str]) -> float:
+    """Fuzzy copying must occur nearby, not collect topic words across a course.
+
+    Exact seven-token shingles still use the entire candidate below. Sliding
+    windows retain detection of locally interleaved copying while preventing an
+    unbounded LCS from matching ordinary domain vocabulary thousands of words apart.
+    """
+    if not source_tokens or not candidate_tokens:
+        return 0.0
+    window = max(3 * len(source_tokens), 1)
+    if len(candidate_tokens) <= window:
+        return _ordered_token_containment(source_tokens, candidate_tokens)
+    stride = max(len(source_tokens) // 2, 1)
+    return max(
+        _ordered_token_containment(source_tokens, candidate_tokens[start:start + window])
+        for start in range(0, len(candidate_tokens), stride)
+    )
+
+
 def _directional_containment(
     source_tokens: list[str],
     candidate_tokens: list[str],
@@ -567,7 +624,7 @@ def _directional_containment(
     )
     return max(
         phrase_containment,
-        _ordered_token_containment(source_tokens, candidate_tokens),
+        _localized_ordered_containment(source_tokens, candidate_tokens),
     )
 
 
@@ -575,8 +632,8 @@ def shingle_containment(source: str, candidate: str) -> float:
     """Measure ordered phrase coverage in both copy directions.
 
     Taking both directions catches a padded full copy as well as a shorter candidate
-    copied from one subsection of a larger reference. Exact bit-parallel LCS coverage
-    tolerates inserted tokens without reducing the check to a bag-of-words metric.
+    copied from one subsection of a larger reference. Localized bit-parallel LCS coverage
+    tolerates nearby inserted tokens without collecting isolated words across a module.
     """
 
     source_tokens = _tokens(source)
@@ -611,21 +668,22 @@ def _draft_prose_segments_with_locations(
         if isinstance(value, str) and value.strip():
             prose.append((block_id, field_name, value.strip()))
 
+    # learning_outcome, artifact_type and prerequisites are SERVER-OWNED identity
+    # fields. The outline and writer prompts require them to be reproduced from the
+    # module target unchanged, and separate gates verify that they were. Scanning
+    # them for source-phrase overlap therefore punishes the writer for obeying a
+    # mandatory instruction: a short outcome sentence that happens to echo a source
+    # excerpt scores very high containment (a 7-token shingle window over ~15 words
+    # leaves almost no room to differ) and no rewrite can clear it without
+    # violating the identity contract. Their correctness is already enforced by
+    # exact comparison against the target, which is the right check for a field
+    # nobody is allowed to reword.
     for field_name in (
         "title",
         "summary",
-        "learning_outcome",
-        "artifact_type",
         "artifact_description",
     ):
         append_text(content.get(field_name), field_name=field_name)
-    prerequisites = content.get("prerequisites")
-    if isinstance(prerequisites, list):
-        for index, prerequisite in enumerate(prerequisites):
-            append_text(
-                prerequisite,
-                field_name=f"prerequisites[{index}]",
-            )
 
     blocks = content.get("blocks")
     if isinstance(blocks, list):
@@ -669,6 +727,18 @@ def _draft_prose_segments_with_locations(
                     field_name=f"rubric[{index}].{field_name}",
                 )
 
+    workbooks = content.get("session_workbooks", [])
+    if isinstance(workbooks, list):
+        for session_index, session in enumerate(workbooks):
+            workbook = session.get("workbook", {}) if isinstance(session, Mapping) else {}
+            for activity_index, activity in enumerate(workbook.get("activities", [])):
+                prefix = f"session_workbooks[{session_index}].activities[{activity_index}]"
+                for key in ("title", "instructions", "hint", "worked_solution"):
+                    append_text(activity.get(key), field_name=f"{prefix}.{key}")
+                for field_index, field in enumerate(activity.get("fields", [])):
+                    append_text(field.get("label"), field_name=f"{prefix}.fields[{field_index}].label")
+                    for criterion_index, criterion in enumerate(field.get("criteria", [])):
+                        append_text(criterion, field_name=f"{prefix}.fields[{field_index}].criteria[{criterion_index}]")
     return tuple(prose)
 
 
@@ -708,6 +778,46 @@ def _originality_candidate_texts(draft: CanonicalModuleDraft) -> tuple[str, ...]
     return tuple(text for _, _, text in _originality_candidate_segments(draft))
 
 
+def _prose_location(block_id: str | None, field_name: str) -> str:
+    return f"{field_name} in block {block_id}" if block_id else field_name
+
+
+def _aggregate_source_contributors(
+    *,
+    source_text: str,
+    segments: tuple[tuple[str | None, str, str], ...],
+    excluded: set[tuple[str | None, str]],
+) -> tuple[tuple[str, ...], int]:
+    ranked: list[tuple[float, float, str]] = []
+    source_token_count = len(_tokens(source_text))
+    for block_id, field_name, text in segments:
+        if (block_id, field_name) in excluded:
+            continue
+        candidate_token_count = len(_tokens(text))
+        if candidate_token_count < 1:
+            continue
+        containment = shingle_containment(source_text, text)
+        if containment <= 0:
+            continue
+        covered_token_weight = containment * min(
+            source_token_count,
+            candidate_token_count,
+        )
+        ranked.append(
+            (
+                covered_token_weight,
+                containment,
+                _prose_location(block_id, field_name),
+            )
+        )
+    ranked.sort(key=lambda item: (-item[0], -item[1], item[2]))
+    selected = tuple(
+        location
+        for _, _, location in ranked[:MAX_SOURCE_COPYING_CONTRIBUTORS]
+    )
+    return selected, len(ranked)
+
+
 def validate_originality(
     draft: CanonicalModuleDraft,
     comparison_texts: Iterable[str],
@@ -745,10 +855,14 @@ def validate_source_originality(
     manifest: ResearchManifest,
 ) -> GateResult:
     candidates = _originality_candidate_segments(draft)
+    prose_segments = _draft_prose_segments_with_locations(draft)
     maximum = 0.0
     source_id = ""
-    closest_block_id: str | None = None
-    closest_field = "complete_draft"
+    violations: dict[
+        tuple[str | None, str],
+        tuple[float, set[str]],
+    ] = {}
+    aggregate_violations: list[tuple[float, str, tuple[str, ...], int]] = []
     for source in manifest.sources:
         source_tokens = _tokens(source.sanitized_support_text)
         size = min(7, len(source_tokens))
@@ -758,48 +872,143 @@ def validate_source_originality(
         positional_shingle_count = len(source_tokens) - size + 1 if size > 0 else 0
         if positional_shingle_count < 4:
             continue
-        containment, block_id, field_name = max(
+        scored_candidates = tuple(
             (
-                (
-                    shingle_containment(
-                        source.sanitized_support_text,
-                        candidate_text,
-                    ),
-                    candidate_block_id,
-                    candidate_field,
-                )
-                for candidate_block_id, candidate_field, candidate_text in candidates
-            ),
+                shingle_containment(
+                    source.sanitized_support_text,
+                    candidate_text,
+                ),
+                candidate_block_id,
+                candidate_field,
+            )
+            for candidate_block_id, candidate_field, candidate_text in candidates
+        )
+        containment, _, _ = max(
+            scored_candidates,
             key=lambda item: (item[0], item[2] != "complete_draft"),
         )
         if containment > maximum:
             maximum = containment
             source_id = source.source_id
-            closest_block_id = block_id
-            closest_field = field_name
-    issues: list[ReviewIssue] = []
-    if maximum > MAX_SOURCE_SHINGLE_CONTAINMENT:
-        location = (
-            f"{closest_field} in block {closest_block_id}"
-            if closest_block_id
-            else closest_field
+
+        # Report every concrete field that violates the threshold so one repair
+        # can address all known copying.
+        source_violations = tuple(
+            item
+            for item in scored_candidates
+            if item[0] > MAX_SOURCE_SHINGLE_CONTAINMENT
+            and item[2] != "complete_draft"
         )
-        issues.append(
-            _issue(
-                "source_copying_detected",
+        for candidate_score, candidate_block_id, candidate_field in source_violations:
+            key = (candidate_block_id, candidate_field)
+            prior_score, prior_sources = violations.get(
+                key,
+                (0.0, set()),
+            )
+            violations[key] = (
+                max(candidate_score, prior_score),
+                {*prior_sources, source.source_id},
+            )
+
+        # Remove already-reported fields and recheck the remaining prose. If
+        # many short fields jointly copy a source, preserve the whole-draft gate
+        # while giving the repair model the concrete contributing field paths.
+        specific_keys = {(item[1], item[2]) for item in source_violations}
+        residual_text = "\n".join(
+            text
+            for candidate_block_id, candidate_field, text in prose_segments
+            if (candidate_block_id, candidate_field) not in specific_keys
+        )
+        residual_score = shingle_containment(
+            source.sanitized_support_text,
+            residual_text,
+        )
+        if residual_score > MAX_SOURCE_SHINGLE_CONTAINMENT:
+            contributors, contributor_count = _aggregate_source_contributors(
+                source_text=source.sanitized_support_text,
+                segments=prose_segments,
+                excluded=specific_keys,
+            )
+            aggregate_violations.append(
                 (
-                    f"Draft segment {location} contains {maximum:.1%} of a "
-                    "source excerpt's phrase shingles."
+                    residual_score,
+                    source.source_id,
+                    contributors,
+                    contributor_count,
+                )
+            )
+
+    issue_candidates: list[tuple[float, int, str, str, ReviewIssue]] = []
+    for (block_id, field_name), (containment, source_ids) in violations.items():
+        location = _prose_location(block_id, field_name)
+        issue_candidates.append(
+            (
+                containment,
+                0,
+                block_id or "",
+                field_name,
+                _issue(
+                    "source_copying_detected",
+                    (
+                        f"Draft segment {location} contains {containment:.1%} of a "
+                        "source excerpt's phrase shingles."
+                    ),
+                    (
+                        f"Rewrite {location} as an original synthesis and keep only "
+                        "short attributed quotations."
+                    ),
+                    severity=ReviewSeverity.CRITICAL,
+                    block_id=block_id,
+                    source_ids=sorted(source_ids)[:8],
                 ),
-                (
-                    f"Rewrite {location} as an original synthesis and keep only "
-                    "short attributed quotations."
-                ),
-                severity=ReviewSeverity.CRITICAL,
-                block_id=closest_block_id,
-                source_ids=[source_id] if source_id else [],
             )
         )
+
+    aggregate_contributor_count = 0
+    aggregate_contributor_reported_count = 0
+    for containment, aggregate_source_id, contributors, contributor_count in (
+        aggregate_violations
+    ):
+        aggregate_contributor_count += contributor_count
+        aggregate_contributor_reported_count += len(contributors)
+        if contributors:
+            contributor_list = ", ".join(contributors)
+            contributor_context = (
+                f" Highest-overlap field paths ({len(contributors)} of "
+                f"{contributor_count}): {contributor_list}."
+            )
+        else:
+            contributor_context = ""
+        issue_candidates.append(
+            (
+                containment,
+                1,
+                "",
+                aggregate_source_id,
+                _issue(
+                    "source_copying_detected",
+                    (
+                        "Draft segment complete_draft contains "
+                        f"{containment:.1%} of a source excerpt's phrase shingles."
+                    ),
+                    (
+                        "Rewrite all aggregate source-derived wording associated "
+                        f"with source {aggregate_source_id} as an original synthesis."
+                        f"{contributor_context} Keep only short attributed quotations."
+                    ),
+                    severity=ReviewSeverity.CRITICAL,
+                    source_ids=[aggregate_source_id],
+                ),
+            )
+        )
+
+    issues = [
+        issue
+        for _, _, _, _, issue in sorted(
+            issue_candidates,
+            key=lambda item: (-item[0], item[1], item[2], item[3]),
+        )[:MAX_SOURCE_COPYING_ISSUES]
+    ]
     return GateResult(
         passed=not issues,
         score=max(0.0, 1.0 - maximum),
@@ -807,6 +1016,14 @@ def validate_source_originality(
         metrics={
             "maximum_source_shingle_containment": maximum,
             "closest_source_id": source_id,
+            "source_copying_violation_count": (
+                len(violations) + len(aggregate_violations)
+            ),
+            "source_copying_reported_count": len(issues),
+            "aggregate_contributor_count": aggregate_contributor_count,
+            "aggregate_contributor_reported_count": (
+                aggregate_contributor_reported_count
+            ),
         },
     )
 
@@ -850,6 +1067,7 @@ def publication_gate(
             else ()
         ),
         validate_structure(draft),
+        validate_in_app_contract(draft, technique_plan, module_target),
         validate_manifest_verification(manifest),
         validate_source_attribution(draft, manifest),
         validate_technique_implementation(
@@ -865,7 +1083,7 @@ def publication_gate(
     issues = tuple(issue for result in results for issue in result.issues)
     return GateResult(
         passed=all(result.passed for result in results),
-        score=min(result.score for result in results),
+        score=min(review.score for review in reviews.reviews) if all(result.passed for result in results) else 0.0,
         issues=issues,
         metrics={
             "gate_version": QUALITY_GATE_VERSION,

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:phosphor_flutter/phosphor_flutter.dart';
@@ -43,13 +44,74 @@ class CmpysDiscoveryStep extends ConsumerStatefulWidget {
 
 class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
   String _query = '';
+  final _searchController = TextEditingController();
+  Timer? _searchTimer;
+  int _searchRevision = 0;
+  bool _searching = false;
+  String? _searchError;
+  List<CmpysIdolSuggestion> _searchResults = [];
+
+  @override
+  void dispose() {
+    _searchTimer?.cancel();
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _search(String value) {
+    _searchTimer?.cancel();
+    final revision = ++_searchRevision;
+    setState(() {
+      _query = value;
+      _searchError = null;
+      _searchResults = [];
+      _searching = value.trim().length >= 2;
+    });
+    if (!_searching) return;
+    _searchTimer = Timer(const Duration(milliseconds: 400), () async {
+      try {
+        final rows = await ref
+            .read(sessionRepositoryProvider)
+            .discoverMentors(value.trim());
+        if (!mounted || revision != _searchRevision) return;
+        setState(() {
+          _searchResults = rows
+              .map(
+                (m) => CmpysIdolSuggestion(
+                  idol: cmpysIdolFromSuggestion(
+                    name: m['name'] as String,
+                    era: '',
+                    summary: (m['description'] as String?) ?? '',
+                    domains: ((m['occupations'] as List?) ?? []).cast<String>(),
+                    wikidataId: m['externalId'] as String?,
+                    imageUrl: m['imageUrl'] as String?,
+                  ),
+                  score: 0,
+                  reason: (m['description'] as String?) ?? 'Name search result',
+                ),
+              )
+              .toList();
+          _searching = false;
+        });
+      } catch (_) {
+        if (!mounted || revision != _searchRevision) return;
+        setState(() {
+          _searching = false;
+          _searchError = 'Search could not finish. Try the name again.';
+        });
+      }
+    });
+  }
+
   bool _loading = true;
   String? _error;
   List<CmpysIdolSuggestion> _suggestions = const [];
+  String? _sessionId;
 
   @override
   void initState() {
     super.initState();
+    _sessionId = widget.existingSessionId;
     _loadSuggestions();
   }
 
@@ -69,8 +131,8 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
       // would otherwise 409 createSession and push us to the offline ranker),
       // then create a fresh idol-selection session carrying the intake.
       String sessionId;
-      if (widget.existingSessionId != null) {
-        sessionId = widget.existingSessionId!;
+      if (_sessionId != null) {
+        sessionId = _sessionId!;
       } else {
         await repo.abandonCurrentSession();
         final session = await repo.createSession(
@@ -82,6 +144,7 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
           ),
         );
         sessionId = session.id;
+        _sessionId = sessionId;
         widget.onSessionCreated?.call(sessionId);
       }
 
@@ -148,13 +211,18 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
   List<CmpysIdolSuggestion> get _filtered {
     if (_query.trim().isEmpty) return _suggestions;
     final q = _query.toLowerCase();
-    return _suggestions
+    final local = _suggestions
         .where(
           (s) => '${s.idol.name} ${s.idol.title} ${s.idol.field}'
               .toLowerCase()
               .contains(q),
         )
         .toList();
+    final names = local.map((s) => s.idol.name.toLowerCase()).toSet();
+    return [
+      ...local,
+      ..._searchResults.where((s) => names.add(s.idol.name.toLowerCase())),
+    ];
   }
 
   @override
@@ -218,12 +286,12 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
     return Container(
       decoration: const BoxDecoration(gradient: AppColors.gradGreen),
       child: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 26),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 26, vertical: 24),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const SizedBox(height: 60),
+              const SizedBox(height: 24),
               Text(
                 'MATCHING YOU WITH A MENTOR',
                 style: AppTypography.kicker.copyWith(
@@ -232,7 +300,7 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
               ),
               const SizedBox(height: 10),
               Text(
-                'Thinking…',
+                'Finding your matches…',
                 style: AppTypography.display.copyWith(
                   color: Colors.white,
                   fontSize: 34,
@@ -259,7 +327,6 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
                   intervalMs: 700,
                 ),
               ),
-              const Spacer(),
             ],
           ),
         ),
@@ -272,11 +339,17 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
     final list = _filtered;
     final featured = _suggestions.isNotEmpty ? _suggestions.first : null;
     final rest = list
-        .where((s) => featured == null || s.idol.id != featured.idol.id)
+        .where(
+          (s) =>
+              _query.trim().isNotEmpty ||
+              featured == null ||
+              s.idol.id != featured.idol.id,
+        )
         .toList();
     return SafeArea(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: ListView(
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+        padding: const EdgeInsets.only(bottom: 30),
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(22, 16, 22, 12),
@@ -288,7 +361,7 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
                 Padding(
                   padding: const EdgeInsets.only(bottom: 10),
                   child: Text(
-                    'Who do you want to measure against?',
+                    'Who inspires your next step?',
                     style: AppTypography.display.copyWith(
                       fontSize: 28,
                       fontWeight: FontWeight.w500,
@@ -300,12 +373,15 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
                 _aiAttribution(),
                 const SizedBox(height: 12),
                 _searchField(),
+                if (_searching) const LinearProgressIndicator(),
+                if (_searchError != null) Text(_searchError!),
               ],
             ),
           ),
-          Expanded(
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(18, 10, 18, 30),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 10, 18, 30),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 if (_query.trim().isEmpty && featured != null) ...[
                   _featuredCard(featured),
@@ -354,7 +430,7 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
 
   Widget _searchField() {
     return Container(
-      height: 48,
+      constraints: const BoxConstraints(minHeight: 48),
       padding: const EdgeInsets.symmetric(horizontal: 14),
       decoration: BoxDecoration(
         color: AppColors.card,
@@ -371,7 +447,8 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
           const SizedBox(width: 10),
           Expanded(
             child: TextField(
-              onChanged: (v) => setState(() => _query = v),
+              controller: _searchController,
+              onChanged: _search,
               textAlignVertical: TextAlignVertical.center,
               onTapOutside: (_) =>
                   FocusManager.instance.primaryFocus?.unfocus(),
@@ -388,9 +465,13 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
             ),
           ),
           if (_query.isNotEmpty)
-            GestureDetector(
-              onTap: () => setState(() => _query = ''),
-              child: const Icon(
+            IconButton(
+              tooltip: 'Clear search',
+              onPressed: () {
+                _searchController.clear();
+                _search('');
+              },
+              icon: const Icon(
                 PhosphorIconsRegular.x,
                 size: 17,
                 color: AppColors.ink3,
@@ -450,7 +531,7 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
                     borderRadius: BorderRadius.circular(999),
                   ),
                   child: Text(
-                    '${suggestion.score}% fit',
+                    'Suggested mentor',
                     style: AppTypography.kicker.copyWith(
                       color: Colors.white,
                       fontSize: 10.5,
@@ -604,7 +685,7 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
                         borderRadius: BorderRadius.circular(999),
                       ),
                       child: Text(
-                        '${s.score}%',
+                        'Explore',
                         style: AppTypography.kicker.copyWith(
                           color: idol.color,
                           fontSize: 10,

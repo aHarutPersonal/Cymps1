@@ -12,6 +12,7 @@ from app.api.v1 import (
     me,
     notes,
     plans,
+    practice,
     sessions,
     tools,
     daily_tasks,
@@ -29,6 +30,7 @@ router.include_router(comparison.router)
 router.include_router(content_resources.router)
 router.include_router(plans.router)
 router.include_router(plans.items_router)  # /plan-items
+router.include_router(practice.router)
 router.include_router(notes.router)
 router.include_router(feed.router)
 router.include_router(sessions.router)

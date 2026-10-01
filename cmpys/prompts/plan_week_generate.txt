@@ -33,12 +33,16 @@ EXECUTION CONTRACT:
   appropriate for this learner. Do not write the long lesson itself here.
 - Every daily rhythm description must be 45-80 words and state exact cadence,
   per-session duration, skill drill, and recorded evidence.
+- The cadence times per-session minutes must equal estimated_hours × 60 exactly.
+  For a one-hour weekly habit, three sessions must be 20 minutes each, not 10.
+- The daily screen offers a saved free-text reflection and a completion button.
+  Do not promise automatic timers, templates, spreadsheet editors or scored daily fields.
 - Every daily rhythm includes daily_instructions of 70-120 words: what to do,
   sequence, timer or repetition count, tool/template, expected output, and a
   stopping rule. It must be executable from the Today screen by itself.
 - success_metric must remain binary, measurable, and consistent with the
   backbone. Never write "task completed".
-- predicted_friction and friction_solution must be specific to this learner,
+- predicted_friction and friction_solution must each stay under 350 characters and be specific to this learner,
   domain, and week.
 - Do not invent quotations, chapter numbers, mentor facts, URLs, or resources.
 - The sum of estimated_hours must remain exactly {hours_per_week}; preserve the
@@ -67,3 +71,13 @@ Return strict JSON only:
     }
   ]
 }
+
+RECENT LEARNING EVIDENCE:
+Use the supplied learner placement and recent_practice before older narrative comparisons.
+Adjust scaffolding, worked examples, and case complexity to the checked, named skill.
+A supported transfer calls for another independent case; an unhinted transfer can justify
+more complexity in that skill, not a blanket promotion. Uncertain review needs clarification;
+a draft is not a failed assessment. If the approved task's prerequisites are not established,
+include a brief diagnostic and targeted prerequisite work within its intent, and state the
+unresolved prerequisite in predicted_friction. Do not claim it has already been mastered.
+Preserve approved task identities and time budgets; do not rewrite completed work.

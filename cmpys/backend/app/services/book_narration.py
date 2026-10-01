@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import hashlib
 import html
 import ipaddress
@@ -12,6 +14,7 @@ import math
 import os
 import re
 import socket
+import struct
 import unicodedata
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -73,11 +76,24 @@ class BookNarrationUnavailableError(RuntimeError):
         reason_code: str = "narration_unavailable",
         retryable: bool = False,
         alignment_diagnostics: _SafeAlignmentDiagnostics | None = None,
+        http_status: int | None = None,
+        provider_status: int | None = None,
     ) -> None:
         super().__init__(message)
-        self.reason_code = reason_code
+        self.reason_code = (
+            reason_code if isinstance(reason_code, str) and re.fullmatch(r"[a-z0-9_]{1,64}", reason_code)
+            else "narration_unavailable"
+        )
         self.retryable = retryable
         self.alignment_diagnostics = alignment_diagnostics
+        self.http_status = (
+            http_status if type(http_status) is int and 100 <= http_status <= 599
+            else None
+        )
+        self.provider_status = (
+            provider_status if type(provider_status) is int and abs(provider_status) <= 2**31
+            else None
+        )
 
 
 @dataclass(frozen=True)
@@ -126,7 +142,13 @@ class _NarratorProfile:
 class _MiniMaxSynthesis:
     audio_bytes: bytes
     duration_ms: int
-    subtitle_url: str
+    subtitle_url: str | None
+
+
+@dataclass(frozen=True)
+class _GeminiSynthesis:
+    audio_bytes: bytes
+    duration_ms: int
 
 
 _STYLE_PRESETS: dict[str, _StylePreset] = {
@@ -138,7 +160,14 @@ _STYLE_PRESETS: dict[str, _StylePreset] = {
 }
 
 _CACHE_VERSION = "minimax-narration-v4"
-_PROVIDER = "yunwu"
+_GEMINI_CACHE_VERSION = "gemini-narration-v1"
+_GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+_GEMINI_STYLES = {
+    "expressive": "Warm, expressive audiobook narration with natural emphasis and clear, unhurried pacing.",
+    "warm": "Warm, gentle audiobook narration with a relaxed pace and natural pauses.",
+    "grounded": "Calm, grounded audiobook narration with measured pacing and clear emphasis.",
+}
+_SUPPORTED_PROVIDERS = frozenset({"yunwu", "openlux", "gemini"})
 _OFFSET_ENCODING = "utf16"
 _DISCLOSURE = "AI-generated voice; not the real person."
 _locks: dict[str, asyncio.Lock] = {}
@@ -236,37 +265,46 @@ async def render_book_narration(
 ) -> NarrationAsset:
     """Render or retrieve one expressive narration passage."""
 
+    provider = settings.book_narration_provider.casefold()
     if (
         not settings.book_narration_enabled
-        or settings.book_narration_provider.casefold() != _PROVIDER
-        or not settings.yunwu_api_key
+        or provider not in _SUPPORTED_PROVIDERS
     ):
-        raise BookNarrationUnavailableError("Expressive narration is not configured")
+        raise BookNarrationUnavailableError(
+            "Expressive narration is not configured", reason_code="provider_not_configured"
+        )
     preset = _STYLE_PRESETS.get(style)
     if preset is None:
         raise ValueError(f"Unsupported narration style: {style}")
-    profile = _narrator_profile(narrator_profile)
+    profile = _narrator_profile(narrator_profile, provider=provider)
 
     cleaned_text = text.strip()
     source_text_hash = _source_text_hash(cleaned_text)
+    model = (
+        settings.book_narration_gemini_model if provider == "gemini"
+        else settings.book_narration_tts_model
+    )
+    if provider == "gemini":
+        identity = (
+            _GEMINI_CACHE_VERSION, provider, _GEMINI_API_BASE, model,
+            narrator_profile, profile.voice_id, style, _GEMINI_STYLES[style],
+            "native-wav-no-alignment", source_text_hash,
+        )
+        extension = "wav"
+    else:
+        # Preserve existing MiniMax fingerprints so paid recordings remain usable.
+        identity = (
+            _CACHE_VERSION, provider,
+            settings.book_narration_api_base_url.rstrip("/"), model,
+            narrator_profile, profile.voice_id, style,
+            str(preset.speed), str(preset.pitch),
+            "provider-subtitle-word-request", source_text_hash,
+        )
+        extension = "mp3"
     digest = hashlib.sha256(
-        "\n".join(
-            (
-                _CACHE_VERSION,
-                _PROVIDER,
-                settings.book_narration_api_base_url.rstrip("/"),
-                settings.book_narration_tts_model,
-                narrator_profile,
-                profile.voice_id,
-                style,
-                str(preset.speed),
-                str(preset.pitch),
-                "provider-subtitle-word-request",
-                source_text_hash,
-            )
-        ).encode("utf-8")
+        "\n".join(identity).encode("utf-8")
     ).hexdigest()
-    filename = f"book_narration_{digest}.mp3"
+    filename = f"book_narration_{digest}.{extension}"
     media_dir = Path(settings.book_narration_media_dir)
     audio_path = media_dir / filename
     metadata_path = media_dir / f"book_narration_{digest}.json"
@@ -282,20 +320,29 @@ async def render_book_narration(
             if cached is not None:
                 logger.info(
                     "Book narration cache hit provider=%s model=%s chars=%d",
-                    _PROVIDER,
-                    settings.book_narration_tts_model,
+                    provider,
+                    model,
                     len(cleaned_text),
                 )
                 return cached
 
+            # Cached audio does not depend on the provider being reachable or
+            # its credential remaining configured after the recording exists.
+            if not _narration_api_key(provider):
+                raise BookNarrationUnavailableError(
+                    "Expressive narration is not configured", reason_code="provider_not_configured"
+                )
             await asyncio.to_thread(media_dir.mkdir, parents=True, exist_ok=True)
             started = asyncio.get_running_loop().time()
             try:
-                synthesis = await _synthesize_with_minimax(
-                    cleaned_text,
-                    preset=preset,
-                    profile=profile,
-                )
+                if provider == "gemini":
+                    synthesis = await _synthesize_with_gemini(
+                        cleaned_text, style=style, profile=profile,
+                    )
+                else:
+                    synthesis = await _synthesize_with_minimax(
+                        cleaned_text, preset=preset, profile=profile, provider=provider,
+                    )
             except BookNarrationUnavailableError:
                 raise
             except Exception as exc:
@@ -304,7 +351,7 @@ async def render_book_narration(
                     type(exc).__name__,
                 )
                 raise BookNarrationUnavailableError(
-                    "Narration generation failed"
+                    "Narration generation failed", reason_code="synthesis_unexpected"
                 ) from exc
             generation_ms = round((asyncio.get_running_loop().time() - started) * 1000)
 
@@ -312,21 +359,25 @@ async def render_book_narration(
             alignment_source = "none"
             alignment_granularity = "none"
             subtitle_started = asyncio.get_running_loop().time()
-            try:
-                subtitle_document = await _fetch_subtitle_with_retry(
-                    synthesis.subtitle_url,
-                )
-                alignment, alignment_granularity = _alignment_from_provider_segments(
-                    cleaned_text,
-                    subtitle_document,
-                    duration_ms=synthesis.duration_ms,
-                )
-                if alignment:
-                    alignment_source = "provider"
-            except Exception as exc:
-                # Preserve the expressive recording, but never invent exact word
-                # timing. The response explicitly reports that timing is absent.
-                _log_timing_failure(exc)
+            # Gemini unary TTS supplies audio only. Do not invent alignment or
+            # treat an intentionally absent subtitle as a transient error.
+            if isinstance(synthesis, _MiniMaxSynthesis):
+                try:
+                    if not synthesis.subtitle_url:
+                        raise BookNarrationUnavailableError(
+                            "Narration provider returned no timing", reason_code="subtitle_missing"
+                        )
+                    subtitle_document = await _fetch_subtitle_with_retry(
+                        synthesis.subtitle_url,
+                    )
+                    alignment, alignment_granularity = _alignment_from_provider_segments(
+                        cleaned_text, subtitle_document, duration_ms=synthesis.duration_ms,
+                    )
+                    if alignment:
+                        alignment_source = "provider"
+                except Exception as exc:
+                    # Preserve the recording without inventing exact word timing.
+                    _log_timing_failure(exc)
             subtitle_ms = round(
                 (asyncio.get_running_loop().time() - subtitle_started) * 1000
             )
@@ -336,8 +387,8 @@ async def render_book_narration(
                 "voice": profile.voice_id,
                 "voiceDisplayName": profile.display_name,
                 "narratorProfile": narrator_profile,
-                "provider": _PROVIDER,
-                "model": settings.book_narration_tts_model,
+                "provider": provider,
+                "model": model,
                 "durationMs": synthesis.duration_ms,
                 "alignment": [asdict(cue) for cue in alignment],
                 "alignmentSource": alignment_source,
@@ -355,8 +406,8 @@ async def render_book_narration(
             logger.info(
                 "Book narration generated provider=%s model=%s chars=%d "
                 "duration_ms=%d generation_ms=%d subtitle_ms=%d granularity=%s",
-                _PROVIDER,
-                settings.book_narration_tts_model,
+                provider,
+                model,
                 len(cleaned_text),
                 synthesis.duration_ms,
                 generation_ms,
@@ -369,8 +420,8 @@ async def render_book_narration(
                 voice=profile.voice_id,
                 voice_display_name=profile.display_name,
                 narrator_profile=narrator_profile,
-                provider=_PROVIDER,
-                model=settings.book_narration_tts_model,
+                provider=provider,
+                model=model,
                 duration_ms=synthesis.duration_ms,
                 alignment=alignment,
                 alignment_source=alignment_source,
@@ -386,20 +437,239 @@ async def render_book_narration(
             _locks.pop(digest, None)
 
 
-def _narrator_profile(profile: str) -> _NarratorProfile:
+def _narration_api_key(provider: str) -> str | None:
+    """Narration credentials follow its explicit provider, independently of LLMs."""
+    if provider == "yunwu":
+        return settings.yunwu_api_key
+    if provider == "openlux":
+        return settings.openlux_api_key
+    if provider == "gemini":
+        return settings.gemini_api_key
+    return None
+
+
+def _narrator_profile(profile: str, *, provider: str | None = None) -> _NarratorProfile:
     """Resolve only server-approved voices; clients never submit a voice ID."""
 
+    provider = provider or settings.book_narration_provider.casefold()
     if profile == "expressive_narrator":
         return _NarratorProfile(
-            voice_id=settings.book_narration_voice_id,
+            voice_id=(settings.book_narration_gemini_voice if provider == "gemini"
+                      else settings.book_narration_voice_id),
             display_name="Expressive narrator",
         )
     if profile == "seasoned_mentor":
         return _NarratorProfile(
-            voice_id=settings.book_narration_mentor_voice_id,
+            voice_id=(settings.book_narration_gemini_mentor_voice if provider == "gemini"
+                      else settings.book_narration_mentor_voice_id),
             display_name="Seasoned mentor",
         )
     raise ValueError(f"Unsupported narrator profile: {profile}")
+
+
+async def _synthesize_with_gemini(
+    text: str,
+    *,
+    style: str,
+    profile: _NarratorProfile,
+    client: httpx.AsyncClient | None = None,
+) -> _GeminiSynthesis:
+    """Generate one complete native WAV using Google's unary TTS endpoint."""
+
+    api_key = _narration_api_key("gemini")
+    model = settings.book_narration_gemini_model
+    if not api_key or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", model):
+        raise BookNarrationUnavailableError(
+            "Expressive narration is not configured", reason_code="provider_not_configured"
+        )
+    # Gemini 3.8 treats text as a verbatim transcript. Directions belong only in
+    # speech_metadata, otherwise they can be read aloud with the book passage.
+    payload = {
+        "contents": [{"role": "user", "parts": [{
+            "text": text,
+            "speech_metadata": {"style": _GEMINI_STYLES[style]},
+        }]}],
+        "generationConfig": {
+            "responseModalities": ["AUDIO"],
+            "speechConfig": {"voiceConfig": {"voice": profile.voice_id}},
+        },
+    }
+    timeout = httpx.Timeout(
+        settings.book_narration_timeout_seconds,
+        connect=min(settings.book_narration_timeout_seconds, 10.0),
+    )
+    owns_client = client is None
+    if client is None:
+        client = httpx.AsyncClient(timeout=timeout, follow_redirects=False, trust_env=False)
+    # Bound the HTTP body as well as decoded audio, including when the provider
+    # omits Content-Length or keeps sending data within each read timeout.
+    max_body_bytes = 4 * ((settings.book_narration_max_audio_bytes + 2) // 3) + 65_536
+    try:
+        async with asyncio.timeout(settings.book_narration_timeout_seconds):
+            async with client.stream(
+                "POST", f"{_GEMINI_API_BASE}/{model}:generateContent",
+                headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+                json=payload, timeout=timeout, follow_redirects=False,
+            ) as response:
+                response.raise_for_status()
+                declared_length = response.headers.get("content-length", "")
+                if declared_length.isdigit() and int(declared_length) > max_body_bytes:
+                    raise BookNarrationUnavailableError(
+                        "Narration provider response was too large", reason_code="audio_too_large"
+                    )
+                body = bytearray()
+                async for chunk in response.aiter_bytes():
+                    if len(body) + len(chunk) > max_body_bytes:
+                        raise BookNarrationUnavailableError(
+                            "Narration provider response was too large", reason_code="audio_too_large"
+                        )
+                    body.extend(chunk)
+            try:
+                document = json.loads(body)
+            except (ValueError, UnicodeDecodeError) as exc:
+                raise BookNarrationUnavailableError(
+                    "Narration provider returned invalid JSON", reason_code="provider_json_invalid"
+                ) from exc
+            return _parse_gemini_response(document)
+    except httpx.HTTPStatusError as exc:
+        status_code = exc.response.status_code
+        raise BookNarrationUnavailableError(
+            "Narration provider request failed", reason_code="provider_http_error",
+            http_status=status_code, retryable=status_code in {408, 425, 429} or status_code >= 500,
+        ) from exc
+    except (TimeoutError, httpx.TimeoutException) as exc:
+        raise BookNarrationUnavailableError(
+            "Narration provider request timed out", reason_code="provider_timeout", retryable=True,
+        ) from exc
+    except httpx.TransportError as exc:
+        raise BookNarrationUnavailableError(
+            "Narration provider request failed", reason_code="provider_transport_error", retryable=True,
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise BookNarrationUnavailableError(
+            "Narration provider request failed", reason_code="provider_http_error"
+        ) from exc
+    finally:
+        if owns_client:
+            await client.aclose()
+
+
+def _parse_gemini_response(payload: Any) -> _GeminiSynthesis:
+    if not isinstance(payload, dict):
+        raise BookNarrationUnavailableError(
+            "Narration provider response was invalid", reason_code="provider_response_invalid"
+        )
+    feedback = payload.get("promptFeedback")
+    if isinstance(feedback, dict) and feedback.get("blockReason"):
+        raise BookNarrationUnavailableError(
+            "Narration provider rejected the request", reason_code="provider_rejected"
+        )
+    candidates = payload.get("candidates")
+    if not isinstance(candidates, list) or len(candidates) != 1 or not isinstance(candidates[0], dict):
+        raise BookNarrationUnavailableError(
+            "Narration provider returned no complete audio", reason_code="audio_missing"
+        )
+    candidate = candidates[0]
+    if candidate.get("finishReason") != "STOP":
+        # Partial audio (including MAX_TOKENS) must never enter the cache.
+        raise BookNarrationUnavailableError(
+            "Narration provider did not complete the audio", reason_code="audio_incomplete"
+        )
+    ratings = candidate.get("safetyRatings")
+    if isinstance(ratings, list) and any(
+        isinstance(rating, dict) and rating.get("blocked") is True for rating in ratings
+    ):
+        raise BookNarrationUnavailableError(
+            "Narration provider rejected the request", reason_code="provider_rejected"
+        )
+    content = candidate.get("content")
+    parts = content.get("parts") if isinstance(content, dict) else None
+    audio_parts = [
+        part["inlineData"] for part in parts
+        if isinstance(part, dict) and isinstance(part.get("inlineData"), dict)
+    ] if isinstance(parts, list) else []
+    if len(audio_parts) != 1:
+        raise BookNarrationUnavailableError(
+            "Narration provider returned invalid audio parts", reason_code="audio_missing"
+        )
+    inline = audio_parts[0]
+    mime_type = inline.get("mimeType")
+    if not isinstance(mime_type, str) or mime_type.casefold() not in {"audio/wav", "audio/x-wav"}:
+        # Unary Gemini 3.8 returns a complete WAV by default. Raw PCM belongs to
+        # a different output contract and must not be guessed or double-wrapped.
+        raise BookNarrationUnavailableError(
+            "Narration provider returned an unsupported audio format", reason_code="audio_format_invalid"
+        )
+    encoded = inline.get("data")
+    if not isinstance(encoded, str) or not encoded:
+        raise BookNarrationUnavailableError(
+            "Narration provider returned empty audio", reason_code="audio_empty"
+        )
+    max_audio_bytes = settings.book_narration_max_audio_bytes
+    if len(encoded) > 4 * ((max_audio_bytes + 2) // 3):
+        raise BookNarrationUnavailableError(
+            "Narration provider audio was too large", reason_code="audio_too_large"
+        )
+    try:
+        audio_bytes = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise BookNarrationUnavailableError(
+            "Narration provider returned invalid audio", reason_code="audio_invalid"
+        ) from exc
+    if len(audio_bytes) > max_audio_bytes:
+        raise BookNarrationUnavailableError(
+            "Narration provider audio was too large", reason_code="audio_too_large"
+        )
+    return _GeminiSynthesis(audio_bytes=audio_bytes, duration_ms=_wav_duration_ms(audio_bytes))
+
+
+def _wav_duration_ms(audio: bytes) -> int:
+    """Validate complete mono 24 kHz PCM WAV and measure only its audio frames.
+
+    Gemini may include metadata chunks before or after its data. RIFF chunk
+    walking avoids assuming a 44-byte header or counting metadata as speech.
+    """
+    def invalid() -> BookNarrationUnavailableError:
+        return BookNarrationUnavailableError(
+            "Narration provider returned invalid WAV audio", reason_code="audio_invalid"
+        )
+
+    if (
+        len(audio) < 44 or audio[:4] != b"RIFF" or audio[8:12] != b"WAVE"
+        or struct.unpack_from("<I", audio, 4)[0] + 8 != len(audio)
+    ):
+        raise invalid()
+    offset = 12
+    format_seen = False
+    data_size: int | None = None
+    while offset < len(audio):
+        if offset + 8 > len(audio):
+            raise invalid()
+        chunk_id = audio[offset:offset + 4]
+        chunk_size = struct.unpack_from("<I", audio, offset + 4)[0]
+        start = offset + 8
+        end = start + chunk_size
+        padded_end = end + chunk_size % 2
+        if padded_end > len(audio):
+            raise invalid()
+        if chunk_id == b"fmt ":
+            if format_seen or chunk_size < 16:
+                raise invalid()
+            encoding, channels, rate, byte_rate, frame_bytes, bits = struct.unpack_from("<HHIIHH", audio, start)
+            if (encoding, channels, rate, byte_rate, frame_bytes, bits) != (1, 1, 24000, 48000, 2, 16):
+                raise invalid()
+            format_seen = True
+        elif chunk_id == b"data":
+            if not format_seen or data_size is not None or chunk_size == 0 or chunk_size % 2:
+                raise invalid()
+            data_size = chunk_size
+        offset = padded_end
+    if not format_seen or data_size is None:
+        raise invalid()
+    duration_ms = round((data_size // 2) * 1000 / 24000)
+    if duration_ms <= 0:
+        raise invalid()
+    return duration_ms
 
 
 def _minimax_request_payload(
@@ -439,9 +709,16 @@ async def _synthesize_with_minimax(
     preset: _StylePreset,
     profile: _NarratorProfile,
     client: httpx.AsyncClient | None = None,
+    provider: str | None = None,
 ) -> _MiniMaxSynthesis:
-    """Generate one non-streaming MP3 through Yunwu's native MiniMax route."""
+    """Generate one MP3 through the explicitly selected native MiniMax gateway."""
 
+    provider = provider or settings.book_narration_provider.casefold()
+    api_key = _narration_api_key(provider)
+    if not api_key:
+        raise BookNarrationUnavailableError(
+            "Expressive narration is not configured", reason_code="provider_not_configured"
+        )
     endpoint = f"{settings.book_narration_api_base_url.rstrip('/')}/t2a_v2"
     timeout = httpx.Timeout(
         settings.book_narration_timeout_seconds,
@@ -458,7 +735,7 @@ async def _synthesize_with_minimax(
         response = await client.post(
             endpoint,
             headers={
-                "Authorization": f"Bearer {settings.yunwu_api_key}",
+                "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },
             json=_minimax_request_payload(text, preset=preset, profile=profile),
@@ -468,12 +745,26 @@ async def _synthesize_with_minimax(
             payload = response.json()
         except (ValueError, json.JSONDecodeError) as exc:
             raise BookNarrationUnavailableError(
-                "Narration provider returned invalid JSON"
+                "Narration provider returned invalid JSON", reason_code="provider_json_invalid"
             ) from exc
         return _parse_minimax_response(payload)
+    except httpx.HTTPStatusError as exc:
+        status_code = exc.response.status_code
+        raise BookNarrationUnavailableError(
+            "Narration provider request failed", reason_code="provider_http_error",
+            http_status=status_code, retryable=status_code in {408, 425, 429} or status_code >= 500,
+        ) from exc
+    except httpx.TimeoutException as exc:
+        raise BookNarrationUnavailableError(
+            "Narration provider request timed out", reason_code="provider_timeout", retryable=True,
+        ) from exc
+    except httpx.TransportError as exc:
+        raise BookNarrationUnavailableError(
+            "Narration provider request failed", reason_code="provider_transport_error", retryable=True,
+        ) from exc
     except httpx.HTTPError as exc:
         raise BookNarrationUnavailableError(
-            "Narration provider request failed"
+            "Narration provider request failed", reason_code="provider_http_error"
         ) from exc
     finally:
         if owns_client:
@@ -482,45 +773,50 @@ async def _synthesize_with_minimax(
 
 def _parse_minimax_response(payload: Any) -> _MiniMaxSynthesis:
     if not isinstance(payload, dict):
-        raise BookNarrationUnavailableError("Narration provider response was invalid")
+        raise BookNarrationUnavailableError(
+            "Narration provider response was invalid", reason_code="provider_response_invalid"
+        )
     base_response = payload.get("base_resp")
-    if not isinstance(base_response, dict) or base_response.get("status_code") != 0:
-        raise BookNarrationUnavailableError("Narration provider rejected the request")
+    provider_status = base_response.get("status_code") if isinstance(base_response, dict) else None
+    if type(provider_status) is not int or provider_status != 0:
+        raise BookNarrationUnavailableError(
+            "Narration provider rejected the request", reason_code="provider_rejected",
+            provider_status=provider_status,
+        )
     data = payload.get("data")
     extra_info = payload.get("extra_info")
     if not isinstance(data, dict) or not isinstance(extra_info, dict):
-        raise BookNarrationUnavailableError("Narration provider returned no audio")
+        raise BookNarrationUnavailableError("Narration provider returned no audio", reason_code="audio_missing")
     if data.get("status") != 2:
         raise BookNarrationUnavailableError(
-            "Narration provider did not complete the audio"
+            "Narration provider did not complete the audio", reason_code="audio_incomplete"
         )
 
     raw_audio = data.get("audio")
     subtitle_url = data.get("subtitle_file")
     duration_ms = extra_info.get("audio_length")
     if not isinstance(raw_audio, str) or len(raw_audio) % 2:
-        raise BookNarrationUnavailableError("Narration provider returned invalid audio")
+        raise BookNarrationUnavailableError("Narration provider returned invalid audio", reason_code="audio_invalid")
     if len(raw_audio) > settings.book_narration_max_audio_bytes * 2:
-        raise BookNarrationUnavailableError("Narration provider audio was too large")
+        raise BookNarrationUnavailableError("Narration provider audio was too large", reason_code="audio_too_large")
     try:
         audio_bytes = bytes.fromhex(raw_audio)
     except ValueError as exc:
         raise BookNarrationUnavailableError(
-            "Narration provider returned invalid audio"
+            "Narration provider returned invalid audio", reason_code="audio_invalid"
         ) from exc
     if len(audio_bytes) < 128:
-        raise BookNarrationUnavailableError("Narration provider returned empty audio")
-    if not isinstance(duration_ms, (int, float)) or isinstance(duration_ms, bool):
-        raise BookNarrationUnavailableError("Narration provider returned no duration")
-    duration_ms = round(float(duration_ms))
+        raise BookNarrationUnavailableError("Narration provider returned empty audio", reason_code="audio_empty")
+    duration = _strict_number(duration_ms)
+    if duration is None:
+        raise BookNarrationUnavailableError("Narration provider returned no duration", reason_code="duration_invalid")
+    duration_ms = round(duration)
     if duration_ms <= 0:
-        raise BookNarrationUnavailableError("Narration provider returned no duration")
-    if not isinstance(subtitle_url, str) or not subtitle_url:
-        raise BookNarrationUnavailableError("Narration provider returned no timing")
+        raise BookNarrationUnavailableError("Narration provider returned no duration", reason_code="duration_invalid")
     return _MiniMaxSynthesis(
         audio_bytes=audio_bytes,
         duration_ms=duration_ms,
-        subtitle_url=subtitle_url,
+        subtitle_url=subtitle_url if isinstance(subtitle_url, str) and subtitle_url else None,
     )
 
 
@@ -957,7 +1253,8 @@ async def _read_cached_asset(
     if not audio_path.is_file() or not metadata_path.is_file():
         return None
     try:
-        if audio_path.stat().st_size < 128:
+        file_size = audio_path.stat().st_size
+        if file_size < 128 or file_size > settings.book_narration_max_audio_bytes:
             return None
         raw = await asyncio.to_thread(metadata_path.read_text, encoding="utf-8")
         metadata = json.loads(raw)
@@ -965,17 +1262,28 @@ async def _read_cached_asset(
             NarrationCue(**item) for item in metadata.get("alignment", [])
         )
         duration_ms = metadata.get("durationMs")
-        if not isinstance(duration_ms, int) or duration_ms <= 0:
+        if type(duration_ms) is not int or duration_ms <= 0:
             return None
-        if (
-            metadata.get("alignmentSource") != "provider"
-            or metadata.get("alignmentGranularity") not in {"word", "phrase"}
-            or not alignment
-        ):
-            # Audio is still served to the request that generated it, but an
-            # incomplete timing result must not become a permanent cache hit.
-            return None
-        if not _cached_alignment_is_valid(alignment, duration_ms):
+        if audio_path.suffix == ".wav":
+            if metadata.get("provider") != "gemini":
+                return None
+            audio_bytes = await asyncio.to_thread(audio_path.read_bytes)
+            if _wav_duration_ms(audio_bytes) != duration_ms:
+                return None
+        has_provider_timing = (
+            metadata.get("alignmentSource") == "provider"
+            and metadata.get("alignmentGranularity") in {"word", "phrase"}
+            and bool(alignment)
+            and _cached_alignment_is_valid(alignment, duration_ms)
+        )
+        has_audio_only = (
+            metadata.get("alignmentSource") == "none"
+            and metadata.get("alignmentGranularity") == "none"
+            and not alignment
+        )
+        # Subtitle availability affects highlighting, not the paid recording.
+        # Replaying usable audio must never silently resynthesize the passage.
+        if not has_provider_timing and not has_audio_only:
             return None
         return NarrationAsset(
             audio_url=f"/media/{filename}",
@@ -994,7 +1302,7 @@ async def _read_cached_asset(
             disclosure=str(metadata["disclosure"]),
             cached=True,
         )
-    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+    except (OSError, ValueError, TypeError, KeyError, BookNarrationUnavailableError):
         return None
 
 

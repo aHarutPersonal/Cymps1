@@ -15,9 +15,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
+from collections.abc import Awaitable, Callable
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from app.core.async_runtime import run_async
@@ -68,6 +69,7 @@ from app.services.curriculum.gates import (
     validate_manifest_verification,
 )
 from app.services.curriculum.generation import (
+    curriculum_recovery_route,
     GeneratedArtifact,
     configured_tier,
     deterministic_draft_gate,
@@ -87,6 +89,7 @@ from app.services.curriculum.pilot import (
 )
 from app.services.curriculum.research import build_research_manifest
 from app.services.curriculum.schemas import (
+    evidence_policy_for_domain,
     CanonicalModuleDraft,
     CurriculumOutline,
     MentorClaimCuration,
@@ -161,6 +164,12 @@ def _worker_owner() -> str:
 
 def _provider_model_for_tier(provider: str, tier: str) -> str | None:
     fields = {
+        "zai": {"fast": settings.zai_fast_model, "balanced": settings.zai_model, "quality": settings.zai_quality_model},
+        "openlux": {
+            "fast": settings.openlux_fast_model,
+            "balanced": settings.openlux_model,
+            "quality": settings.openlux_quality_model,
+        },
         "openai": {
             "fast": settings.openai_fast_model,
             "balanced": settings.openai_model,
@@ -191,6 +200,29 @@ def _resolved_llm_route(tier: str) -> dict[str, Any]:
         "fallback": None,
         "resolution": "dummy_or_unknown_provider",
     }
+    if provider == "zai":
+        if settings.zai_api_key:
+            route["primary"] = {
+                "provider": "zai", "model": _provider_model_for_tier("zai", tier),
+                "endpoint_fingerprint": sha256_json({"base_url": settings.zai_base_url.rstrip("/")}),
+            }
+            route["resolution"] = "configured_primary"
+        else:
+            route["resolution"] = "configured_primary_unavailable"
+        return route
+    if provider == "openlux":
+        if settings.openlux_api_key:
+            route["primary"] = {
+                "provider": "openlux",
+                "model": _provider_model_for_tier("openlux", tier),
+                "endpoint_fingerprint": sha256_json(
+                    {"base_url": settings.openlux_base_url.rstrip("/")}
+                ),
+            }
+            route["resolution"] = "configured_primary"
+        else:
+            route["resolution"] = "configured_primary_unavailable"
+        return route
     if provider == "openai":
         if settings.openai_api_key:
             route["primary"] = {
@@ -569,11 +601,30 @@ def _module_target(job_input: dict[str, Any]) -> dict[str, Any]:
     return target
 
 
-def _checkpoint_model(checkpoints: dict[str, Any], key: str, model):
+def _checkpoint_model(
+    checkpoints: dict[str, Any],
+    key: str,
+    model,
+    *,
+    context: dict[str, Any] | None = None,
+):
     value = checkpoints.get(key)
     if not isinstance(value, dict):
         raise ValueError(f"missing {key} checkpoint")
-    return model.model_validate(value)
+    return model.model_validate(value, context=context)
+
+
+def _manifest_context(job_input: dict[str, Any]) -> dict[str, Any]:
+    """Evidence policy for revalidating a stored manifest.
+
+    ResearchManifest defaults to the strict institutional rule when no policy is
+    supplied, which is the right fail-closed default for fresh curation. But a
+    manifest that legitimately passed under the reputable policy is re-validated
+    on every later stage when it is loaded back from its checkpoint, and without
+    this context that reload would reject work the pipeline already accepted.
+    """
+    domain = _module_target(job_input).get("domain")
+    return {"evidence_policy": evidence_policy_for_domain(domain)}
 
 
 def _stage_dependencies(
@@ -584,6 +635,17 @@ def _stage_dependencies(
     repair_attempts: int,
 ) -> dict[str, Any]:
     dependencies: dict[str, Any] = {"module_target": _module_target(job_input)}
+    generation_recovery = (checkpoints.get("generation_recovery_routes") or {}).get(stage.value)
+    if generation_recovery is not None:
+        dependencies["generation_recovery"] = generation_recovery
+    if stage == PipelineStage.OUTLINE and checkpoints.get("outline_contract_feedback"):
+        dependencies["outline_contract_feedback"] = checkpoints["outline_contract_feedback"]
+    if stage == PipelineStage.WRITING and checkpoints.get("draft_gate_recheck"):
+        dependencies["draft_gate_recheck"] = checkpoints["draft_gate_recheck"]
+        dependencies["editorial_revision"] = checkpoints.get("editorial_revision")
+    if stage == PipelineStage.SOURCE_RESEARCH:
+        dependencies["verification_recovery"] = checkpoints.get("research_verification_recovery")
+        dependencies["curation_recovery"] = checkpoints.get("research_curation_recovery")
     if stage not in {PipelineStage.TAXONOMY, PipelineStage.SOURCE_RESEARCH}:
         dependencies["source_manifest"] = checkpoints.get("source_manifest")
     if stage not in {
@@ -646,11 +708,46 @@ def _checkpoint_stage(
     return result
 
 
+def _rechecked_writer_provenance(checkpoints: dict, recheck: dict) -> str:
+    editorial = checkpoints.get("editorial_revision")
+    if editorial is not None:
+        record = editorial.get("record") if isinstance(editorial, dict) else None
+        if (
+            not isinstance(record, dict)
+            or editorial.get("hash") != sha256_json(record)
+            or record.get("draft_hash") != recheck.get("draft_hash")
+            or record.get("source_manifest_hash") != sha256_json(checkpoints.get("source_manifest"))
+            or record.get("outline_hash") != sha256_json(checkpoints.get("outline"))
+            or record.get("technique_plan_hash") != sha256_json(checkpoints.get("technique_plan"))
+            or record.get("authoring_method") != "owner_authorized_codex_editorial_revision"
+        ):
+            raise ValueError("editorial draft provenance mismatch")
+        return "codex-editorial"
+    writing = (checkpoints.get("model_usage") or {}).get("writing") or {}
+    writer = writing.get("writer") or {}
+    model = writer.get("model") or writing.get("writer_provenance") or writing.get("model")
+    if not model or model == "unknown":
+        raise ValueError("draft recheck lacks original writer provenance")
+    return str(model)
+
+
+def _complete_recovery_usage(model_usage: dict[str, Any]) -> tuple[int, int] | None:
+    """Only single-call, complete native recovery responses can release a reserve."""
+    if "provider" in model_usage:
+        tokens = int(model_usage.get("total_tokens") or 0)
+        return (1, tokens) if model_usage["provider"] == "gemini" and tokens > 0 else None
+    children = [_complete_recovery_usage(value) for value in model_usage.values() if isinstance(value, dict)]
+    if not children or any(value is None for value in children):
+        return None
+    return sum(value[0] for value in children), sum(value[1] for value in children)
+
+
 def _reconcile_job_usage_snapshot(
     job: CurriculumGenerationJob,
     *,
     usage,
     checkpoints: dict[str, Any] | None = None,
+    completed_usage: tuple[int, int] | None = None,
 ) -> dict[str, Any]:
     updated = dict(
         checkpoints if checkpoints is not None else job.checkpoints_json or {}
@@ -661,12 +758,21 @@ def _reconcile_job_usage_snapshot(
         reserve = max(float(active.get("reserve_usd") or 0), 0.0)
         cost_before = max(float(active.get("actual_cost_before_usd") or 0), 0.0)
         attempt_actual = max(usage.estimated_cost_usd - cost_before, 0.0)
-        estimated += max(attempt_actual - reserve, 0.0)
+        settled = bool(
+            completed_usage and completed_usage[0] > 0 and completed_usage[1] > 0
+            and active.get("event_count_before") is not None
+            and active.get("total_tokens_before") is not None
+            and usage.event_count - active["event_count_before"] == completed_usage[0]
+            and usage.total_tokens - active["total_tokens_before"] == completed_usage[1]
+            and attempt_actual > 0
+        )
+        estimated += (attempt_actual - reserve) if settled else max(attempt_actual - reserve, 0.0)
         history = list(updated.get("cost_attempts") or [])[-49:]
         history.append(
             {
                 **active,
                 "actual_cost_usd": round(attempt_actual, 8),
+                "settled_from_complete_usage": settled,
                 "reconciled_at": datetime.now(timezone.utc).isoformat(),
             }
         )
@@ -687,6 +793,7 @@ async def _reconcile_job_usage(
     job: CurriculumGenerationJob,
     *,
     checkpoints: dict[str, Any] | None = None,
+    completed_usage: tuple[int, int] | None = None,
 ) -> tuple[dict[str, Any], Any]:
     """Reconcile the durable reserve ledger with all job-tagged usage events."""
 
@@ -695,6 +802,7 @@ async def _reconcile_job_usage(
         job,
         usage=usage,
         checkpoints=checkpoints,
+        completed_usage=completed_usage,
     )
     return updated, usage
 
@@ -706,6 +814,8 @@ def _reserve_job_attempt(
     stage: str,
     reserve_usd: float,
     actual_cost_before_usd: float,
+    event_count_before: int | None = None,
+    total_tokens_before: int | None = None,
 ) -> dict[str, Any]:
     """Charge a conservative attempt reserve before any provider call."""
 
@@ -717,6 +827,8 @@ def _reserve_job_attempt(
         "stage": stage,
         "reserve_usd": round(reserve_usd, 8),
         "actual_cost_before_usd": round(actual_cost_before_usd, 8),
+        "event_count_before": event_count_before,
+        "total_tokens_before": total_tokens_before,
         "reserved_at": datetime.now(timezone.utc).isoformat(),
     }
     job.checkpoints_json = updated
@@ -979,6 +1091,8 @@ async def _seed_pilot(
                         "prerequisites": list(definition.prerequisites),
                         "estimated_minutes": definition.estimated_minutes,
                         "artifact_type": "applied_project",
+                        "in_app_practice_required": True,
+                        "feedback_capabilities": ["deterministic_numbers", "deterministic_choices", "rubric_based_text_review", "revision", "transfer"],
                         "taxonomy_version": PILOT_TAXONOMY_VERSION,
                     },
                 },
@@ -1390,6 +1504,19 @@ async def _curriculum_control_tick_async(
                     ),
                 )
                 .order_by(
+                    # Drain work already in flight before starting new work.
+                    # Dispatch is capped per tick, so without this a backlog of
+                    # fresh source_research jobs with higher skill priority
+                    # permanently starves the one job sitting at writing -- the
+                    # pipeline starts endlessly and finishes nothing.
+                    case(
+                        (
+                            CurriculumGenerationJob.stage
+                            == GenerationStage.SOURCE_RESEARCH,
+                            1,
+                        ),
+                        else_=0,
+                    ).asc(),
                     CurriculumGenerationJob.priority.desc(),
                     CurriculumGenerationJob.created_at.asc(),
                 )
@@ -1548,6 +1675,31 @@ def _comparison_corpus_texts(
     ]
 
 
+async def _persist_research_progress(
+    *, job_id: str, lease_owner: str, progress: dict[str, Any]
+) -> None:
+    """Save paid research substages only while this worker still owns the job."""
+    now = datetime.now(timezone.utc)
+    async with async_session_maker() as db:
+        job = await db.get(CurriculumGenerationJob, job_id, with_for_update=True)
+        if (
+            job is None
+            or job.state != GenerationState.RUNNING
+            or job.stage != GenerationStage.SOURCE_RESEARCH
+            or job.lease_owner != lease_owner
+            or job.lease_expires_at is None
+            or job.lease_expires_at <= now
+        ):
+            raise RuntimeError("research checkpoint lease is no longer owned")
+        job.checkpoints_json = {
+            **dict(job.checkpoints_json or {}),
+            "research_progress": progress,
+        }
+        job.heartbeat_at = now
+        job.lease_expires_at = now + timedelta(seconds=max(settings.curriculum_lease_seconds, 60))
+        await db.commit()
+
+
 async def _run_stage(
     *,
     stage: PipelineStage,
@@ -1556,6 +1708,7 @@ async def _run_stage(
     repair_attempts: int,
     module_id: str | None,
     job_id: str,
+    save_research_progress: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
 ) -> StageResult:
     target = _module_target(job_input)
     research_tier = configured_tier(
@@ -1587,6 +1740,18 @@ async def _run_stage(
             usage = {"model": "deterministic_approved_seed", "total_tokens": 0}
         else:
             research_usage: list[dict[str, Any]] = []
+            recovery_record = checkpoints.get("research_verification_recovery")
+            recovery_route = None
+            if recovery_record is not None:
+                if not isinstance(recovery_record, dict) or recovery_record.get("hash") != sha256_json(recovery_record.get("route")):
+                    raise ValueError("research recovery route checkpoint hash mismatch")
+                recovery_route = recovery_record["route"]
+            curation_record = checkpoints.get("research_curation_recovery")
+            curation_route = None
+            if curation_record is not None:
+                if not isinstance(curation_record, dict) or curation_record.get("hash") != sha256_json(curation_record.get("route")):
+                    raise ValueError("research curation recovery route checkpoint hash mismatch")
+                curation_route = curation_record["route"]
             manifest = await build_research_manifest(
                 module_target=target,
                 research_tier=research_tier,
@@ -1594,6 +1759,10 @@ async def _run_stage(
                 verification_tier=review_tier,
                 telemetry_metadata=telemetry_metadata,
                 usage_sink=research_usage,
+                progress=checkpoints.get("research_progress"),
+                save_progress=save_research_progress,
+                verification_recovery=recovery_route,
+                **({"curation_recovery": curation_route} if curation_route else {}),
             )
             usage = {
                 f"call_{index}": item
@@ -1610,7 +1779,12 @@ async def _run_stage(
             model_usage={"model": "deterministic", "total_tokens": 0},
         )
 
-    manifest = _checkpoint_model(checkpoints, "source_manifest", ResearchManifest)
+    manifest = _checkpoint_model(
+        checkpoints,
+        "source_manifest",
+        ResearchManifest,
+        context=_manifest_context(job_input),
+    )
     if stage == PipelineStage.TECHNIQUE_DESIGN:
         generated = await generate_technique_plan(
             module_target=target,
@@ -1635,6 +1809,7 @@ async def _run_stage(
             technique_plan=plan,
             tier=writing_tier,
             telemetry_metadata=telemetry_metadata,
+            **({"contract_feedback": checkpoints["outline_contract_feedback"]} if checkpoints.get("outline_contract_feedback") else {}),
         )
         outline = CurriculumOutline.model_validate(generated.value)
         return StageResult(
@@ -1644,7 +1819,14 @@ async def _run_stage(
 
     outline = _checkpoint_model(checkpoints, "outline", CurriculumOutline)
     if stage == PipelineStage.WRITING:
-        if repair_attempts > 0:
+        recheck = checkpoints.get("draft_gate_recheck")
+        if recheck is not None:
+            if not isinstance(recheck, dict) or recheck.get("draft_hash") != sha256_json(checkpoints.get("draft")):
+                raise ValueError("draft recheck checkpoint hash mismatch")
+            draft = _checkpoint_model(checkpoints, "draft", CanonicalModuleDraft)
+            generated = None
+            writer_provenance = _rechecked_writer_provenance(checkpoints, recheck)
+        elif repair_attempts > 0:
             draft = _checkpoint_model(checkpoints, "draft", CanonicalModuleDraft)
             issues = checkpoints.get("repair_issues")
             if not isinstance(issues, list) or not issues:
@@ -1669,7 +1851,9 @@ async def _run_stage(
                 tier=writing_tier,
                 telemetry_metadata=telemetry_metadata,
             )
-        draft = CanonicalModuleDraft.model_validate(generated.value)
+        if generated is not None:
+            draft = CanonicalModuleDraft.model_validate(generated.value)
+        writer_usage = (_model_usage(generated) if generated is not None else {})
         deterministic = deterministic_draft_gate(
             draft=draft,
             manifest=manifest,
@@ -1685,7 +1869,7 @@ async def _run_stage(
                     "draft": draft.model_dump(mode="json"),
                     "reviews": {},
                 },
-                model_usage=_model_usage(generated),
+                model_usage=writer_usage,
                 passed=False,
                 issues=tuple(
                     issue.model_dump(mode="json") for issue in deterministic.issues
@@ -1712,7 +1896,7 @@ async def _run_stage(
                 "reviews": {"structure": structure.model_dump(mode="json")},
             },
             model_usage={
-                "writer": _model_usage(generated),
+                **({"writer": writer_usage} if writer_usage else {"reused_draft_hash": recheck["draft_hash"], "writer_provenance": writer_provenance}),
                 "structure_reviewer": _model_usage(reviewed),
             },
             passed=structure.passed,
@@ -1813,6 +1997,10 @@ def _retryable_error(exc: Exception, stage: PipelineStage) -> bool:
         # existing bounded job-attempt and cost-budget fences instead of making
         # a resumable stage terminal after its first response.
         "invalid json in response",
+        # A gateway stream can fail after successful discovery/curation. The
+        # durable substage checkpoint now allows a bounded verification retry
+        # without charging for the completed research again.
+        "openlux request failed (apierror; finish=missing)",
     )
     if any(marker in text for marker in transient_markers):
         return True
@@ -1841,7 +2029,39 @@ async def _record_stage_failure(
             return {"status": "ignored", "job_id": job_id}
         await _reconcile_job_usage(db, job)
         job.attempts = min(job.attempts + 1, job.max_attempts)
+        checkpoints = dict(job.checkpoints_json or {})
+        policy = checkpoints.get("generation_recovery_policy") or {}
+        recovery_eligible = (
+            stage not in {PipelineStage.SOURCE_RESEARCH, PipelineStage.TAXONOMY, PipelineStage.PUBLISH}
+            and any(str(error).startswith(f"OpenLux request failed ({kind};") for kind in (
+                "TimeoutError", "APITimeoutError", "APIConnectionError", "ConnectionError",
+                "RateLimitError", "InternalServerError", "APIError", "JSONDecodeError", "ValueError",
+            ))
+            and policy.get("provider") == "gemini"
+            and policy.get("model") == settings.gemini_quality_model
+            and policy.get("allowed_after") == "openlux_failure"
+            and bool(settings.gemini_api_key)
+            and job.attempts < job.max_attempts
+        )
+        if recovery_eligible:
+            routes = dict(checkpoints.get("generation_recovery_routes") or {})
+            route = {"provider": "gemini", "model": settings.gemini_quality_model,
+                     "from_provider": "openlux", "reason": str(error)[:1000],
+                     "failed_stage": stage.value, "recorded_at": now.isoformat()}
+            routes.setdefault(stage.value, {"route": route, "hash": sha256_json(route)})
+            job.checkpoints_json = {**checkpoints, "generation_recovery_routes": routes}
         retryable = _retryable_error(error, stage) and job.attempts < job.max_attempts
+        outline_repair = (
+            stage == PipelineStage.OUTLINE and isinstance(error, ValueError)
+            and str(error).startswith("outline ")
+            and job.attempts < job.max_attempts
+        )
+        if outline_repair:
+            job.checkpoints_json = {
+                **(job.checkpoints_json or {}),
+                "outline_contract_feedback": str(error)[:2000],
+            }
+        retryable = retryable or recovery_eligible or outline_repair
         job.state = GenerationState.RETRY_WAIT if retryable else GenerationState.FAILED
         job.next_attempt_at = (
             now + timedelta(seconds=retry_delay_seconds(job.attempts))
@@ -2083,6 +2303,12 @@ async def _process_curriculum_job_async(
             and input_json.get("approved_source_manifest") is not None
             else curriculum_stage_reserve_usd(stage.value)
         )
+        if stage == PipelineStage.SOURCE_RESEARCH and checkpoints.get("research_verification_recovery"):
+            stage_reserve = max(stage_reserve, 0.50)
+        if stage == PipelineStage.SOURCE_RESEARCH and checkpoints.get("research_curation_recovery"):
+            stage_reserve = max(stage_reserve, 0.75)
+        if (checkpoints.get("generation_recovery_routes") or {}).get(stage.value):
+            stage_reserve = max(stage_reserve, 1.0 if stage == PipelineStage.WRITING and not checkpoints.get("draft_gate_recheck") else 0.50)
         job_limit = (
             float(job.budget_limit_usd) if job.budget_limit_usd is not None else None
         )
@@ -2127,6 +2353,8 @@ async def _process_curriculum_job_async(
             stage=stage.value,
             reserve_usd=stage_reserve,
             actual_cost_before_usd=authoritative_usage.estimated_cost_usd,
+            event_count_before=authoritative_usage.event_count,
+            total_tokens_before=authoritative_usage.total_tokens,
         )
         job.heartbeat_at = datetime.now(timezone.utc)
         job.lease_expires_at = datetime.now(timezone.utc) + timedelta(
@@ -2156,14 +2384,27 @@ async def _process_curriculum_job_async(
             prompt_version=PROMPT_VERSION,
             inputs=dependencies,
         )
-        result = await _run_stage(
-            stage=stage,
-            job_input=input_json,
-            checkpoints=stage_checkpoints,
-            repair_attempts=repair_attempts,
-            module_id=module_id,
-            job_id=job_id,
-        )
+        async def save_research_progress(progress: dict[str, Any]) -> None:
+            await _persist_research_progress(
+                job_id=job_id, lease_owner=owner, progress=progress,
+            )
+
+        recovery_record = (stage_checkpoints.get("generation_recovery_routes") or {}).get(stage.value)
+        recovery_route = None
+        if recovery_record is not None:
+            if not isinstance(recovery_record, dict) or recovery_record.get("hash") != sha256_json(recovery_record.get("route")):
+                raise ValueError("generation recovery route checkpoint hash mismatch")
+            recovery_route = recovery_record["route"]
+        with curriculum_recovery_route(recovery_route):
+            result = await _run_stage(
+                stage=stage,
+                job_input=input_json,
+                checkpoints=stage_checkpoints,
+                repair_attempts=repair_attempts,
+                module_id=module_id,
+                job_id=job_id,
+                save_research_progress=save_research_progress,
+            )
     except Exception as exc:
         logger.exception("[CURRICULUM] Job %s stage %s failed", job_id, stage.value)
         return await _record_stage_failure(
@@ -2188,6 +2429,8 @@ async def _process_curriculum_job_async(
             model_usage=result.model_usage,
             completed_at=now,
         )
+        if stage == PipelineStage.WRITING:
+            updated.pop("draft_gate_recheck", None)
         if not result.passed:
             updated["repair_issues"] = list(result.issues)
             transition = transition_after_gate_failure(
@@ -2227,6 +2470,9 @@ async def _process_curriculum_job_async(
             db,
             job,
             checkpoints=updated,
+            completed_usage=(
+                _complete_recovery_usage(result.model_usage)
+            ),
         )
         job.lease_owner = None
         job.lease_expires_at = None
@@ -2341,6 +2587,13 @@ async def _revoke_canonical_module_version_async(
     }
 
 
+async def _replace_skill_prerequisites(db, skill, prerequisites) -> None:
+    # Collection assignment reads the old relationship to track changes. Load it
+    # explicitly: an implicit lazy SELECT cannot run in the async attribute setter.
+    await db.refresh(skill, attribute_names=["prerequisites"])
+    skill.prerequisites = prerequisites
+
+
 async def _publish_curriculum_job(
     db,
     job: CurriculumGenerationJob,
@@ -2361,7 +2614,12 @@ async def _publish_curriculum_job(
 
     checkpoints = dict(job.checkpoints_json or {})
     draft = _checkpoint_model(checkpoints, "draft", CanonicalModuleDraft)
-    manifest = _checkpoint_model(checkpoints, "source_manifest", ResearchManifest)
+    manifest = _checkpoint_model(
+        checkpoints,
+        "source_manifest",
+        ResearchManifest,
+        context=_manifest_context(dict(job.input_json or {})),
+    )
     plan = _checkpoint_model(checkpoints, "technique_plan", TechniquePlan)
     reviews_map = checkpoints.get("reviews")
     if not isinstance(reviews_map, dict):
@@ -2468,7 +2726,7 @@ async def _publish_curriculum_job(
         (
             writing_usage.get("writer", {}).get("model")
             if isinstance(writing_usage.get("writer"), dict)
-            else writing_usage.get("model")
+            else writing_usage.get("writer_provenance") or writing_usage.get("model")
         )
         or "unknown"
     )
@@ -2515,6 +2773,7 @@ async def _publish_curriculum_job(
         "publication_corpus_manifest": publication_corpus["versions"],
         "publication_corpus_hash": publication_corpus["corpus_hash"],
         "spacing_follow_up_days": plan.spacing_follow_up_days,
+        **({"editorial_revision": checkpoints["editorial_revision"]} if checkpoints.get("editorial_revision") else {}),
     }
     version = CanonicalModuleVersion(
         module_id=module.id,
@@ -2549,6 +2808,10 @@ async def _publish_curriculum_job(
                 }
             ),
         }
+        if draft.session_workbooks:
+            workbook = draft.session_workbooks[position - 1].workbook.model_dump(mode="json")
+            session_content["practice_workbook"] = workbook
+            session_content["practice_workbook_hash"] = sha256_json(workbook)
         assessment_blocks = [
             block.model_dump(mode="json")
             for block in session_blocks
@@ -2648,7 +2911,7 @@ async def _publish_curriculum_job(
         )
         if {item.key for item in prerequisites} != set(prerequisite_keys):
             raise ValueError("publish target references an unknown prerequisite skill")
-        skill.prerequisites = prerequisites
+        await _replace_skill_prerequisites(db, skill, prerequisites)
         skill.status = CurriculumSkillStatus.ACTIVE
     job.module_version_id = version.id
     job.target_version_number = version.version_number

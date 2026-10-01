@@ -29,6 +29,10 @@ class BookGuideUnavailableException implements Exception {
 /// API access for the generated 12-week plan: current plan, generation-job
 /// polling, and per-item lesson details.
 class PlanRepository {
+  Future<void> saveDailyReflection(String itemId, String text) async {
+    await _dioClient.put('/plan-items/$itemId/reflection', data: {'text': text});
+  }
+
   PlanRepository({required DioClient dioClient}) : _dioClient = dioClient;
 
   static const _bookGuidePollDelays = <Duration>[

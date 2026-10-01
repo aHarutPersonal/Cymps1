@@ -124,7 +124,9 @@ async def test_future_week_enriches_placeholders_in_place(monkeypatch) -> None:
     monkeypatch.setattr(
         plan_tasks,
         "_load_session_context",
-        AsyncMock(return_value={}),
+        AsyncMock(return_value={"learner_baseline": {"practice_evidence": [
+            {"lesson": "Earlier case", "status": "completed_with_support", "activities": []}
+        ]}}),
     )
     generate_week = AsyncMock(return_value=expanded)
     monkeypatch.setattr(
@@ -150,6 +152,7 @@ async def test_future_week_enriches_placeholders_in_place(monkeypatch) -> None:
         "Run the approved drill and save its evidence."
     )
     assert generate_week.await_count == 1
+    assert "completed_with_support" in generate_week.await_args.kwargs["session_context"]
     # Lease commit, read-transaction release before the model call, and final
     # in-place update commit.
     assert db.commit.await_count == 3

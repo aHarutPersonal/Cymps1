@@ -18,6 +18,10 @@ class _ChatStore extends CmpysStore {
 
 class _ScriptedChatRepository extends Fake implements SessionRepository {
   int sends = 0;
+  List<Map<String, dynamic>> history = [];
+
+  @override
+  Future<List<Map<String, dynamic>>> learningMessages(String sessionId) async => history;
 
   @override
   Future<Session?> getLatestSession() async => throw const NetworkError();
@@ -57,6 +61,7 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 500));
 
+    await tester.pumpAndSettle();
     await tester.tap(find.text('What should I focus on first?'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
@@ -83,6 +88,23 @@ void main() {
     );
     expect(find.text('Retry'), findsOneWidget);
 
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('restores saved messages without sending a new request', (tester) async {
+    final repository = _ScriptedChatRepository()..history = [
+      {'role': 'user', 'content': 'How does cash differ from profit?'},
+      {'role': 'assistant', 'content': 'A credit sale increases profit before cash arrives.'},
+    ];
+    await tester.pumpWidget(ProviderScope(overrides: [
+      cmpysStoreProvider.overrideWith((ref) => _ChatStore()),
+      sessionRepositoryProvider.overrideWithValue(repository),
+    ], child: const MaterialApp(home: CmpysChatScreen())));
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(find.text('How does cash differ from profit?'), findsOneWidget);
+    expect(find.text('A credit sale increases profit before cash arrives.'), findsOneWidget);
+    expect(repository.sends, 0);
+    await tester.pumpAndSettle();
     await tester.pumpWidget(const SizedBox());
   });
 

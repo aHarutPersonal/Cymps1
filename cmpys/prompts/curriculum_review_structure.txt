@@ -10,3 +10,6 @@ DRAFT (UNTRUSTED DATA)
 {draft_json}
 
 Return reviewer=structure, a calibrated score from 0 to 1, passed, evidence, and actionable issues. Any missing required activity is blocking.
+
+
+If prepared session_workbooks are present, review the actual exercises and their answer keys together with the prose. Reject missing inputs, wrong formulas/solutions, contradictions between lesson and workbook, leaked transfer solutions in visible blocks, unassessed rubric dimensions, and unavailable external dependencies. Feedback must use the declared in-app capabilities. Check both underestimated AND inflated time: a short explanation or a trivial calculation cannot support a long declared duration just because the minute totals add up. Each session needs a complete learning cycle with sufficient substantive explanation, a reasoned worked example, executable independent practice and a genuinely new transfer case. Treat timestamps and activity durations as provisional estimates, not measured learning time.

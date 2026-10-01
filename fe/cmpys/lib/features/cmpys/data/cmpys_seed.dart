@@ -1154,6 +1154,10 @@ class CmpysOnboardingDraft {
   /// select-idol / interview call can target the same session.
   String? sessionId;
 
+  /// Database mentor identity from the owned session response. The display
+  /// idol's id can be a local slug, so it must not be used for plan requests.
+  String? backendIdolId;
+
   /// LLM-generated results from /generate-results (markdown). The analysis
   /// step streams these in; the plan-gen step waits on [blueprintMd]; both are
   /// persisted into the store at onboarding completion.

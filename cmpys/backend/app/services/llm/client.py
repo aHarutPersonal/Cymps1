@@ -376,6 +376,12 @@ class FallbackLLMClient(BaseLLMClient):
     _circuit_open_until: dict[tuple[str, str], float] = {}
     _circuit_last_error: dict[tuple[str, str], str] = {}
     _circuit_cooldown_seconds = 300.0
+    # A rate limit is not an outage. Free/shared-pool routes (e.g. OpenRouter's
+    # stealth models) answer 429 with "retry shortly" and recover in seconds, so
+    # holding the circuit open for the full outage cooldown converts a momentary
+    # limit into minutes of paid-fallback traffic. Genuine transport failures keep
+    # the long cooldown.
+    _rate_limit_cooldown_seconds = 20.0
 
     def __init__(self, primary: BaseLLMClient, fallback: BaseLLMClient):
         self.primary = primary
@@ -389,6 +395,17 @@ class FallbackLLMClient(BaseLLMClient):
                 or self.primary.__class__.__name__
             ),
             str(getattr(self.primary, "base_url", None) or "default"),
+        )
+
+    @staticmethod
+    def _is_rate_limit_failure(error: str | None) -> bool:
+        """Throttling that the provider itself says will clear shortly."""
+        if not error:
+            return False
+        normalized = error.casefold()
+        return any(
+            marker in normalized
+            for marker in ("rate limit", "rate-limited", "429", "quota")
         )
 
     @staticmethod
@@ -476,9 +493,12 @@ class FallbackLLMClient(BaseLLMClient):
                     provider=getattr(self.primary, "provider_name", None),
                 )
             if self._is_operational_failure(primary_response.error):
-                self._circuit_open_until[circuit_key] = (
-                    time.monotonic() + self._circuit_cooldown_seconds
+                cooldown = (
+                    self._rate_limit_cooldown_seconds
+                    if self._is_rate_limit_failure(primary_response.error)
+                    else self._circuit_cooldown_seconds
                 )
+                self._circuit_open_until[circuit_key] = time.monotonic() + cooldown
                 self._circuit_last_error[circuit_key] = str(primary_response.error)
             elif not primary_response.error:
                 self._circuit_open_until.pop(circuit_key, None)
@@ -566,7 +586,7 @@ class OpenAILLMClient(BaseLLMClient):
         loop = asyncio.get_running_loop()
         # Yunwu already has an independent Gemini fallback. Retrying the same
         # timed-out gateway first can multiply a 60-second user-facing wait.
-        max_retries = 0 if self.provider_name == "yunwu" else 2
+        max_retries = 0 if self.provider_name in {"yunwu", "openlux", "zai"} else 2
         cache_key = (
             self.base_url or "https://api.openai.com/v1",
             api_key,
@@ -1431,7 +1451,7 @@ def get_llm_client(
     """
     Factory function to get the configured LLM client.
 
-    Uses LLM_PROVIDER env var: 'dummy', 'openai', 'gemini', or 'yunwu'
+    Uses LLM_PROVIDER: dummy, openai, gemini, yunwu, openlux, or openrouter.
 
     Args:
         timeout: Request timeout in seconds (default: 60s)
@@ -1451,6 +1471,33 @@ def get_llm_client(
     if resolved_tier not in {"fast", "balanced", "quality"}:
         raise ValueError(f"Unknown LLM tier: {resolved_tier}")
 
+    if provider == "zai":
+        from app.services.llm.zai import ZaiLLMClient
+
+        return ZaiLLMClient(
+            model={"fast": settings.zai_fast_model, "balanced": settings.zai_model,
+                   "quality": settings.zai_quality_model}[resolved_tier],
+            api_key=settings.zai_api_key, base_url=settings.zai_base_url,
+            timeout=timeout, max_tokens=max_tokens,
+            thinking_level=thinking_level or ("low" if resolved_tier == "fast" else "high"),
+            temperature=temperature,
+        )
+    if provider == "openlux":
+        from app.services.llm.openlux import OpenLuxLLMClient
+
+        return OpenLuxLLMClient(
+            model={
+                "fast": settings.openlux_fast_model,
+                "balanced": settings.openlux_model,
+                "quality": settings.openlux_quality_model,
+            }[resolved_tier],
+            api_key=settings.openlux_api_key,
+            base_url=settings.openlux_base_url,
+            timeout=timeout,
+            max_tokens=max_tokens,
+            thinking_level=thinking_level or ("high" if resolved_tier == "quality" else "low"),
+            temperature=temperature,
+        )
     if provider == "gemini":
         if not settings.gemini_api_key:
             logger.warning(
@@ -1497,6 +1544,64 @@ def get_llm_client(
             max_tokens=max_tokens,
             temperature=temperature,
         )
+    elif provider == "openrouter":
+        # OpenRouter speaks the OpenAI wire format, so it reuses OpenAILLMClient
+        # exactly as the Yunwu gateway does. Gemini remains the fallback because
+        # grounded discovery is Gemini-native regardless of this setting.
+        fallback_client = None
+        if (
+            allow_fallback
+            and settings.openrouter_fallback_enabled
+            and settings.gemini_api_key
+        ):
+            fallback_model = {
+                "fast": settings.gemini_fast_model,
+                "balanced": settings.gemini_model,
+                "quality": settings.gemini_quality_model,
+            }[resolved_tier]
+            fallback_thinking_level, fallback_thinking_budget = resolve_thinking_config(
+                model=fallback_model,
+                tier=resolved_tier,
+                thinking_level=thinking_level,
+                thinking_budget=thinking_budget,
+            )
+            fallback_client = GeminiLLMClient(
+                model=fallback_model,
+                timeout=timeout,
+                max_tokens=max_tokens,
+                thinking_budget=fallback_thinking_budget,
+                thinking_level=fallback_thinking_level,
+                temperature=temperature,
+            )
+
+        if not settings.openrouter_api_key:
+            if fallback_client is not None:
+                logger.warning(
+                    "LLM_PROVIDER=openrouter but OPENROUTER_API_KEY not set; using Gemini."
+                )
+                return fallback_client
+            logger.warning(
+                "Neither OPENROUTER_API_KEY nor Gemini fallback is configured."
+            )
+            return DummyLLMClient()
+
+        model = {
+            "fast": settings.openrouter_fast_model,
+            "balanced": settings.openrouter_model,
+            "quality": settings.openrouter_quality_model,
+        }[resolved_tier]
+        primary_client = OpenAILLMClient(
+            model=model,
+            api_key=settings.openrouter_api_key,
+            base_url=settings.openrouter_base_url,
+            provider_name="openrouter",
+            timeout=timeout,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        if fallback_client is not None:
+            return FallbackLLMClient(primary_client, fallback_client)
+        return primary_client
     elif provider == "yunwu":
         fallback_client = None
         if (

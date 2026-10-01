@@ -17,7 +17,10 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a password against its hash."""
     password_bytes = plain_password.encode("utf-8")
     hashed_bytes = hashed_password.encode("utf-8")
-    return bcrypt.checkpw(password_bytes, hashed_bytes)
+    try:
+        return bcrypt.checkpw(password_bytes, hashed_bytes)
+    except ValueError:
+        return False
 
 
 def create_access_token(subject: str, expires_delta: timedelta | None = None) -> str:
@@ -29,7 +32,7 @@ def create_access_token(subject: str, expires_delta: timedelta | None = None) ->
             minutes=settings.jwt_access_token_expire_minutes
         )
 
-    to_encode = {"sub": subject, "exp": expire}
+    to_encode = {"sub": subject, "exp": expire, "type": "access"}
     encoded_jwt = jwt.encode(
         to_encode, settings.jwt_secret_key, algorithm=settings.jwt_algorithm
     )

@@ -21,8 +21,6 @@ from app.models.ingest_job import IngestKind
 
 logger = logging.getLogger(__name__)
 
-GOOGLE_BOOKS_URL = "https://www.googleapis.com/books/v1/volumes"
-
 # Broad non-fiction shelves keep the autonomous catalog useful for CMPYS while
 # still producing variety. A time-bucket seed chooses both shelf and page.
 BOOK_TOPICS = (
@@ -284,19 +282,10 @@ async def discover_google_books_candidates(
         "startIndex": start_index,
     }
 
-    async def _request(active_client: httpx.AsyncClient) -> dict[str, Any]:
-        response = await active_client.get(GOOGLE_BOOKS_URL, params=params)
-        response.raise_for_status()
-        return response.json()
+    from app.services.google_books import search_volumes
 
-    try:
-        if client is None:
-            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as owned:
-                data = await _request(owned)
-        else:
-            data = await _request(client)
-    except (httpx.HTTPError, ValueError, TypeError) as exc:
-        logger.warning("[CATALOG_DISCOVERY] Google Books lookup failed: %s", exc)
+    data = await search_volumes(params, client=client)
+    if data is None:
         return _curated_book_candidates(bucket=bucket, limit=limit)
 
     parsed = [

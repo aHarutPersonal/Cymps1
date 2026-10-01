@@ -14,7 +14,7 @@ abstract final class AppTheme {
       brightness: Brightness.light,
       scaffoldBackgroundColor: AppColors.brandBg,
       colorScheme: const ColorScheme.light(
-        primary: AppColors.brandAccent,
+        primary: AppColors.green2,
         onPrimary: Colors.white,
         secondary: AppColors.emerald,
         onSecondary: AppColors.charcoal,
@@ -149,7 +149,7 @@ abstract final class AppTheme {
   static ElevatedButtonThemeData get _elevatedButtonTheme {
     return ElevatedButtonThemeData(
       style: ElevatedButton.styleFrom(
-        backgroundColor: AppColors.brandAccent,
+        backgroundColor: AppColors.green2,
         foregroundColor: Colors.white,
         elevation: 0,
         padding: const EdgeInsets.symmetric(
@@ -170,7 +170,7 @@ abstract final class AppTheme {
   static TextButtonThemeData get _textButtonTheme {
     return TextButtonThemeData(
       style: TextButton.styleFrom(
-        foregroundColor: AppColors.brandAccent,
+        foregroundColor: AppColors.green2,
         padding: const EdgeInsets.symmetric(
           horizontal: AppSpacing.s16,
           vertical: AppSpacing.s12,
@@ -203,7 +203,7 @@ abstract final class AppTheme {
       style: IconButton.styleFrom(
         foregroundColor: AppColors.textPrimary,
         highlightColor: AppColors.brandAccent.withValues(alpha: 0.08),
-        minimumSize: const Size(40, 40),
+        minimumSize: const Size(48, 48),
         shape: const CircleBorder(),
       ),
     );
@@ -277,7 +277,7 @@ abstract final class AppTheme {
       }),
       cancelButtonStyle: TextButton.styleFrom(foregroundColor: AppColors.peach),
       confirmButtonStyle: TextButton.styleFrom(
-        foregroundColor: AppColors.brandAccent,
+        foregroundColor: AppColors.green2,
       ),
     );
   }

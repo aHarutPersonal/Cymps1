@@ -17,6 +17,8 @@ from typing import Any
 INTERVIEW_ANSWER_KEYS = (
     "achievement_inventory",
     "current_capability",
+    "foundation_check",
+    "application_check",
     "weekly_hours",
     "target_outcome",
     "constraints_resources",
@@ -25,16 +27,17 @@ INTERVIEW_ANSWER_KEYS = (
 
 INTERVIEW_ANSWER_KEY_INSTRUCTIONS = {
     "achievement_inventory": (
-        "Ask for the 1-3 most meaningful achievements relevant to the goal. "
-        "For each, ask what the person personally did, the concrete artifact "
-        "or result, an approximate date or recency, and any honest metric or "
-        "evidence. Make clear that 'none yet' is a valid answer."
+        "Ask what they have already completed toward their goal. Invite 1-3 "
+        "examples with their role, result and rough recency in one short helper "
+        "sentence. Explicitly accept 'none yet'. Do not interrogate every detail."
     ),
     "current_capability": (
-        "Ask what they can reliably do today without step-by-step help, what "
-        "they have studied or practiced, and where they still get stuck. Seek "
-        "specific work samples or situations rather than a self-rating alone."
+        "Ask what they can reliably do without step-by-step help. Invite one "
+        "recent example and a sticking point, without a checklist. No experience "
+        "is valid; studying a subject, resources or a job title do not establish mastery."
     ),
+    "foundation_check": "Use the server-provided foundation diagnostic; never infer general mastery from it.",
+    "application_check": "Use the server-provided application diagnostic; unknown is a valid result.",
     "weekly_hours": (
         "Ask only for the number of focused hours they can honestly protect "
         "every week for the next twelve weeks. Do not combine this with a "
@@ -45,14 +48,42 @@ INTERVIEW_ANSWER_KEY_INSTRUCTIONS = {
         "weeks and the observable evidence that would prove success."
     ),
     "constraints_resources": (
-        "Ask which real constraints could block the plan and which resources "
-        "already help: money, tools, access, environment, health or schedule. "
-        "Treat 'none' as useful information."
+        "Ask for the biggest practical limit the plan should work around. "
+        "Briefly invite existing tools or support. Treat 'none' as useful information."
     ),
     "learning_habits_support": (
-        "Ask what learning format, practice rhythm, feedback, accountability, "
-        "mentor, peer, or collaborator setup has actually worked or failed for "
-        "them. The answer should help choose how the plan teaches and checks work."
+        "Ask what has helped them learn consistently in the past. Briefly invite "
+        "one useful format, routine or feedback partner. A new habit is not "
+        "established evidence; 'nothing yet' is valid."
+    ),
+}
+
+# These are complete coverage questions, not fabricated mentor replies or
+# inferred learner evidence. They keep intake usable during provider outages.
+INTERVIEW_QUESTION_FALLBACKS = {
+    "achievement_inventory": (
+        "What have you completed that relates to your goal? Share 1–3 examples "
+        "with your role, a result, and roughly when it happened. ‘None yet’ is fine."
+    ),
+    "current_capability": (
+        "What can you already do toward your goal without step-by-step help? "
+        "One recent example is enough; mention where you get stuck."
+    ),
+    "weekly_hours": (
+        "How many focused hours can you protect each week for the next twelve weeks? "
+        "Choose a realistic number between 3 and 60."
+    ),
+    "target_outcome": (
+        "What single result would make these twelve weeks worthwhile? "
+        "Describe something you could show or measure."
+    ),
+    "constraints_resources": (
+        "What is the biggest practical limit your plan should work around? "
+        "Mention any tools, access, or support you already have."
+    ),
+    "learning_habits_support": (
+        "What has helped you learn consistently in the past? "
+        "A useful format, routine, or feedback partner is enough. ‘Nothing yet’ is fine."
     ),
 }
 
@@ -165,6 +196,45 @@ def parse_weekly_hours_answer(
     are rejected; legacy values retain historical clamping behavior.
     """
     normalized = " ".join(str(text or "").split())
+    # Normalize Russian answers to the same strict integer parser used by the
+    # picker. Do not guess ranges or round a fractional commitment.
+    russian_numbers = {
+        "ноль": "zero",
+        "один": "one",
+        "одна": "one",
+        "два": "two",
+        "две": "two",
+        "три": "three",
+        "четыре": "four",
+        "пять": "five",
+        "шесть": "six",
+        "семь": "seven",
+        "восемь": "eight",
+        "девять": "nine",
+        "десять": "ten",
+        "одиннадцать": "eleven",
+        "двенадцать": "twelve",
+        "тринадцать": "thirteen",
+        "четырнадцать": "fourteen",
+        "пятнадцать": "fifteen",
+        "шестнадцать": "sixteen",
+        "семнадцать": "seventeen",
+        "восемнадцать": "eighteen",
+        "девятнадцать": "nineteen",
+        "двадцать": "twenty",
+        "тридцать": "thirty",
+        "сорок": "forty",
+        "пятьдесят": "fifty",
+        "шестьдесят": "sixty",
+    }
+    normalized = re.sub(
+        r"[а-яё]+",
+        lambda match: russian_numbers.get(match[0].casefold(), match[0]),
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    normalized = re.sub(r"\bчас(?:а|ов)?\b", "hours", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bнедел[яюиь]\b", "week", normalized, flags=re.IGNORECASE)
     lowered = normalized.casefold()
     if not normalized:
         return None
@@ -172,6 +242,15 @@ def parse_weekly_hours_answer(
         "week" not in lowered or _LEGACY_HOURS_RE.search(normalized) is None
     ):
         return None
+
+    # A leading explicit weekly total may be followed by a day-by-day schedule.
+    # Keep the original answer in the interview; parse only that unambiguous total.
+    if not clamp_legacy:
+        scheduled = re.match(r"^(\d{1,2})\s+hours?\s+(?:per|a|each)\s+week\b(.*)$", normalized, re.IGNORECASE)
+        if scheduled and re.search(r"\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", scheduled[2], re.IGNORECASE):
+            if not re.search(r"\b(?:week|or|instead|maybe|possibly)\b", scheduled[2], re.IGNORECASE):
+                total = int(scheduled[1])
+                return total if 3 <= total <= 60 else None
 
     range_matches = list(_RANGE_RE.finditer(normalized))
 
@@ -295,6 +374,7 @@ def collect_interview_answers(messages: list[Any]) -> dict[str, list[dict[str, s
                 "answer": content,
                 "source_message_id": message_id,
                 "question_id": str(getattr(question, "id", "") or ""),
+                "diagnostic_id": str(metadata.get("diagnostic_id") or ""),
             }
         )
     return answers
@@ -324,6 +404,7 @@ def build_interview_plan_inputs(
     messages: list[Any],
     *,
     session_goal: str | None = None,
+    require_diagnostics: bool = False,
 ) -> dict[str, Any]:
     """Build the versioned learner baseline consumed by later planning."""
     answers = collect_interview_answers(messages)
@@ -343,7 +424,7 @@ def build_interview_plan_inputs(
     )
     normalized_achievement = (
         re.sub(
-            r"[^a-z0-9]+",
+            r"[^\w]+",
             " ",
             achievement_text.casefold().replace("'", "").replace("’", ""),
         ).strip()
@@ -351,6 +432,10 @@ def build_interview_plan_inputs(
         else ""
     )
     none_yet = normalized_achievement in {
+        "нет",
+        "пока нет",
+        "ничего",
+        "пока ничего",
         "none",
         "none yet",
         "nothing",
@@ -367,8 +452,22 @@ def build_interview_plan_inputs(
         "no relevant achievements yet",
     }
 
+    from app.services.intake_diagnostics import (
+        diagnostic_summary,
+        answer_evidence_status,
+        reports_no_achievements,
+    )
+    none_yet = none_yet or reports_no_achievements(achievement_text or "")
+
+    evidence_status = {
+        key: answer_evidence_status(record["answer"] if record else "")
+        for key, record in latest.items()
+    }
     return {
-        "version": 1,
+        "version": 2,
+        "answer_evidence_status": evidence_status,
+        "skill_diagnostics": diagnostic_summary(answers),
+        "placement_policy": "Use demonstrated skills only within the checked scope. Unknown is not beginner. Resources are not knowledge. Validate uncertain prerequisites in the first lesson.",
         "goal": session_goal,
         "weekly_capacity_hours": weekly_hours,
         "weekly_capacity_confirmed": weekly_hours is not None,
@@ -377,15 +476,26 @@ def build_interview_plan_inputs(
             if none_yet
             else "self_reported"
             if achievement_text
+            and evidence_status["achievement_inventory"] == "self_reported"
             else "missing"
         ),
         "achievement_inventory": latest["achievement_inventory"],
         "current_capability": latest["current_capability"],
+        "foundation_check": latest["foundation_check"],
+        "application_check": latest["application_check"],
         "target_outcome": latest["target_outcome"],
         "constraints_resources": latest["constraints_resources"],
         "learning_habits_support": latest["learning_habits_support"],
         "answered_keys": [key for key in INTERVIEW_ANSWER_KEYS if latest[key]],
-        "missing_keys": missing_interview_answer_keys(messages),
+        "missing_keys": [
+            key
+            for key in missing_interview_answer_keys(messages)
+            if require_diagnostics
+            or key not in {"foundation_check", "application_check"}
+            or any(
+                answers[check] for check in ("foundation_check", "application_check")
+            )
+        ],
     }
 
 
@@ -397,6 +507,10 @@ def provider_interview_plan_inputs(plan_inputs: dict[str, Any]) -> dict[str, Any
     """
     result: dict[str, Any] = {
         "version": plan_inputs.get("version", 1),
+        "answer_evidence_status": plan_inputs.get("answer_evidence_status", {}),
+        "skill_diagnostics": plan_inputs.get("skill_diagnostics", []),
+        "placement_policy": plan_inputs.get("placement_policy"),
+        "practice_evidence": plan_inputs.get("practice_evidence", []),
         "north_star_goal": plan_inputs.get("goal"),
         "weekly_capacity_hours": plan_inputs.get("weekly_capacity_hours"),
         "weekly_capacity_confirmed": bool(plan_inputs.get("weekly_capacity_confirmed")),
@@ -431,3 +545,32 @@ def extract_legacy_weekly_hours(messages: list[Any]) -> int | None:
         if parsed is not None:
             found = parsed
     return found
+
+
+def compact_placement_context(baseline: dict[str, Any]) -> str:
+    """Keep placement evidence ahead of long narrative context in lesson prompts."""
+    import json
+
+    if not baseline:
+        return (
+            "Learner placement: not assessed; check prerequisites in the first lesson."
+        )
+    facts = {
+        "answer_evidence_status": baseline.get("answer_evidence_status", {}),
+        "skill_diagnostics": [
+            {key: item.get(key) for key in ("skill_id", "status", "scope")}
+            for item in (baseline.get("skill_diagnostics") or [])[:2]
+            if isinstance(item, dict)
+        ],
+    }
+    from app.services.practice.evidence import compact_practice_evidence
+    facts["recent_practice"] = compact_practice_evidence(baseline.get("practice_evidence") or [])
+    for key in ("current_capability", "target_outcome", "constraints_resources"):
+        record = baseline.get(key)
+        facts[key] = (
+            str(record.get("answer") or "")[:450] if isinstance(record, dict) else None
+        )
+    return (
+        "Learner placement (self-report and narrow checks, not general mastery):\n"
+        + json.dumps(facts, ensure_ascii=False)
+    )

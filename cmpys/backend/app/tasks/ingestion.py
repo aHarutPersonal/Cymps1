@@ -15,7 +15,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
 
 from app.core.celery import celery_app
@@ -244,6 +244,23 @@ async def _run_ingestion_async(job_id: str) -> dict:
     logger.info(f"[INGESTION] Starting async pipeline for job_id={job_id}")
     
     async with async_session_maker() as db:
+        # Broker deliveries and manual start requests can race. Claim before
+        # reading sources or making paid model calls, once per database job.
+        claim = await db.execute(
+            update(IdolImportJob)
+            .where(
+                IdolImportJob.id == job_id,
+                IdolImportJob.status.in_(["queued", "pending"]),
+            )
+            .values(status="running", step="collecting_sources", progress_percent=5)
+        )
+        await db.commit()
+        if claim.rowcount != 1:
+            existing = await db.get(IdolImportJob, job_id)
+            if existing is None:
+                return {"error": "Job not found"}
+            return {"status": "skipped", "job_status": existing.status}
+
         # Fetch job with idol and external IDs
         logger.debug("[INGESTION] Fetching job from database...")
         stmt = (

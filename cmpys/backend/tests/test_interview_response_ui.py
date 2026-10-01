@@ -249,7 +249,7 @@ def _thread() -> ChatThread:
     return thread
 
 
-def _thread_ready_for_weekly_question() -> ChatThread:
+def _thread_ready_for_weekly_question(*, include_diagnostics=True) -> ChatThread:
     thread = ChatThread(id="thread-1", user_id="user-1", idol_id="idol-1")
     thread.messages = [
         ChatMessage(
@@ -274,6 +274,24 @@ def _thread_ready_for_weekly_question() -> ChatThread:
             response_ui_json={"answer_key": "current_capability"},
         ),
     ]
+    if include_diagnostics:
+        for key in ("foundation_check", "application_check"):
+            thread.messages[0:0] = [
+                ChatMessage(
+                    id=f"q-{key}",
+                    thread_id="thread-1",
+                    role=MessageRole.ASSISTANT,
+                    content="Diagnostic",
+                    response_ui_json={"answer_key": key},
+                ),
+                ChatMessage(
+                    id=f"a-{key}",
+                    thread_id="thread-1",
+                    role=MessageRole.USER,
+                    content="I do not know",
+                    reply_to_message_id=f"q-{key}",
+                ),
+            ]
     return thread
 
 
@@ -283,6 +301,8 @@ def _thread_awaiting_final_answer() -> ChatThread:
     keys = [
         "achievement_inventory",
         "current_capability",
+        "foundation_check",
+        "application_check",
         "weekly_hours",
         "target_outcome",
         "constraints_resources",
@@ -291,6 +311,8 @@ def _thread_awaiting_final_answer() -> ChatThread:
     answers = [
         "I shipped a prototype used by five people.",
         "I can build and test a small app without a tutorial.",
+        "I do not know yet",
+        "I do not know yet",
         "8 hours per week",
         "A published product with ten active users.",
         "A laptop and test users help; weekday time is the constraint.",
@@ -386,7 +408,7 @@ def _patch_session(monkeypatch, session: IntakeSession) -> None:
 
 
 @pytest.mark.asyncio
-async def test_interview_persists_and_emits_response_ui_without_leaking_trailer(
+async def test_weekly_capacity_question_and_control_do_not_require_provider(
     monkeypatch,
 ):
     session = _session(turn=2)
@@ -399,9 +421,8 @@ async def test_interview_persists_and_emits_response_ui_without_leaking_trailer(
     )
 
     async def stream(*_args, **_kwargs):
-        yield "How many hours can you "
-        yield "honestly commit?\n<CMPYS_RESP"
-        yield "ONSE_UI>" + trailer.split(">", 1)[1]
+        raise AssertionError("The exact weekly-capacity question needs no model")
+        yield trailer  # pragma: no cover
 
     _patch_session(monkeypatch, session)
     monkeypatch.setattr(sessions, "interview_stream", stream)
@@ -428,9 +449,9 @@ async def test_interview_persists_and_emits_response_ui_without_leaking_trailer(
         if isinstance(item, ChatMessage) and item.role == MessageRole.ASSISTANT
     )
 
-    assert visible == "How many hours can you honestly commit?\n"
+    assert visible == sessions.INTERVIEW_QUESTION_FALLBACKS["weekly_hours"]
     assert "CMPYS_RESPONSE_UI" not in visible
-    assert assistant.content == "How many hours can you honestly commit?"
+    assert assistant.content == visible
     assert assistant.response_ui_json["kind"] == "number"
     assert assistant.response_ui_json["answer_key"] == "weekly_hours"
     assert assistant.response_ui_json["min"] == 3
@@ -479,14 +500,15 @@ async def test_transitioning_turn_omits_response_ui(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_complete_profile_does_not_transition_without_closing_marker(
+async def test_complete_profile_transitions_without_a_provider_closing_marker(
     monkeypatch,
 ):
     session = _session(turn=6)
     db = _Database(_thread_awaiting_final_answer())
 
     async def stream(*_args, **_kwargs):
-        yield "Good. What would you like to clarify next?"
+        raise AssertionError("Complete evidence is sufficient to finish intake")
+        yield  # pragma: no cover
 
     _patch_session(monkeypatch, session)
     monkeypatch.setattr(sessions, "interview_stream", stream)
@@ -503,9 +525,9 @@ async def test_complete_profile_does_not_transition_without_closing_marker(
     )
     events = await _body_events(response)
 
-    assert any(event["type"] == "error" for event in events)
-    assert not any(event["type"] == "done" for event in events)
-    assert session.phase == SessionPhase.INTERVIEW
+    assert not any(event["type"] == "error" for event in events)
+    assert any(event["type"] == "done" for event in events)
+    assert session.phase == SessionPhase.COMPARISON
     assert not any(
         isinstance(item, ChatMessage)
         and item.role == MessageRole.ASSISTANT
@@ -554,7 +576,7 @@ async def test_marker_after_accidental_trailer_still_transitions_and_never_leaks
         if isinstance(item, ChatMessage) and item.role == MessageRole.ASSISTANT
     )
 
-    assert visible == "I have enough to build your diagnosis."
+    assert visible == sessions.INTERVIEW_CLOSING_TEXT
     assert done["phase_transition"] is True
     assert "response_ui" not in done
     assert assistant.content == visible
@@ -583,3 +605,41 @@ async def test_invalid_custom_weekly_hours_replays_the_same_question(monkeypatch
 
     assert exc_info.value.status_code == 409
     assert exc_info.value.detail["code"] == "invalid_interview_answer"
+
+
+@pytest.mark.asyncio
+async def test_fixed_diagnostic_stream_persists_exact_case_without_model_call(
+    monkeypatch,
+):
+    from app.services.intake_diagnostics import BANK
+
+    session = _session(turn=2)
+    session.user_goal = "Learn geometry"
+    db = _Database(_thread_ready_for_weekly_question(include_diagnostics=False))
+    _patch_session(monkeypatch, session)
+
+    async def forbidden_stream(**kwargs):
+        raise AssertionError("A fixed diagnostic must not call the model")
+        yield ""
+
+    monkeypatch.setattr(sessions, "interview_stream", forbidden_stream)
+    response = await sessions.interview(
+        session_id=session.id,
+        data=InterviewMessageRequest(content="I can calculate areas."),
+        db=db,
+        current_user=User(
+            id="user-1", email="learner@example.com", password_hash="hash"
+        ),
+    )
+    events = await _body_events(response)
+    done = next(event for event in events if event["type"] == "done")
+    assert done["response_ui"]["diagnostic_id"] == BANK["geometry"][0].id
+    assert done["response_ui"]["answer_key"] == "foundation_check"
+    assert not done["phase_transition"]
+    assistant = next(
+        item
+        for item in db.added
+        if isinstance(item, ChatMessage) and item.role == MessageRole.ASSISTANT
+    )
+    assert assistant.content == BANK["geometry"][0].question
+    assert assistant.response_ui_json == done["response_ui"]

@@ -166,7 +166,7 @@ void main() {
     );
 
     expect(find.byKey(const Key('comparison-scores-failed')), findsOneWidget);
-    expect(find.text('We couldn’t finish your comparison.'), findsOneWidget);
+    expect(find.text('Your dimension assessment couldn’t finish.'), findsOneWidget);
     expect(find.byType(CircularProgressIndicator), findsNothing);
   });
 
@@ -183,13 +183,13 @@ void main() {
       find.byKey(const Key('comparison-overall-insufficient')),
       findsOneWidget,
     );
-    expect(find.text('No honest overall score yet'), findsOneWidget);
+    expect(find.text('Your starting point, skill by skill'), findsOneWidget);
     expect(find.text('Different basis'), findsOneWidget);
     expect(find.textContaining('No numeric score'), findsOneWidget);
     expect(find.textContaining('% of'), findsNothing);
   });
 
-  testWidgets('complete evidence shows a point gap instead of a ratio', (
+  testWidgets('complete evidence does not become an overall ability gap', (
     tester,
   ) async {
     await _pumpCompare(
@@ -198,9 +198,38 @@ void main() {
       scores: _estimatedScores(),
     );
 
-    expect(find.text('−50'), findsOneWidget);
-    expect(find.text('point gap'), findsOneWidget);
-    expect(find.textContaining('not a percentage'), findsOneWidget);
+    expect(find.text('−50'), findsNothing);
+    expect(find.text('point gap'), findsNothing);
+    expect(find.text('Your starting point, skill by skill'), findsOneWidget);
+    expect(
+      find.textContaining('not one overall ability score'),
+      findsOneWidget,
+    );
     expect(find.textContaining('% of'), findsNothing);
+  });
+  testWidgets('diagnostic uncertainty is visible without an ability score', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await _pumpCompare(
+      tester,
+      (ref) async => ComparisonScoresSyncResult.ready,
+      scores: {
+        ..._insufficientScores(),
+        'learner_diagnostics': [
+          {'skill_id': 'profit_vs_cash', 'status': 'correct_on_item'},
+          {'skill_id': 'maintenance_vs_growth', 'status': 'unknown'},
+        ],
+      },
+    );
+    expect(find.byKey(const Key('comparison-skill-checks')), findsOneWidget);
+    expect(find.text('Profit and cash: Correct on this check'), findsOneWidget);
+    expect(
+      find.text('Maintenance and growth spending: Not established yet'),
+      findsOneWidget,
+    );
+    expect(find.text('point gap'), findsNothing);
+    expect(tester.takeException(), isNull);
   });
 }

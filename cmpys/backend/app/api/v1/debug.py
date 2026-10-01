@@ -37,6 +37,8 @@ async def get_llm_status() -> LLMStatusResponse:
     the API key. Use this to verify your configuration.
     """
     models = {
+        "zai": settings.zai_model,
+        "openlux": settings.openlux_model,
         "openai": settings.openai_model,
         "gemini": settings.gemini_model,
         "yunwu": settings.yunwu_model,

@@ -1,0 +1,28 @@
+# Managed by infra/https/setup.sh. HTTP stays available during client migration.
+# Empty keys skip accounting for CORS preflight and other non-POST requests.
+map $request_method $cmpys_auth_limit_key {
+    default "";
+    POST $binary_remote_addr;
+}
+limit_req_zone $cmpys_auth_limit_key zone=cmpys_auth_credentials:1m rate=10r/m;
+limit_req_zone $cmpys_auth_limit_key zone=cmpys_auth_refresh:1m rate=60r/m;
+
+server {
+    listen 80 default_server;
+    server_name __PUBLIC_IP__;
+    server_tokens off;
+
+__PROXY_DIRECTIVES__
+
+__AUTH_LOCATIONS__
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/cmpys-acme;
+        default_type text/plain;
+        try_files $uri =404;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+    }
+}

@@ -96,6 +96,10 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
   bool _autoGenerateTried = false;
   Timer? _poll;
   String? _pollingJobId;
+  String? _failedJobId;
+  int _pollFailures = 0;
+  int _missingPlanChecks = 0;
+  int _refreshRevision = 0;
 
   static const _pollInterval = Duration(seconds: 3);
 
@@ -113,6 +117,7 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
 
   /// Re-fetch the plan; falls back to job polling while it's generating.
   Future<void> refresh() async {
+    final revision = ++_refreshRevision;
     _cancelPolling();
     try {
       final jobId = _readJobId();
@@ -135,7 +140,7 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
           onError: (Object e) => planError = e,
         ),
       ]);
-      if (!mounted) return;
+      if (!mounted || revision != _refreshRevision) return;
 
       // Check the stored job FIRST. A running job means a newer plan is being
       // generated — we must not show the stale old plan during that window.
@@ -180,6 +185,8 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
           wantIdol.isEmpty ||
           (planIdol != null && planIdol.isNotEmpty && planIdol == wantIdol);
       if (fetched != null && fetched.items.isNotEmpty && matchesActiveIdol) {
+        _failedJobId = null;
+        _missingPlanChecks = 0;
         state = CurrentPlanState(
           status: CurrentPlanStatus.ready,
           plan: fetched,
@@ -187,6 +194,22 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
         return;
       }
       if (jobId != null && jobId.isNotEmpty) {
+        if (job?.isFailed == true) {
+          _failedJobId = jobId;
+          state = CurrentPlanState(
+            status: CurrentPlanStatus.failed,
+            error: job?.errorMessage ?? 'Your plan paused. Retry to continue.',
+          );
+          return;
+        }
+        if (job?.isCompleted == true && ++_missingPlanChecks >= 3) {
+          _failedJobId = jobId;
+          state = const CurrentPlanState(
+            status: CurrentPlanStatus.failed,
+            error: 'Your plan could not be loaded. Retry to reconnect it.',
+          );
+          return;
+        }
         // Job completed but plan not yet visible — keep polling briefly.
         state = const CurrentPlanState(status: CurrentPlanStatus.generating);
         _startPolling(jobId);
@@ -194,7 +217,7 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
         await _tryAutoGenerate();
       }
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || revision != _refreshRevision) return;
       debugPrint('📋 Plan fetch failed: $e');
       state = CurrentPlanState(
         status: CurrentPlanStatus.failed,
@@ -236,8 +259,31 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
   /// retry must be allowed to enqueue again after a transient API/broker
   /// failure.
   Future<void> retry() async {
+    if (state.status == CurrentPlanStatus.loading) return;
     _autoGenerateTried = false;
+    _missingPlanChecks = 0;
+    _pollFailures = 0;
     state = const CurrentPlanState(status: CurrentPlanStatus.loading);
+    if (_failedJobId != null && _requestGeneration != null) {
+      _cancelPolling();
+      try {
+        final jobId = await _requestGeneration();
+        if (!mounted) return;
+        if (jobId != null && jobId.isNotEmpty) {
+          _failedJobId = null;
+          state = const CurrentPlanState(status: CurrentPlanStatus.generating);
+          _startPolling(jobId);
+          return;
+        }
+      } catch (_) {
+        if (!mounted) return;
+        state = const CurrentPlanState(
+          status: CurrentPlanStatus.failed,
+          error: 'Couldn’t restart your plan. Please try again.',
+        );
+        return;
+      }
+    }
     await refresh();
   }
 
@@ -251,6 +297,9 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
       return;
     }
     state = const CurrentPlanState(status: CurrentPlanStatus.generating);
+    _refreshRevision++;
+    _failedJobId = null;
+    _missingPlanChecks = 0;
     _startPolling(jobId);
   }
 
@@ -279,11 +328,13 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
     _checking = true;
     try {
       final job = await _repo.getJobStatus(jobId);
-      if (!mounted) return;
+      if (!mounted || _pollingJobId != jobId) return;
+      _pollFailures = 0;
       if (job.isCompleted) {
         _cancelPolling();
         await refresh();
       } else if (job.isFailed) {
+        _failedJobId = jobId;
         _cancelPolling();
         state = CurrentPlanState(
           status: CurrentPlanStatus.failed,
@@ -300,13 +351,20 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
         if (next != state) state = next;
       }
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || _pollingJobId != jobId) return;
       debugPrint('📋 Plan job poll failed: $e');
       // A stale job id (backend reset) 404s forever — stop and show "no
       // plan". Transient network errors just wait for the next tick.
       if (e is ApiError && e.statusCode == 404) {
         _cancelPolling();
+        _failedJobId = jobId;
         state = const CurrentPlanState(status: CurrentPlanStatus.empty);
+      } else if (++_pollFailures >= 3) {
+        _cancelPolling();
+        state = const CurrentPlanState(
+          status: CurrentPlanStatus.failed,
+          error: 'We can’t check your plan. Check your connection and retry.',
+        );
       }
     } finally {
       _checking = false;
