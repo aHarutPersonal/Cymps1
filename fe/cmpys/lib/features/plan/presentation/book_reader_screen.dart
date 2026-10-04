@@ -439,7 +439,7 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
       BookNarrationAlignmentGranularity.phrase => ' Phrase synchronized.',
       BookNarrationAlignmentGranularity.sentence => ' Sentence synchronized.',
       BookNarrationAlignmentGranularity.none =>
-        _narrationProvider.isEmpty ? '' : ' Text tracking is estimated.',
+        _narrationProvider.isEmpty ? '' : ' Text highlighting unavailable.',
     };
     return '$status$passage Voice: $_narrationVoiceLabel. '
         '$_narrationDisclosure.$provider$model$tracking';
@@ -669,7 +669,7 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
       _narrationWordStart = wordStart;
       _narrationWordEnd = wordEnd;
       // Pause/resume repeats the current word instead of dropping a syllable.
-      _narrationResumeOffset = wordStart;
+      if (wordEnd > wordStart) _narrationResumeOffset = wordStart;
     });
     _scheduleNarrationCheckpoint();
     _syncRemoteDock();
@@ -731,8 +731,9 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
           _narrationFinished = false;
           _narrationWordStart = event.highlightStart ?? 0;
           _narrationWordEnd = event.highlightEnd ?? 0;
-          if (event.highlightStart != null) {
-            _narrationResumeOffset = event.highlightStart!;
+          if ((event.resumeCharacterOffset ?? event.highlightStart)
+              case final offset?) {
+            _narrationResumeOffset = offset;
           }
           break;
         case BookNarrationPlaybackPhase.paused:
@@ -740,8 +741,9 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
           _narrationPlaying = false;
           _narrationWordStart = 0;
           _narrationWordEnd = 0;
-          if (event.highlightStart != null) {
-            _narrationResumeOffset = event.highlightStart!;
+          if ((event.resumeCharacterOffset ?? event.highlightStart)
+              case final offset?) {
+            _narrationResumeOffset = offset;
           }
           break;
         case BookNarrationPlaybackPhase.completed:
@@ -1379,7 +1381,7 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
 
   void _onChapterChanged(int index) {
     final narrationControlled = _narrationChangingChapter;
-    final continuePlaying = _narrationPlaying;
+    final continuePlaying = _narrationPlaying || _narrationPreparing;
     setState(() {
       _chapterIndex = index;
       _selectedQuote = null;
@@ -1389,25 +1391,31 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
         _narrationWordStart = 0;
         _narrationWordEnd = 0;
         _narrationPlaying = false;
+        _narrationPreparing = false;
         _narrationFinished = false;
       }
     });
     if (!narrationControlled && _narrationVisible) {
-      _narrationRun++;
+      final run = ++_narrationRun;
       _narrationTrackSessionId = null;
       _narrationTrackReady = false;
-      unawaited(_restartNarrationAfterChapterChange(continuePlaying));
+      unawaited(_restartNarrationAfterChapterChange(continuePlaying, run));
       _scheduleNarrationCheckpoint();
     }
     _syncRemoteDock();
     unawaited(_persistProgress());
   }
 
-  Future<void> _restartNarrationAfterChapterChange(bool continuePlaying) async {
+  Future<void> _restartNarrationAfterChapterChange(
+    bool continuePlaying,
+    int run,
+  ) async {
     try {
       await _narrator.stop();
     } catch (_) {}
-    if (continuePlaying && mounted) unawaited(_playNarration());
+    if (continuePlaying && mounted && run == _narrationRun) {
+      unawaited(_playNarration());
+    }
   }
 
   Future<void> _toggleSaved() async {
@@ -2176,7 +2184,11 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
                     _narrationDocuments[index].blocks.isNotEmpty)
                   _NarratedBookMarkdown(
                     document: _narrationDocuments[index],
-                    activeSegmentIndex: index == _chapterIndex
+                    activeSegmentIndex:
+                        index == _chapterIndex &&
+                            _narrationPlaying &&
+                            !_narrationPreparing &&
+                            _narrationWordEnd > _narrationWordStart
                         ? _narrationSegmentIndex
                         : null,
                     activeWordStart: _narrationWordStart,

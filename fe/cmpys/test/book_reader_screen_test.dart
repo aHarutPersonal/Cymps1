@@ -138,6 +138,7 @@ class _TrackContentResourcesRepository extends _FakeContentResourcesRepository {
       alignmentGranularity: timed
           ? BookNarrationAlignmentGranularity.word
           : BookNarrationAlignmentGranularity.none,
+      alignmentSource: timed ? 'transcription' : 'none',
       isAiGenerated: true,
     );
   }
@@ -312,6 +313,15 @@ bool _containsLiveWordHighlight(InlineSpan span) {
   return false;
 }
 
+bool _containsNarrationHighlight(InlineSpan span) {
+  if (span.style?.backgroundColor == AppColors.green ||
+      span.style?.backgroundColor == AppColors.greenSoft) {
+    return true;
+  }
+  return span is TextSpan &&
+      (span.children?.any(_containsNarrationHighlight) ?? false);
+}
+
 void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
@@ -325,6 +335,7 @@ void main() {
     bool audioOnly = false,
     bool singleChapter = false,
     BookNarrationCheckpointStore? checkpointStore,
+    Completer<BookNarrationAudio>? initialPreparation,
   }) async {
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;
@@ -333,7 +344,8 @@ void main() {
     final player = FakeBookAudioPlayer();
     final repository = _TrackContentResourcesRepository()
       ..audioOnly = audioOnly
-      ..singleChapter = singleChapter;
+      ..singleChapter = singleChapter
+      ..pendingPreparation = initialPreparation;
     final narrator = ExpressiveBookNarrator(
       repository: repository,
       resourceId: 'book-1',
@@ -357,7 +369,11 @@ void main() {
     );
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('book-listen-button')));
-    await tester.pumpAndSettle();
+    if (initialPreparation == null) {
+      await tester.pumpAndSettle();
+    } else {
+      await tester.pump();
+    }
     return (player: player, repository: repository);
   }
 
@@ -373,6 +389,68 @@ void main() {
           .properties
           .value ??
       '';
+
+  testWidgets(
+    'transcription gaps clear both the word and sentence background',
+    (tester) async {
+      final setup = await mountProductionTrack(tester);
+      final highlights = find.byWidgetPredicate(
+        (widget) =>
+            widget is RichText && _containsNarrationHighlight(widget.text),
+      );
+      expect(highlights, findsWidgets);
+      await setup.player.seek(const Duration(milliseconds: 1200));
+      await tester.pump();
+      expect(highlights, findsNothing);
+      await setup.player.seek(const Duration(milliseconds: 300));
+      await tester.pump();
+      expect(highlights, findsWidgets);
+      await tester.tap(find.byKey(const Key('book-narration-play-pause')));
+      await tester.pumpAndSettle();
+      expect(highlights, findsNothing);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    },
+  );
+
+  testWidgets(
+    'changing chapter during preparation starts the selected chapter',
+    (tester) async {
+      final pending = Completer<BookNarrationAudio>();
+      final setup = await mountProductionTrack(
+        tester,
+        initialPreparation: pending,
+      );
+      expect(narrationSemantics(tester), contains('Preparing narration.'));
+      setup.repository.pendingPreparation = null;
+      tester.widget<PageView>(find.byType(PageView)).controller!.jumpToPage(1);
+      await tester.pump();
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.pumpAndSettle();
+      expect(setup.player.playing, isTrue);
+      expect(
+        narrationSemantics(tester),
+        isNot(contains('Preparing narration.')),
+      );
+      final loads = setup.player.loads;
+      pending.complete(
+        BookNarrationAudio(
+          audioUri: Uri.parse('https://audio.example.test/obsolete.wav'),
+          style: 'expressive',
+          voice: 'voice',
+          duration: const Duration(seconds: 20),
+          alignment: const [],
+          isAiGenerated: true,
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(setup.player.loads, loads);
+      expect(setup.player.playing, isTrue);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    },
+  );
 
   testWidgets(
     'native playback failure exits buffering and Play reloads the expressive track',
@@ -421,7 +499,7 @@ void main() {
       expect(narrationSemantics(tester), isNot(contains('Word synchronized.')));
       expect(
         narrationSemantics(tester),
-        contains('Text tracking is estimated.'),
+        contains('Text highlighting unavailable.'),
       );
       expect(find.byTooltip('Pause narration'), findsOneWidget);
       expect(tester.takeException(), isNull);
@@ -430,21 +508,24 @@ void main() {
     },
   );
 
-  testWidgets('Gemini audio-only WAV plays with estimated text tracking', (
+  testWidgets('Gemini audio-only WAV plays without guessing text highlights', (
     tester,
   ) async {
     final setup = await mountProductionTrack(tester, audioOnly: true);
     expect(find.byTooltip('Pause narration'), findsOneWidget);
-    expect(narrationSemantics(tester), contains('Text tracking is estimated.'));
+    expect(
+      narrationSemantics(tester),
+      contains('Text highlighting unavailable.'),
+    );
     expect(narrationSemantics(tester), isNot(contains('synchronized')));
     await setup.player.seek(const Duration(seconds: 5));
     await tester.pump();
     expect(
       find.byWidgetPredicate(
         (widget) =>
-            widget is RichText && _containsLiveWordHighlight(widget.text),
+            widget is RichText && _containsNarrationHighlight(widget.text),
       ),
-      findsWidgets,
+      findsNothing,
     );
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());

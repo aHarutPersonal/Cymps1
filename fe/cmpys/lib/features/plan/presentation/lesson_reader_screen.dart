@@ -142,7 +142,7 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
       return;
     }
     if (!_practicePassed) {
-      await _openPractice(finishOnPass: true);
+      await _openPractice();
       return;
     }
     setState(() => _completing = true);
@@ -168,7 +168,7 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
     }
   }
 
-  Future<void> _openPractice({bool finishOnPass = false}) async {
+  Future<void> _openPractice() async {
     final passed = await Navigator.of(context, rootNavigator: true).push<bool>(
       CmpysPageRoute<bool>(
         builder: (_) => LessonPracticeScreen(
@@ -183,7 +183,9 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
     );
     if (!mounted) return;
     setState(() => _practicePassed = passed == true);
-    if (_practicePassed && finishOnPass) await _finish();
+    // A true result only comes from the explicit "Finish lesson" action.
+    // Honor it from the toolbar as well as the reader's final page.
+    if (_practicePassed) await _finish();
   }
 
   Future<void> _next() async {

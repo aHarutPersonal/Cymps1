@@ -31,6 +31,98 @@ class _NarrationClient extends Fake implements DioClient {
 }
 
 void main() {
+  test(
+    'transcription keeps valid UTF-16 cues and skips malformed ranges',
+    () async {
+      final client = _NarrationClient()
+        ..responseData = {
+          'audioUrl': '/media/narration/existing.wav',
+          'durationMs': 2000,
+          'alignmentSource': 'transcription',
+          'alignmentGranularity': 'word',
+          'offsetEncoding': 'utf16',
+          'alignment': [
+            {'start': 7, 'end': 11, 'startMs': 1000, 'endMs': 1300},
+            null,
+            {'start': 0, 'end': 2, 'startMs': 'bad', 'endMs': 100},
+            {'start': 3, 'end': 6, 'startMs': 200, 'endMs': 500},
+            {'start': 7, 'end': 50, 'startMs': 700, 'endMs': 800},
+            {'start': 7, 'end': 11, 'startMs': -1, 'endMs': 100},
+            {'start': 7, 'end': 11, 'startMs': 1500, 'endMs': 2500},
+            {'start': 7, 'end': 11, 'startMs': double.nan, 'endMs': 1500},
+            {'start': 7.5, 'end': 11, 'startMs': 1500, 'endMs': 1600},
+            {'start': 7, 'end': 11, 'startMs': 1500, 'endMs': 1400},
+          ],
+        };
+      final audio = await ContentResourcesRepository(
+        dioClient: client,
+      ).prepareNarration('book', text: '💡 One word.', style: 'expressive');
+      expect(audio.alignmentSource, 'transcription');
+      expect(
+        audio.alignmentGranularity,
+        BookNarrationAlignmentGranularity.word,
+      );
+      expect(audio.alignment.map((cue) => cue.start), [3, 7]);
+      expect(audio.alignment.map((cue) => cue.startTime.inMilliseconds), [
+        200,
+        1000,
+      ]);
+      expect(audio.audioUri.path, '/media/narration/existing.wav');
+    },
+  );
+
+  test(
+    'overlapping cue groups are omitted rather than claiming an ambiguous word',
+    () async {
+      final client = _NarrationClient()
+        ..responseData = {
+          'audioUrl': '/media/narration/existing.wav',
+          'durationMs': 2000,
+          'alignmentSource': 'transcription',
+          'alignmentGranularity': 'word',
+          'offsetEncoding': 'utf16',
+          'alignment': [
+            {'start': 0, 'end': 3, 'startMs': 0, 'endMs': 1000},
+            {'start': 4, 'end': 7, 'startMs': 200, 'endMs': 400},
+            {'start': 8, 'end': 13, 'startMs': 500, 'endMs': 900},
+            {'start': 14, 'end': 18, 'startMs': 1200, 'endMs': 1800},
+          ],
+        };
+      final audio = await ContentResourcesRepository(dioClient: client)
+          .prepareNarration(
+            'book',
+            text: 'One two three four',
+            style: 'expressive',
+          );
+      expect(audio.alignment, hasLength(1));
+      expect(audio.alignment.single.start, 14);
+    },
+  );
+
+  test(
+    'invalid transcription remains playable without timing claims',
+    () async {
+      final client = _NarrationClient()
+        ..responseData = {
+          'audioUrl': '/media/narration/existing.wav',
+          'alignmentSource': 'transcription',
+          'alignmentGranularity': 'word',
+          'alignment': [
+            false,
+            {'start': 99, 'end': 100, 'startMs': 1, 'endMs': 2},
+          ],
+        };
+      final audio = await ContentResourcesRepository(
+        dioClient: client,
+      ).prepareNarration('book', text: 'One word.', style: 'expressive');
+      expect(audio.alignment, isEmpty);
+      expect(
+        audio.alignmentGranularity,
+        BookNarrationAlignmentGranularity.none,
+      );
+    },
+  );
+
   test('narration allows synthesis and timing passes to finish', () async {
     final client = _NarrationClient();
     final audio = await ContentResourcesRepository(dioClient: client)

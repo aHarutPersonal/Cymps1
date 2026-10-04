@@ -38,6 +38,130 @@ class _AudioRepository extends Fake implements ContentResourcesRepository {
 }
 
 void main() {
+  for (final timed in [true, false]) {
+    test(
+      'legacy expressive playback ${timed ? 'clears gaps' : 'does not estimate words'}',
+      () async {
+        final player = FakeBookAudioPlayer()..playGate = Completer<void>();
+        final repo = _AudioRepository();
+        if (timed) {
+          repo.preparedAudio = BookNarrationAudio(
+            audioUri: Uri.parse('https://audio.example.test/existing.wav'),
+            style: 'expressive',
+            voice: 'voice',
+            duration: const Duration(seconds: 1),
+            alignmentSource: 'transcription',
+            alignment: const [
+              BookNarrationCue(
+                start: 0,
+                end: 5,
+                startTime: Duration.zero,
+                endTime: Duration(milliseconds: 400),
+              ),
+              BookNarrationCue(
+                start: 6,
+                end: 14,
+                startTime: Duration(milliseconds: 700),
+                endTime: Duration(milliseconds: 900),
+              ),
+            ],
+            isAiGenerated: true,
+          );
+        }
+        final narrator = ExpressiveBookNarrator(
+          repository: repo,
+          resourceId: 'book',
+          audioPlayer: player,
+        );
+        addTearDown(() async {
+          if (!player.playGate!.isCompleted) player.playGate!.complete();
+          await narrator.dispose();
+        });
+        final progress = <(int, int)>[];
+        narrator.setProgressHandler(
+          (start, end, _) => progress.add((start, end)),
+        );
+        final speech = narrator.speak('First passage.');
+        await Future<void>.delayed(Duration.zero);
+        for (final position in [200, 500, 750, 950]) {
+          player.positions.add(Duration(milliseconds: position));
+        }
+        if (timed) {
+          expect(progress, [(0, 5), (0, 0), (6, 14), (0, 0)]);
+        } else {
+          expect(progress, isEmpty);
+        }
+        player.playGate!.complete();
+        await speech;
+      },
+    );
+  }
+
+  test(
+    'transcription shows only the active cue, including before and after gaps',
+    () async {
+      final player = FakeBookAudioPlayer();
+      final repo = _AudioRepository()
+        ..preparedAudio = BookNarrationAudio(
+          audioUri: Uri.parse('https://audio.example.test/existing.wav'),
+          style: 'expressive',
+          voice: 'voice',
+          duration: const Duration(seconds: 2),
+          alignmentSource: 'transcription',
+          alignmentGranularity: BookNarrationAlignmentGranularity.word,
+          alignment: const [
+            BookNarrationCue(
+              start: 0,
+              end: 5,
+              startTime: Duration(milliseconds: 200),
+              endTime: Duration(milliseconds: 400),
+            ),
+            BookNarrationCue(
+              start: 6,
+              end: 14,
+              startTime: Duration(milliseconds: 700),
+              endTime: Duration(milliseconds: 900),
+            ),
+          ],
+          isAiGenerated: true,
+        );
+      final narrator = ExpressiveBookNarrator(
+        repository: repo,
+        resourceId: 'book',
+        audioPlayer: player,
+      );
+      addTearDown(narrator.dispose);
+      final events = <BookNarrationTrackEvent>[];
+      narrator.setTrackHandler(events.add);
+      await narrator.loadTrack(
+        sessionId: 1,
+        chapters: [BookNarrationDocument.fromMarkdown('First passage.')],
+        initialChapterIndex: 0,
+        initialSegmentIndex: 0,
+      );
+      await narrator.playTrack();
+      for (final sample in [
+        (0, null),
+        (250, 0),
+        (400, null),
+        (650, null),
+        (750, 6),
+        (900, null),
+        (1500, null),
+      ]) {
+        player.position = Duration(milliseconds: sample.$1);
+        player.positions.add(player.position);
+        expect(
+          events.last.highlightStart,
+          sample.$2,
+          reason: 'position ${sample.$1}ms',
+        );
+        if (sample.$2 == null) expect(events.last.highlightEnd, isNull);
+      }
+      expect(events.last.audio!.alignmentSource, 'transcription');
+    },
+  );
+
   Future<void> flush() => Future<void>.delayed(Duration.zero);
   Future<void> load(ExpressiveBookNarrator narrator, {int session = 1}) =>
       narrator.loadTrack(
@@ -298,7 +422,11 @@ void main() {
         final paused = events.last;
         expect(paused.phase, BookNarrationPlaybackPhase.paused);
         expect(paused.segmentIndex, 1);
-        expect(paused.highlightStart, greaterThan(0));
+        expect(
+          timed ? paused.highlightStart : paused.resumeCharacterOffset,
+          greaterThan(0),
+        );
+        if (!timed) expect(paused.highlightStart, isNull);
         player.indexes.add(0);
         expect(events.last.segmentIndex, paused.segmentIndex);
         expect(events.last.highlightStart, paused.highlightStart);
@@ -399,4 +527,173 @@ void main() {
     expect(player.errors.hasListener, isFalse);
     expect(player.errors.isClosed, isTrue);
   });
+
+  test('clip ending during native append resumes the new clip', () async {
+    final player = FakeBookAudioPlayer();
+    final repo = _AudioRepository()..holdSecond = true;
+    final narrator = ExpressiveBookNarrator(
+      repository: repo,
+      resourceId: 'book',
+      audioPlayer: player,
+    );
+    addTearDown(narrator.dispose);
+    await load(narrator);
+    await narrator.playTrack();
+    final append = Completer<void>();
+    player.nextAddGate = append;
+    repo.lateChunk.complete(_audio('Second passage.'));
+    await flush();
+    expect(player.adds, 1);
+    player.emitState(ProcessingState.completed);
+    append.complete();
+    await flush();
+    expect(player.seeks, 1);
+    expect(player.plays, 2);
+    expect(player.processingState, ProcessingState.ready);
+  });
+
+  test(
+    'restoring a word loads directly at its timestamp without a second seek',
+    () async {
+      final player = FakeBookAudioPlayer();
+      final repo = _AudioRepository()
+        ..preparedAudio = BookNarrationAudio(
+          audioUri: Uri.parse('https://audio.example.test/resume.wav'),
+          style: 'expressive',
+          voice: 'voice',
+          duration: const Duration(seconds: 20),
+          alignment: const [
+            BookNarrationCue(
+              start: 0,
+              end: 5,
+              startTime: Duration.zero,
+              endTime: Duration(seconds: 4),
+            ),
+            BookNarrationCue(
+              start: 6,
+              end: 14,
+              startTime: Duration(seconds: 5),
+              endTime: Duration(seconds: 10),
+            ),
+          ],
+          isAiGenerated: true,
+        );
+      final narrator = ExpressiveBookNarrator(
+        repository: repo,
+        resourceId: 'book',
+        audioPlayer: player,
+      );
+      addTearDown(narrator.dispose);
+      await narrator.loadTrack(
+        sessionId: 1,
+        chapters: [BookNarrationDocument.fromMarkdown('First passage.')],
+        initialChapterIndex: 0,
+        initialSegmentIndex: 0,
+        initialCharacterOffset: 8,
+      );
+      expect(player.position, const Duration(seconds: 5));
+      expect(player.loadedInitialPosition, const Duration(seconds: 5));
+      expect(player.seeks, 0);
+    },
+  );
+
+  test(
+    'position ticks during a pending seek cannot highlight the target using the old clock',
+    () async {
+      final player = FakeBookAudioPlayer();
+      final narrator = ExpressiveBookNarrator(
+        repository: _AudioRepository(),
+        resourceId: 'book',
+        audioPlayer: player,
+      );
+      addTearDown(narrator.dispose);
+      final events = <BookNarrationTrackEvent>[];
+      narrator.setTrackHandler(events.add);
+      await load(narrator);
+      await narrator.playTrack();
+      await flush();
+      final gate = Completer<void>();
+      player.nextSeekGate = gate;
+      final seek = narrator.seekToSentence(chapterIndex: 0, segmentIndex: 1);
+      await flush();
+      player.position = const Duration(seconds: 18);
+      player.positions.add(player.position);
+      expect(events.last.highlightStart, isNull);
+      gate.complete();
+      await seek;
+      expect(events.last.segmentIndex, 1);
+      expect(events.last.highlightStart, isNull);
+      expect(events.last.resumeCharacterOffset, 0);
+    },
+  );
+
+  test(
+    'rapid seeks apply the latest target after the active native seek',
+    () async {
+      final player = FakeBookAudioPlayer();
+      final narrator = ExpressiveBookNarrator(
+        repository: _AudioRepository(),
+        resourceId: 'book',
+        audioPlayer: player,
+      );
+      addTearDown(narrator.dispose);
+      final events = <BookNarrationTrackEvent>[];
+      narrator.setTrackHandler(events.add);
+      await load(narrator);
+      await narrator.playTrack();
+      await flush();
+      final gate = Completer<void>();
+      player.nextSeekGate = gate;
+      final first = narrator.seekToSentence(chapterIndex: 0, segmentIndex: 1);
+      await flush();
+      final obsolete = narrator.seekToSentence(
+        chapterIndex: 0,
+        segmentIndex: 1,
+      );
+      final latest = narrator.seekToSentence(chapterIndex: 0, segmentIndex: 0);
+      await flush();
+      expect(player.seeks, 1);
+      await narrator.pauseTrack();
+      gate.complete();
+      await Future.wait([first, obsolete, latest]);
+      expect(player.seeks, 2);
+      expect(events.last.segmentIndex, 0);
+      expect(events.last.phase, BookNarrationPlaybackPhase.paused);
+      expect(player.playing, isFalse);
+    },
+  );
+
+  test(
+    'an append during a user seek cannot redirect playback to the next clip',
+    () async {
+      final player = FakeBookAudioPlayer();
+      final repo = _AudioRepository()..holdSecond = true;
+      final narrator = ExpressiveBookNarrator(
+        repository: repo,
+        resourceId: 'book',
+        audioPlayer: player,
+      );
+      addTearDown(narrator.dispose);
+      final events = <BookNarrationTrackEvent>[];
+      narrator.setTrackHandler(events.add);
+      await load(narrator);
+      await narrator.playTrack();
+      final gate = Completer<void>();
+      player.nextSeekGate = gate;
+      final seek = narrator.seekToSentence(chapterIndex: 0, segmentIndex: 0);
+      await flush();
+      player.emitState(ProcessingState.completed);
+      repo.lateChunk.complete(_audio('Second passage.'));
+      await flush();
+      expect(player.seeks, 1);
+      player.processingState = ProcessingState.ready;
+      gate.complete();
+      await seek;
+      expect(events.last.segmentIndex, 0);
+      await narrator.pauseTrack();
+      await narrator.playTrack();
+      expect(player.seeks, 1);
+      expect(events.last.segmentIndex, 0);
+    },
+  );
 }

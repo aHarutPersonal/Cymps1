@@ -100,6 +100,7 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
   int _pollFailures = 0;
   int _missingPlanChecks = 0;
   int _refreshRevision = 0;
+  int _pollRevision = 0;
 
   static const _pollInterval = Duration(seconds: 3);
 
@@ -110,6 +111,7 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
   }
 
   void _cancelPolling() {
+    _pollRevision++;
     _poll?.cancel();
     _poll = null;
     _pollingJobId = null;
@@ -212,9 +214,9 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
         }
         // Job completed but plan not yet visible — keep polling briefly.
         state = const CurrentPlanState(status: CurrentPlanStatus.generating);
-        _startPolling(jobId);
+        _startPolling(jobId, checkImmediately: job?.isCompleted != true);
       } else {
-        await _tryAutoGenerate();
+        await _tryAutoGenerate(revision);
       }
     } catch (e) {
       if (!mounted || revision != _refreshRevision) return;
@@ -229,7 +231,7 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
   /// No plan and no job id: if a completed onboarding session exists, enqueue
   /// generation ourselves so the user still ends up with an AI plan. Tried at
   /// most once per controller lifetime.
-  Future<void> _tryAutoGenerate() async {
+  Future<void> _tryAutoGenerate(int revision) async {
     if (_autoGenerateTried || _requestGeneration == null) {
       if (state.status != CurrentPlanStatus.generating) {
         state = const CurrentPlanState(status: CurrentPlanStatus.empty);
@@ -239,7 +241,7 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
     _autoGenerateTried = true;
     try {
       final jobId = await _requestGeneration();
-      if (!mounted) return;
+      if (!mounted || revision != _refreshRevision) return;
       if (jobId != null && jobId.isNotEmpty) {
         debugPrint('📋 Auto-enqueued plan generation: $jobId');
         state = const CurrentPlanState(status: CurrentPlanStatus.generating);
@@ -249,7 +251,7 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
     } catch (e) {
       debugPrint('📋 Plan auto-generation failed: $e');
     }
-    if (mounted) {
+    if (mounted && revision == _refreshRevision) {
       state = const CurrentPlanState(status: CurrentPlanStatus.empty);
     }
   }
@@ -311,24 +313,30 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
     if (idolName == null || idolName.isEmpty) return;
     if (idolName == _lastIdol) return;
     _lastIdol = idolName;
+    _autoGenerateTried = false;
+    state = const CurrentPlanState(status: CurrentPlanStatus.loading);
     refresh();
   }
 
-  void _startPolling(String jobId) {
+  void _startPolling(String jobId, {bool checkImmediately = true}) {
+    if (_pollingJobId != jobId) _pollFailures = 0;
     _poll?.cancel();
+    final revision = ++_pollRevision;
     _pollingJobId = jobId;
-    _poll = Timer.periodic(_pollInterval, (_) => _checkJob(jobId));
-    _checkJob(jobId);
+    _poll = Timer.periodic(_pollInterval, (_) => _checkJob(jobId, revision));
+    if (checkImmediately) _checkJob(jobId, revision);
   }
 
-  bool _checking = false;
+  int? _checkingRevision;
 
-  Future<void> _checkJob(String jobId) async {
-    if (_checking) return;
-    _checking = true;
+  Future<void> _checkJob(String jobId, int revision) async {
+    if (_checkingRevision == revision) return;
+    _checkingRevision = revision;
     try {
       final job = await _repo.getJobStatus(jobId);
-      if (!mounted || _pollingJobId != jobId) return;
+      if (!mounted || _pollRevision != revision || _pollingJobId != jobId) {
+        return;
+      }
       _pollFailures = 0;
       if (job.isCompleted) {
         _cancelPolling();
@@ -351,7 +359,9 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
         if (next != state) state = next;
       }
     } catch (e) {
-      if (!mounted || _pollingJobId != jobId) return;
+      if (!mounted || _pollRevision != revision || _pollingJobId != jobId) {
+        return;
+      }
       debugPrint('📋 Plan job poll failed: $e');
       // A stale job id (backend reset) 404s forever — stop and show "no
       // plan". Transient network errors just wait for the next tick.
@@ -367,7 +377,7 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
         );
       }
     } finally {
-      _checking = false;
+      if (_checkingRevision == revision) _checkingRevision = null;
     }
   }
 }

@@ -1,10 +1,16 @@
 /// API error representation.
 class ApiError implements Exception {
-  const ApiError({required this.message, this.code, this.statusCode});
+  const ApiError({
+    required this.message,
+    this.code,
+    this.statusCode,
+    this.retryAfterSeconds,
+  });
 
   final String message;
   final String? code;
   final int? statusCode;
+  final int? retryAfterSeconds;
 
   /// Create ApiError from HTTP status code.
   factory ApiError.fromStatusCode(int statusCode, [String? message]) {
@@ -60,11 +66,12 @@ class ApiError implements Exception {
     return other is ApiError &&
         other.message == message &&
         other.code == code &&
-        other.statusCode == statusCode;
+        other.statusCode == statusCode &&
+        other.retryAfterSeconds == retryAfterSeconds;
   }
 
   @override
-  int get hashCode => Object.hash(message, code, statusCode);
+  int get hashCode => Object.hash(message, code, statusCode, retryAfterSeconds);
 }
 
 /// Network connectivity error.

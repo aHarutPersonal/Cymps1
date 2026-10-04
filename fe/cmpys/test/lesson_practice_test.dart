@@ -540,50 +540,61 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('reader finishes only after returning from completed practice', (
-    tester,
-  ) async {
-    final repo = FakePracticeRepository();
-    repo.data = {
-      ...repo.data,
-      'complete': true,
-      'passed_activity_ids': ['triangle', 'transfer'],
-    };
-    final completion = _CompletionRepository();
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          practiceRepositoryProvider.overrideWithValue(repo),
-          planRepositoryProvider.overrideWithValue(completion),
-        ],
-        child: const MaterialApp(
-          home: LessonReaderScreen(
-            itemId: 'item',
-            missionTitle: 'Geometry',
-            step: PlanStepDetail(
-              id: 's1',
-              title: 'Triangle',
-              lessonContent: '## Learn\nA triangle lesson.',
+  for (final entry in ['footer', 'toolbar', 'toolbar-back']) {
+    testWidgets(
+      'reader completes only on explicit practice finish via $entry',
+      (tester) async {
+        final repo = FakePracticeRepository();
+        repo.data = {
+          ...repo.data,
+          'complete': true,
+          'passed_activity_ids': ['triangle', 'transfer'],
+        };
+        final completion = _CompletionRepository();
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              practiceRepositoryProvider.overrideWithValue(repo),
+              planRepositoryProvider.overrideWithValue(completion),
+            ],
+            child: const MaterialApp(
+              home: LessonReaderScreen(
+                itemId: 'item',
+                missionTitle: 'Geometry',
+                step: PlanStepDetail(
+                  id: 's1',
+                  title: 'Triangle',
+                  lessonContent: '## Learn\nA triangle lesson.',
+                ),
+                stepNumber: 1,
+                totalSteps: 1,
+                materials: [],
+                completed: false,
+              ),
             ),
-            stepNumber: 1,
-            totalSteps: 1,
-            materials: [],
-            completed: false,
           ),
-        ),
-      ),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(
+          entry == 'footer'
+              ? find.text('Practice & finish')
+              : find.byTooltip('Open practice'),
+        );
+        await tester.pumpAndSettle();
+        expect(completion.completions, 0);
+        expect(find.byType(LessonPracticeScreen), findsOneWidget);
+        if (entry == 'toolbar-back') {
+          await tester.tap(find.byTooltip('Back to lesson'));
+        } else {
+          await tester.ensureVisible(find.text('Finish lesson'));
+          await tester.tap(find.text('Finish lesson'));
+        }
+        await tester.pumpAndSettle();
+        expect(completion.completions, entry == 'toolbar-back' ? 0 : 1);
+        expect(tester.takeException(), isNull);
+      },
     );
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Practice & finish'));
-    await tester.pumpAndSettle();
-    expect(completion.completions, 0);
-    expect(find.byType(LessonPracticeScreen), findsOneWidget);
-    await tester.ensureVisible(find.text('Finish lesson'));
-    await tester.tap(find.text('Finish lesson'));
-    await tester.pumpAndSettle();
-    expect(completion.completions, 1);
-    expect(tester.takeException(), isNull);
-  });
+  }
 
   testWidgets('back navigation flushes a pending draft before leaving', (
     tester,

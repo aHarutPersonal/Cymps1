@@ -152,6 +152,7 @@ class BookNarrationTrackEvent {
     required this.segmentIndex,
     this.highlightStart,
     this.highlightEnd,
+    this.resumeCharacterOffset,
     this.alignmentGranularity = BookNarrationAlignmentGranularity.none,
     this.audio,
   });
@@ -166,6 +167,9 @@ class BookNarrationTrackEvent {
   /// range means the media position is currently in silence or buffering.
   final int? highlightStart;
   final int? highlightEnd;
+
+  /// A bookmark estimate when timing is unavailable; never a highlight range.
+  final int? resumeCharacterOffset;
   final BookNarrationAlignmentGranularity alignmentGranularity;
   final BookNarrationAudio? audio;
 }
@@ -271,6 +275,9 @@ final class ExpressiveBookNarrator
   int _trackSessionId = 0;
   int _trackQueueIndex = 0;
   int _trackSegmentIndex = 0;
+  int _trackSeekRevision = 0;
+  bool _trackSeeking = false;
+  Future<void> _pendingTrackSeek = Future<void>.value();
   int? _trackFillRun;
   int? _trackResumeQueueIndex;
   bool _trackWantsPlayback = false;
@@ -399,6 +406,9 @@ final class ExpressiveBookNarrator
   }) async {
     if (_player == null) await initialize(speed: _speed);
     final run = ++_trackRun;
+    _trackSeekRevision++;
+    _trackSeeking = false;
+    _pendingTrackSeek = Future<void>.value();
     _playRun++;
     _trackWantsPlayback = false;
     _releaseQueuedChunks();
@@ -461,9 +471,15 @@ final class ExpressiveBookNarrator
     _trackErrorSubscription = player.errorStream.listen(
       (error) => _failTrackPlayback(error, run: run),
     );
+    final initialPosition = _positionForSegment(
+      firstAudio,
+      _trackEntries.first.chunk,
+      initialSegmentIndex,
+      characterOffset: initialCharacterOffset,
+    );
     await player.setAudioSources([
       AudioSource.uri(firstAudio.audioUri, tag: _trackEntries.first),
-    ]);
+    ], initialPosition: initialPosition);
     if (run != _trackRun) return;
     _trackAssets.add(firstAudio);
     _queuedChunks.first.complete(null);
@@ -478,6 +494,7 @@ final class ExpressiveBookNarrator
             _trackEntries[nextIndex].chunk.segments.first.segmentIndex;
       }
       _bufferTrackAhead(run);
+      if (_trackSeeking) return;
       final entry = _trackEntries[_trackQueueIndex];
       if (player.processingState == ProcessingState.ready) {
         _emitTrackPosition(
@@ -504,11 +521,12 @@ final class ExpressiveBookNarrator
     });
     _positionSubscription = player
         .createPositionStream(
-          minPeriod: const Duration(milliseconds: 45),
-          maxPeriod: const Duration(milliseconds: 100),
+          minPeriod: const Duration(milliseconds: 30),
+          maxPeriod: const Duration(milliseconds: 45),
         )
         .listen((position) {
           if (run != _trackRun ||
+              _trackSeeking ||
               !player.playing ||
               player.processingState != ProcessingState.ready) {
             return;
@@ -516,15 +534,6 @@ final class ExpressiveBookNarrator
           _emitTrackPosition(position, run: run);
         });
 
-    final initialPosition = _positionForSegment(
-      firstAudio,
-      _trackEntries.first.chunk,
-      initialSegmentIndex,
-      characterOffset: initialCharacterOffset,
-    );
-    if (initialPosition > Duration.zero) {
-      await player.seek(initialPosition, index: 0);
-    }
     if (run != _trackRun) return;
     _emitTrackEvent(
       phase: BookNarrationPlaybackPhase.paused,
@@ -554,7 +563,12 @@ final class ExpressiveBookNarrator
 
   Future<void> _resumeQueuedTrack(int run) async {
     final index = _trackResumeQueueIndex;
-    if (index == null || run != _trackRun || !_trackWantsPlayback) return;
+    if (index == null ||
+        run != _trackRun ||
+        !_trackWantsPlayback ||
+        _trackSeeking) {
+      return;
+    }
     _trackResumeQueueIndex = null;
     _trackQueueIndex = index;
     _trackSegmentIndex = _trackEntries[index].chunk.segments.first.segmentIndex;
@@ -613,6 +627,45 @@ final class ExpressiveBookNarrator
       throw RangeError('Sentence is outside the prepared narration track');
     }
     final run = _trackRun;
+    final revision = ++_trackSeekRevision;
+    _trackSeeking = true;
+    _emitTrackEvent(
+      phase: _trackWantsPlayback
+          ? BookNarrationPlaybackPhase.buffering
+          : BookNarrationPlaybackPhase.paused,
+      chapterIndex: chapterIndex,
+      segmentIndex: segmentIndex,
+      force: true,
+    );
+    // Native seeks can complete out of order. Finish the active seek first,
+    // skip superseded queued requests, then apply only the newest target.
+    final operation = _pendingTrackSeek.then((_) async {
+      if (run != _trackRun || revision != _trackSeekRevision) return;
+      var succeeded = false;
+      try {
+        await _seekPreparedSentence(targetIndex, segmentIndex, run: run);
+        succeeded = true;
+      } finally {
+        if (run == _trackRun && revision == _trackSeekRevision) {
+          _trackSeeking = false;
+          if (succeeded) {
+            _handleTrackPlayerState(
+              PlayerState(_player!.playing, _player!.processingState),
+              run: run,
+            );
+          }
+        }
+      }
+    });
+    _pendingTrackSeek = operation.catchError((_) {});
+    await operation;
+  }
+
+  Future<void> _seekPreparedSentence(
+    int targetIndex,
+    int segmentIndex, {
+    required int run,
+  }) async {
     final targetAvailability = _queuedChunks[targetIndex];
     if (!targetAvailability.isCompleted) {
       final entry = _trackEntries[targetIndex];
@@ -639,17 +692,9 @@ final class ExpressiveBookNarrator
       index: targetIndex,
     );
     if (run != _trackRun) return;
-    if (_trackWantsPlayback) {
-      _emitTrackPosition(_player!.position, run: run, force: true);
-    } else {
-      _emitTrackEvent(
-        phase: BookNarrationPlaybackPhase.paused,
-        chapterIndex: entry.chapterIndex,
-        segmentIndex: segmentIndex,
-        audio: asset,
-        force: true,
-      );
-    }
+    // A clip may have been appended while the user's seek was in flight.
+    // Its automatic continuation must not replace the explicit seek target.
+    _trackResumeQueueIndex = null;
     if (_trackWantsPlayback && !_player!.playing) {
       _playTrackPlayer(run);
     }
@@ -712,7 +757,8 @@ final class ExpressiveBookNarrator
         if (!_queuedChunks[index].isCompleted) {
           _queuedChunks[index].complete(null);
         }
-        if (resumeFromExhaustedQueue) {
+        if (resumeFromExhaustedQueue ||
+            player.processingState == ProcessingState.completed) {
           // Pausing during native append must preserve the next clip for a
           // later manual Play, without restarting audio after the pause.
           _trackResumeQueueIndex ??= index;
@@ -754,7 +800,7 @@ final class ExpressiveBookNarrator
   }
 
   void _handleTrackPlayerState(PlayerState state, {required int run}) {
-    if (_trackEntries.isEmpty || run != _trackRun) return;
+    if (_trackEntries.isEmpty || run != _trackRun || _trackSeeking) return;
     final entry = _trackEntries[_trackQueueIndex];
     switch (state.processingState) {
       case ProcessingState.loading:
@@ -816,6 +862,7 @@ final class ExpressiveBookNarrator
     bool force = false,
   }) {
     if (run != _trackRun ||
+        _trackSeeking ||
         _trackQueueIndex < 0 ||
         _trackQueueIndex >= _trackEntries.length) {
       return;
@@ -837,8 +884,7 @@ final class ExpressiveBookNarrator
             phase: phase,
             chapterIndex: entry.chapterIndex,
             segmentIndex: estimate.segmentIndex,
-            highlightStart: estimate.highlightStart,
-            highlightEnd: estimate.highlightEnd,
+            resumeCharacterOffset: estimate.highlightStart,
             audio: audio,
             force: force,
           );
@@ -890,6 +936,7 @@ final class ExpressiveBookNarrator
     required int segmentIndex,
     int? highlightStart,
     int? highlightEnd,
+    int? resumeCharacterOffset,
     BookNarrationAlignmentGranularity alignmentGranularity =
         BookNarrationAlignmentGranularity.none,
     BookNarrationAudio? audio,
@@ -897,7 +944,7 @@ final class ExpressiveBookNarrator
   }) {
     final key =
         '$phase/$chapterIndex/$segmentIndex/'
-        '$highlightStart/$highlightEnd/${audio?.audioUri}';
+        '$highlightStart/$highlightEnd/$resumeCharacterOffset/${audio?.audioUri}';
     if (!force && key == _lastTrackEventKey) return;
     _lastTrackEventKey = key;
     _trackHandler?.call(
@@ -908,6 +955,7 @@ final class ExpressiveBookNarrator
         segmentIndex: segmentIndex,
         highlightStart: highlightStart,
         highlightEnd: highlightEnd,
+        resumeCharacterOffset: resumeCharacterOffset,
         alignmentGranularity: alignmentGranularity,
         audio: audio,
       ),
@@ -945,10 +993,9 @@ final class ExpressiveBookNarrator
       final audio = await _load(text);
       if (run != _playRun) return;
       final player = _player!;
-      final loadedDuration = await player.setUrl(audio.audioUri.toString());
+      await player.setUrl(audio.audioUri.toString());
       if (run != _playRun) return;
       await player.setSpeed(_speed);
-      final duration = loadedDuration ?? audio.duration ?? player.duration;
       await _positionSubscription?.cancel();
       _positionSubscription = player
           .createPositionStream(
@@ -960,14 +1007,12 @@ final class ExpressiveBookNarrator
             _emitProgress(
               text: text,
               position: position,
-              duration: duration,
               alignment: audio.alignment,
             );
           });
       _emitProgress(
         text: text,
         position: Duration.zero,
-        duration: duration,
         alignment: audio.alignment,
       );
       await player.play();
@@ -987,13 +1032,17 @@ final class ExpressiveBookNarrator
   void _emitProgress({
     required String text,
     required Duration position,
-    required Duration? duration,
     required List<BookNarrationCue> alignment,
   }) {
-    final cue = alignment.isNotEmpty
-        ? _alignedCue(alignment, position)
-        : _estimatedCue(text, position, duration);
-    if (cue == null || cue.start == _lastCueStart) return;
+    final cue = activeBookNarrationCueAt(alignment, position);
+    if (cue == null) {
+      if (_lastCueStart != -1) {
+        _lastCueStart = -1;
+        _progressHandler?.call(0, 0, '');
+      }
+      return;
+    }
+    if (cue.start == _lastCueStart) return;
     _lastCueStart = cue.start;
     _progressHandler?.call(
       cue.start,
@@ -1001,36 +1050,6 @@ final class ExpressiveBookNarrator
       text.substring(cue.start, cue.end),
     );
   }
-
-  _LocalNarrationCue? _alignedCue(
-    List<BookNarrationCue> alignment,
-    Duration position,
-  ) {
-    var low = 0;
-    var high = alignment.length - 1;
-    while (low <= high) {
-      final middle = (low + high) >> 1;
-      final cue = alignment[middle];
-      if (position < cue.startTime) {
-        high = middle - 1;
-      } else if (position >= cue.endTime) {
-        low = middle + 1;
-      } else {
-        return _LocalNarrationCue(cue.start, cue.end);
-      }
-    }
-    final nearest = (high < 0 ? 0 : high)
-        .clamp(0, alignment.length - 1)
-        .toInt();
-    final cue = alignment[nearest];
-    return _LocalNarrationCue(cue.start, cue.end);
-  }
-
-  _LocalNarrationCue? _estimatedCue(
-    String text,
-    Duration position,
-    Duration? duration,
-  ) => _estimatedBookNarrationCue(text, position, duration);
 
   @override
   Future<void> stop() async {
@@ -1323,7 +1342,8 @@ class BookNarrationTrackHighlight {
   final int highlightEnd;
 }
 
-/// Estimates the visible, segment-relative word for audio without alignment.
+/// Estimates a segment-relative bookmark for audio without alignment.
+/// This estimate must never be used as a displayed highlight.
 ///
 /// The estimated cue begins in generated-chunk coordinates. Narration chunks
 /// can contain several sentence segments (or part of a split long segment), so

@@ -327,7 +327,19 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
               Align(
                 alignment: Alignment.centerRight,
                 child: TextButton(
-                  onPressed: () => context.push(AppRoutes.forgotPassword),
+                  onPressed: () async {
+                    final reset = await context.push<bool>(
+                      AppRoutes.forgotPassword,
+                    );
+                    if (!mounted || reset != true) return;
+                    ref.read(authControllerProvider.notifier).clearError();
+                    setState(() {
+                      _passwordController.clear();
+                      _errorMessage = null;
+                      _isLoginMode = true;
+                      _showEmailForm = true;
+                    });
+                  },
                   child: Text(
                     'Forgot Password?',
                     style: AppTypography.bodyMedium.copyWith(

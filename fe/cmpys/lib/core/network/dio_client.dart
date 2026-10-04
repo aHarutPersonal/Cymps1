@@ -308,10 +308,16 @@ class DioClient {
       code ??= data['code']?.toString();
     }
 
+    final retryAfter = int.tryParse(
+      response.headers.value('retry-after') ?? '',
+    );
     return ApiError(
       message: message ?? ApiError.defaultMessageForStatus(statusCode),
       code: code,
       statusCode: statusCode,
+      retryAfterSeconds: retryAfter != null && retryAfter > 0
+          ? retryAfter
+          : null,
     );
   }
 

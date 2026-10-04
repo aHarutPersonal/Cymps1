@@ -1,0 +1,118 @@
+{
+  "before": {
+    "speed_1.0": {
+      "prepared_ms": 613,
+      "first_playing_ms": 614,
+      "observed_words": 10,
+      "highlight_lag_p95_ms": 42.882,
+      "highlight_lag_max_ms": 42.882
+    },
+    "speed_1.5": {
+      "prepared_ms": 60,
+      "first_playing_ms": 60,
+      "observed_words": 10,
+      "highlight_lag_p95_ms": 32.13333333333333,
+      "highlight_lag_max_ms": 32.13333333333333
+    },
+    "speed_2.0": {
+      "prepared_ms": 66,
+      "first_playing_ms": 66,
+      "observed_words": 10,
+      "highlight_lag_p95_ms": 44.462,
+      "highlight_lag_max_ms": 44.462
+    },
+    "restore_ms": 28,
+    "restore_extra_seeks": 1,
+    "service_fixture_ms": [
+      404
+    ],
+    "native_source_load_ms": [
+      199,
+      14,
+      14,
+      17
+    ],
+    "native_seek_ms": [
+      3
+    ]
+  },
+  "method": {
+    "platform": "iPhone 16 Plus simulator, iOS 18.6",
+    "audio": "4-second local 24kHz mono WAV with 10 known cue boundaries",
+    "service": "synthetic 400ms preparation delay, one uncached call; cache reused afterward",
+    "lag": "callback player.position minus cue.startTime divided by playback speed, milliseconds of wall time",
+    "samples_per_speed": 10,
+    "limits": "No live TTS, streaming transfer or acoustic measurement; one measured run per version; cold native load varies between runs.",
+    "alignment_contract": "Final native fixture uses transcription with contiguous cues for timings and a separate sparse-cue reader UI pass."
+  },
+  "after_initial_fix": {
+    "speed_1.0": {
+      "prepared_ms": 572,
+      "first_playing_ms": 574,
+      "observed_words": 10,
+      "highlight_lag_p95_ms": 28.707,
+      "highlight_lag_max_ms": 28.707
+    },
+    "speed_1.5": {
+      "prepared_ms": 75,
+      "first_playing_ms": 75,
+      "observed_words": 10,
+      "highlight_lag_p95_ms": 29.916,
+      "highlight_lag_max_ms": 29.916
+    },
+    "speed_2.0": {
+      "prepared_ms": 77,
+      "first_playing_ms": 78,
+      "observed_words": 10,
+      "highlight_lag_p95_ms": 24.815,
+      "highlight_lag_max_ms": 24.815
+    },
+    "restore_ms": 26,
+    "restore_extra_seeks": 0,
+    "service_fixture_ms": [
+      403
+    ],
+    "native_source_load_ms": [
+      158,
+      18,
+      17,
+      14
+    ],
+    "native_seek_ms": []
+  },
+  "after": {
+    "speed_1.0": {
+      "prepared_ms": 656,
+      "first_playing_ms": 658,
+      "observed_words": 10,
+      "highlight_lag_p95_ms": 25.049,
+      "highlight_lag_max_ms": 25.049
+    },
+    "speed_1.5": {
+      "prepared_ms": 67,
+      "first_playing_ms": 67,
+      "observed_words": 10,
+      "highlight_lag_p95_ms": 28.707333333333334,
+      "highlight_lag_max_ms": 28.707333333333334
+    },
+    "speed_2.0": {
+      "prepared_ms": 70,
+      "first_playing_ms": 71,
+      "observed_words": 10,
+      "highlight_lag_p95_ms": 26.076,
+      "highlight_lag_max_ms": 26.076
+    },
+    "restore_ms": 22,
+    "restore_extra_seeks": 0,
+    "service_fixture_ms": [
+      404
+    ],
+    "native_source_load_ms": [
+      242,
+      16,
+      18,
+      14
+    ],
+    "native_seek_ms": []
+  }
+}

@@ -13,11 +13,14 @@ class FakeBookAudioPlayer extends Fake implements AudioPlayer {
   final sources = <AudioSource>[];
   int loads = 0, plays = 0, pauses = 0;
   Object? playError;
+  Completer<void>? playGate;
   Completer<void>? nextAddGate;
   Completer<void>? nextSeekGate;
   Completer<void>? nextPositionCancellationGate;
   int adds = 0, seeks = 0;
   int? repeatedIndexOnPause;
+  Duration? loadedInitialPosition;
+  double playbackSpeed = 1;
 
   @override
   bool playing = false;
@@ -60,9 +63,24 @@ class FakeBookAudioPlayer extends Fake implements AudioPlayer {
     ShuffleOrder? shuffleOrder,
   }) async {
     loads++;
+    loadedInitialPosition = initialPosition;
+    position = initialPosition ?? Duration.zero;
     sources
       ..clear()
       ..addAll(audioSources);
+    emitState(ProcessingState.ready);
+    return duration;
+  }
+
+  @override
+  Future<Duration?> setUrl(
+    String url, {
+    Map<String, String>? headers,
+    Duration? initialPosition,
+    bool preload = true,
+    dynamic tag,
+  }) async {
+    position = initialPosition ?? Duration.zero;
     emitState(ProcessingState.ready);
     return duration;
   }
@@ -77,7 +95,10 @@ class FakeBookAudioPlayer extends Fake implements AudioPlayer {
   }
 
   @override
-  Future<void> setSpeed(double speed) async {}
+  Future<void> setSpeed(double speed) async {
+    playbackSpeed = speed;
+  }
+
   @override
   Future<void> stop() async {
     playing = false;
@@ -90,6 +111,7 @@ class FakeBookAudioPlayer extends Fake implements AudioPlayer {
     if (playError case final error?) throw error;
     playing = true;
     emitState(ProcessingState.ready);
+    await playGate?.future;
   }
 
   @override

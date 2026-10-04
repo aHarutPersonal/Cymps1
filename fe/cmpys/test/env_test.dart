@@ -3,6 +3,10 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('production API requires a verified HTTPS origin', () {
+    expect(Uri.parse(Env.apiBaseUrlProduction).scheme, 'https');
+  });
+
   test('release configuration defaults to the deployed API', () {
     expect(
       Env.resolveApiBaseUrl(
