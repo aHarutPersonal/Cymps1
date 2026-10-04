@@ -43,7 +43,7 @@ async def test_schema_failure_has_safe_persistable_diagnostics(payload, expected
     assert not usage.success
     assert usage.metadata["error"] == response.error
     assert review_response_quality(response) == 0.0
-    client.generate_json.assert_awaited_once()
+    assert client.generate_json.await_count == 2
 
 
 @pytest.mark.parametrize("payload,score", [
@@ -75,3 +75,32 @@ async def test_valid_review_retains_approval_and_advisories():
     assert returned.error is None
     assert returned.data["advisories"]
     assert review_response_quality(returned) == 1.0
+
+
+@pytest.mark.asyncio
+async def test_invalid_review_retried_without_rewriting_lesson():
+    invalid = SimpleNamespace(error=None, data=_review(calculations=[{
+        "location": "example", "expression": "2+2", "claimed_result": 4,
+        "absolute_tolerance": 1,
+    }]))
+    valid = SimpleNamespace(error=None, data=_review(calculations=[{
+        "location": "example", "expression": "2+2", "claimed_result": 4,
+        "absolute_tolerance": 0.01,
+    }]))
+    client = SimpleNamespace(generate_json=AsyncMock(side_effect=[invalid, valid]))
+    failures, response, _ = await review_lesson(
+        {"lesson_content": "Keep this complete lesson"}, client_factory=lambda **kw: client, context={})
+    assert not failures and response is valid
+    first, second = client.generate_json.await_args_list
+    assert first.kwargs["user_prompt"] == second.kwargs["user_prompt"]
+    assert "less_than_equal" in second.kwargs["system_prompt"]
+
+
+@pytest.mark.asyncio
+async def test_negative_content_review_is_not_retried_for_approval():
+    negative = SimpleNamespace(error=None, data=_review(acceptable=False, issues=["Incorrect calculation"]))
+    client = SimpleNamespace(generate_json=AsyncMock(return_value=negative))
+    failures, _, _ = await review_lesson(
+        {"lesson_content": "Wrong example"}, client_factory=lambda **kw: client, context={})
+    assert failures == ["Incorrect calculation"]
+    client.generate_json.assert_awaited_once()

@@ -18,13 +18,20 @@ class CompleteRecoveryClient(GeminiLLMClient):
 
 
 def operational_recovery_client(response, *, timeout: float, max_tokens: int):
-    if getattr(response, "provider", None) != "openlux":
+    provider = getattr(response, "provider", None)
+    if provider not in {"openlux", "zai"}:
         return None
     error = str(getattr(response, "error", None) or "")
+    if provider == "zai" and not any(error.startswith(f"zai request failed ({category};") for category in (
+        "TimeoutError", "APIConnectionError", "RemoteProtocolError", "ReadError",
+        "APIStatusError", "InternalServerError", "RateLimitError", "APITimeoutError",
+        "ValueError",
+    )):
+        return None
     # OpenLux sanitizes upstream failures to exception categories. A stream
     # ending without its terminal marker is transport failure, not bad JSON.
     interrupted = (
-        error.startswith("OpenLux request failed (")
+        error.startswith("OpenLux request failed (" if provider == "openlux" else "zai request failed (")
         and "finish=missing" in error
         and any(category in error for category in (
             "ValueError", "APIConnectionError", "RemoteProtocolError",

@@ -2725,7 +2725,10 @@ async def generate_results(
     # later persistence calls transparently acquire it again.
     await db.commit()
 
+    scores_task = None
+
     async def _generate_results_stream():
+        nonlocal scores_task
         pipeline_session = session
         if plan_job is not None:
             yield f"data: {json_lib.dumps({'type': 'plan_job', 'job_id': str(plan_job.id)})}\n\n"
@@ -2733,7 +2736,6 @@ async def generate_results(
         # =====================================================================
         # Part 1: Comparison — generate once, then replay on retry/resume.
         # =====================================================================
-        scores_task = None
         full_comparison = pipeline_session.comparison_output or ""
         yield f"data: {json_lib.dumps({'type': 'section', 'section': 'comparison'})}\n\n"
 
@@ -2994,6 +2996,13 @@ async def generate_results(
             async for event in _generate_results_stream():
                 yield event
         finally:
+            # The scoring request belongs to this stream. A disconnected client
+            # or failed blueprint must not leave an orphan paid provider call.
+            if scores_task is not None:
+                if not scores_task.done():
+                    scores_task.cancel()
+                with anyio.move_on_after(5, shield=True):
+                    await asyncio.gather(scores_task, return_exceptions=True)
             with anyio.move_on_after(5, shield=True):
                 await _release_owned_thread_claim(
                     db,

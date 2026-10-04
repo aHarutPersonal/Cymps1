@@ -23,6 +23,11 @@ class _SessionContext:
         return None
 
 
+def test_plans_and_foreground_lessons_use_independent_workers():
+    assert plan_tasks.run_plan_generation._get_exec_options()["queue"] == "high_priority"
+    assert plan_tasks.regenerate_plan_item_details._get_exec_options().get("queue") != "high_priority"
+
+
 @pytest.mark.asyncio
 async def test_persisted_plan_resumes_publication_without_model_work(monkeypatch):
     db = AsyncMock()
@@ -117,6 +122,56 @@ def test_infeasible_task_count_and_large_workload_gaps_still_require_review():
     assert generator.validate_plan_backbone(corrected, duration_weeks=12, hours_per_week=5)
     corrected, changes = generator._normalize_backbone_workload(_backbone(), hours_per_week=6)
     assert changes == []  # A six-hour week needs two mission tasks.
+
+
+def test_six_hour_week_reports_impossible_three_mission_minimum():
+    original = _backbone()
+    week = original.weeks[0]
+    mission = week.tasks[0].model_copy(update={"estimated_hours": 2})
+    daily = week.tasks[1].model_copy(update={"estimated_hours": 1})
+    week.tasks = [mission, mission.model_copy(update={"title": "Second skill"}),
+                  mission.model_copy(update={"title": "Third skill"}), daily]
+    issues = generator.validate_plan_backbone(original, duration_weeks=12, hours_per_week=6)
+    assert any("week 1 task count requires at least 7 hours" in issue and
+               "at most 2 missions" in issue for issue in issues)
+    assert "exactly\n  TWO missions" in generator.load_prompt("plan_backbone_generate")
+
+
+def test_daily_rhythm_can_continue_but_mission_duplicates_still_fail():
+    candidate = _backbone()
+    for week in candidate.weeks:
+        week.tasks[1].title = "Daily evidence reflection"
+    assert not generator.validate_plan_backbone(candidate, duration_weeks=12, hours_per_week=5)
+    candidate.weeks[1].tasks[0].title = candidate.weeks[0].tasks[0].title
+    assert any("duplicate backbone task title" in issue for issue in
+               generator.validate_plan_backbone(candidate, duration_weeks=12, hours_per_week=5))
+    candidate = _backbone()
+    candidate.weeks[0].tasks[1].title = candidate.weeks[0].tasks[0].title
+    assert any("duplicate backbone task title" in issue for issue in
+               generator.validate_plan_backbone(candidate, duration_weeks=12, hours_per_week=5))
+
+
+@pytest.mark.asyncio
+async def test_zai_compact_backbone_uses_low_reasoning_without_changing_model_tier(monkeypatch):
+    client = SimpleNamespace(model="test", generate_and_validate=AsyncMock(
+        return_value=(_backbone(), SimpleNamespace(error=None, model="test"))))
+    factory = MagicMock(return_value=client)
+    monkeypatch.setattr(generator.settings, "llm_provider", "zai")
+    monkeypatch.setattr(generator, "_plan_client", factory)
+    monkeypatch.setattr(generator, "record_llm_response", AsyncMock())
+    result = await generator._generate_plan_backbone(
+        system_prompt="system", user_prompt="goal", duration_weeks=12, hours_per_week=5,
+    )
+    assert result == _backbone()
+    assert factory.call_args.kwargs["thinking_level"] == "low"
+    assert factory.call_args.kwargs["tier"] == "balanced"
+    client.generate_and_validate.return_value = (_expanded_week_one(), SimpleNamespace(error=None, model="test"))
+    await generator.generate_plan_week_from_backbone(
+        backbone_week=_backbone().weeks[0], roadmap_thesis="Learn",
+        idol_name="Ada", idol_domain="computing", user_goal="Learn", hours_per_week=5,
+    )
+    assert factory.call_args.kwargs["thinking_level"] == "low"
+    assert factory.call_args.kwargs["tier"] == "balanced"
 
 
 @pytest.mark.asyncio

@@ -16,7 +16,7 @@ import re
 import socket
 import struct
 import unicodedata
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -162,6 +162,7 @@ _STYLE_PRESETS: dict[str, _StylePreset] = {
 _CACHE_VERSION = "minimax-narration-v4"
 _GEMINI_CACHE_VERSION = "gemini-narration-v1"
 _GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+_GEMINI_ALIGNMENT_MODEL = "gemini-3.5-transcribe"
 _GEMINI_STYLES = {
     "expressive": "Warm, expressive audiobook narration with natural emphasis and clear, unhurried pacing.",
     "warm": "Warm, gentle audiobook narration with a relaxed pace and natural pauses.",
@@ -318,6 +319,25 @@ async def render_book_narration(
                 filename=filename,
             )
             if cached is not None:
+                if provider == "gemini" and not cached.alignment:
+                    # Upgrade existing paid recordings in place. One bounded
+                    # attempt per cache entry, including unavailable alignment.
+                    metadata = json.loads(await asyncio.to_thread(metadata_path.read_text, encoding="utf-8"))
+                    if not metadata.get("alignmentAttempted") and _narration_api_key(provider):
+                        audio_bytes = await asyncio.to_thread(audio_path.read_bytes)
+                        alignment = await _gemini_word_alignment(
+                            cleaned_text, audio_bytes, duration_ms=cached.duration_ms,
+                        )
+                        metadata.update(_gemini_alignment_metadata(alignment))
+                        await _write_cache_atomically(
+                            audio_path=audio_path, metadata_path=metadata_path,
+                            audio_bytes=audio_bytes, metadata=metadata,
+                        )
+                        cached = replace(
+                            cached, alignment=alignment,
+                            alignment_source="transcription" if alignment else "none",
+                            alignment_granularity="word" if alignment else "none",
+                        )
                 logger.info(
                     "Book narration cache hit provider=%s model=%s chars=%d",
                     provider,
@@ -359,9 +379,14 @@ async def render_book_narration(
             alignment_source = "none"
             alignment_granularity = "none"
             subtitle_started = asyncio.get_running_loop().time()
-            # Gemini unary TTS supplies audio only. Do not invent alignment or
-            # treat an intentionally absent subtitle as a transient error.
-            if isinstance(synthesis, _MiniMaxSynthesis):
+            if isinstance(synthesis, _GeminiSynthesis):
+                alignment = await _gemini_word_alignment(
+                    cleaned_text, synthesis.audio_bytes, duration_ms=synthesis.duration_ms,
+                )
+                if alignment:
+                    alignment_source = "transcription"
+                    alignment_granularity = "word"
+            elif isinstance(synthesis, _MiniMaxSynthesis):
                 try:
                     if not synthesis.subtitle_url:
                         raise BookNarrationUnavailableError(
@@ -397,6 +422,8 @@ async def render_book_narration(
                 "sourceTextHash": source_text_hash,
                 "disclosure": _DISCLOSURE,
             }
+            if provider == "gemini":
+                metadata.update(_gemini_alignment_metadata(alignment))
             await _write_cache_atomically(
                 audio_path=audio_path,
                 metadata_path=metadata_path,
@@ -435,6 +462,92 @@ async def render_book_narration(
         # Avoid retaining one asyncio.Lock for every passage ever requested.
         if _locks.get(digest) is lock and not lock.locked():
             _locks.pop(digest, None)
+
+
+def _gemini_alignment_metadata(alignment: tuple[NarrationCue, ...]) -> dict:
+    return {
+        "alignment": [asdict(cue) for cue in alignment],
+        "alignmentSource": "transcription" if alignment else "none",
+        "alignmentGranularity": "word" if alignment else "none",
+        "alignmentAttempted": True,
+        "alignmentModel": _GEMINI_ALIGNMENT_MODEL,
+    }
+
+
+def _transcription_word_cues(text: str, document: dict, *, duration_ms: int) -> tuple[NarrationCue, ...]:
+    """Map acoustic timestamps only when the recognized words match the source.
+
+    Case/punctuation do not affect word identity. Missing or substituted words
+    reject the alignment; malformed timing ranges are omitted, never guessed.
+    At least 90% of source words must retain valid measured ranges.
+    """
+    if document.get("status") != "completed":
+        return ()
+    annotations = [a for step in document.get("steps", [])
+                   for content in step.get("content", [])
+                   for a in content.get("annotations", []) if a.get("type") == "word_info"]
+    source_words = list(_source_word.finditer(text))
+    if not source_words or len(annotations) != len(source_words):
+        return ()
+    def normalized(word):
+        return unicodedata.normalize("NFC", word).casefold().replace("\u2019", "'")
+    offsets = _utf16_prefix_offsets(text)
+    cues = []
+    previous_end = 0
+    for word, annotation in zip(source_words, annotations):
+        recognized = _source_word.findall(str(annotation.get("text") or ""))
+        if len(recognized) != 1 or normalized(recognized[0]) != normalized(word.group()):
+            return ()
+        raw_start, raw_end = annotation.get("start_offset"), annotation.get("end_offset")
+        if not all(isinstance(v, str) and re.fullmatch(r"\d+(?:\.\d{1,9})?s", v) for v in (raw_start, raw_end)):
+            continue
+        start, end = round(float(raw_start[:-1]) * 1000), round(float(raw_end[:-1]) * 1000)
+        if not (previous_end <= start < end <= duration_ms):
+            continue
+        cues.append(NarrationCue(offsets[word.start()], offsets[word.end()], start, end, word.group()))
+        previous_end = end
+    return tuple(cues) if len(cues) / len(source_words) >= 0.9 else ()
+
+
+async def _gemini_word_alignment(
+    text: str, audio: bytes, *, duration_ms: int, client: httpx.AsyncClient | None = None,
+) -> tuple[NarrationCue, ...]:
+    """A bounded transcription of the actual recording, not text interpolation."""
+    api_key = _narration_api_key("gemini")
+    if not api_key:
+        return ()
+    timeout = settings.book_narration_subtitle_timeout_seconds
+    owns_client = client is None
+    if owns_client:
+        client = httpx.AsyncClient(timeout=timeout, follow_redirects=False, trust_env=False)
+    try:
+        async with asyncio.timeout(timeout):
+            async with client.stream(
+                "POST", "https://generativelanguage.googleapis.com/v1beta/interactions",
+                headers={"x-goog-api-key": api_key}, timeout=timeout, follow_redirects=False,
+                json={
+                    "model": _GEMINI_ALIGNMENT_MODEL, "store": False,
+                    "input": [{"type": "audio", "mime_type": "audio/wav",
+                               "data": base64.b64encode(audio).decode("ascii")}],
+                    "generation_config": {"transcription_config": {"mode": {
+                        "type": "verbatim", "timestamp_granularities": ["word"],
+                    }}},
+                },
+            ) as response:
+                response.raise_for_status()
+                body = bytearray()
+                async for chunk in response.aiter_bytes():
+                    body.extend(chunk)
+                    if len(body) > settings.book_narration_max_subtitle_bytes:
+                        raise ValueError("Alignment response too large")
+                return _transcription_word_cues(text, json.loads(body), duration_ms=duration_ms)
+    except Exception as exc:
+        # Audio stays usable. No provider bodies, URLs or credentials in logs.
+        logger.warning("Book narration transcription unavailable error_type=%s", type(exc).__name__)
+        return ()
+    finally:
+        if owns_client:
+            await client.aclose()
 
 
 def _narration_api_key(provider: str) -> str | None:
@@ -1271,7 +1384,7 @@ async def _read_cached_asset(
             if _wav_duration_ms(audio_bytes) != duration_ms:
                 return None
         has_provider_timing = (
-            metadata.get("alignmentSource") == "provider"
+            metadata.get("alignmentSource") in {"provider", "transcription"}
             and metadata.get("alignmentGranularity") in {"word", "phrase"}
             and bool(alignment)
             and _cached_alignment_is_valid(alignment, duration_ms)

@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import json
 import re
 from types import SimpleNamespace
 
@@ -547,10 +548,17 @@ def test_parallel_outline_rejects_unapproved_resource_names() -> None:
     assert "resources" in response.error
 
 
-def test_writing_uses_tiered_modern_thinking_levels() -> None:
+def test_writing_uses_tiered_modern_thinking_levels(monkeypatch) -> None:
+    monkeypatch.setattr("app.tasks.plans.settings.llm_provider", "dummy")
     assert _writing_thinking_level("fast") == "minimal"
     assert _writing_thinking_level("balanced") == "minimal"
     assert _writing_thinking_level("quality") == "high"
+
+
+@pytest.mark.parametrize("tier", ["fast", "balanced", "quality"])
+def test_zai_writing_keeps_corrections_within_the_generation_budget(monkeypatch, tier):
+    monkeypatch.setattr("app.tasks.plans.settings.llm_provider", "zai")
+    assert _writing_thinking_level(tier) == "low"
 
 
 @pytest.mark.asyncio
@@ -641,6 +649,9 @@ async def test_all_missing_lessons_start_concurrently_and_checkpoint_independent
     )
 
     async def checkpoint(payload, stage):
+        if stage == "outline_ready":
+            # Reference lookup must overlap writing, not postpone it.
+            await asyncio.wait_for(all_started.wait(), timeout=1)
         checkpoints.append(
             (
                 stage,
@@ -924,6 +935,158 @@ async def test_parallel_generation_retries_only_the_failed_lesson() -> None:
         "parallel_lesson_step_2_attempt_1",
         "parallel_lesson_step_3_attempt_1",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_error,recovers", [
+    ("zai request failed (TimeoutError; finish=missing)", True),
+    ("zai request failed (JSONDecodeError; finish=stop)", False),
+])
+async def test_lesson_independent_provider_retry_requires_an_actual_outage(monkeypatch, provider_error, recovers):
+    from app.services.llm import recovery
+    from app.services.llm.client import LLMResponse
+    from app.services.planning.lesson_review import LessonReview
+
+    monkeypatch.setattr(recovery.settings, "gemini_api_key", "test-only")
+    attempts = {}
+    recovered = []
+
+    class RecoveryClient:
+        model = "recovery-test"
+        def __init__(self, **kwargs):
+            assert kwargs["thinking_level"] == "low"
+        async def generate_json(self, **kwargs):
+            recovered.append(kwargs)
+            return LLMResponse(data=_lesson_sections_payload(), provider="gemini")
+
+    monkeypatch.setattr(recovery, "CompleteRecoveryClient", RecoveryClient)
+
+    class Client:
+        model = "zai-test"
+        async def generate_json(self, *, output_model, user_prompt, **kwargs):
+            if output_model is PlanItemDetailsOutlineOutput:
+                return LLMResponse(data=_outline_payload())
+            if output_model is LessonReview:
+                return LLMResponse(data={"acceptable": True, "issues": [], "practice_minutes": 60,
+                                         "contains_calculations": False, "calculations": []})
+            step = next(s["id"] for s in _outline_payload()["steps"] if f'"id":"{s["id"]}"' in user_prompt)
+            attempts[step] = attempts.get(step, 0) + 1
+            if step == "step_1" and attempts[step] == 1:
+                return LLMResponse(data={}, error=provider_error, provider="zai")
+            return LLMResponse(data=_lesson_sections_payload(), provider="zai")
+
+    result, calls, error = await _generate_plan_item_details_parallel(
+        system_prompt="planner", task_title="Build a validated experiment",
+        mission_hours=5, user_goal="learn product experimentation",
+        learning_preferences="reading and practice", idol_name="Mentor",
+        idol_domain="technology", idol_evidence={}, session_context="",
+        active_tier="balanced", routing_reason="test", client_factory=lambda **kwargs: Client(),
+    )
+    assert error is None and result
+    assert len(recovered) == int(recovers)
+    assert attempts["step_1"] == (1 if recovers else 2)
+    assert any(reason == "parallel_lesson_provider_recovery" for _, _, _, reason, _ in calls) == recovers
+
+
+@pytest.mark.asyncio
+async def test_outline_publication_failure_cancels_every_started_writer():
+    started = 0
+    cancelled = 0
+    all_started = asyncio.Event()
+
+    class FakeClient:
+        model = "fake-model"
+
+        async def generate_json(self, *, output_model, **kwargs):
+            nonlocal started, cancelled
+            if output_model is PlanItemDetailsOutlineOutput:
+                return SimpleNamespace(data=_outline_payload(), error=None)
+            started += 1
+            if started == 3:
+                all_started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled += 1
+
+    async def checkpoint(payload, stage):
+        assert stage == "outline_ready"
+        await asyncio.wait_for(all_started.wait(), timeout=1)
+        raise RuntimeError("publication failed")
+
+    result, calls, error = await _generate_plan_item_details_parallel(
+        system_prompt="planner", task_title="Build a validated experiment",
+        mission_hours=5, user_goal="learn product experimentation",
+        learning_preferences="reading and practice", idol_name="Mentor",
+        idol_domain="technology", idol_evidence={}, session_context="",
+        active_tier="balanced", routing_reason="test",
+        client_factory=lambda **kwargs: FakeClient(), on_checkpoint=checkpoint,
+    )
+    assert error == "Outline checkpoint failed: RuntimeError"
+    assert started == cancelled == 3
+    assert not any(s.get("lesson_content") for s in result["steps"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("repaired_minutes", [45, 20])
+async def test_short_reviewed_lesson_repairs_only_practice_and_rechecks_duration(repaired_minutes):
+    from app.services.planning.lesson_review import LessonReview
+
+    outline = _outline_payload()
+    drafts = []
+    reviews = []
+    repairs = []
+
+    class FakeClient:
+        model = "fake-model"
+
+        async def generate_json(self, *, user_prompt, output_model, **kwargs):
+            if output_model is PlanItemDetailsOutlineOutput:
+                return SimpleNamespace(data=copy.deepcopy(outline), error=None)
+            if output_model is LessonReview:
+                lesson = json.loads(user_prompt)["lesson"]
+                reviews.append(copy.deepcopy(lesson))
+                minutes = 60
+                if lesson["id"] == "step_1":
+                    minutes = repaired_minutes if "transfer case" in lesson["lesson_content"] else 20
+                return SimpleNamespace(data={
+                    "acceptable": True, "issues": [], "practice_minutes": minutes,
+                    "contains_calculations": False, "calculations": [],
+                }, error=None)
+            if output_model is PlanDetailSectionsRepairOutput:
+                repairs.append(user_prompt)
+                return SimpleNamespace(data={"sections": [
+                    {"field_name": "guided_practice", "content": "transfer case " * 250},
+                    {"field_name": "check_your_understanding", "content": "answer rubric " * 125},
+                ]}, error=None)
+            step_id = next(step["id"] for step in outline["steps"]
+                           if f'"id":"{step["id"]}"' in user_prompt)
+            drafts.append(step_id)
+            return SimpleNamespace(data=copy.deepcopy(_lesson_sections_payload()), error=None)
+
+    result, calls, error = await _generate_plan_item_details_parallel(
+        system_prompt="planner", task_title="Build a validated experiment",
+        mission_hours=5, user_goal="learn product experimentation",
+        learning_preferences="reading and practice", idol_name="Mentor",
+        idol_domain="technology", idol_evidence={}, session_context="",
+        active_tier="balanced", routing_reason="test",
+        client_factory=lambda **kwargs: FakeClient(),
+    )
+    step_reviews = [r for r in reviews if r["id"] == "step_1"]
+    before, after = step_reviews[:2]
+    assert before["lesson_content"].split("## Guided Practice")[0] == after["lesson_content"].split("## Guided Practice")[0]
+    assert before["lesson_content"].split("## References")[1] == after["lesson_content"].split("## References")[1]
+    assert before["substeps"] == after["substeps"]
+    assert drafts.count("step_2") == drafts.count("step_3") == 1
+    if repaired_minutes == 45:
+        assert error is None
+        assert drafts.count("step_1") == len(repairs) == 1
+        assert result["steps"][0]["practice_minutes"] == 45
+        assert result["steps"][0]["estimate_minutes"] == result["steps"][0]["reading_minutes"] + 45
+    else:
+        assert "estimate_minutes" in error
+        assert drafts.count("step_1") == len(repairs) == 2
+        assert not result["steps"][0].get("lesson_content")
 
 
 @pytest.mark.asyncio

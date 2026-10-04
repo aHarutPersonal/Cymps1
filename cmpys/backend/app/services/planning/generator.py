@@ -276,8 +276,9 @@ def validate_plan_backbone(
         **{week: "applied_practice" for week in range(7, 10)},
         **{week: "integration" for week in range(10, 13)},
     }
-    seen_titles: set[str] = set()
+    seen_mission_titles: set[str] = set()
     for week in backbone.weeks:
+        week_titles: set[str] = set()
         expected_phase = expected_phases.get(week.week_number)
         if expected_phase and week.phase != expected_phase:
             issues.append(
@@ -293,6 +294,13 @@ def validate_plan_backbone(
             not low_capacity and not 1 <= len(daily) <= 2
         ):
             issues.append(f"week {week.week_number} has invalid daily task count")
+        minimum_hours = 2 * len(missions) + len(daily)
+        if minimum_hours > hours_per_week:
+            issues.append(
+                f"week {week.week_number} task count requires at least {minimum_hours} hours, "
+                f"exceeding capacity {hours_per_week}; use at most "
+                f"{max(0, (hours_per_week - len(daily)) // 2)} missions and preserve the weekly outcome"
+            )
         stored_hours = sum(
             _resolve_estimated_hours(
                 task.estimated_hours,
@@ -318,9 +326,13 @@ def validate_plan_backbone(
                     f"{resolved_hours} hours; mission range is 2-8"
                 )
             normalized_title = task.title.strip().casefold()
-            if normalized_title in seen_titles:
+            if normalized_title in week_titles or (
+                task.type in mission_types and normalized_title in seen_mission_titles
+            ):
                 issues.append(f"duplicate backbone task title: {task.title}")
-            seen_titles.add(normalized_title)
+            week_titles.add(normalized_title)
+            if task.type in mission_types:
+                seen_mission_titles.add(normalized_title)
             if not task.success_metric.strip():
                 issues.append(
                     f"week {week.week_number} task '{task.title}' needs a success metric"
@@ -585,7 +597,10 @@ async def _generate_plan_backbone(
         timeout=90 if settings.llm_provider == "zai" else PLAN_BACKBONE_TIMEOUT_SECONDS,
         max_tokens=PLAN_BACKBONE_MAX_TOKENS,
         tier="balanced",
-        thinking_level="medium",
+        # Z.ai maps medium to high reasoning. The compact roadmap timed out
+        # at 90 seconds, while its same-model low-reasoning recovery completed.
+        # Keep the model and every quality gate; avoid that wasted first call.
+        thinking_level="low" if settings.llm_provider == "zai" else "medium",
     )
     validated, response = await active_client.generate_and_validate(
         system_prompt=system_prompt,
@@ -846,7 +861,7 @@ async def generate_plan_week_from_backbone(
         timeout=90 if settings.llm_provider == "zai" else PLAN_WEEK_TIMEOUT_SECONDS,
         max_tokens=PLAN_WEEK_MAX_TOKENS,
         tier="balanced",
-        thinking_level="medium",
+        thinking_level="low" if settings.llm_provider == "zai" else "medium",
     )
     validated, response = await active_client.generate_and_validate(
         system_prompt=system_prompt,

@@ -4,7 +4,7 @@ import json
 import pytest
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.services.llm.openlux import OpenLuxLLMClient, _unwrap_schema_answer
+from app.services.llm.openlux import OpenLuxLLMClient, _unwrap_schema_answer, _complete_json_object
 from app.services.llm.zai import ZaiLLMClient
 from tests.test_openlux import chunk, transport
 
@@ -16,6 +16,42 @@ class StructuredAnswer(BaseModel):
 
 
 VALID = {"explanation": "A complete answer", "checked": True}
+
+
+@pytest.mark.parametrize('raw', [
+    '```json\n{"explanation":"A complete answer","checked":true}\n```',
+    '{"explanation":"A complete\nanswer","checked":true}',
+])
+def test_lossless_complete_json_framing(raw):
+    parsed = _complete_json_object(raw)
+    assert StructuredAnswer.model_validate(parsed).checked
+    assert 'complete' in parsed['explanation']
+
+
+@pytest.mark.parametrize('raw', [
+    '```json\n{"checked":true}',
+    'Here is the answer: {"checked":true}',
+    '{"checked":true} {"checked":false}',
+    '{"checked":true,"checked":false}',
+    '{"checked":NaN}',
+    '{"checked":true,}',
+    '{"checked":true',
+])
+def test_json_framing_never_guesses_or_selects_ambiguous_content(raw):
+    with pytest.raises(ValueError):
+        _complete_json_object(raw)
+
+
+@pytest.mark.asyncio
+async def test_complete_fenced_stream_is_decoded_but_truncation_is_rejected(monkeypatch):
+    client = ZaiLLMClient(api_key='test', model='glm-5.3', base_url='https://api.z.ai/api/paas/v4')
+    raw = '```json\n' + json.dumps(VALID) + '\n```'
+    transport(monkeypatch, client, [chunk(raw, 'stop')])
+    response = await client.generate_json('System', 'User', output_model=StructuredAnswer)
+    assert response.error is None and response.data == VALID
+    transport(monkeypatch, client, [chunk(raw, 'length')])
+    response = await client.generate_json('System', 'User', output_model=StructuredAnswer)
+    assert response.error and response.data == {}
 
 
 @pytest.mark.asyncio

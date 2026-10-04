@@ -56,6 +56,9 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    if payload.get("ver", 0) != (getattr(user, "auth_version", 0) or 0):
+        raise HTTPException(status_code=401, detail="Session expired; sign in again")
+
     return user
 
 

@@ -7,6 +7,7 @@ from app.services.llm import recovery
 from app.services.llm.client import LLMResponse
 
 
+@pytest.mark.parametrize('provider', ['openlux', 'zai'])
 @pytest.mark.parametrize('error,finish,allowed', [
     ('OpenLux request failed (APITimeoutError; finish=missing)', None, True),
     ('OpenLux request failed (ValueError; finish=missing)', None, True),
@@ -16,10 +17,12 @@ from app.services.llm.client import LLMResponse
     ('Schema validation failed', 'stop', False),
     (None, 'stop', False),
 ])
-def test_recovery_requires_gateway_operational_failure(monkeypatch, error, finish, allowed):
+def test_recovery_requires_gateway_operational_failure(monkeypatch, provider, error, finish, allowed):
     monkeypatch.setattr(recovery, 'settings', SimpleNamespace(
         gemini_api_key='test-only', gemini_quality_model='quality-test'))
-    response = LLMResponse(data={}, provider='openlux', error=error, finish_reason=finish)
+    if provider == 'zai' and error:
+        error = error.replace('OpenLux', 'zai')
+    response = LLMResponse(data={}, provider=provider, error=error, finish_reason=finish)
     client = recovery.operational_recovery_client(response, timeout=25, max_tokens=2000)
     assert (client is not None) == allowed
     if client:

@@ -40,6 +40,14 @@ class Settings(BaseSettings):
     jwt_access_token_expire_minutes: int = 30
     jwt_refresh_token_expire_days: int = 7
 
+    # Password recovery stays disabled until a verified SMTP sender is connected.
+    recovery_smtp_host: str | None = None
+    recovery_smtp_port: int = Field(default=587, ge=1, le=65535)
+    recovery_smtp_username: str | None = Field(default=None, repr=False, exclude=True)
+    recovery_smtp_password: str | None = Field(default=None, repr=False, exclude=True)
+    recovery_smtp_tls: str = "starttls"
+    recovery_email_sender: str | None = None
+
     # Extraction
     extractor_mode: str = "deterministic"  # "deterministic" or "llm"
 

@@ -530,7 +530,7 @@ async def _promote_prefetched_detail_job(
     try:
         from app.tasks.plans import regenerate_plan_item_details
 
-        regenerate_plan_item_details.apply_async(args=[job.id], queue="high_priority")
+        regenerate_plan_item_details.apply_async(args=[job.id], queue="default")
         logger.info(
             "[PLAN_ITEM] Promoted prefetched detail job item_id=%s job_id=%s",
             job.plan_item_id,
@@ -2116,9 +2116,9 @@ async def get_plan_item_detailed(
     await db.commit()
     await db.refresh(job)
 
-    # Queue the regeneration task on high priority since user is waiting
+    # Queue the regeneration task on the foreground lesson worker since user is waiting
     try:
-        regenerate_plan_item_details.apply_async(args=[job.id], queue="high_priority")
+        regenerate_plan_item_details.apply_async(args=[job.id], queue="default")
     except Exception as exc:
         logger.exception(
             "[PLAN_ITEM] Could not publish details job item_id=%s job_id=%s",
@@ -2149,7 +2149,7 @@ async def get_plan_item_detailed(
             ),
         )
     logger.info(
-        f"[PLAN_ITEM] Enqueued high_priority details generation for item_id={item_id}, job_id={job.id}"
+        f"[PLAN_ITEM] Enqueued foreground details generation for item_id={item_id}, job_id={job.id}"
     )
 
     return PlanItemDetailedResponse(
@@ -2777,9 +2777,9 @@ async def regenerate_item_details(
     # Import here to avoid circular imports
     from app.tasks.plans import regenerate_plan_item_details
 
-    # Queue the regeneration task on high priority
+    # Queue the regeneration task on the foreground lesson worker
     try:
-        regenerate_plan_item_details.apply_async(args=[job.id], queue="high_priority")
+        regenerate_plan_item_details.apply_async(args=[job.id], queue="default")
     except Exception as exc:
         logger.exception(
             "[PLAN_ITEM] Could not publish retry item_id=%s job_id=%s",

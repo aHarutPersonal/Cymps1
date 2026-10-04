@@ -29,3 +29,12 @@ class TokenResponse(BaseModel):
 
 class RefreshTokenRequest(BaseModel):
     refreshToken: str
+
+
+class PasswordResetRequest(BaseModel):
+    email: EmailStr
+
+
+class PasswordResetConfirm(PasswordRequest):
+    token: str = Field(pattern=r"^[A-Za-z0-9_-]{43}$")
+    password: str = Field(min_length=8, max_length=72)

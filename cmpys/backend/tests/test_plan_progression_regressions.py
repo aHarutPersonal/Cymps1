@@ -1506,7 +1506,7 @@ async def test_manual_daily_item_persists_script_without_detail_generation(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("pilot", [False, True])
-async def test_current_week_reserves_high_priority_for_first_mission(pilot) -> None:
+async def test_current_week_keeps_plan_worker_free_and_prioritizes_first_lesson(pilot) -> None:
     missions = [
         _item("mission-1", PlanItemType.PROJECT, 1),
         _item("mission-2", PlanItemType.READING, 1),
@@ -1538,7 +1538,7 @@ async def test_current_week_reserves_high_priority_for_first_mission(pilot) -> N
     assert [call.args[0].status for call in db.add.call_args_list] == ["queued"] * (1 if pilot else 2)
     assert [call.args[0].step for call in db.add.call_args_list] == ["background_queued"] * (1 if pilot else 2)
     assert enqueue.call_count == (1 if pilot else 2)
-    assert [call.kwargs["queue"] for call in enqueue.call_args_list] == (["high_priority"] if pilot else ["high_priority", "default"])
+    assert [call.kwargs["queue"] for call in enqueue.call_args_list] == (["default"] if pilot else ["default", "low_priority"])
     db.commit.assert_awaited_once()
 
 
@@ -1630,7 +1630,7 @@ async def test_opening_prefetched_detail_promotes_it_once(
 
     assert result == "promoted"
     assert job.status == "queued"
-    enqueue.assert_called_once_with(args=["job-prefetch"], queue="high_priority")
+    enqueue.assert_called_once_with(args=["job-prefetch"], queue="default")
     db.commit.assert_awaited_once()
 
 
@@ -3226,7 +3226,7 @@ async def test_regenerate_does_not_short_circuit_on_orphaned_modern_artifact() -
         )
 
     assert response.job_id == JOB_B
-    enqueue.assert_called_once_with(args=[JOB_B], queue="high_priority")
+    enqueue.assert_called_once_with(args=[JOB_B], queue="default")
 
 
 @pytest.mark.asyncio

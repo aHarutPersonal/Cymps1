@@ -8,6 +8,7 @@ import asyncio
 from contextlib import aclosing
 import json
 import logging
+import re
 import time
 from typing import Any
 
@@ -16,6 +17,38 @@ from pydantic import BaseModel, ValidationError
 from app.services.llm.client import LLMResponse, OpenAILLMClient
 
 logger = logging.getLogger(__name__)
+
+
+def _complete_json_object(raw: str) -> dict:
+    """Decode one complete document, allowing only lossless wire framing.
+
+    Never balance braces, invent values, or select one object from commentary.
+    Literal control characters inside strings are preserved, not removed.
+    Callers still validate the schema and the operation's content contract.
+    """
+    document = raw.strip()
+    fenced = re.fullmatch(r"```(?:json)?\s*\n(.*?)\n\s*```", document, re.S | re.I)
+    if fenced is not None:
+        document = fenced.group(1)
+
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("Duplicate JSON property")
+            result[key] = value
+        return result
+
+    def invalid_constant(_value):
+        raise ValueError("Non-finite JSON number")
+
+    data = json.loads(
+        document, strict=False, object_pairs_hook=unique_object,
+        parse_constant=invalid_constant,
+    )
+    if not isinstance(data, dict):
+        raise ValueError("Expected a JSON object")
+    return data
 
 
 def _unwrap_schema_answer(data: dict, output_model: type[BaseModel] | None) -> dict:
@@ -155,15 +188,16 @@ class OpenLuxLLMClient(OpenAILLMClient):
                             await on_chunk(text)
             if finish != "stop" or not text.strip():
                 raise ValueError("Incomplete or empty response")
-            data = json.loads(text)
-            if not isinstance(data, dict):
-                raise ValueError("Expected a JSON object")
+            data = _complete_json_object(text)
             data = _unwrap_schema_answer(data, output_model)
         except Exception as exc:
             # Upstream exceptions can echo headers or user content. Keep both
             # logs and persisted failures limited to a safe error category.
             label = "OpenLux" if self.provider_name == "openlux" else self.provider_name
             error = f"{label} request failed ({type(exc).__name__}; finish={finish or 'missing'})"
+            if isinstance(exc, json.JSONDecodeError):
+                # Decoder diagnostics contain locations, never response text.
+                error += f"; JSON at line {exc.lineno} column {exc.colno}: {exc.msg}"
             logger.warning("%s", error)
         return LLMResponse(
             data=data if error is None else {},

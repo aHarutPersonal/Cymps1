@@ -44,6 +44,7 @@ def gemini_settings(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "book_narration_gemini_voice", "Sulafat")
     monkeypatch.setattr(settings, "book_narration_gemini_mentor_voice", "Gacrux")
     monkeypatch.setattr(settings, "book_narration_media_dir", str(tmp_path))
+    monkeypatch.setattr(narration, "_gemini_word_alignment", AsyncMock(return_value=()))
     narration._locks.clear()
 
 

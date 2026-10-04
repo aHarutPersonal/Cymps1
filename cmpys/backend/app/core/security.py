@@ -23,7 +23,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         return False
 
 
-def create_access_token(subject: str, expires_delta: timedelta | None = None) -> str:
+def create_access_token(subject: str, expires_delta: timedelta | None = None, *, auth_version: int = 0) -> str:
     """Create a JWT access token."""
     if expires_delta:
         expire = datetime.now(timezone.utc) + expires_delta
@@ -32,19 +32,19 @@ def create_access_token(subject: str, expires_delta: timedelta | None = None) ->
             minutes=settings.jwt_access_token_expire_minutes
         )
 
-    to_encode = {"sub": subject, "exp": expire, "type": "access"}
+    to_encode = {"sub": subject, "exp": expire, "type": "access", "ver": auth_version}
     encoded_jwt = jwt.encode(
         to_encode, settings.jwt_secret_key, algorithm=settings.jwt_algorithm
     )
     return encoded_jwt
 
 
-def create_refresh_token(subject: str) -> str:
+def create_refresh_token(subject: str, *, auth_version: int = 0) -> str:
     """Create a JWT refresh token."""
     expire = datetime.now(timezone.utc) + timedelta(
         days=settings.jwt_refresh_token_expire_days
     )
-    to_encode = {"sub": subject, "exp": expire, "type": "refresh"}
+    to_encode = {"sub": subject, "exp": expire, "type": "refresh", "ver": auth_version}
     return jwt.encode(
         to_encode, settings.jwt_secret_key, algorithm=settings.jwt_algorithm
     )
