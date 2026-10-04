@@ -7,6 +7,7 @@ import '../../../app/design_tokens.dart';
 import '../../../core/ui/app_shell.dart';
 import '../../../core/ui/cmpys/cmpys_markdown.dart';
 import '../../../core/ui/cmpys/learning_comparison_view.dart';
+import '../../../core/ui/cmpys/learning_diagram_view.dart';
 import '../../../core/ui/cmpys/cmpys_primitives.dart';
 import '../../auth/controllers/session_controller.dart';
 import '../../cmpys/state/cmpys_store.dart';
@@ -377,10 +378,11 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
         .toInt();
     final document = documents[chapterIndex];
     if (document.segments.isEmpty) return null;
-    final position = checkpoint.textVersion < 2
+    final position = checkpoint.textVersion < 3
         ? document.remapLegacyPosition(
             checkpoint.segmentIndex,
             checkpoint.characterOffset,
+            textVersion: checkpoint.textVersion,
           )
         : (checkpoint.segmentIndex, checkpoint.characterOffset);
     final segmentIndex = position.$1
@@ -390,7 +392,7 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
     return BookNarrationCheckpoint(
       chapterIndex: chapterIndex,
       segmentIndex: segmentIndex,
-      textVersion: 2,
+      textVersion: 3,
       characterOffset: position.$2.clamp(0, segment.text.length).toInt(),
       updatedAtEpochMs: checkpoint.updatedAtEpochMs,
     );
@@ -557,7 +559,7 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
           .clamp(0, segment.text.length)
           .toInt(),
       updatedAtEpochMs: DateTime.now().millisecondsSinceEpoch,
-      textVersion: 2,
+      textVersion: 3,
     );
   }
 
@@ -2340,6 +2342,13 @@ class _NarratedBookMarkdown extends StatelessWidget {
     );
 
     Widget content = switch (block.kind) {
+      BookNarrationBlockKind.diagram => LearningDiagramView(
+        diagram: block.diagram!,
+        fontSize: fontSize,
+        dark: dark,
+        spansForRange: (start, end) =>
+            _textSpans(block, activeSegment, rangeStart: start, rangeEnd: end),
+      ),
       BookNarrationBlockKind.comparison => LearningComparisonView(
         comparison: block.comparison!,
         fontSize: fontSize,

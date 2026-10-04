@@ -1,0 +1,22 @@
+{
+  "version": "1.0.0",
+  "build": 3,
+  "flutter_tests_passed": 427,
+  "analyze": "No issues found",
+  "native_reader_scenarios_passed": 3,
+  "codesign": "deep strict verification passed",
+  "physical_installation": "confirmed by install result and device-side app inventory",
+  "physical_launch": "not verified; iOS Locked; subsequent connection inventory disconnected",
+  "transport_inventory": "localNetwork / tcp",
+  "artifact": "build/releases/cmpys-reader-1.0.0-3.app.zip",
+  "artifact_sha256": "260877d55e6ff1413b24aa62c95e50f18ff6dfccf76251bf49f30e5496ce64a7",
+  "app_framework_sha256": "4c928565f5c525b6ed08b86b25d6e0e2e71e1a4712fd690c3701804c77d4f3ee",
+  "screenshots": {
+    "playbook-tree-listening.png": "a4fda1e57e717605725b5520aafca5d42ed6b17c16d16dc8062639e2e0e47631",
+    "mr-market-large-text.png": "497c2bcd34a1acbba82956918528da969034832e4e0cbd8fe1a6c8ed3311f49c",
+    "playbook-tree-large-text.png": "13e23f221166816ca40e956c56f3fcf27d28b73171a83871bb7a2724aa74ad84",
+    "playbook-tree-reading.png": "1649167ae587b1a25bed6bb2a151b2c00f5cdd093f4fd849f4323eba32af067e",
+    "mr-market-listening.png": "a5dad178e71575055646a013c9a719c8e605e46f0d48f8d4f22b7522a8dd71f8",
+    "mr-market-reading.png": "463c0cc125be98d21abb4df06758323866cfc60b6924f878b210f8c23be39c06"
+  }
+}

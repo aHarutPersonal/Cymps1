@@ -57,7 +57,7 @@ void main() {
     await binding.takeScreenshot('comparison-listening');
     await tester.tap(find.byKey(const Key('book-narration-play-pause')));
     await tester.pumpAndSettle();
-    expect(repository.cursor?['narrationTextVersion'], 2);
+    expect(repository.cursor?['narrationTextVersion'], 3);
     await tester.longPress(
       find.text('1. Thorough Financial Analysis', findRichText: true).first,
     );

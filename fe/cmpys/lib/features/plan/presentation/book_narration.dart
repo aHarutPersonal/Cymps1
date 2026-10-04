@@ -10,6 +10,8 @@ import 'package:markdown/markdown.dart' as md;
 
 import '../../../core/network/api_error.dart';
 import '../../../core/reading/learning_comparison.dart';
+import '../../../core/reading/learning_diagram.dart';
+import '../../../core/reading/markdown_code_text.dart';
 import '../../session/data/content_resources_repository.dart';
 
 typedef BookNarrationProgressHandler =
@@ -1591,6 +1593,7 @@ enum BookNarrationBlockKind {
   quote,
   code,
   comparison,
+  diagram,
 }
 
 @immutable
@@ -1603,6 +1606,7 @@ class BookNarrationBlock {
     this.headingLevel = 0,
     this.listMarker,
     this.comparison,
+    this.diagram,
   });
 
   final String text;
@@ -1612,6 +1616,7 @@ class BookNarrationBlock {
   final int headingLevel;
   final String? listMarker;
   final LearningComparison? comparison;
+  final LearningDiagram? diagram;
 
   bool get containsSpeech => segmentCount > 0;
 }
@@ -1684,16 +1689,19 @@ class BookNarrationDocument {
     required this.segments,
     required this.chunks,
     this.legacyDocument,
+    this.previousDocument,
   });
 
   factory BookNarrationDocument.fromMarkdown(
     String markdown, {
     bool semanticComparisons = true,
+    bool semanticDiagrams = true,
   }) {
     final nodes = md.Document(
       extensionSet: md.ExtensionSet.gitHubFlavored,
     ).parse(markdown);
     final drafts = <_NarrationBlockDraft>[];
+    var changedCodeText = false;
 
     void appendNode(md.Node node, {String? listMarker}) {
       if (node is md.Text) {
@@ -1764,18 +1772,32 @@ class BookNarrationDocument {
             'language-',
             '',
           );
+          // Keep historical v1/v2 documents byte-compatible for saved cursors.
+          final source = semanticDiagrams
+              ? markdownCodeText(node.textContent)
+              : node.textContent;
+          changedCodeText |= source != node.textContent;
           final comparison = semanticComparisons
-              ? LearningComparison.parse(node.textContent, language: language)
+              ? LearningComparison.parse(source, language: language)
               : null;
-          final text = comparison?.text ?? _readableText(node);
+          final diagram = semanticDiagrams && comparison == null
+              ? LearningDiagram.parse(source, language: language)
+              : null;
+          final text =
+              comparison?.text ??
+              diagram?.text ??
+              source.replaceAll(RegExp(r'\s+'), ' ').trim();
           if (text.isNotEmpty) {
             drafts.add(
               _NarrationBlockDraft(
                 text: text,
-                kind: comparison == null
-                    ? BookNarrationBlockKind.code
-                    : BookNarrationBlockKind.comparison,
+                kind: comparison != null
+                    ? BookNarrationBlockKind.comparison
+                    : diagram != null
+                    ? BookNarrationBlockKind.diagram
+                    : BookNarrationBlockKind.code,
                 comparison: comparison,
+                diagram: diagram,
               ),
             );
           }
@@ -1861,6 +1883,7 @@ class BookNarrationDocument {
           headingLevel: draft.headingLevel,
           listMarker: draft.listMarker,
           comparison: draft.comparison,
+          diagram: draft.diagram,
         ),
       );
     }
@@ -1868,10 +1891,22 @@ class BookNarrationDocument {
       blocks: blocks,
       segments: segments,
       chunks: _buildNarrationChunks(blocks, segments),
-      legacyDocument: drafts.any((draft) => draft.comparison != null)
+      legacyDocument:
+          changedCodeText ||
+              drafts.any(
+                (draft) => draft.comparison != null || draft.diagram != null,
+              )
           ? BookNarrationDocument.fromMarkdown(
               markdown,
               semanticComparisons: false,
+              semanticDiagrams: false,
+            )
+          : null,
+      previousDocument:
+          changedCodeText || drafts.any((draft) => draft.diagram != null)
+          ? BookNarrationDocument.fromMarkdown(
+              markdown,
+              semanticDiagrams: false,
             )
           : null,
     );
@@ -1881,11 +1916,16 @@ class BookNarrationDocument {
   final List<BookNarrationSegment> segments;
   final List<BookNarrationChunk> chunks;
   final BookNarrationDocument? legacyDocument;
+  final BookNarrationDocument? previousDocument;
 
   /// Migrate old saved segment indices without jumping past a transformed box.
   /// The block count/order is unchanged; only its framing and whitespace differ.
-  (int, int) remapLegacyPosition(int segmentIndex, int characterOffset) {
-    final legacy = legacyDocument;
+  (int, int) remapLegacyPosition(
+    int segmentIndex,
+    int characterOffset, {
+    int textVersion = 1,
+  }) {
+    final legacy = textVersion == 2 ? previousDocument : legacyDocument;
     if (legacy == null || legacy.segments.isEmpty) {
       return (segmentIndex, characterOffset);
     }
@@ -1895,12 +1935,11 @@ class BookNarrationDocument {
     final block = blocks[old.blockIndex];
     final oldOffset = old.start + characterOffset.clamp(0, old.text.length);
     var offset = oldOffset;
-    if (block.comparison != null) {
-      final formatting = RegExp(r'[\s+|\-=]');
-      final retained = oldText
-          .substring(0, oldOffset)
-          .replaceAll(formatting, '')
-          .length;
+    if (block.comparison != null || block.diagram != null) {
+      final formatting = RegExp(r'[\s+|\-=\[\]<>─━│▼►▶→←├└┌┐┘┤┬┴┼]');
+      final retained = markdownCodeText(
+        oldText.substring(0, oldOffset),
+      ).replaceAll(formatting, '').length;
       var count = 0;
       offset = 0;
       while (offset < block.text.length && count < retained) {
@@ -1910,6 +1949,8 @@ class BookNarrationDocument {
       while (offset < block.text.length && block.text[offset].trim().isEmpty) {
         offset++;
       }
+    } else if (block.kind == BookNarrationBlockKind.code) {
+      offset = markdownCodeText(oldText.substring(0, oldOffset)).length;
     }
     final candidates = segments
         .skip(block.firstSegmentIndex)
@@ -2275,6 +2316,7 @@ final class _NarrationBlockDraft {
     this.headingLevel = 0,
     this.listMarker,
     this.comparison,
+    this.diagram,
   });
 
   final String text;
@@ -2282,6 +2324,7 @@ final class _NarrationBlockDraft {
   final int headingLevel;
   final String? listMarker;
   final LearningComparison? comparison;
+  final LearningDiagram? diagram;
 }
 
 final class _TextRange {

@@ -5,6 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:markdown/markdown.dart' as md;
 import '../../reading/learning_comparison.dart';
+import '../../reading/learning_diagram.dart';
+import '../../reading/markdown_code_text.dart';
+import 'learning_diagram_view.dart';
 import 'learning_comparison_view.dart';
 
 import '../../../app/design_tokens.dart';
@@ -185,13 +188,20 @@ class _LearningBlockBuilder extends MarkdownElementBuilder {
       'language-',
       '',
     );
-    final comparison = LearningComparison.parse(
-      element.textContent,
-      language: language,
-    );
+    // FlutterMarkdown already constructs Document(encodeHtml: false).
+    final source = markdownCodeText(element.textContent, encoded: false);
+    final comparison = LearningComparison.parse(source, language: language);
     if (comparison != null) {
       return LearningComparisonView(
         comparison: comparison,
+        fontSize: fontSize,
+        dark: dark,
+      );
+    }
+    final diagram = LearningDiagram.parse(source, language: language);
+    if (diagram != null) {
+      return LearningDiagramView(
+        diagram: diagram,
         fontSize: fontSize,
         dark: dark,
       );
@@ -205,7 +215,7 @@ class _LearningBlockBuilder extends MarkdownElementBuilder {
       child: SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         child: Text(
-          element.textContent.trimRight(),
+          source.trimRight(),
           style: AppTypography.monoLabel.copyWith(
             color: dark ? Colors.white : AppColors.ink,
             fontSize: fontSize - 2,

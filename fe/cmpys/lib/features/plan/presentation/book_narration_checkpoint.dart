@@ -48,7 +48,7 @@ class BookNarrationCheckpoint {
     if (value is! Map) return null;
 
     final textVersion = _nonNegativeInt(value['textVersion'] ?? 1);
-    if (textVersion != 1 && textVersion != 2) return null;
+    if (textVersion != 1 && textVersion != 2 && textVersion != 3) return null;
     final chapterIndex = _nonNegativeInt(value['chapterIndex']);
     final segmentIndex = _nonNegativeInt(value['segmentIndex']);
     final characterOffset = _nonNegativeInt(value['characterOffset']);
