@@ -177,3 +177,65 @@ async def test_single_use_replacement_expiry_and_password_change_postgres(monkey
                     assert (await recovery.issue_reset(db,'missing@example.com'))[0] is None
             finally: await transaction.rollback()
     finally: await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_http_recovery_round_trip_against_postgres(monkeypatch):
+    if os.environ.get('RUN_POSTGRES_INTEGRATION') != '1':
+        pytest.skip('PostgreSQL integration opt-in')
+    from fastapi import Depends
+    from sqlalchemy import text
+    app = FastAPI()
+    app.include_router(auth.router)
+    @app.get('/protected')
+    async def protected(user=Depends(get_current_user)):
+        return {'authenticated': True}
+    monkeypatch.setattr(recovery, 'recovery_available', lambda: True)
+    monkeypatch.setattr(recovery, 'enforce_recovery_limit', AsyncMock())
+    mail = AsyncMock()
+    monkeypatch.setattr(recovery, 'deliver_reset', mail)
+    engine = create_async_engine(settings.database_url)
+    try:
+        async with engine.connect() as connection:
+            if not (await connection.execute(text("select to_regclass('users')"))).scalar_one():
+                pytest.skip('Apply migrations to the isolated QA database first')
+            await connection.rollback()
+            outer = await connection.begin()
+            try:
+                async with AsyncSession(connection, expire_on_commit=False,
+                                        join_transaction_mode='create_savepoint') as db:
+                    async def database():
+                        yield db
+                    app.dependency_overrides[get_db] = database
+                    email = 'recovery-http-' + uuid4().hex + '@example.com'
+                    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                                 base_url='https://test') as client:
+                        registered = await client.post('/auth/register', json={
+                            'email': email, 'password': 'old-password'})
+                        assert registered.status_code == 201
+                        old = registered.json()
+                        headers = {'Authorization': 'Bearer ' + old['accessToken']}
+                        assert (await client.get('/protected', headers=headers)).status_code == 200
+                        requested = await client.post('/auth/password-reset/request', json={'email': email})
+                        assert requested.status_code == 202
+                        recipient, code = mail.await_args.args
+                        assert recipient == email and code not in requested.text
+                        confirmed = await client.post('/auth/password-reset/confirm', json={
+                            'token': code, 'password': 'new-password'})
+                        assert confirmed.status_code == 204
+                        assert (await client.get('/protected', headers=headers)).status_code == 401
+                        assert (await client.post('/auth/refresh', json={
+                            'refreshToken': old['refreshToken']})).status_code == 401
+                        assert (await client.post('/auth/login', json={
+                            'email': email, 'password': 'old-password'})).status_code == 401
+                        current = await client.post('/auth/login', json={
+                            'email': email, 'password': 'new-password'})
+                        assert current.status_code == 200
+                        assert (await client.get('/protected', headers={
+                            'Authorization': 'Bearer ' + current.json()['accessToken']})).status_code == 200
+                        assert (await client.post('/auth/password-reset/confirm', json={
+                            'token': code, 'password': 'another-password'})).status_code == 400
+            finally:
+                await outer.rollback()
+    finally:
+        await engine.dispose()

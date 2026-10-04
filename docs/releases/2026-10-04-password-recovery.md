@@ -25,3 +25,5 @@ Migration `m4n5o6p7q8r9` adds nullable recovery fields and an authentication ver
 ## Validation
 
 Tests cover code/password validation, identical known/unknown responses, explicit unconfigured behavior, old access/refresh rejection, secret-free error logging, loopback-only cleartext allowance, real SMTP delivery into a controlled loopback server, Redis failure/limit responses, and real PostgreSQL expiry, replacement, one-time consumption and password change. Test SMTP delivery is not evidence of production email delivery.
+
+An additional HTTP-to-PostgreSQL round trip passed against the isolated QA database: registration, authenticated access, recovery request (delivery captured in memory), confirmation, rejection of old access/refresh tokens and password, successful new-password login, and rejection of a reused code. The transaction was rolled back; no external message was sent. This complements the separate real SMTP loopback test.
