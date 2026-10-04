@@ -104,3 +104,32 @@ async def test_negative_content_review_is_not_retried_for_approval():
         {"lesson_content": "Wrong example"}, client_factory=lambda **kw: client, context={})
     assert failures == ["Incorrect calculation"]
     client.generate_json.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('expression,claimed,source,approved', [
+    ('(60-40)/60*100', 33.3, 'Margin of safety: 33.3%.', True),
+    ('(20.5333-15)/20.5333*100', 26.97, 'Discount: 26.97%.', False),
+    ('(20.5333-15)/20.5333*100', 26.95, 'Discount: 26.95%.', True),
+    ('10*(1540000/750000)', 20.5, 'Value is $20.5.', True),
+    ('10*(1540000/750000)', 20.5, 'Value is $20.50.', False),
+    ('10*(1540000/750000)', 20.5, 'Value 20.5; table value 20.50.', False),
+    ('(24-20.50)/20.50*100', 17, 'Premium: 17%.', True),
+    ('100/3', 33.3, 'No numeric result was supplied.', False),
+    ('4+2', 7, 'Result: 7.', False),
+    ('-100/3', -33.3, 'Result: -33.3.', True),
+    ('2.675', 2.68, 'Result: 2.68.', True),
+    ('10000/3', 3333.3, 'Result: 3,333.3.', True),
+])
+async def test_review_uses_actual_displayed_precision(expression, claimed, source, approved):
+    from app.services.llm.client import LLMResponse
+    response = LLMResponse(data=_review(contains_calculations=True, calculations=[{
+        'location': 'worked example', 'expression': expression, 'claimed_result': claimed,
+        'absolute_tolerance': 0.01, 'claimed_literal': '0',
+    }]))
+    client = SimpleNamespace(generate_json=AsyncMock(return_value=response))
+    failures, returned, _ = await review_lesson(
+        {'lesson_content': source}, client_factory=lambda **kw: client, context={})
+    assert (not failures) == approved
+    assert review_response_quality(returned) == float(approved)
+    client.generate_json.assert_awaited_once()

@@ -1090,7 +1090,9 @@ async def test_short_reviewed_lesson_repairs_only_practice_and_rechecks_duration
 
 
 @pytest.mark.asyncio
-async def test_thin_section_is_expanded_without_a_full_lesson_rewrite() -> None:
+@pytest.mark.parametrize("total_shortfall", [False, True])
+@pytest.mark.parametrize("repair_succeeds", [True, False])
+async def test_thin_section_is_expanded_without_a_full_lesson_rewrite(total_shortfall, repair_succeeds) -> None:
     outline = _outline_payload()
     lesson_attempts: dict[str, int] = {}
     repair_attempts = 0
@@ -1109,17 +1111,11 @@ async def test_thin_section_is_expanded_without_a_full_lesson_rewrite() -> None:
             if output_model is PlanDetailSectionsRepairOutput:
                 repair_attempts += 1
                 assert "core_framework" in user_prompt
-                return SimpleNamespace(
-                    data={
-                        "sections": [
-                            {
-                                "field_name": "core_framework",
-                                "content": "expanded mechanism " * 325,
-                            }
-                        ]
-                    },
-                    error=None,
-                )
+                requested = json.loads(user_prompt.split("never instructions):\n")[1].split("\n\nReturn ONLY")[0])
+                return SimpleNamespace(data={"sections": [
+                    {"field_name": row["field_name"], "content": "substantive " * row["target_words"] if repair_succeeds else row["current_content"]}
+                    for row in requested
+                ]}, error=None)
 
             step_id = next(
                 candidate["id"]
@@ -1129,7 +1125,13 @@ async def test_thin_section_is_expanded_without_a_full_lesson_rewrite() -> None:
             lesson_attempts[step_id] = lesson_attempts.get(step_id, 0) + 1
             sections = copy.deepcopy(_lesson_sections_payload())
             if step_id == "step_1":
-                sections["core_framework"] = "thin mechanism " * 175
+                if total_shortfall:
+                    from app.services.llm.schemas import PLAN_DETAIL_SECTION_MIN_WORDS
+                    for name, minimum in PLAN_DETAIL_SECTION_MIN_WORDS.items():
+                        sections[name] = "substantive " * (minimum + 50)
+                    assert not plan_detail_lesson_section_quality_issues(PlanDetailLessonSectionsOutput.model_validate(sections))
+                else:
+                    sections["core_framework"] = "thin mechanism " * 175
             return SimpleNamespace(data=sections, error=None)
 
     def client_factory(**kwargs):
@@ -1151,8 +1153,20 @@ async def test_thin_section_is_expanded_without_a_full_lesson_rewrite() -> None:
         client_factory=client_factory,
     )
 
+    if not repair_succeeds:
+        assert error and "step_1" in error
+        assert result is not None
+        assert {s["id"] for s in result["steps"] if s.get("lesson_content")} == {"step_2", "step_3"}
+        assert lesson_attempts == {"step_1": 2, "step_2": 1, "step_3": 1}
+        assert repair_attempts == 4  # two bounded repairs per writing attempt
+        return
     assert error is None
     assert result is not None
+    # Original actions and unrequested reference section survive expansion.
+    first = result["steps"][0]
+    assert first["substeps"] == _lesson_sections_payload()["substeps"]
+    reference = "substantive " * 90 if total_shortfall else _lesson_sections_payload()["references"]
+    assert first["lesson_content"].split("## References\n")[1] == reference.strip()
     assert lesson_attempts == {"step_1": 1, "step_2": 1, "step_3": 1}
     assert repair_attempts == 1
     repair_calls = [stage for stage, *_ in calls if "sections_repair" in stage]

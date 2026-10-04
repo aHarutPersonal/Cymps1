@@ -493,6 +493,11 @@ def _assemble_parallel_lesson_response(
         title=str(step.get("title") or ""),
         sections=sections,
     )
+    if len(lesson_content.split()) < MIN_PLAN_DETAIL_LESSON_WORDS:
+        # Keep the structured draft for a bounded section expansion. Individual
+        # section floors sum to less than the complete lesson floor.
+        response.error = "Plan lesson sections quality failed: complete lesson is below the minimum word count"
+        return
     reading_minutes = max(1, round(len(lesson_content.split()) / 200))
     practice_minutes = max(20, target_minutes - reading_minutes)
     response.data = {
@@ -701,6 +706,29 @@ only approved resource titles. Never invent quotations, chapter numbers,
 dates, or mentor anecdotes. Do not return unchanged sections, substeps,
 headings, commentary, or a markdown fence.
 """
+
+
+def _sections_needing_expansion(sections: dict[str, Any], title: str) -> list[str]:
+    if not sections:
+        return []
+    counts = {name: len(str(sections.get(name) or "").split())
+              for name in PLAN_DETAIL_SECTION_MIN_WORDS}
+    selected = [name for name, minimum in PLAN_DETAIL_SECTION_MIN_WORDS.items()
+                if counts[name] < minimum]
+    content = _assemble_plan_detail_lesson_content(
+        title=title, sections=PlanDetailLessonSectionsOutput.model_validate(sections))
+    projected = len(content.split()) + sum(
+        max(0, PLAN_DETAIL_SECTION_TARGET_WORDS[name] - counts[name]) for name in selected)
+    # Expand the fewest substantive teaching sections needed to clear the
+    # total floor, leaving all other prose and actions byte-for-byte intact.
+    for name in sorted(counts, key=lambda n: PLAN_DETAIL_SECTION_TARGET_WORDS[n] - counts[n], reverse=True):
+        if projected >= MIN_PLAN_DETAIL_LESSON_WORDS + 100:
+            break
+        gain = PLAN_DETAIL_SECTION_TARGET_WORDS[name] - counts[name]
+        if name not in selected and name != "references" and gain > 0:
+            selected.append(name)
+            projected += gain
+    return selected
 
 
 def _validate_plan_detail_sections_repair_response(
@@ -1013,18 +1041,9 @@ async def _generate_plan_item_details_parallel(
                     ).model_dump(mode="json")
                 except ValidationError:
                     original_sections = {}
-                thin_fields = (
-                    [
-                        field_name
-                        for field_name, minimum_words in PLAN_DETAIL_SECTION_MIN_WORDS.items()
-                        if len(str(original_sections.get(field_name) or "").split())
-                        < minimum_words
-                    ]
-                    if original_sections
-                    else []
-                )
                 current_sections = original_sections
                 for repair_attempt in range(2):
+                    thin_fields = _sections_needing_expansion(current_sections, str(step.get("title") or ""))
                     if not thin_fields:
                         break
                     repair_tier = "balanced"

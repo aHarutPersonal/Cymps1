@@ -2,11 +2,22 @@
 import json
 import logging
 import math
+import re
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from app.services.practice.contracts import calculate
 
 REVIEW_VERSION = 2
 logger = logging.getLogger(__name__)
+
+_NUMBER_LITERAL = re.compile(r"(?<![\w.])[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?!\w|\.\d|,\d)")
+
+
+def _source_literal(source: str, claimed: float) -> str | None:
+    """Keep the most precise matching spelling; JSON floats lose trailing zeros."""
+    matches = [m.group().replace(",", "") for m in _NUMBER_LITERAL.finditer(source)
+               if Decimal(m.group().replace(",", "")) == Decimal(str(claimed))]
+    return min(matches, key=lambda value: Decimal(value).as_tuple().exponent) if matches else None
 
 
 class CalculationCheck(BaseModel):
@@ -15,6 +26,8 @@ class CalculationCheck(BaseModel):
     expression: str = Field(min_length=1, max_length=300)
     claimed_result: float
     absolute_tolerance: float = Field(default=0.01, ge=0, le=0.1)
+    claimed_literal: str | None = Field(default=None, max_length=80,
+        description="Exact numeric spelling in the lesson, preserving decimal places, or null.")
 
 
 class LessonReview(BaseModel):
@@ -44,9 +57,16 @@ class LessonReview(BaseModel):
         for check in self.calculations:
             try:
                 actual = calculate(check.expression, {})
-                if not math.isclose(actual, check.claimed_result, rel_tol=0, abs_tol=check.absolute_tolerance):
+                correct = math.isclose(actual, check.claimed_result, rel_tol=0, abs_tol=check.absolute_tolerance)
+                if check.claimed_literal is not None:
+                    literal = Decimal(check.claimed_literal)
+                    # Source precision takes precedence over a reviewer-chosen
+                    # tolerance. 33.333... -> 33.3 is correct; 26.9479 -> 26.97 isn't.
+                    correct = (literal.is_finite() and literal == Decimal(str(check.claimed_result))
+                               and Decimal(str(actual)).quantize(literal, rounding=ROUND_HALF_UP) == literal)
+                if not correct:
                     errors.append(f"{check.location}: {check.expression} = {actual:g}, not {check.claimed_result:g}")
-            except ValueError:
+            except (ValueError, InvalidOperation):
                 errors.append(f"{check.location}: calculation cannot be verified")
         return errors
 
@@ -103,6 +123,8 @@ async def review_lesson(lesson: dict, *, client_factory, context: dict):
             "For EVERY numeric result extract an expression using raw numeric inputs and + - * / "
             "parentheses or sqrt only, and the result CLAIMED IN THE LESSON, not your corrected result. "
             "The server will recompute it. Include calculations even if you believe they are correct. "
+            "Preserve the exact displayed decimal places in claimed_literal. Correct rounding to "
+            "those places is allowed; incorrect rounding, wrong inputs and wrong signs are not. "
             "Do not use a claimed answer as its own expression. Check semantic classifications yourself: "
             "arithmetic alone cannot establish whether an expense or asset was treated correctly. "
             "Estimate practice_minutes from the actual exercises, including revisions; do not fill "
@@ -125,6 +147,12 @@ async def review_lesson(lesson: dict, *, client_factory, context: dict):
                     else "Content review unavailable; lesson must not be published"], response, client
         try:
             review = LessonReview.model_validate(response.data)
+            source = json.dumps({key: lesson.get(key) for key in ("lesson_content", "substeps")}, ensure_ascii=False)
+            for check in review.calculations:
+                # Never let a model invent a coarser precision to pass a check.
+                # Derive it from the actual lesson, including legacy responses
+                # that omitted claimed_literal entirely.
+                check.claimed_literal = _source_literal(source, check.claimed_result)
             response.data = review.model_dump(mode="json")
             # A valid negative review is final. Never ask until a reviewer agrees.
             return review.failures(), response, client
