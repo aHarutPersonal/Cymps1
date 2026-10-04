@@ -102,3 +102,7 @@ The missing recovery function identified above has now been implemented and test
 Real production email remains disabled until an existing verified sender is connected and tested. No email provider was purchased, no external email was sent, and test delivery is not claimed as production delivery.
 
 Post-deployment synthetic smoke passed registration, login, profile and token refresh. Recovery availability returned false, requests returned explicit 503, and an invalid well-formed code returned 400 through the live Redis limiter. Database migration head matched `m4n5o6p7q8r9`; all configured services passed deployment readiness.
+
+## HTTPS activation after owner consent
+
+The owner subsequently approved the reviewed Let's Encrypt agreement and HTTPS activation. The existing IP-certificate workflow completed successfully, including a successful renewal dry run and an enabled/active renewal timer. Public HTTPS readiness returned 200 using normal certificate validation; the new client API base is `https://54.158.122.215/api/v1`. See [activation evidence](2026-10-04-https-activation.md). The earlier pending-consent blocker is resolved. Existing HTTP compatibility remains for installed builds until migration; the new build must use HTTPS. Real recovery-email delivery is still awaiting a verified sender connection.

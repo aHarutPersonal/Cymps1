@@ -221,3 +221,16 @@ verify_configured_workers() {{ return 0; }}
     assert result.returncode == (17 if armed and compose_fails else 0), result.stderr
     assert live.read_text() == "previous release"
     assert backup.read_text() == "previous release"
+
+
+def test_web_is_reachable_only_through_the_trusted_host_proxy():
+    import yaml
+    compose = yaml.safe_load((PROJECT_ROOT / 'infra/docker-compose.prod.yml').read_text())
+    web = compose['services']['web']
+    assert web['ports'] == ['127.0.0.1:8000:8000']
+    assert web['environment']['FORWARDED_ALLOW_IPS'] == '*'
+    proxy = (PROJECT_ROOT / 'infra/https/nginx-proxy.conf.template').read_text()
+    assert 'proxy_set_header X-Forwarded-For $remote_addr;' in proxy
+    assert 'proxy_set_header X-Forwarded-Proto $scheme;' in proxy
+    assert 'RECOVERY_EMAIL_SENDER' in web['environment']
+    assert 'RECOVERY_SMTP_TLS' in web['environment']
