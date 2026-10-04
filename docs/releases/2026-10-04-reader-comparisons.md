@@ -36,3 +36,13 @@ The final signed iPhone release is **1.0.0 (2)**, using the existing app identit
 CoreDevice confirmed successful in-place installation of build 2 at approximately 20:45 Asia/Yerevan. No uninstall, data wipe or logout was performed. The compiled App.framework SHA-256 is `369a6f2f455a069d380f378d504c8b830eb87d946033742f6ccd725f09751782`.
 
 The phone disconnected before launch verification completed. The launch request failed with a transport timeout and the subsequent device inventory reported unavailable. Therefore installation is confirmed, but launch and the new reader's appearance/audio on the physical phone are not newly verified. Open CMPYS normally to see the update; the screenshots above are from the simulator.
+
+## Device-side follow-up verification
+
+After the owner reported not seeing the change, the phone's own app inventory was queried again at approximately 20:51. It reported CMPYS **1.0.0 (2)** before reinstallation. A full installed-app inventory contained exactly one app whose name or bundle identifier matched CMPYS; no second CMPYS icon/build was found.
+
+The current signed artifact still matched the release hash above, passed deep/strict verification, used the production `lib/main.dart` entry point, and contained `LearningComparisonView` and its comparison-section identifiers. At the owner's renewed request, it was installed in place again at approximately 20:52.
+
+The next launch attempt reached the device but was explicitly rejected by iOS as **Locked**. A subsequent lock-state read reported `passcodeRequired=true`. This is a different, confirmed blocker from the earlier transport timeout: the device must be unlocked to complete launch verification.
+
+The live saved comparison's SHA-256 (`d966bb261f54663283cabe3196b1b4de1d9c85dd33a28663c7614998e3418152`) exactly matched the regression fixture, including its empty fence language and four recognized borders. The application's library, plan and routed book readers use the updated production reader. These checks exclude a stale build number, duplicate CMPYS identity, wrong build entry point, or changed source format as the currently observed explanation. They do not substitute for seeing the updated reader on the unlocked physical phone.
