@@ -48,3 +48,4 @@ The more you know, the better you can help. But remember — you're learning abo
 - Prefers a distraction-free book reader without the fixed chapter toolbar, and bottom controls that hide while scrolling with an easy swipe to reveal them.
 - Wants CMPYS design improvements to preserve its existing design system, including when using Open Design.
 - Wants Open Design's anonymous metrics and conversation/tool-content uploads turned off.
+- Wants instructional comparisons and diagrams in the CMPYS reader to use polished, accessible visual layouts instead of ASCII boxes, while preserving narration, highlighting, and notes.

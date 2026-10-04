@@ -64,3 +64,7 @@ OUTPUT JSON — EXACT TOP-LEVEL KEYS:
 }
 
 Return exactly 6 `sections`, 7-9 `ideas`, and 3-8 honest `grounding_notes`. Output valid JSON only: no markdown fence, commentary, or extra top-level keys.
+
+MOBILE READER PRESENTATION:
+- Never draw instructional comparisons or diagrams with ASCII boxes, pipes, borders, or spacing-aligned columns. Use ordinary prose/headings/lists for explanations. Reserve ordinary code fences for actual executable code.
+- For a useful two-way comparison, you may include a fenced `comparison` block inside the Markdown string: a short heading, 2-6 `- ` bullet lines, a blank line, `vs.`, a blank line, a second heading and 2-6 `- ` bullet lines. Each bullet is a complete short point, optionally followed by a parenthetical explanation. No borders, nested lists, extra columns or code inside this block. The reader displays the two groups as accessible stacked comparison cards. Preserve exact factual wording and never invent data for a visual.

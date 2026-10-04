@@ -3,6 +3,9 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:markdown/markdown.dart' as md;
+import '../../reading/learning_comparison.dart';
+import 'learning_comparison_view.dart';
 
 import '../../../app/design_tokens.dart';
 
@@ -28,7 +31,12 @@ class CmpysMarkdown extends StatelessWidget {
     return MarkdownBody(
       data: data,
       selectable: false,
+      fitContent: false,
+      builders: {
+        'pre': _LearningBlockBuilder(fontSize: fontSize, dark: onDark),
+      },
       styleSheet: MarkdownStyleSheet(
+        codeblockDecoration: const BoxDecoration(),
         p: AppTypography.reading.copyWith(
           fontSize: fontSize,
           height: lineHeight,
@@ -155,6 +163,54 @@ class CmpysMarkdownScreen extends StatelessWidget {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _LearningBlockBuilder extends MarkdownElementBuilder {
+  _LearningBlockBuilder({required this.fontSize, required this.dark});
+  final double fontSize;
+  final bool dark;
+  @override
+  bool isBlockElement() => true;
+  @override
+  Widget visitText(md.Text text, TextStyle? preferredStyle) =>
+      const SizedBox.shrink();
+  @override
+  Widget? visitElementAfter(md.Element element, TextStyle? preferredStyle) {
+    final code = element.children?.whereType<md.Element>().firstOrNull;
+    final language = (code?.attributes['class'] ?? '').replaceFirst(
+      'language-',
+      '',
+    );
+    final comparison = LearningComparison.parse(
+      element.textContent,
+      language: language,
+    );
+    if (comparison != null) {
+      return LearningComparisonView(
+        comparison: comparison,
+        fontSize: fontSize,
+        dark: dark,
+      );
+    }
+    return Container(
+      padding: const EdgeInsets.all(13),
+      decoration: BoxDecoration(
+        color: dark ? Colors.white.withValues(alpha: .06) : AppColors.paper2,
+        borderRadius: AppRadii.br12,
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Text(
+          element.textContent.trimRight(),
+          style: AppTypography.monoLabel.copyWith(
+            color: dark ? Colors.white : AppColors.ink,
+            fontSize: fontSize - 2,
+            height: 1.55,
+          ),
         ),
       ),
     );

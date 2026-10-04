@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/design_tokens.dart';
 import '../../../core/ui/app_shell.dart';
 import '../../../core/ui/cmpys/cmpys_markdown.dart';
+import '../../../core/ui/cmpys/learning_comparison_view.dart';
 import '../../../core/ui/cmpys/cmpys_primitives.dart';
 import '../../auth/controllers/session_controller.dart';
 import '../../cmpys/state/cmpys_store.dart';
@@ -362,6 +363,7 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
       'segmentIndex': cursor['narrationSegment'],
       'characterOffset': cursor['narrationCharacterOffset'],
       'updatedAtEpochMs': cursor['narrationUpdatedAtEpochMs'],
+      'textVersion': cursor['narrationTextVersion'],
     });
   }
 
@@ -375,16 +377,21 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
         .toInt();
     final document = documents[chapterIndex];
     if (document.segments.isEmpty) return null;
-    final segmentIndex = checkpoint.segmentIndex
+    final position = checkpoint.textVersion < 2
+        ? document.remapLegacyPosition(
+            checkpoint.segmentIndex,
+            checkpoint.characterOffset,
+          )
+        : (checkpoint.segmentIndex, checkpoint.characterOffset);
+    final segmentIndex = position.$1
         .clamp(0, document.segments.length - 1)
         .toInt();
     final segment = document.segments[segmentIndex];
     return BookNarrationCheckpoint(
       chapterIndex: chapterIndex,
       segmentIndex: segmentIndex,
-      characterOffset: checkpoint.characterOffset
-          .clamp(0, segment.text.length)
-          .toInt(),
+      textVersion: 2,
+      characterOffset: position.$2.clamp(0, segment.text.length).toInt(),
       updatedAtEpochMs: checkpoint.updatedAtEpochMs,
     );
   }
@@ -513,6 +520,7 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
         'narrationSegment': checkpoint.segmentIndex,
         'narrationCharacterOffset': checkpoint.characterOffset,
         'narrationUpdatedAtEpochMs': checkpoint.updatedAtEpochMs,
+        'narrationTextVersion': checkpoint.textVersion,
       },
     };
     _progressWrite = _progressWrite.then((_) async {
@@ -549,6 +557,7 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
           .clamp(0, segment.text.length)
           .toInt(),
       updatedAtEpochMs: DateTime.now().millisecondsSinceEpoch,
+      textVersion: 2,
     );
   }
 
@@ -2331,6 +2340,13 @@ class _NarratedBookMarkdown extends StatelessWidget {
     );
 
     Widget content = switch (block.kind) {
+      BookNarrationBlockKind.comparison => LearningComparisonView(
+        comparison: block.comparison!,
+        fontSize: fontSize,
+        dark: dark,
+        spansForRange: (start, end) =>
+            _textSpans(block, activeSegment, rangeStart: start, rangeEnd: end),
+      ),
       BookNarrationBlockKind.listItem => Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -2426,8 +2442,10 @@ class _NarratedBookMarkdown extends StatelessWidget {
 
   List<InlineSpan> _textSpans(
     BookNarrationBlock block,
-    BookNarrationSegment? activeSegment,
-  ) {
+    BookNarrationSegment? activeSegment, {
+    int? rangeStart,
+    int? rangeEnd,
+  }) {
     final boundaries = <int>{0, block.text.length};
     final blockSegments = document.segments
         .skip(block.firstSegmentIndex)
@@ -2454,7 +2472,17 @@ class _NarratedBookMarkdown extends StatelessWidget {
         ..add(wordEnd);
     }
 
-    final ordered = boundaries.toList()..sort();
+    if (rangeStart != null) boundaries.add(rangeStart);
+    if (rangeEnd != null) boundaries.add(rangeEnd);
+    final ordered =
+        boundaries
+            .where(
+              (value) =>
+                  value >= (rangeStart ?? 0) &&
+                  value <= (rangeEnd ?? block.text.length),
+            )
+            .toList()
+          ..sort();
     final spans = <InlineSpan>[];
     for (var index = 0; index < ordered.length - 1; index++) {
       final start = ordered[index];
@@ -2462,6 +2490,8 @@ class _NarratedBookMarkdown extends StatelessWidget {
       if (start == end) continue;
       final inActiveSentence =
           activeSegment != null &&
+          activeSegment.index >= block.firstSegmentIndex &&
+          activeSegment.index < block.firstSegmentIndex + block.segmentCount &&
           start >= activeSegment.start &&
           end <= activeSegment.end;
       final inActiveWord =

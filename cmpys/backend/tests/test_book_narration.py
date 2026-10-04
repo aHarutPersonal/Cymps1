@@ -830,3 +830,30 @@ def test_narration_can_load_openlux_secret_without_switching_text_provider(monke
     assert read_secret.call_count == int(expected_load)
     assert config.openlux_api_key == ("OPENLUX_TEST_SECRET" if expected_load else None)
     assert "OPENLUX_TEST_SECRET" not in repr(config)
+
+
+def test_comparison_cards_speak_existing_box_content_without_frame_characters():
+    markdown = '''```
++----------------------------------------------------------------+
+| INVESTMENT OPERATION                                           |
+| 1. Thorough Financial Analysis (Earnings, Assets, Balance Sheet) |
+| 2. Safety of Principal (Protection Against Capital Destruction) |
++----------------------------------------------------------------+
+vs.
++----------------------------------------------------------------+
+| SPECULATIVE OPERATION                                          |
+| 1. Price Momentum Tracking (Buying Because It Is Rising)        |
+| 2. Unhedged Capital Exposure (Ignoring Downside Risk)           |
++----------------------------------------------------------------+
+```'''
+    semantic = '\n'.join(line.strip().strip('|').strip() for line in markdown.splitlines()
+                         if not line.startswith(('+', '```')))
+    assert narration_text_belongs_to_resource(semantic, markdown)
+    assert not narration_text_belongs_to_resource(semantic.replace('Safety', 'Guarantee'), markdown)
+
+
+def test_new_semantic_comparison_bullets_are_authorized_without_relaxing_source_match():
+    markdown = '```comparison\nFirst approach\n- Consider the evidence\n- Check the downside\n\nvs.\n\nSecond approach\n- Follow the price\n- Ignore the risk\n```'
+    semantic = 'First approach\n- Consider the evidence\n- Check the downside\nvs.\nSecond approach\n- Follow the price\n- Ignore the risk'
+    assert narration_text_belongs_to_resource(semantic, markdown)
+    assert not narration_text_belongs_to_resource(semantic.replace('Ignore', 'Guarantee'), markdown)

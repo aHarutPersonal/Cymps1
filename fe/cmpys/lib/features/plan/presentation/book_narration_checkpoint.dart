@@ -15,6 +15,7 @@ class BookNarrationCheckpoint {
     required this.segmentIndex,
     required this.characterOffset,
     required this.updatedAtEpochMs,
+    this.textVersion = 1,
   });
 
   static const int _maxSafeJsonInteger = 9007199254740991;
@@ -23,12 +24,14 @@ class BookNarrationCheckpoint {
   final int segmentIndex;
   final int characterOffset;
   final int updatedAtEpochMs;
+  final int textVersion;
 
   Map<String, Object> toJson() => {
     'chapterIndex': chapterIndex,
     'segmentIndex': segmentIndex,
     'characterOffset': characterOffset,
     'updatedAtEpochMs': updatedAtEpochMs,
+    'textVersion': textVersion,
   };
 
   /// Parses a checkpoint without throwing when persisted data is malformed.
@@ -44,6 +47,8 @@ class BookNarrationCheckpoint {
   }) {
     if (value is! Map) return null;
 
+    final textVersion = _nonNegativeInt(value['textVersion'] ?? 1);
+    if (textVersion != 1 && textVersion != 2) return null;
     final chapterIndex = _nonNegativeInt(value['chapterIndex']);
     final segmentIndex = _nonNegativeInt(value['segmentIndex']);
     final characterOffset = _nonNegativeInt(value['characterOffset']);
@@ -72,6 +77,7 @@ class BookNarrationCheckpoint {
           ? characterOffset
           : characterOffset.clamp(0, maxCharacterOffset).toInt(),
       updatedAtEpochMs: updatedAtEpochMs,
+      textVersion: textVersion!,
     );
   }
 
@@ -91,7 +97,8 @@ class BookNarrationCheckpoint {
           chapterIndex == other.chapterIndex &&
           segmentIndex == other.segmentIndex &&
           characterOffset == other.characterOffset &&
-          updatedAtEpochMs == other.updatedAtEpochMs;
+          updatedAtEpochMs == other.updatedAtEpochMs &&
+          textVersion == other.textVersion;
 
   @override
   int get hashCode => Object.hash(
@@ -99,6 +106,7 @@ class BookNarrationCheckpoint {
     segmentIndex,
     characterOffset,
     updatedAtEpochMs,
+    textVersion,
   );
 }
 

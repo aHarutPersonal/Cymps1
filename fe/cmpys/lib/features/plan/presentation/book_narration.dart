@@ -9,6 +9,7 @@ import 'package:just_audio/just_audio.dart';
 import 'package:markdown/markdown.dart' as md;
 
 import '../../../core/network/api_error.dart';
+import '../../../core/reading/learning_comparison.dart';
 import '../../session/data/content_resources_repository.dart';
 
 typedef BookNarrationProgressHandler =
@@ -1583,7 +1584,14 @@ final class SystemBookNarrator implements BookNarrator {
   }
 }
 
-enum BookNarrationBlockKind { paragraph, heading, listItem, quote, code }
+enum BookNarrationBlockKind {
+  paragraph,
+  heading,
+  listItem,
+  quote,
+  code,
+  comparison,
+}
 
 @immutable
 class BookNarrationBlock {
@@ -1594,6 +1602,7 @@ class BookNarrationBlock {
     required this.segmentCount,
     this.headingLevel = 0,
     this.listMarker,
+    this.comparison,
   });
 
   final String text;
@@ -1602,6 +1611,7 @@ class BookNarrationBlock {
   final int segmentCount;
   final int headingLevel;
   final String? listMarker;
+  final LearningComparison? comparison;
 
   bool get containsSpeech => segmentCount > 0;
 }
@@ -1673,9 +1683,13 @@ class BookNarrationDocument {
     required this.blocks,
     required this.segments,
     required this.chunks,
+    this.legacyDocument,
   });
 
-  factory BookNarrationDocument.fromMarkdown(String markdown) {
+  factory BookNarrationDocument.fromMarkdown(
+    String markdown, {
+    bool semanticComparisons = true,
+  }) {
     final nodes = md.Document(
       extensionSet: md.ExtensionSet.gitHubFlavored,
     ).parse(markdown);
@@ -1745,12 +1759,23 @@ class BookNarrationDocument {
           }
           return;
         case 'pre':
-          final text = _readableText(node);
+          final code = node.children?.whereType<md.Element>().firstOrNull;
+          final language = (code?.attributes['class'] ?? '').replaceFirst(
+            'language-',
+            '',
+          );
+          final comparison = semanticComparisons
+              ? LearningComparison.parse(node.textContent, language: language)
+              : null;
+          final text = comparison?.text ?? _readableText(node);
           if (text.isNotEmpty) {
             drafts.add(
               _NarrationBlockDraft(
                 text: text,
-                kind: BookNarrationBlockKind.code,
+                kind: comparison == null
+                    ? BookNarrationBlockKind.code
+                    : BookNarrationBlockKind.comparison,
+                comparison: comparison,
               ),
             );
           }
@@ -1835,6 +1860,7 @@ class BookNarrationDocument {
           segmentCount: ranges.length,
           headingLevel: draft.headingLevel,
           listMarker: draft.listMarker,
+          comparison: draft.comparison,
         ),
       );
     }
@@ -1842,12 +1868,58 @@ class BookNarrationDocument {
       blocks: blocks,
       segments: segments,
       chunks: _buildNarrationChunks(blocks, segments),
+      legacyDocument: drafts.any((draft) => draft.comparison != null)
+          ? BookNarrationDocument.fromMarkdown(
+              markdown,
+              semanticComparisons: false,
+            )
+          : null,
     );
   }
 
   final List<BookNarrationBlock> blocks;
   final List<BookNarrationSegment> segments;
   final List<BookNarrationChunk> chunks;
+  final BookNarrationDocument? legacyDocument;
+
+  /// Migrate old saved segment indices without jumping past a transformed box.
+  /// The block count/order is unchanged; only its framing and whitespace differ.
+  (int, int) remapLegacyPosition(int segmentIndex, int characterOffset) {
+    final legacy = legacyDocument;
+    if (legacy == null || legacy.segments.isEmpty) {
+      return (segmentIndex, characterOffset);
+    }
+    final old =
+        legacy.segments[segmentIndex.clamp(0, legacy.segments.length - 1)];
+    final oldText = legacy.blocks[old.blockIndex].text;
+    final block = blocks[old.blockIndex];
+    final oldOffset = old.start + characterOffset.clamp(0, old.text.length);
+    var offset = oldOffset;
+    if (block.comparison != null) {
+      final formatting = RegExp(r'[\s+|\-=]');
+      final retained = oldText
+          .substring(0, oldOffset)
+          .replaceAll(formatting, '')
+          .length;
+      var count = 0;
+      offset = 0;
+      while (offset < block.text.length && count < retained) {
+        if (!formatting.hasMatch(block.text[offset])) count++;
+        offset++;
+      }
+      while (offset < block.text.length && block.text[offset].trim().isEmpty) {
+        offset++;
+      }
+    }
+    final candidates = segments
+        .skip(block.firstSegmentIndex)
+        .take(block.segmentCount);
+    final target = candidates.firstWhere(
+      (segment) => segment.end > offset,
+      orElse: () => candidates.last,
+    );
+    return (target.index, (offset - target.start).clamp(0, target.text.length));
+  }
 }
 
 const _narrationChunkMinCharacters = 600;
@@ -2202,12 +2274,14 @@ final class _NarrationBlockDraft {
     required this.kind,
     this.headingLevel = 0,
     this.listMarker,
+    this.comparison,
   });
 
   final String text;
   final BookNarrationBlockKind kind;
   final int headingLevel;
   final String? listMarker;
+  final LearningComparison? comparison;
 }
 
 final class _TextRange {
