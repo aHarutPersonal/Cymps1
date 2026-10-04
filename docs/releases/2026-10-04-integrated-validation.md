@@ -28,3 +28,7 @@ A new synthetic account, completed intake, new plan and no copied backbone/check
 Recovery code, one-time tokens, session revocation, client form and controlled SMTP test are complete. Production email is deliberately unavailable because the owner has no mail service connected yet. Read-only SES inspection confirmed the same project AWS account is in sandbox with no verified identities; the [SES connection proposal](2026-10-04-email-connection-proposal.md) describes the sender/domain decision, costs, verification and production-access requirements. No new email service, external mail or domain purchase was authorized or performed.
 
 Legacy HTTP compatibility remains for installed builds and must be retired after client migration. The new build uses HTTPS. Physical-device validation is deferred with installation at the owner's request. Background audio/lock-screen and Android device behavior were not exhaustively verified. The evidence supports the tested MVP flows, not a guarantee of zero bugs or an unrestricted public production launch before these remaining steps.
+
+## Later physical-device update
+
+The owner subsequently authorized installation. The current release was signed with the existing development identity, installed in place and launched successfully after the owner enabled developer trust. The process stayed alive for over two minutes. See [physical iPhone installation evidence](2026-10-04-iphone-installation.md) for profile expiry and the exact limits of device verification; this supersedes the earlier installation deferral.
