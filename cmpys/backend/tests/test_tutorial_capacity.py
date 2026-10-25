@@ -68,7 +68,7 @@ def test_only_prose_sections_can_be_assigned_for_capacity_correction():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", [None, "transport", "truncated", "unowned", "too_long", "visual", "semantic", "retimed", "out_of_range", "length_recovered", "title_echo", "changed_title"])
+@pytest.mark.parametrize("failure", [None, "transport", "truncated", "unowned", "too_long", "visual", "semantic", "retimed", "out_of_range", "length_recovered", "section_regressed", "undersized_both", "title_echo", "changed_title"])
 async def test_shortening_requires_complete_scoped_prose_and_independent_review(monkeypatch, failure):
     step = long_tutorial(); before = copy.deepcopy(step)
     package = short_package(); original_package = package.model_dump(mode="json")
@@ -83,8 +83,10 @@ async def test_shortening_requires_complete_scoped_prose_and_independent_review(
             data = {name: base[name] for name in kwargs["output_model"].model_fields}
             if failure in {"title_echo", "changed_title"}: data["title"] = step["title"] if failure == "title_echo" else "Changed title"
             elif failure == "unowned": data["guided_practice"] = "An unauthorized exercise rewrite"
-            elif failure == "too_long" or (failure == "length_recovered" and len(requests) == 1): data = {name: _sections(step)[name] for name in data}
+            elif failure == "too_long" or (failure in {"length_recovered", "section_regressed"} and len(requests) == 1): data = {name: _sections(step)[name] for name in data}
             elif failure == "visual": data["core_framework"] = "explanation " * 180
+            if failure == "undersized_both" or (failure == "section_regressed" and len(requests) == 2):
+                data["why_this_matters"] = "Too short."
             return LLMResponse(data=data, finish_reason="length" if failure == "truncated" else "stop")
     review = AsyncMock(return_value=([
         "Missing reasoning"] if failure == "semantic" else [],
@@ -99,8 +101,8 @@ async def test_shortening_requires_complete_scoped_prose_and_independent_review(
     assert step == before and package.model_dump(mode="json") == original_package
     assert client_options == [{"tier": "balanced", "timeout": 60, "max_tokens": 2600,
                                "thinking_level": "low", "allow_fallback": False}]
-    assert len(requests) == (2 if failure in {"too_long", "length_recovered"} else 1)
-    if failure and failure not in {"retimed", "length_recovered", "title_echo"}:
+    assert len(requests) == (2 if failure in {"too_long", "length_recovered", "section_regressed", "undersized_both"} else 1)
+    if failure and failure not in {"retimed", "length_recovered", "section_regressed", "title_echo"}:
         assert changed is None and error
         assert review.await_count == (1 if failure in {"semantic", "out_of_range"} else 0)
     else:
@@ -110,8 +112,10 @@ async def test_shortening_requires_complete_scoped_prose_and_independent_review(
         assert _sections(changed)["guided_practice"] == _sections(step)["guided_practice"]
         assert _sections(changed)["references"] == _sections(step)["references"]
         assert 450 <= len(changed["lesson_content"].split()) <= 600
-        assert review.await_args.args[0] == changed and len(calls) == (3 if failure == "length_recovered" else 2)
-        if failure == "length_recovered":
+        assert review.await_args.args[0] == changed and len(calls) == (3 if failure in {"length_recovered", "section_regressed"} else 2)
+        if failure == "section_regressed":
+            assert _sections(changed)["why_this_matters"] == _sections(step)["why_this_matters"]
+        if failure in {"length_recovered", "section_regressed"}:
             assert "actual_whole_words" in requests[1]["user_prompt"] and calls[0][1].error
             assert "minimum_words_to_remove" in requests[1]["user_prompt"]
             assert "assigned_sections" not in requests[1]["user_prompt"]

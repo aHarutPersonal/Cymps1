@@ -172,6 +172,7 @@ async def shorten_tutorial_reading(step: dict, package: Any, context: dict, *,
     client = client_factory(tier="balanced", timeout=60, max_tokens=2600,
                             thinking_level="low", allow_fallback=False)
     request_prompt = prompt
+    valid_sections = {}
     for attempt in range(2):
         response = _response(await client.generate_json(
             system_prompt=("Recompose the assigned teaching sections within their explicit word budgets. "
@@ -196,12 +197,21 @@ async def shorten_tutorial_reading(step: dict, package: Any, context: dict, *,
         except (ValueError, TypeError):
             response.error = "Capacity prose correction changed its assigned scope"
             return None, response.error
+        # A retry may accidentally shorten a previously valid section below
+        # its teaching minimum. Keep that exact earlier draft section; the
+        # assembled candidate still needs all structural and semantic checks.
+        for name, value in replacement.items():
+            if len(value.split()) < TUTORIAL_SECTION_MIN_WORDS[name] and name in valid_sections:
+                replacement[name] = valid_sections[name]
+        valid_sections.update({name: value for name, value in replacement.items()
+                               if len(value.split()) >= TUTORIAL_SECTION_MIN_WORDS[name]})
         content = _render(step["title"], {**sections, **replacement})
         counts = {name: len(value.split()) for name, value in replacement.items()}
         if (450 <= len(content.split()) <= 600
                 and all(counts[name] >= TUTORIAL_SECTION_MIN_WORDS[name] for name in counts)):
             break
-        response.error = f"Capacity prose has {len(content.split())} words or an undersized section; expected 450-600"
+        undersized = {name: count for name, count in counts.items() if count < TUTORIAL_SECTION_MIN_WORDS[name]}
+        response.error = f"Capacity prose has {len(content.split())} words; expected 450-600; undersized sections: {undersized}"
         if attempt == 1:
             return None, response.error
         retained = len(content.split()) - sum(counts.values())
