@@ -124,6 +124,7 @@ class NarrationAsset:
     source_text_hash: str
     disclosure: str
     cached: bool
+    alignment_pending: bool = False
 
 
 @dataclass(frozen=True)
@@ -172,6 +173,27 @@ _SUPPORTED_PROVIDERS = frozenset({"yunwu", "openlux", "gemini"})
 _OFFSET_ENCODING = "utf16"
 _DISCLOSURE = "AI-generated voice; not the real person."
 _locks: dict[str, asyncio.Lock] = {}
+_alignment_tasks: dict[str, asyncio.Task] = {}
+
+
+def _schedule_alignment(*, digest, text, audio_bytes, duration_ms, audio_path, metadata_path):
+    if digest in _alignment_tasks or len(_alignment_tasks) >= 4:
+        return
+    async def complete():
+        try:
+            alignment = await _gemini_word_alignment(text, audio_bytes, duration_ms=duration_ms)
+            metadata = json.loads(await asyncio.to_thread(metadata_path.read_text, encoding="utf-8"))
+            # A timing result can only decorate the exact passage that produced it.
+            if metadata.get("sourceTextHash") != _source_text_hash(text):
+                return
+            metadata.update(_gemini_alignment_metadata(alignment))
+            await _write_cache_atomically(audio_path=audio_path, metadata_path=metadata_path,
+                                          audio_bytes=audio_bytes, metadata=metadata)
+        except Exception as exc:
+            logger.warning("Deferred narration alignment failed (%s)", type(exc).__name__)
+    task = asyncio.create_task(complete())
+    _alignment_tasks[digest] = task
+    task.add_done_callback(lambda done: _alignment_tasks.pop(digest, None))
 _markdown_image = re.compile(r"!\[([^]]*)\]\([^)]*\)")
 _markdown_link = re.compile(r"\[([^]]+)\]\([^)]*\)")
 _markdown_ordered_list_marker = re.compile(
@@ -325,19 +347,10 @@ async def render_book_narration(
                     metadata = json.loads(await asyncio.to_thread(metadata_path.read_text, encoding="utf-8"))
                     if not metadata.get("alignmentAttempted") and _narration_api_key(provider):
                         audio_bytes = await asyncio.to_thread(audio_path.read_bytes)
-                        alignment = await _gemini_word_alignment(
-                            cleaned_text, audio_bytes, duration_ms=cached.duration_ms,
-                        )
-                        metadata.update(_gemini_alignment_metadata(alignment))
-                        await _write_cache_atomically(
-                            audio_path=audio_path, metadata_path=metadata_path,
-                            audio_bytes=audio_bytes, metadata=metadata,
-                        )
-                        cached = replace(
-                            cached, alignment=alignment,
-                            alignment_source="transcription" if alignment else "none",
-                            alignment_granularity="word" if alignment else "none",
-                        )
+                        _schedule_alignment(digest=digest, text=cleaned_text, audio_bytes=audio_bytes,
+                                            duration_ms=cached.duration_ms, audio_path=audio_path,
+                                            metadata_path=metadata_path)
+                        cached = replace(cached, alignment_pending=True)
                 logger.info(
                     "Book narration cache hit provider=%s model=%s chars=%d",
                     provider,
@@ -380,12 +393,7 @@ async def render_book_narration(
             alignment_granularity = "none"
             subtitle_started = asyncio.get_running_loop().time()
             if isinstance(synthesis, _GeminiSynthesis):
-                alignment = await _gemini_word_alignment(
-                    cleaned_text, synthesis.audio_bytes, duration_ms=synthesis.duration_ms,
-                )
-                if alignment:
-                    alignment_source = "transcription"
-                    alignment_granularity = "word"
+                pass  # Validated playable audio is saved before optional alignment.
             elif isinstance(synthesis, _MiniMaxSynthesis):
                 try:
                     if not synthesis.subtitle_url:
@@ -423,13 +431,17 @@ async def render_book_narration(
                 "disclosure": _DISCLOSURE,
             }
             if provider == "gemini":
-                metadata.update(_gemini_alignment_metadata(alignment))
+                metadata.update(alignmentAttempted=False, alignmentStatus="pending")
             await _write_cache_atomically(
                 audio_path=audio_path,
                 metadata_path=metadata_path,
                 audio_bytes=synthesis.audio_bytes,
                 metadata=metadata,
             )
+            if provider == "gemini":
+                _schedule_alignment(digest=digest, text=cleaned_text, audio_bytes=synthesis.audio_bytes,
+                                    duration_ms=synthesis.duration_ms, audio_path=audio_path,
+                                    metadata_path=metadata_path)
             logger.info(
                 "Book narration generated provider=%s model=%s chars=%d "
                 "duration_ms=%d generation_ms=%d subtitle_ms=%d granularity=%s",
@@ -457,6 +469,7 @@ async def render_book_narration(
                 source_text_hash=source_text_hash,
                 disclosure=_DISCLOSURE,
                 cached=False,
+                alignment_pending=provider == "gemini",
             )
     finally:
         # Avoid retaining one asyncio.Lock for every passage ever requested.
@@ -470,6 +483,7 @@ def _gemini_alignment_metadata(alignment: tuple[NarrationCue, ...]) -> dict:
         "alignmentSource": "transcription" if alignment else "none",
         "alignmentGranularity": "word" if alignment else "none",
         "alignmentAttempted": True,
+        "alignmentStatus": "ready" if alignment else "unavailable",
         "alignmentModel": _GEMINI_ALIGNMENT_MODEL,
     }
 

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
 import 'package:cmpys/features/plan/data/practice_repository.dart';
+import 'package:cmpys/core/network/api_error.dart';
 import 'package:cmpys/features/plan/data/plan_repository.dart';
 import 'package:cmpys/features/plan/models/plan_models.dart';
 import 'package:cmpys/features/plan/presentation/lesson_reader_screen.dart';
@@ -37,6 +38,7 @@ class _CaptureFonts extends Fake implements AssetManifest {
 Map<String, dynamic> fixture() => {
   'state': 'ready',
   'revision': 1,
+  'lesson_version': 'same-content-and-answer-key',
   'complete': false,
   'answers': <String, String>{},
   'attempts': <Map<String, dynamic>>[],
@@ -100,9 +102,38 @@ class FakePracticeRepository extends Fake implements PracticeRepository {
   Map<String, dynamic> data = fixture();
   int saves = 0, checks = 0, loads = 0, preparations = 0;
   bool failSave = false, failReview = false, failLoad = false;
+  bool artifactChanged = false, refreshMatches = true;
+  int refreshes = 0;
+  String? savedArtifact;
   Completer<void>? holdSave;
   Completer<void>? holdPreparation;
   bool returnPreparing = false;
+  @override
+  Future<({String artifact, LessonPracticeState state})?> refreshUnopened(
+    String item,
+    String step,
+    String? previousArtifact,
+    String title,
+    String content,
+  ) async {
+    refreshes++;
+    return refreshMatches
+        ? (artifact: 'refreshed', state: LessonPracticeState.fromJson(data))
+        : null;
+  }
+
+  @override
+  Future<({String artifact, LessonPracticeState state})?> refreshUnchanged(
+    String item,
+    String step,
+    String? previousArtifact,
+    LessonPracticeState previous,
+  ) async {
+    refreshes++;
+    if (!refreshMatches) return null;
+    return (artifact: 'refreshed', state: LessonPracticeState.fromJson(data));
+  }
+
   @override
   Future<LessonPracticeState> load(
     String item,
@@ -110,6 +141,9 @@ class FakePracticeRepository extends Fake implements PracticeRepository {
     String? artifact,
   ) async {
     loads++;
+    if (artifactChanged && artifact != 'refreshed') {
+      throw const ApiError(message: 'Lesson refreshed', statusCode: 409);
+    }
     if (failLoad) throw StateError('offline');
     return LessonPracticeState.fromJson(data);
   }
@@ -138,6 +172,10 @@ class FakePracticeRepository extends Fake implements PracticeRepository {
     Map<String, String> answers,
   ) async {
     saves++;
+    if (artifactChanged && artifact != 'refreshed') {
+      throw const ApiError(message: 'Lesson refreshed', statusCode: 409);
+    }
+    savedArtifact = artifact;
     if (holdSave != null) await holdSave!.future;
     if (failSave) throw StateError('offline');
     if (revision != data['revision']) throw StateError('revision conflict');
@@ -207,6 +245,7 @@ class FakePracticeRepository extends Fake implements PracticeRepository {
 
 class _CompletionRepository extends Fake implements PlanRepository {
   int completions = 0;
+  String? lastArtifact;
   @override
   Future<({bool completed, bool itemCompleted})> toggleStepComplete(
     String itemId,
@@ -214,6 +253,7 @@ class _CompletionRepository extends Fake implements PlanRepository {
     String? artifactJobId,
   }) async {
     completions++;
+    lastArtifact = artifactJobId;
     return (completed: true, itemCompleted: true);
   }
 }
@@ -231,6 +271,7 @@ Future<void> mount(
   WidgetTester tester,
   FakePracticeRepository repo, {
   bool dark = false,
+  bool isTutorial = false,
   double width = 390,
 }) async {
   tester.view.physicalSize = Size(width, 844);
@@ -247,13 +288,15 @@ Future<void> mount(
         ),
         home: RepaintBoundary(
           key: const Key('practice-capture'),
-          child: dark
-              ? const LessonPracticeScreen(
+          child: dark || isTutorial
+              ? LessonPracticeScreen(
                   itemId: 'item',
                   stepId: 's1',
+                  artifactJobId: 'version',
                   lessonTitle: 'Geometry',
                   lessonContent: 'A geometry lesson.',
-                  dark: true,
+                  dark: dark,
+                  isTutorial: isTutorial,
                 )
               : screen,
         ),
@@ -271,6 +314,63 @@ Future<void> enter(WidgetTester tester, String field, String value) async {
 }
 
 void main() {
+  testWidgets(
+    'practice opens if generation refreshed the unchanged lesson before first load',
+    (tester) async {
+      final repo = FakePracticeRepository()..artifactChanged = true;
+      await mount(tester, repo);
+      expect(repo.refreshes, 1);
+      expect(find.text('A right triangle'), findsOneWidget);
+      expect(repo.preparations, 0);
+      expect(repo.saves, 0);
+    },
+  );
+  testWidgets(
+    'unchanged refreshed practice saves the draft with the current artifact',
+    (tester) async {
+      final repo = FakePracticeRepository();
+      await mount(tester, repo);
+      repo.artifactChanged = true;
+      await enter(tester, 'length', '5');
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+      expect(repo.refreshes, 1);
+      expect(repo.savedArtifact, 'refreshed');
+      expect(repo.data['answers']['triangle.length'], '5');
+      expect(find.text('All answers saved'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'changed practice keeps the draft and does not overwrite current work',
+    (tester) async {
+      final repo = FakePracticeRepository();
+      await mount(tester, repo);
+      repo.artifactChanged = true;
+      repo.refreshMatches = false;
+      await enter(tester, 'length', '5');
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+      expect(repo.refreshes, 1);
+      expect(repo.data['answers'], isEmpty);
+      expect(find.text('Unsaved changes'), findsOneWidget);
+      await tester.tap(find.byTooltip('Back to lesson'));
+      await tester.pumpAndSettle();
+      expect(find.text('Leave without saving?'), findsOneWidget);
+      await tester.tap(find.text('Keep editing'));
+      await tester.pumpAndSettle();
+      expect(find.text('Unsaved changes'), findsOneWidget);
+      expect(
+        tester
+            .widget<TextField>(
+              find.byKey(const ValueKey('answer-triangle.length')),
+            )
+            .controller!
+            .text,
+        '5',
+      );
+    },
+  );
   TestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(() async {
     final fontDir = Platform.environment['PRACTICE_FONT_DIR'];
@@ -497,6 +597,30 @@ void main() {
     expect(find.text('Finish lesson'), findsOneWidget);
   });
 
+  testWidgets('saved tutorial practice keeps its answers and finish action', (
+    tester,
+  ) async {
+    final repo = FakePracticeRepository();
+    repo.data = {
+      ...repo.data,
+      'complete': true,
+      'passed_activity_ids': ['triangle', 'transfer'],
+      'answers': {'triangle.length': '5'},
+    };
+    await mount(tester, repo, isTutorial: true);
+    expect(find.byTooltip('Back to tutorial'), findsOneWidget);
+    final answer = tester.widget<TextField>(
+      find.byKey(const ValueKey('answer-triangle.length')),
+    );
+    expect(answer.controller?.text, '5');
+    expect(answer.enabled, isFalse);
+    await tester.ensureVisible(find.text('Finish tutorial'));
+    expect(find.text('Finish tutorial'), findsOneWidget);
+    expect(find.text('Finish lesson'), findsNothing);
+    expect(repo.preparations, 0);
+    expect(tester.takeException(), isNull);
+  });
+
   for (final status in ['transfer_without_hint', 'completed_with_support']) {
     testWidgets('completion explains evidence: $status', (tester) async {
       final repo = FakePracticeRepository();
@@ -626,6 +750,93 @@ void main() {
     expect(find.text('Open exercise'), findsOneWidget);
     expect(find.byType(LessonPracticeScreen), findsNothing);
   });
+
+  testWidgets(
+    'explicit leave after failed save exits without reporting completion',
+    (tester) async {
+      final repo = FakePracticeRepository()..failSave = true;
+      bool? result;
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [practiceRepositoryProvider.overrideWithValue(repo)],
+          child: MaterialApp(
+            home: Builder(
+              builder: (c) => Scaffold(
+                body: TextButton(
+                  onPressed: () async {
+                    result = await Navigator.of(
+                      c,
+                    ).push<bool>(MaterialPageRoute(builder: (_) => screen));
+                  },
+                  child: const Text('Open exercise'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Open exercise'));
+      await tester.pumpAndSettle();
+      await enter(tester, 'length', '5');
+      await tester.tap(find.byTooltip('Back to lesson'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Leave without saving'));
+      await tester.pumpAndSettle();
+      expect(find.text('Open exercise'), findsOneWidget);
+      expect(find.byType(LessonPracticeScreen), findsNothing);
+      expect(repo.data['answers'], isEmpty);
+      expect(result, false);
+    },
+  );
+
+  testWidgets(
+    'reader completes with the artifact verified by practice refresh',
+    (tester) async {
+      final repo = FakePracticeRepository();
+      final completion = _CompletionRepository();
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            practiceRepositoryProvider.overrideWithValue(repo),
+            planRepositoryProvider.overrideWithValue(completion),
+          ],
+          child: const MaterialApp(
+            home: LessonReaderScreen(
+              itemId: 'item',
+              missionTitle: 'Geometry',
+              artifactJobId: 'version',
+              step: PlanStepDetail(
+                id: 's1',
+                title: 'Triangle',
+                lessonContent: '## Learn\nA triangle lesson.',
+              ),
+              stepNumber: 1,
+              totalSteps: 1,
+              materials: [],
+              completed: false,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Open practice'));
+      await tester.pumpAndSettle();
+      repo.artifactChanged = true;
+      await enter(tester, 'length', '5');
+      repo.data = {
+        ...repo.data,
+        'complete': true,
+        'passed_activity_ids': ['triangle', 'transfer'],
+      };
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('Finish lesson'));
+      await tester.tap(find.text('Finish lesson'));
+      await tester.pumpAndSettle();
+      expect(completion.completions, 1);
+      expect(completion.lastArtifact, 'refreshed');
+    },
+  );
 
   Future<void> openUnpreparedPractice(
     WidgetTester tester,

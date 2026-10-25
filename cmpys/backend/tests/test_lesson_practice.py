@@ -504,7 +504,7 @@ async def test_workbook_uses_balanced_route_with_budget_below_its_lease(monkeypa
     assert config["tier"] == "balanced"
     assert config["thinking_level"] == "low"
     assert config["max_tokens"] == 4000
-    assert config["timeout"] == 90
+    assert config["timeout"] == 60
     assert config["timeout"] + 6 < generation.PRACTICE_GENERATION_BUDGET_SECONDS
     assert generation.PRACTICE_GENERATION_BUDGET_SECONDS < api.PRACTICE_GENERATION_LEASE_SECONDS
     assert generation.PRACTICE_REVIEW_BUDGET_SECONDS < 60
@@ -744,6 +744,17 @@ async def test_recent_evidence_is_scoped_and_rejects_stale_or_revoked_lessons(
     )
     assert "source_session_id" in statement.compile().params.values()
     assert 8 in statement.compile().params.values()
+    assert "plan_items.id !=" not in sql
+    # Exclude the active mission at the database boundary, retaining other
+    # missions' eligible evidence and the owner/session restrictions.
+    assert await load_recent_practice_evidence(
+        db, user_id="u", idol_id="i", session_id="s", exclude_plan_item_id="active-item"
+    ) == result
+    filtered = db.execute.await_args.args[0]
+    assert "plan_items.id !=" in str(filtered)
+    assert "active-item" in filtered.compile().params.values()
+    assert "lesson_practices.user_id" in str(filtered)
+    assert 8 in filtered.compile().params.values()
     row.lesson_version = "stale"
     assert (
         await load_recent_practice_evidence(
@@ -896,3 +907,62 @@ async def test_practice_pilot_rejects_wrong_owner_and_expired_evidence(monkeypat
     check.return_value = None
     with pytest.raises(ValueError, match='expired'):
         await api._practice_pilot_recovery(db, item, 'user')
+
+
+@pytest.mark.asyncio
+async def test_text_review_has_time_to_finish_within_review_lease(monkeypatch):
+    from app.services.practice import generation
+    result = TextReview.model_validate({'fields': [{'field_id': 'reason', 'criterion_met': [True], 'feedback': 'Correct assumption stated.'}]})
+    client = SimpleNamespace(generate_and_validate=AsyncMock(return_value=(result, SimpleNamespace(error=None))))
+    factory = Mock(return_value=client)
+    monkeypatch.setattr(generation.settings, 'llm_provider', 'zai')
+    monkeypatch.setattr(generation, 'get_llm_client', factory)
+    monkeypatch.setattr(generation, 'record_llm_response', AsyncMock())
+    assert await generation.review_text(activity(text=True), {'case_a.reason': 'The triangle is right-angled.'}, 'Lesson') == result
+    config = factory.call_args.kwargs
+    assert config['timeout'] == 45
+    assert config['timeout'] + 6 < generation.PRACTICE_REVIEW_BUDGET_SECONDS < 60
+    assert config['allow_fallback'] is False
+    assert config['thinking_level'] == 'low'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('remaining, expected_recovery', [(17, False), (40, True)])
+async def test_recovery_only_starts_with_enough_remaining_time(monkeypatch, remaining, expected_recovery):
+    import asyncio
+    from app.services.practice import generation
+    from app.services.llm import recovery
+    from app.services.llm.client import LLMResponse
+    primary = SimpleNamespace(generate_and_validate=AsyncMock(return_value=(None, LLMResponse(data={}, error='timeout'))))
+    secondary = SimpleNamespace(generate_and_validate=AsyncMock(return_value=(workbook(), LLMResponse(data={}))))
+    factory = Mock(return_value=secondary)
+    monkeypatch.setattr(generation, 'get_llm_client', lambda **kw: primary)
+    monkeypatch.setattr(generation, 'record_llm_response', AsyncMock())
+    monkeypatch.setattr(recovery, 'operational_recovery_client', factory)
+    request = generation._structured_request('lesson_practice_review.txt', {}, Workbook, 'lesson_practice_review', deadline=asyncio.get_running_loop().time() + remaining)
+    if expected_recovery:
+        assert await request == workbook()
+        assert 15 <= factory.call_args.kwargs['timeout'] <= 30
+        secondary.generate_and_validate.assert_awaited_once()
+    else:
+        with pytest.raises(TimeoutError):
+            await request
+        factory.assert_not_called()
+        secondary.generate_and_validate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_review_deadline_cancels_before_api_lease(monkeypatch):
+    import asyncio
+    from app.services.practice import generation
+    cancelled = asyncio.Event()
+    async def never_finishes(*args, **kwargs):
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+    monkeypatch.setattr(generation, 'PRACTICE_REVIEW_BUDGET_SECONDS', 0.01)
+    monkeypatch.setattr(generation, '_structured_request', never_finishes)
+    with pytest.raises(TimeoutError):
+        await generation.review_text(activity(text=True), {'case_a.reason': 'Right-angled.'}, 'Lesson')
+    assert cancelled.is_set()

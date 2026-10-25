@@ -137,6 +137,7 @@ class ContentNarrationResponse(BaseModel):
     sourceTextHash: str
     disclosure: str
     cached: bool = False
+    alignmentPending: bool = False
 
 
 class ContentHighlightCreate(BaseModel):

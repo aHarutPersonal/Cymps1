@@ -16,6 +16,66 @@ class PracticeRepository {
   Map<String, dynamic>? _query(String? artifact) =>
       artifact == null ? null : {'artifactJobId': artifact};
 
+  /// No draft has been loaded or edited yet. Follow a replaced mission only
+  /// when the current step is the exact lesson the reader has open. The
+  /// server still checks access, publication, prerequisites and the answer key.
+  Future<({String artifact, LessonPracticeState state})?> refreshUnopened(
+    String item,
+    String step,
+    String? previousArtifact,
+    String lessonTitle,
+    String lessonContent,
+  ) async {
+    if (lessonContent.trim().isEmpty) return null;
+    final response = await client.get(
+      '/plan-items/${Uri.encodeComponent(item)}/detailed',
+    );
+    final data = response.data as Map<String, dynamic>;
+    final artifact =
+        (data['artifact_job_id'] ?? data['artifactJobId']) as String?;
+    if (artifact == null || artifact.isEmpty || artifact == previousArtifact) {
+      return null;
+    }
+    final matches = ((data['details'] as Map?)?['steps'] as List? ?? const [])
+        .whereType<Map>()
+        .where((s) => s['id'] == step)
+        .toList();
+    if (matches.length != 1 ||
+        matches.single['title'] != lessonTitle ||
+        matches.single['lesson_content'] != lessonContent) {
+      return null;
+    }
+    return (artifact: artifact, state: await load(item, step, artifact));
+  }
+
+  /// A generation retry can replace the mission while retaining an identical
+  /// lesson and answer key. Refresh only that exact immutable practice version
+  /// and revision, so a stale screen never overwrites changed work.
+  Future<({String artifact, LessonPracticeState state})?> refreshUnchanged(
+    String item,
+    String step,
+    String? previousArtifact,
+    LessonPracticeState previous,
+  ) async {
+    final version = previous.lessonVersion;
+    if (version == null || version.isEmpty) return null;
+    final response = await client.get(
+      '/plan-items/${Uri.encodeComponent(item)}/detailed',
+    );
+    final data = response.data as Map<String, dynamic>;
+    final artifact =
+        (data['artifact_job_id'] ?? data['artifactJobId']) as String?;
+    if (artifact == null || artifact.isEmpty || artifact == previousArtifact) {
+      return null;
+    }
+    final current = await load(item, step, artifact);
+    if (current.lessonVersion != version ||
+        current.revision != previous.revision) {
+      return null;
+    }
+    return (artifact: artifact, state: current);
+  }
+
   Future<LessonPracticeState> load(
     String item,
     String step,

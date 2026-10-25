@@ -159,7 +159,7 @@ class _CurrentFocusCard extends StatelessWidget {
     final focus = plan.focusedItemForWeek(week);
     final complete = plan.allMissionWorkComplete;
 
-    return GestureDetector(
+    return CmpysPressable(
       onTap: focus == null ? null : () => openBackendPlanItem(context, focus),
       child: Container(
         key: const Key('current-week-focus'),
@@ -305,7 +305,7 @@ class _CurrentFocusCard extends StatelessWidget {
                         ),
                         const SizedBox(width: 5),
                         Text(
-                          '~${focus.estimatedHours}h',
+                          '~${focus.durationLabel}',
                           style: AppTypography.captionMedium.copyWith(
                             color: Colors.white,
                             fontSize: 12.5,
@@ -509,11 +509,11 @@ class _WeekBlockState extends State<_WeekBlock> {
 
     final completed = missions.where((item) => item.isCompleted).length;
     final remaining = missions.length - completed;
-    final hours = missions.fold<int>(
+    final minutes = missions.fold<int>(
           0,
-          (total, item) => total + item.estimatedHours,
+          (total, item) => total + item.requiredMinutes,
         ) +
-        rhythm.fold<int>(0, (total, item) => total + item.estimatedHours);
+        rhythm.fold<int>(0, (total, item) => total + item.requiredMinutes);
     final locked = widget.access == _WeekAccess.locked;
     final current = widget.access == _WeekAccess.current;
     final complete = widget.access == _WeekAccess.completed;
@@ -558,7 +558,7 @@ class _WeekBlockState extends State<_WeekBlock> {
                       locked
                           ? 'Complete Week ${widget.activeWeek} to unlock'
                           : current
-                              ? '$remaining mission${remaining == 1 ? '' : 's'} remaining · ~${hours}h'
+                              ? '$remaining mission${remaining == 1 ? '' : 's'} remaining · ~${BackendPlanItem.formatMinutes(minutes)}'
                               : 'Tap to review · ${missions.length} mission${missions.length == 1 ? '' : 's'}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -706,10 +706,10 @@ class _WeekBlockState extends State<_WeekBlock> {
                   const SizedBox(height: 2),
                   Text(
                     isRhythm
-                        ? 'Daily rhythm · ~${item.estimatedHours}h this week'
+                        ? 'Daily rhythm · ~${item.durationLabel} this week'
                         : item.progressPercent > 0
-                            ? '${item.progressPercent}% complete · ~${item.estimatedHours}h'
-                            : '~${item.estimatedHours}h',
+                            ? '${item.progressPercent}% complete · ~${item.durationLabel}'
+                            : '~${item.durationLabel}',
                     style: AppTypography.caption.copyWith(
                       color: AppColors.ink3,
                       fontSize: 12,

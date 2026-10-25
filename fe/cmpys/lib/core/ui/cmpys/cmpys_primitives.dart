@@ -154,6 +154,8 @@ class CmpysMentorAvatar extends StatelessWidget {
               fit: BoxFit.cover,
               errorBuilder: (_, _, _) => fallback,
             )
+          : slug.trim().isEmpty || slug == '__llm__'
+          ? fallback
           : Image.asset(
               'assets/images/mentors/$slug.png',
               fit: BoxFit.cover,
@@ -185,6 +187,8 @@ class CmpysPressable extends StatefulWidget {
     this.pressedScale = 0.975,
     this.haptic = CmpysHaptic.none,
     this.semanticLabel,
+    this.selected,
+    this.toggled,
   });
 
   final Widget child;
@@ -192,6 +196,8 @@ class CmpysPressable extends StatefulWidget {
   final double pressedScale;
   final CmpysHaptic haptic;
   final String? semanticLabel;
+  final bool? selected;
+  final bool? toggled;
 
   @override
   State<CmpysPressable> createState() => _CmpysPressableState();
@@ -254,7 +260,10 @@ class _CmpysPressableState extends State<CmpysPressable> {
             : Duration.zero,
         curve: AppCurves.easeOut,
         scale: motionEnabled && _pressed ? widget.pressedScale : 1,
-        child: widget.child,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+          child: Center(widthFactor: 1, heightFactor: 1, child: widget.child),
+        ),
       ),
     );
 
@@ -287,6 +296,8 @@ class _CmpysPressableState extends State<CmpysPressable> {
       button: true,
       enabled: enabled,
       label: widget.semanticLabel,
+      selected: widget.selected,
+      toggled: widget.toggled,
       onTap: enabled ? _handleTap : null,
       child: widget.semanticLabel == null
           ? interaction
@@ -1076,7 +1087,8 @@ Future<T?> showCmpysSheet<T>(
     context: context,
     isScrollControlled: true,
     useSafeArea: true,
-    showDragHandle: false,
+    showDragHandle: true,
+    requestFocus: true,
     backgroundColor: AppColors.paper,
     barrierColor: const Color(0x6B16161C),
     shape: const RoundedRectangleBorder(
@@ -1098,21 +1110,11 @@ Future<T?> showCmpysSheet<T>(
             ),
             padding: const EdgeInsets.fromLTRB(18, 10, 18, 34),
             child: SingleChildScrollView(
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Center(
-                    child: Container(
-                      width: 40,
-                      height: 5,
-                      margin: const EdgeInsets.only(bottom: 14, top: 4),
-                      decoration: BoxDecoration(
-                        color: AppColors.hair2,
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                    ),
-                  ),
                   if (title != null) ...[
                     Text(title, style: AppTypography.h3),
                     const SizedBox(height: 12),

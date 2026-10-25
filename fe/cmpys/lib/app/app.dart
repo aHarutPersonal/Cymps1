@@ -36,24 +36,25 @@ class App extends ConsumerWidget {
       }
     });
 
-    // Set system UI overlay style for the dark glass theme.
-    SystemChrome.setSystemUIOverlayStyle(
-      const SystemUiOverlayStyle(
-        statusBarColor: Colors.transparent,
-        statusBarIconBrightness: Brightness.light,
-        statusBarBrightness: Brightness.dark,
-        systemNavigationBarColor: AppColors.bg,
-        systemNavigationBarIconBrightness: Brightness.light,
-      ),
+    // Keep system icons readable against the light paper background.
+    const overlayStyle = SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Brightness.dark,
+      statusBarBrightness: Brightness.light,
+      systemNavigationBarColor: AppColors.bg,
+      systemNavigationBarIconBrightness: Brightness.dark,
     );
 
-    return MaterialApp.router(
-      title: 'CMPYS',
-      debugShowCheckedModeBanner: false,
-      theme: AppTheme.light,
-      darkTheme: AppTheme.light,
-      themeMode: ThemeMode.dark,
-      routerConfig: router,
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: overlayStyle,
+      child: MaterialApp.router(
+        title: 'CMPYS',
+        debugShowCheckedModeBanner: false,
+        theme: AppTheme.light,
+        darkTheme: AppTheme.light,
+        themeMode: ThemeMode.dark,
+        routerConfig: router,
+      ),
     );
   }
 }

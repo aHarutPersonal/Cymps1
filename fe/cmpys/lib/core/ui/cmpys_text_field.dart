@@ -16,6 +16,7 @@ class CmpysTextField extends StatefulWidget {
     this.prefixIcon,
     this.suffixIcon,
     this.onSuffixTap,
+    this.suffixTooltip,
     this.obscureText = false,
     this.enabled = true,
     this.readOnly = false,
@@ -47,6 +48,7 @@ class CmpysTextField extends StatefulWidget {
   final String? prefixIcon;
   final String? suffixIcon;
   final VoidCallback? onSuffixTap;
+  final String? suffixTooltip;
   final bool obscureText;
   final bool enabled;
   final bool readOnly;
@@ -93,108 +95,110 @@ class _CmpysTextFieldState extends State<CmpysTextField> {
       mainAxisSize: MainAxisSize.min,
       children: [
         if (widget.label != null) ...[
-          Text(
-            widget.label!,
-            style: AppTypography.label.copyWith(color: AppColors.textSecondary),
+          ExcludeSemantics(
+            child: Text(
+              widget.label!,
+              style: AppTypography.label.copyWith(
+                color: AppColors.textSecondary,
+              ),
+            ),
           ),
           const SizedBox(height: AppSpacing.s8),
         ],
-        TextFormField(
-          controller: widget.controller,
-          focusNode: widget.focusNode,
-          obscureText: _obscureText,
-          enabled: widget.enabled,
-          readOnly: widget.readOnly,
-          autofocus: widget.autofocus,
-          maxLines: widget.obscureText ? 1 : widget.maxLines,
-          minLines: widget.minLines,
-          maxLength: widget.maxLength,
-          keyboardType: widget.keyboardType,
-          textInputAction: widget.textInputAction,
-          inputFormatters: widget.inputFormatters,
-          textCapitalization: widget.textCapitalization,
-          autocorrect: widget.autocorrect ?? !widget.obscureText,
-          enableSuggestions: widget.enableSuggestions ?? !widget.obscureText,
-          autofillHints: widget.autofillHints,
-          onChanged: widget.onChanged,
-          onFieldSubmitted: widget.onSubmitted,
-          onTap: widget.onTap,
-          validator: widget.validator,
-          autovalidateMode: widget.autovalidateMode,
-          style: AppTypography.body,
-          cursorColor: AppColors.accent,
-          textAlignVertical: isSingleLine
-              ? TextAlignVertical.center
-              : TextAlignVertical.top,
-          onTapOutside:
-              widget.onTapOutside ??
-              (_) => FocusManager.instance.primaryFocus?.unfocus(),
-          decoration: InputDecoration(
-            hintText: widget.hint,
-            counterText: '',
-            prefixIcon: widget.prefixIcon != null
-                ? Padding(
-                    padding: const EdgeInsets.all(14),
-                    child: SvgPicture.asset(
-                      widget.prefixIcon!,
-                      width: 20,
-                      height: 20,
-                      colorFilter: const ColorFilter.mode(
-                        AppColors.textSecondary,
-                        BlendMode.srcIn,
+        Semantics(
+          label: widget.label,
+          child: TextFormField(
+            controller: widget.controller,
+            focusNode: widget.focusNode,
+            obscureText: _obscureText,
+            enabled: widget.enabled,
+            readOnly: widget.readOnly,
+            autofocus: widget.autofocus,
+            maxLines: widget.obscureText ? 1 : widget.maxLines,
+            minLines: widget.minLines,
+            maxLength: widget.maxLength,
+            keyboardType: widget.keyboardType,
+            textInputAction: widget.textInputAction,
+            inputFormatters: widget.inputFormatters,
+            textCapitalization: widget.textCapitalization,
+            autocorrect: widget.autocorrect ?? !widget.obscureText,
+            enableSuggestions: widget.enableSuggestions ?? !widget.obscureText,
+            autofillHints: widget.autofillHints,
+            onChanged: widget.onChanged,
+            onFieldSubmitted: widget.onSubmitted,
+            onTap: widget.onTap,
+            validator: widget.validator,
+            autovalidateMode: widget.autovalidateMode,
+            style: AppTypography.body,
+            cursorColor: AppColors.accent,
+            textAlignVertical: isSingleLine
+                ? TextAlignVertical.center
+                : TextAlignVertical.top,
+            onTapOutside:
+                widget.onTapOutside ??
+                (_) => FocusManager.instance.primaryFocus?.unfocus(),
+            decoration: InputDecoration(
+              hintText: widget.hint,
+              counterText: '',
+              prefixIcon: widget.prefixIcon != null
+                  ? Padding(
+                      padding: const EdgeInsets.all(14),
+                      child: SvgPicture.asset(
+                        widget.prefixIcon!,
+                        width: 20,
+                        height: 20,
+                        colorFilter: const ColorFilter.mode(
+                          AppColors.textSecondary,
+                          BlendMode.srcIn,
+                        ),
                       ),
-                    ),
-                  )
-                : null,
-            suffixIcon: _buildSuffixIcon(),
-            errorText: null, // We handle error text ourselves
-            enabledBorder: OutlineInputBorder(
-              borderRadius: AppRadii.br12,
-              borderSide: BorderSide(
-                color: hasError ? AppColors.error : AppColors.border,
+                    )
+                  : null,
+              suffixIcon: _buildSuffixIcon(),
+              errorText: widget.errorText,
+              helperText: widget.helperText,
+              errorMaxLines: 3,
+              helperMaxLines: 3,
+              enabledBorder: OutlineInputBorder(
+                borderRadius: AppRadii.br12,
+                borderSide: BorderSide(
+                  color: hasError ? AppColors.error : AppColors.border,
+                ),
               ),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: AppRadii.br12,
-              borderSide: BorderSide(
-                color: hasError ? AppColors.error : AppColors.borderFocus,
-                width: 1.5,
+              focusedBorder: OutlineInputBorder(
+                borderRadius: AppRadii.br12,
+                borderSide: BorderSide(
+                  color: hasError ? AppColors.error : AppColors.borderFocus,
+                  width: 1.5,
+                ),
               ),
             ),
           ),
         ),
-        if (widget.errorText != null || widget.helperText != null) ...[
-          const SizedBox(height: AppSpacing.s6),
-          Text(
-            widget.errorText ?? widget.helperText ?? '',
-            style: AppTypography.caption.copyWith(
-              color: hasError ? AppColors.error : AppColors.textTertiary,
-            ),
-          ),
-        ],
       ],
     );
   }
 
   Widget? _buildSuffixIcon() {
     if (widget.obscureText) {
-      return GestureDetector(
-        onTap: () => setState(() => _obscureText = !_obscureText),
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Icon(
-            _obscureText ? Icons.visibility_off : Icons.visibility,
-            size: 20,
-            color: AppColors.textSecondary,
-          ),
+      return IconButton(
+        tooltip: _obscureText ? 'Show password' : 'Hide password',
+        onPressed: widget.enabled
+            ? () => setState(() => _obscureText = !_obscureText)
+            : null,
+        icon: Icon(
+          _obscureText ? Icons.visibility_off : Icons.visibility,
+          size: 20,
+          color: AppColors.textSecondary,
         ),
       );
     }
 
     if (widget.suffixIcon != null) {
-      return GestureDetector(
-        onTap: widget.onSuffixTap,
-        child: Padding(
+      return IconButton(
+        tooltip: widget.suffixTooltip,
+        onPressed: widget.enabled ? widget.onSuffixTap : null,
+        icon: Padding(
           padding: const EdgeInsets.all(14),
           child: SvgPicture.asset(
             widget.suffixIcon!,

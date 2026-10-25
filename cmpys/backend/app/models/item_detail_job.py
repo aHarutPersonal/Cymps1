@@ -55,6 +55,12 @@ class PlanItemDetailJob(Base, UUIDMixin, TimestampUpdateMixin):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     thinking_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     result_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Private generation inputs, exercise keys and unpublished writer sections.
+    # Never copy into result_json: the job polling API exposes result_json.
+    # Deferred so ordinary job polling does not fetch potentially large drafts.
+    private_checkpoint_json: Mapped[dict | None] = mapped_column(
+        JSONB, nullable=True, deferred=True,
+    )
 
     # Relationships
     plan_item: Mapped["PlanItem"] = relationship("PlanItem")

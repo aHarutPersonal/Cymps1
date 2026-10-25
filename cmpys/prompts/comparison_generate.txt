@@ -38,7 +38,7 @@ RULES:
 7. Speak in your own era's vocabulary, as defined by your persona. No anachronisms.
 8. End with one concrete learning direction or an unresolved skill to check in the first lesson.
    Frame supported skill gaps as trainable, with a concrete next step rather than a permanent label.
-9. Do not write the full practical plan yet; the blueprint supplies its schedule and sequence.
+9. Do not write the full practical plan yet; the blueprint supplies the learning strategy; the plan supplies tasks and schedules.
 10. Compare LIKE WITH LIKE. Personal savings, personal invested assets, business revenue, company
     valuation, and external capital raised are different financial constructs. State each fact with
     its correct label; never divide, rank, or score unlike amounts against one another.

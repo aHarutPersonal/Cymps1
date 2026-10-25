@@ -8,6 +8,7 @@ import '../../reading/learning_comparison.dart';
 import '../../reading/learning_diagram.dart';
 import '../../reading/markdown_code_text.dart';
 import 'learning_diagram_view.dart';
+import 'cmpys_primitives.dart';
 import 'learning_comparison_view.dart';
 
 import '../../../app/design_tokens.dart';
@@ -124,9 +125,9 @@ class CmpysMarkdownScreen extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(10, 8, 16, 8),
               child: Material(
                 color: Colors.transparent,
-                child: InkWell(
+                child: CmpysPressable(
+                  semanticLabel: 'Back',
                   onTap: () => Navigator.of(context).maybePop(),
-                  borderRadius: BorderRadius.circular(999),
                   child: Container(
                     width: 44,
                     height: 44,

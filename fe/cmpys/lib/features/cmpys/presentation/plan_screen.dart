@@ -38,6 +38,7 @@ class CmpysPlanScreen extends ConsumerStatefulWidget {
 
 class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
   int _view = 0; // 0 = Roadmap, 1 = Daily habits
+  final Set<String> _pendingDailyTasks = {};
 
   @override
   Widget build(BuildContext context) {
@@ -301,7 +302,7 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
   /// The LLM-written blueprint from onboarding — the mentor's own roadmap.
   Widget _blueprintCard(_PlanStoreView st) {
     final idol = st.idol;
-    return GestureDetector(
+    return CmpysPressable(
       onTap: () => Navigator.of(context).push(
         CmpysPageRoute(
           builder: (_) => CmpysMarkdownScreen(
@@ -391,7 +392,9 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
       child: Row(
         children: [
-          GestureDetector(
+          CmpysPressable(
+            semanticLabel: c.title,
+            toggled: done,
             onTap: () => ref.read(cmpysStoreProvider.notifier).toggleTask(c.id),
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 200),
@@ -456,11 +459,29 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
     final planState = ref.watch(currentPlanProvider);
     switch (planState.status) {
       case CurrentPlanStatus.ready:
-        final today = ref.watch(todayViewProvider).valueOrNull;
-        if (today == null) {
+        final todayState = ref.watch(todayViewProvider);
+        if (todayState.hasError) {
+          return [
+            CmpysCardSurface(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Couldn’t load your daily habits.'),
+                  const SizedBox(height: 12),
+                  CmpysButton(
+                    onTap: () => ref.invalidate(todayViewProvider),
+                    child: const Text('Try again'),
+                  ),
+                ],
+              ),
+            ),
+          ];
+        }
+        if (todayState.isLoading) {
           return [const CmpysSkeleton.block(height: 96)];
         }
-        if (today.items.isEmpty) {
+        final today = todayState.valueOrNull;
+        if (today == null || today.items.isEmpty) {
           return [
             Text(
               'No daily rhythm tasks this week — check the roadmap.',
@@ -627,10 +648,14 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
   }
 
   Future<void> _toggleDaily(TodayTaskItem item) async {
+    if (!_pendingDailyTasks.add(item.id)) return;
+    setState(() {});
     final wasDone = item.completedToday;
     try {
       await ref.read(planRepositoryProvider).toggleDailyTask(item.id);
+      if (!mounted) return;
       ref.invalidate(todayViewProvider);
+      await ref.read(todayViewProvider.future);
       if (!wasDone && mounted) {
         showCmpysToast(
           context,
@@ -648,6 +673,8 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
           tone: AppColors.ink2,
         );
       }
+    } finally {
+      if (mounted) setState(() => _pendingDailyTasks.remove(item.id));
     }
   }
 
@@ -661,9 +688,13 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
       ),
       child: Row(
         children: [
-          GestureDetector(
-            onTap: () => _toggleDaily(item),
-            behavior: HitTestBehavior.opaque,
+          CmpysPressable(
+            key: ValueKey('toggle-daily-${item.id}'),
+            semanticLabel: item.title,
+            toggled: done,
+            onTap: _pendingDailyTasks.contains(item.id)
+                ? null
+                : () => _toggleDaily(item),
             child: Padding(
               padding: const EdgeInsets.fromLTRB(8, 14, 12, 14),
               child: AnimatedContainer(
@@ -678,7 +709,15 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
                     width: 2,
                   ),
                 ),
-                child: done
+                child: _pendingDailyTasks.contains(item.id)
+                    ? const Center(
+                        child: SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      )
+                    : done
                     ? const Icon(
                         Icons.check_rounded,
                         size: 15,
@@ -689,9 +728,8 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
             ),
           ),
           Expanded(
-            child: GestureDetector(
+            child: CmpysPressable(
               onTap: () => openBackendPlanItemById(context, item.id),
-              behavior: HitTestBehavior.opaque,
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 12),
                 child: Column(

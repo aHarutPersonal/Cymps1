@@ -191,6 +191,8 @@ class LearningTopicRequest(BaseModel):
     """Request a Socratic learning session on a topic."""
 
     topic: str = Field(..., max_length=200)
+    level: str | None = Field(default=None, max_length=80)
+    language: str | None = Field(default=None, max_length=40)
 
 
 class GuidedLearningMessageRequest(BaseModel):

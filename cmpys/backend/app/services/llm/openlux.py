@@ -8,6 +8,7 @@ import asyncio
 from contextlib import aclosing
 import json
 import logging
+import math
 import re
 import time
 from typing import Any
@@ -17,6 +18,14 @@ from pydantic import BaseModel, ValidationError
 from app.services.llm.client import LLMResponse, OpenAILLMClient
 
 logger = logging.getLogger(__name__)
+
+
+class JSONProtocolError(ValueError):
+    """A completed document violates the strict JSON response contract.
+
+    This signals caller-owned, bounded output correction. It is deliberately
+    distinct from arbitrary ValueError failures and is not a transport retry.
+    """
 
 
 def _complete_json_object(raw: str) -> dict:
@@ -35,19 +44,25 @@ def _complete_json_object(raw: str) -> dict:
         result = {}
         for key, value in pairs:
             if key in result:
-                raise ValueError("Duplicate JSON property")
+                raise JSONProtocolError("Duplicate JSON property")
             result[key] = value
         return result
 
     def invalid_constant(_value):
-        raise ValueError("Non-finite JSON number")
+        raise JSONProtocolError("Non-finite JSON number")
+
+    def finite_float(value):
+        result = float(value)
+        if not math.isfinite(result):
+            raise JSONProtocolError("Non-finite JSON number")
+        return result
 
     data = json.loads(
         document, strict=False, object_pairs_hook=unique_object,
-        parse_constant=invalid_constant,
+        parse_constant=invalid_constant, parse_float=finite_float,
     )
     if not isinstance(data, dict):
-        raise ValueError("Expected a JSON object")
+        raise JSONProtocolError("Expected a JSON object")
     return data
 
 
@@ -73,7 +88,7 @@ def _unwrap_schema_answer(data: dict, output_model: type[BaseModel] | None) -> d
     candidate = data["answer"]
     if isinstance(candidate, str):
         try:
-            candidate = json.loads(candidate)
+            candidate = _complete_json_object(candidate)
         except (ValueError, RecursionError):
             return data
     if not isinstance(candidate, dict):
@@ -89,11 +104,37 @@ class OpenLuxStreamError(RuntimeError):
     """Sanitized failure category for deliberate, operation-specific recovery."""
 
     def __init__(self, error: Exception, provider: str = "openlux"):
+        # HTTP 429 also covers exhausted credit. Never treat that as transient
+        # throttling or retain provider response text (which can echo secrets).
+        body = getattr(error, "body", None)
+        details = body.get("error", body) if isinstance(body, dict) else {}
+        business_code = str(details.get("code", "")) if isinstance(details, dict) else ""
+        status = getattr(error, "status_code", None)
+        unavailable = (
+            (provider == "zai" and business_code == "1113")
+            or business_code in {"insufficient_quota", "credit_balance_exhausted"}
+            or status in {401, 403}
+        )
+        limited = status == 429 or type(error).__name__ == "RateLimitError"
+        self.code = (
+            "generation_unavailable" if unavailable else
+            "generation_rate_limited" if limited else "generation_failed"
+        )
         self.retryable = isinstance(error, (TimeoutError, ConnectionError)) or type(error).__name__ in {
             "APITimeoutError", "APIConnectionError", "RateLimitError", "InternalServerError",
         }
+        if unavailable:
+            self.retryable = False
+        self.retry_after_seconds = None
+        if limited and not unavailable:
+            headers = getattr(getattr(error, "response", None), "headers", {})
+            try:
+                delay = int(headers.get("retry-after", "60"))
+            except (TypeError, ValueError):
+                delay = 60
+            self.retry_after_seconds = max(1, min(delay, 3600))
         label = "OpenLux" if provider == "openlux" else provider
-        super().__init__(f"{label} stream failed ({type(error).__name__})")
+        super().__init__(f"{label} stream failed ({type(error).__name__}; {self.code})")
 
 
 class OpenLuxLLMClient(OpenAILLMClient):
@@ -136,7 +177,10 @@ class OpenLuxLLMClient(OpenAILLMClient):
             kwargs["max_tokens"] = self.max_tokens or 4096
         if schema is not None:
             kwargs["response_format"] = {"type": "json_object"}
-        async with asyncio.timeout(self.timeout):
+        self._effective_parameters = {k: v for k, v in kwargs.items() if k not in {"messages", "stream", "stream_options"}}
+        from app.services.llm.admission import provider_permit
+        async with provider_permit(self.provider_name, self.model, timeout=self.timeout) as wait_ms, asyncio.timeout(self.timeout):
+            self._admission_wait_ms = wait_ms
             stream = await self._get_client(self.api_key).chat.completions.create(
                 **kwargs
             )
@@ -165,52 +209,137 @@ class OpenLuxLLMClient(OpenAILLMClient):
             system_prompt, user_prompt, schema, on_chunk, output_model=output_model
         )
 
+    @staticmethod
+    def _reported_reasoning_tokens(usage):
+        """Keep an optional provider count, never estimate it from visible text."""
+        details = getattr(usage, "completion_tokens_details", None)
+        count = details.get("reasoning_tokens") if isinstance(details, dict) else getattr(details, "reasoning_tokens", None)
+        completion = getattr(usage, "completion_tokens", None)
+        if type(count) is not int or count < 0:
+            return None
+        if type(completion) is int and count > completion:
+            return None
+        return count
+
     async def _collect_json(
         self, system_prompt, user_prompt, schema, on_chunk=None, *, output_model=None
     ):
         started = time.perf_counter()
         text, finish, usage = "", None, None
+        first_event_ms = None
+        first_content_ms = None
         error = None
+        error_code = None
+        retryable = None
+        retry_after_seconds = None
         data = {}
+        transport_success = False
+        self._admission_wait_ms = None
+        self._effective_parameters = {}
+        from app.services.llm.tracing import record_attempt
+        attempt = LLMResponse(data={}, error="pending_provider_attempt", model=self.model, provider=self.provider_name)
+        await record_attempt(attempt, schema_name=getattr(output_model, "__name__", None), started=True)
         try:
             async with aclosing(
                 self._events(system_prompt, user_prompt, schema)
             ) as events:
                 async for chunk in events:
+                    if first_event_ms is None:
+                        first_event_ms = (time.perf_counter() - started) * 1000
                     usage = getattr(chunk, "usage", None) or usage
                     for choice in chunk.choices:
                         if choice.index != 0:
                             continue
                         content = choice.delta.content or ""
+                        if content and first_content_ms is None:
+                            first_content_ms = (time.perf_counter() - started) * 1000
                         text += content
                         finish = choice.finish_reason or finish
                         if content and on_chunk:
                             await on_chunk(text)
-            if finish != "stop" or not text.strip():
-                raise ValueError("Incomplete or empty response")
+            if finish != "stop":
+                raise ValueError("Incomplete response")
+            transport_success = True
+            if not text.strip():
+                raise JSONProtocolError("Empty JSON document")
             data = _complete_json_object(text)
             data = _unwrap_schema_answer(data, output_model)
+        except asyncio.CancelledError:
+            from app.services.llm.tracing import record_attempt
+            cancelled_response = LLMResponse(
+                data={}, error="cancelled", provider=self.provider_name, model=self.model,
+                prompt_tokens=getattr(usage, "prompt_tokens", None),
+                completion_tokens=getattr(usage, "completion_tokens", None),
+                total_tokens=getattr(usage, "total_tokens", None),
+                thoughts_tokens=self._reported_reasoning_tokens(usage),
+                duration_ms=(time.perf_counter() - started) * 1000,
+                first_event_ms=first_event_ms,
+                first_content_ms=first_content_ms,
+                response_chars=len(text),
+                finish_reason=finish,
+                admission_wait_ms=getattr(self, "_admission_wait_ms", None),
+                attempt_id=attempt.attempt_id,
+                transport_success=False, json_valid=False,
+                effective_parameters=getattr(self, "_effective_parameters", {}),
+            )
+            self.last_attempt = cancelled_response
+            await record_attempt(cancelled_response, schema_name=getattr(output_model, "__name__", None), cancelled=True)
+            raise
         except Exception as exc:
             # Upstream exceptions can echo headers or user content. Keep both
             # logs and persisted failures limited to a safe error category.
+            classified = OpenLuxStreamError(exc, self.provider_name)
+            error_code = classified.code
+            if classified.code in {"generation_unavailable", "generation_rate_limited"} or classified.retryable:
+                retryable = classified.retryable
+                retry_after_seconds = classified.retry_after_seconds
             label = "OpenLux" if self.provider_name == "openlux" else self.provider_name
-            error = f"{label} request failed ({type(exc).__name__}; finish={finish or 'missing'})"
+            # Credit exhaustion is also HTTP 429. Do not present its SDK
+            # RateLimitError name as transient throttling to legacy callers.
+            category = "GenerationUnavailable" if classified.code == "generation_unavailable" else type(exc).__name__
+            error = f"{label} request failed ({category}; finish={finish or 'missing'})"
+            if isinstance(exc, JSONProtocolError):
+                # These categories are assigned from fixed parser messages only.
+                # Never persist duplicate key names or the response document.
+                self._effective_parameters["json_protocol_error"] = {
+                    "Duplicate JSON property": "duplicate_property",
+                    "Non-finite JSON number": "non_finite_number",
+                    "Expected a JSON object": "non_object_document",
+                    "Empty JSON document": "empty_document",
+                }.get(str(exc), "invalid_json_document")
             if isinstance(exc, json.JSONDecodeError):
+                self._effective_parameters["json_protocol_error"] = "invalid_json_syntax"
                 # Decoder diagnostics contain locations, never response text.
                 error += f"; JSON at line {exc.lineno} column {exc.colno}: {exc.msg}"
             logger.warning("%s", error)
-        return LLMResponse(
+        response = LLMResponse(
             data=data if error is None else {},
             raw_response=text,
             error=error,
+            error_code=error_code,
+            retryable=retryable,
+            retry_after_seconds=retry_after_seconds,
             model=self.model,
             provider=self.provider_name,
+            attempt_id=attempt.attempt_id,
             prompt_tokens=getattr(usage, "prompt_tokens", None),
             completion_tokens=getattr(usage, "completion_tokens", None),
             total_tokens=getattr(usage, "total_tokens", None),
+            thoughts_tokens=self._reported_reasoning_tokens(usage),
             finish_reason=finish,
             duration_ms=(time.perf_counter() - started) * 1000,
+            first_event_ms=first_event_ms,
+            first_content_ms=first_content_ms,
+            response_chars=len(text),
+            admission_wait_ms=getattr(self, "_admission_wait_ms", None),
+            cached_prompt_tokens=getattr(getattr(usage, "prompt_tokens_details", None), "cached_tokens", None),
+            effective_parameters=getattr(self, "_effective_parameters", {}),
+            transport_success=transport_success, json_valid=error is None,
         )
+        self.last_attempt = response
+        from app.services.llm.tracing import record_attempt
+        await record_attempt(response, schema_name=getattr(output_model, "__name__", None))
+        return response
 
     async def stream_text(self, system_prompt, user_prompt, *, operation):
         from app.services.llm.telemetry import UsageRecord, record_usage_records

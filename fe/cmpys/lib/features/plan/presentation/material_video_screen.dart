@@ -2,6 +2,7 @@
 // editorial player layout (16:9 player card, title, why-this-material).
 
 import 'package:flutter/material.dart';
+import 'package:cmpys/core/ui/cmpys/cmpys_primitives.dart';
 import 'package:youtube_player_iframe/youtube_player_iframe.dart';
 
 import '../../../app/design_tokens.dart';
@@ -120,9 +121,9 @@ class _MaterialVideoScreenState extends State<MaterialVideoScreen> {
         children: [
           Material(
             color: Colors.transparent,
-            child: InkWell(
+            child: CmpysPressable(
+              semanticLabel: 'Back',
               onTap: () => Navigator.of(context).maybePop(),
-              borderRadius: BorderRadius.circular(999),
               child: Container(
                 width: 44,
                 height: 44,

@@ -83,6 +83,7 @@ class ContentResourcesRepository {
           ? 'unicode_codepoints'
           : offsetEncoding,
       sourceTextHash: data['sourceTextHash']?.toString().trim() ?? '',
+      alignmentPending: data['alignmentPending'] == true,
       disclosure: data['disclosure']?.toString().trim() ?? '',
       isAiGenerated: data['isAiGenerated'] != false,
     );
@@ -280,6 +281,7 @@ class BookNarrationAudio {
     this.alignmentGranularity = BookNarrationAlignmentGranularity.none,
     this.offsetEncoding = 'utf16',
     this.sourceTextHash = '',
+    this.alignmentPending = false,
     this.disclosure = '',
     required this.isAiGenerated,
   });
@@ -298,6 +300,7 @@ class BookNarrationAudio {
   final BookNarrationAlignmentGranularity alignmentGranularity;
   final String offsetEncoding;
   final String sourceTextHash;
+  final bool alignmentPending;
   final String disclosure;
   final bool isAiGenerated;
 }

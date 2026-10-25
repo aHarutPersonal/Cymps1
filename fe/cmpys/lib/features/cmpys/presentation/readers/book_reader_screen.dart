@@ -92,9 +92,9 @@ class _CmpysBookReaderScreenState extends State<CmpysBookReaderScreen> {
         children: [
           Material(
             color: Colors.transparent,
-            child: InkWell(
+            child: CmpysPressable(
+              semanticLabel: 'Back',
               onTap: () => Navigator.of(context).maybePop(),
-              borderRadius: BorderRadius.circular(999),
               child: Container(
                 width: 44,
                 height: 44,

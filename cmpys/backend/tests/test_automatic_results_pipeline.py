@@ -15,6 +15,13 @@ from app.models.intake import IntakeSession, SessionPhase
 from app.models.plan_job import PlanGenerationJob
 
 
+@pytest.fixture(autouse=True)
+def catalog_facts(monkeypatch):
+    lookup = AsyncMock(return_value={"origin": "published_catalog", "facts": [{"description": "Sourced milestone"}]})
+    monkeypatch.setattr(sessions_api, "catalog_mentor_facts", lookup)
+    return lookup
+
+
 class _Result:
     def __init__(self, value):
         self.value = value
@@ -372,6 +379,8 @@ async def test_comparison_cas_does_not_overwrite_a_completed_artifact(
         return session
 
     async def fake_comparison(*args, **kwargs):
+        assert "Sourced milestone" in kwargs["user_message"]
+        assert session.idol_facts_json["origin"] == "published_catalog"
         yield "Losing comparison"
 
     async def forbidden_blueprint(*args, **kwargs):

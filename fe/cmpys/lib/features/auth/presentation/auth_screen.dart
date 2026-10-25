@@ -814,6 +814,8 @@ class _PaperInputField extends StatelessWidget {
                   controller: controller,
                   keyboardType: keyboardType,
                   obscureText: obscureText,
+                  autocorrect: false,
+                  enableSuggestions: false,
                   enabled: enabled,
                   onChanged: onChanged,
                   textCapitalization: textCapitalization,
@@ -891,9 +893,10 @@ class _ErrorBanner extends StatelessWidget {
                       ),
                     ),
                   ),
-                  GestureDetector(
-                    onTap: onDismiss,
-                    child: Icon(
+                  IconButton(
+                    tooltip: 'Dismiss error',
+                    onPressed: onDismiss,
+                    icon: Icon(
                       Icons.close,
                       size: 16,
                       color: AppColors.error.withValues(alpha: 0.7),

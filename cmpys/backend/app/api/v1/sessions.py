@@ -24,7 +24,7 @@ from typing import Annotated
 import anyio
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import JSON, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -67,6 +67,7 @@ from app.services.comparison.scoring import (
     comparison_score_retry_delay,
     generate_comparison_scores,
 )
+from app.services.comparison.mentor_facts import catalog_mentor_facts
 from app.services.content_resources import attach_content_resources_to_materials
 from app.services.llm import get_llm_client
 from app.services.llm.prompt_loader import load_and_render, sanitize_untrusted_input
@@ -1644,31 +1645,45 @@ async def _prefetch_idol_facts(
     from app.core.db import async_session_maker
 
     try:
-        facts_prompt = (
-            f"What had {idol_name} achieved by age {user_age}? "
-            f"List specific, verified accomplishments as concise bullet points, "
-            f"one per line, each with the year and {idol_name}'s age at the time."
-        )
-        facts_response = await generate_with_grounding(
-            system_prompt="You are a historical fact checker. Return accurate, sourced facts.",
-            user_message=facts_prompt,
-            operation="idol_fact_lookup",
-            tier="fast",
-            thinking_level="minimal",
-            max_output_tokens=900,
-        )
-        if not facts_response:
-            return
         async with async_session_maker() as bg_db:
-            result = await bg_db.execute(
+            bg_session = (await bg_db.execute(
                 select(IntakeSession).where(IntakeSession.id == session_id)
+            )).scalar_one_or_none()
+            if not bg_session or bg_session.idol_facts_json:
+                return
+            idol_id = bg_session.idol_id
+            # Catalog reads are local and deterministic. Never spend a provider
+            # request or wait for optional web research when cited facts exist.
+            facts = await catalog_mentor_facts(bg_db, idol_id=idol_id, user_age=user_age)
+        if not facts:
+            facts_prompt = (
+                f"What had {idol_name} achieved by age {user_age}? "
+                f"List specific, verified accomplishments as concise bullet points, "
+                f"one per line, each with the year and {idol_name}'s age at the time."
             )
-            bg_session = result.scalar_one_or_none()
-            # Never clobber facts the interview path may have written first.
-            if bg_session and not bg_session.idol_facts_json:
-                bg_session.idol_facts_json = {"raw_facts": facts_response}
-                await bg_db.commit()
-                logger.info(f"[SESSION] Prefetched idol facts for session {session_id}")
+            facts_response = await generate_with_grounding(
+                system_prompt="You are a historical fact checker. Return accurate, sourced facts.",
+                user_message=facts_prompt,
+                operation="idol_fact_lookup",
+                tier="fast",
+                thinking_level="minimal",
+                max_output_tokens=900,
+            )
+            if not facts_response:
+                return
+            facts = {"raw_facts": facts_response}
+        async with async_session_maker() as bg_db:
+            # Compare-and-set avoids overwriting newer evidence or a changed
+            # mentor/age while the optional provider call was in flight.
+            await bg_db.execute(update(IntakeSession).where(
+                IntakeSession.id == session_id,
+                IntakeSession.idol_id == idol_id,
+                IntakeSession.user_age == user_age,
+                or_(IntakeSession.idol_facts_json.is_(None), IntakeSession.idol_facts_json == JSON.NULL,
+                    IntakeSession.idol_facts_json == {}),
+            ).values(idol_facts_json=facts))
+            await bg_db.commit()
+
     except Exception as e:
         logger.warning(f"[SESSION] Optional idol facts prefetch failed: {e}")
 
@@ -2533,6 +2548,26 @@ async def _dispatch_session_plan_job(db, job: PlanGenerationJob | None) -> None:
         raise RuntimeError("Plan generation could not be queued")
 
 
+def _results_error_event(error: Exception, section: str) -> dict:
+    """Expose actionable categories, never upstream bodies or credentials."""
+    from app.services.llm.openlux import OpenLuxStreamError
+
+    code = error.code if isinstance(error, OpenLuxStreamError) else "generation_failed"
+    messages = {
+        "generation_unavailable": "Generation is unavailable right now. Your answers are saved. Please try again later.",
+        "generation_rate_limited": "Generation is busy right now. Your answers are saved. Please wait before trying again.",
+        "generation_failed": "Generation could not finish. Your answers are saved. Please try again.",
+    }
+    event = {
+        "type": "error", "section": section, "code": code,
+        "message": messages[code],
+        "retryable": error.retryable if isinstance(error, OpenLuxStreamError) else True,
+    }
+    if isinstance(error, OpenLuxStreamError) and error.retry_after_seconds is not None:
+        event["retry_after_seconds"] = error.retry_after_seconds
+    return event
+
+
 @router.post("/{session_id}/generate-results")
 async def generate_results(
     session_id: str,
@@ -2684,6 +2719,12 @@ async def generate_results(
             detail="The intake session changed while results were being claimed.",
         )
 
+    # Resolve the optional-prefetch race before taking a stable input snapshot.
+    # Existing artifacts retain their original evidence; retries replay them.
+    if not session.comparison_output and not session.idol_facts_json:
+        session.idol_facts_json = await catalog_mentor_facts(
+            db, idol_id=session.idol_id, user_age=session.user_age)
+
     _clear_interview_claim(claimed_thread)
     results_claim_token = str(uuid.uuid4())
     claimed_thread.interview_claim_key = "results"
@@ -2802,7 +2843,7 @@ async def generate_results(
                 # Remain in COMPARISON so the same endpoint can retry without
                 # making the user repeat the interview.
                 await db.rollback()
-                yield f"data: {json_lib.dumps({'type': 'error', 'section': 'comparison', 'message': 'Comparison generation failed. Please try again.', 'retryable': True})}\n\n"
+                yield f"data: {json_lib.dumps(_results_error_event(e, 'comparison'))}\n\n"
                 return
 
         if not comparison_scores_are_current(pipeline_session.comparison_scores_json):
@@ -2855,7 +2896,9 @@ async def generate_results(
                     "user_age": str(pipeline_session.user_age),
                     "user_profile_json": user_profile_prompt_json,
                     "interview_transcript_json": interview_transcript,
-                    "comparison_summary": full_comparison[:2000],
+                    "comparison_summary": json_lib.dumps({"comparison": full_comparison,
+                        "evidence_status": plan_inputs.get("achievement_baseline_status"),
+                        "learner_baseline": plan_inputs}, ensure_ascii=False),
                     "idol_facts_json": json_lib.dumps(
                         pipeline_session.idol_facts_json or {}
                     ),
@@ -2913,7 +2956,7 @@ async def generate_results(
                     scores_task.cancel()
                 # Remain in BLUEPRINT; the retry reuses the finished comparison.
                 await db.rollback()
-                yield f"data: {json_lib.dumps({'type': 'error', 'section': 'blueprint', 'message': 'Blueprint generation failed. Please try again.', 'retryable': True})}\n\n"
+                yield f"data: {json_lib.dumps(_results_error_event(e, 'blueprint'))}\n\n"
                 return
 
         # =====================================================================
@@ -3041,7 +3084,7 @@ async def get_learning_materials(
     Fetch curated learning materials for a specific blueprint topic.
     Uses Google Search grounding to find real articles and videos.
     """
-    await _get_session(session_id, current_user.id, db)
+    learning_session = await _get_session(session_id, current_user.id, db)
 
     # The grounded search is network-bound and does not need a database
     # connection.  Close the read transaction until resource attachment.
@@ -3050,7 +3093,14 @@ async def get_learning_materials(
     # Braces in the user-typed topic would read as unresolved placeholders
     # under strict rendering — neutralise them before substitution.
     safe_topic = data.topic.replace("{", "(").replace("}", ")")
-    prompt = load_and_render("learning_materials_generate.txt", {"topic": safe_topic})
+    prompt = load_and_render("learning_materials_generate.txt", {
+        "topic": safe_topic,
+        "learner_context": json_lib.dumps({
+            "goal": getattr(learning_session, "user_goal", None),
+            "skill_evidence": getattr(learning_session, "comparison_scores_json", None),
+            "requested_level": data.level, "language": data.language,
+        }, ensure_ascii=False),
+    })
 
     full_response = await generate_with_grounding(
         system_prompt=load_and_render("learning_materials_system.txt", {}),

@@ -43,7 +43,7 @@ from app.models.user import User
 from app.models.user_achievement import UserAchievement
 from app.services.content_quality import (
     BOOK_MODULE_QUALITY_GATE_VERSION,
-    MIN_PLAN_DETAIL_LESSON_WORDS,
+    plan_detail_min_words,
 )
 from app.services.content_resources import normalized_material_type
 from app.services.interview_inputs import (
@@ -620,6 +620,11 @@ def _item_to_response(
     description, metric, hours = item.description, item.success_metric, item.estimated_hours
     loaded_details = vars(item).get("details_json")
     details = loaded_details if isinstance(loaded_details, dict) else {}
+    minutes = hours * 60
+    workload = details.get("workload") or {}
+    if (details.get("_generation") or {}).get("status") == "ready" and workload.get("status") == "reconciled":
+        minutes = int(workload["required_minutes"])
+        hours = (minutes + 59) // 60
     if details.get("catalog") and _lesson_details_meet_quality(details):
         steps = _validated_lesson_steps(details) or []
         minutes = sum(int(step.get("estimate_minutes") or 0) for step in steps)
@@ -641,6 +646,7 @@ def _item_to_response(
         weekEnd=item.week_end,
         successMetric=metric,
         estimatedHours=hours,
+        estimatedMinutes=minutes,
         status=(
             PlanItemStatus.NOT_STARTED
             if is_daily
@@ -1586,6 +1592,7 @@ def _parse_item_details(details_json: dict | None) -> ItemDetails | None:
             StepDetail(
                 id=str(s["id"]),
                 title=s.get("title", ""),
+                lesson_format=s.get("lesson_format"),
                 description=s.get("description"),
                 expected_output=s.get("expected_output"),
                 estimate_minutes=s.get("estimate_minutes")
@@ -1608,6 +1615,7 @@ def _parse_item_details(details_json: dict | None) -> ItemDetails | None:
 
         return ItemDetails(
             steps=steps,
+            lesson_format=details_json.get("lesson_format"),
             materials=materials,
             generated_from_prompt_version=details_json.get(
                 "generated_from_prompt_version"
@@ -1619,8 +1627,11 @@ def _parse_item_details(details_json: dict | None) -> ItemDetails | None:
 
 
 def _lesson_details_meet_quality(details_json: dict | None) -> bool:
-    """Treat legacy short lessons as missing so they are upgraded on open."""
+    """Require approved content at its format's depth before exposing it."""
     if not details_json:
+        return False
+    from app.services.planning.lesson_package import current_package_approval
+    if not current_package_approval(details_json, allow_compatible_read=True):
         return False
     from app.services.planning.catalog_lessons import (
         catalog_details_are_personalized_and_ready,
@@ -1640,16 +1651,18 @@ def _lesson_details_meet_quality(details_json: dict | None) -> bool:
     steps = _validated_lesson_steps(details_json)
     if not steps:
         return False
-    lessons = [str(step.get("lesson_content") or "") for step in steps]
     return _parse_item_details(details_json) is not None and all(
-        lesson.strip() and len(lesson.split()) >= MIN_PLAN_DETAIL_LESSON_WORDS
-        for lesson in lessons
+        len(str(step.get("lesson_content") or "").split()) >= plan_detail_min_words(step)
+        for step in steps
     )
 
 
 def _partial_lesson_details_available(details_json: dict | None) -> bool:
-    """Expose only explicit checkpoints containing a validated long lesson."""
+    """Expose only explicit checkpoints containing approved lesson content."""
     if not isinstance(details_json, dict):
+        return False
+    from app.services.planning.lesson_package import current_package_approval
+    if not current_package_approval(details_json, allow_compatible_read=True):
         return False
     from app.services.planning.catalog_lessons import (
         catalog_details_are_personalized_and_ready,
@@ -1750,7 +1763,7 @@ async def _require_completion_artifact_ready(
     elif (
         isinstance(selected_step, dict)
         and len(str(selected_step.get("lesson_content") or "").split())
-        >= MIN_PLAN_DETAIL_LESSON_WORDS
+        >= plan_detail_min_words(selected_step)
     ):
         details = item.details_json if isinstance(item.details_json, dict) else {}
         generation = details.get("_generation")
@@ -1982,6 +1995,75 @@ async def get_plan_item_detailed(
         user_id=str(current_user.id),
         plan_item_id=str(item.id),
     )
+    embedded_job_id = _details_generation_job_id(item)
+    # A successor now keeps approved public content in place until it has a
+    # complete approved replacement. Read that exact retained artifact while
+    # its successor runs or fails; the latest job still owns generation status.
+    # Completion/mutation endpoints keep their existing publication CAS rules.
+    from app.tasks.plans import _approved_readable_step_ids
+
+    preserved_approved_artifact = bool(
+        existing_job is not None
+        and embedded_job_id is not None
+        and str(existing_job.id) != embedded_job_id
+        and partial_runtime_safe
+        and _approved_readable_step_ids(item.details_json)
+        and await artifact_job_reference_is_valid(
+            db, item.details_json,
+            plan_item_id=str(item.id), user_id=str(current_user.id),
+        )
+    )
+    if preserved_approved_artifact:
+        # Build a coherent content/progress snapshot while the item lock is
+        # still held; queue maintenance below may commit its transaction.
+        preserved_response = PlanItemDetailedResponse(
+            item=_detailed_item_response(item, completed=is_completed),
+            details=_parse_item_details(item.details_json),
+            progress=progress,
+            completed=is_completed,
+            completed_step_ids=completed_step_ids,
+            details_status=(
+                DetailsStatus.AVAILABLE
+                if generation.get("status") == "ready"
+                else DetailsStatus.PARTIAL
+            ),
+            job_id=existing_job.id,
+            artifact_job_id=embedded_job_id,
+            details_progress=existing_job.progress_percent,
+            details_step=existing_job.step,
+            details_error=(
+                "Some lessons are not ready yet. Your ready lessons and progress are saved."
+                if generation.get("status") != "ready"
+                and existing_job.status in {"failed", "cancelled"}
+                else None
+            ),
+        )
+        if existing_job.status in {"pending", "queued"}:
+            await _promote_prefetched_detail_job(db, existing_job)
+        preserved_response.details_progress = existing_job.progress_percent
+        preserved_response.details_step = existing_job.step
+        successor_status = existing_job.status
+        if existing_job.status in ACTIVE_DETAIL_JOB_STATUSES and _detail_job_is_stale(existing_job):
+            # Do not fail a worker that refreshed its heartbeat after our read.
+            stopped = await db.execute(
+                update(PlanItemDetailJob)
+                .where(
+                    PlanItemDetailJob.id == existing_job.id,
+                    PlanItemDetailJob.status == existing_job.status,
+                    PlanItemDetailJob.updated_at == existing_job.updated_at,
+                )
+                .values(status="failed", step="error",
+                        error_message="Generation worker stopped before completion")
+            )
+            await db.commit()
+            if stopped.rowcount == 1:
+                successor_status = "failed"
+                preserved_response.details_step = "error"
+        if generation.get("status") != "ready" and successor_status in {"failed", "cancelled"}:
+            preserved_response.details_error = (
+                "Some lessons are not ready yet. Your ready lessons and progress are saved."
+            )
+        return preserved_response
     active_replacement = _active_job_replaces_artifact(
         item,
         (
@@ -1997,7 +2079,6 @@ async def get_plan_item_detailed(
         progress = ItemProgress()
         is_completed = False
         completed_step_ids = []
-    embedded_job_id = _details_generation_job_id(item)
     partial_artifact_owned = bool(
         not artifact_job_marker_is_invalid(item.details_json)
         and embedded_job_id is not None

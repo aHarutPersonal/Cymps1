@@ -280,6 +280,8 @@ def curriculum_stage_reserve_usd(stage: str | None = None) -> float:
     limit = max(float(settings.curriculum_daily_budget_usd), 0.0)
     if stage is not None:
         base = _STAGE_RESERVE_USD.get(stage, 0.05)
+        if stage == "factual_review" and settings.curriculum_parallel_reviews:
+            base += _STAGE_RESERVE_USD["pedagogy_review"]
         # Reserving Gemini-sized money for stages served by a free route starves
         # admission on spend that will never happen: with OpenRouter serving
         # generation, ~$0.225 per job was held against ~$0.06 of real search

@@ -1,3 +1,4 @@
+import asyncio
 import json
 from unittest.mock import AsyncMock
 
@@ -14,6 +15,29 @@ def document(words):
         {"type": "word_info", "text": word, "start_offset": f"{i + .1}s",
          "end_offset": f"{i + .6}s"} for i, word in enumerate(words)
     ]}]}]}
+
+
+@pytest.mark.asyncio
+async def test_slow_alignment_never_holds_cold_or_cached_audio(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "book_narration_enabled", True)
+    monkeypatch.setattr(settings, "book_narration_provider", "gemini")
+    monkeypatch.setattr(settings, "gemini_api_key", "TEST_KEY")
+    monkeypatch.setattr(settings, "book_narration_media_dir", str(tmp_path))
+    started, release = asyncio.Event(), asyncio.Event()
+    async def slow(*args, **kwargs):
+        started.set()
+        await release.wait()
+        return ()
+    synthesize = AsyncMock(return_value=narration._GeminiSynthesis(_wav(frames=48000), 2000))
+    monkeypatch.setattr(narration, "_synthesize_with_gemini", synthesize)
+    monkeypatch.setattr(narration, "_gemini_word_alignment", slow)
+    first = await asyncio.wait_for(narration.render_book_narration("Hello world", "expressive"), 1)
+    await started.wait()
+    second = await asyncio.wait_for(narration.render_book_narration("Hello world", "expressive"), 1)
+    assert first.audio_url == second.audio_url and first.alignment_pending and second.alignment_pending
+    synthesize.assert_awaited_once()
+    release.set()
+    await asyncio.gather(*narration._alignment_tasks.values())
 
 
 def test_acoustic_ranges_keep_pauses_and_utf16_source_offsets():
@@ -84,6 +108,8 @@ async def test_existing_recording_gets_one_alignment_attempt_without_resynthesis
     monkeypatch.setattr(narration, "_synthesize_with_gemini", synthesize)
     monkeypatch.setattr(narration, "_gemini_word_alignment", align)
     first = await narration.render_book_narration("Hello world", "expressive")
+    assert first.alignment_pending
+    await asyncio.gather(*narration._alignment_tasks.values())
     metadata_path = next(tmp_path.glob("*.json"))
     metadata = json.loads(metadata_path.read_text())
     metadata.pop("alignmentAttempted")  # Simulate an older paid recording.
@@ -91,6 +117,8 @@ async def test_existing_recording_gets_one_alignment_attempt_without_resynthesis
     cues = narration._transcription_word_cues("Hello world", document(["Hello", "world"]), duration_ms=2000)
     align.return_value = cues if success else ()
     second = await narration.render_book_narration("Hello world", "expressive")
+    assert second.alignment_pending
+    await asyncio.gather(*narration._alignment_tasks.values())
     third = await narration.render_book_narration("Hello world", "expressive")
     assert synthesize.await_count == 1
     assert align.await_count == 2  # Initial recording and one legacy upgrade.

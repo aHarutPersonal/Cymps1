@@ -86,7 +86,8 @@ def practice_summary(row, workbook: Workbook) -> dict:
 
 
 async def load_recent_practice_evidence(
-    db, *, user_id: str, idol_id: str, session_id: str
+    db, *, user_id: str, idol_id: str, session_id: str,
+    exclude_plan_item_id: str | None = None,
 ) -> list[dict]:
     """Owner + mentor + goal-session scoped, bounded, current artifacts only."""
     if not all((user_id, idol_id, session_id)):
@@ -96,7 +97,7 @@ async def load_recent_practice_evidence(
         catalog_details_are_ready_in_database,
     )
 
-    result = await db.execute(
+    statement = (
         select(LessonPractice, PlanItem)
         .join(PlanItem, PlanItem.id == LessonPractice.plan_item_id)
         .join(Plan, Plan.id == PlanItem.plan_id)
@@ -110,6 +111,11 @@ async def load_recent_practice_evidence(
         .order_by(LessonPractice.updated_at.desc(), LessonPractice.id.desc())
         .limit(8)
     )
+    # A mission must not change its own generation inputs as lessons finish.
+    # Apply this before LIMIT so other missions can still supply evidence.
+    if exclude_plan_item_id is not None:
+        statement = statement.where(PlanItem.id != exclude_plan_item_id)
+    result = await db.execute(statement)
     evidence = []
     for row, item in result.all():
         details = item.details_json or {}

@@ -307,7 +307,8 @@ class TestPlanPromptSessionContext:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('unavailable', [False, True])
-async def test_practice_enrichment_preserves_intake_even_when_storage_unavailable(monkeypatch, unavailable):
+@pytest.mark.parametrize('exclude_item', [None, 'active-item'])
+async def test_practice_enrichment_preserves_intake_even_when_storage_unavailable(monkeypatch, unavailable, exclude_item):
     from contextlib import asynccontextmanager
     from unittest.mock import AsyncMock
     from sqlalchemy.exc import SQLAlchemyError
@@ -328,9 +329,11 @@ async def test_practice_enrichment_preserves_intake_even_when_storage_unavailabl
     checked = [{'lesson': 'Triangles', 'status': 'completed_with_support', 'activities': []}]
     loader = AsyncMock(side_effect=SQLAlchemyError('unavailable') if unavailable else None, return_value=checked)
     monkeypatch.setattr(evidence, 'load_recent_practice_evidence', loader)
-    ctx = await _load_session_context(db, user_id='u1', idol_id='i1', session_id='s1')
+    ctx = await _load_session_context(db, user_id='u1', idol_id='i1', session_id='s1',
+                                      exclude_practice_plan_item_id=exclude_item)
     assert ctx['learner_baseline']['current_capability']['answer'] == 'I solve triangle problems.'
-    loader.assert_awaited_once_with(db, user_id='u1', idol_id='i1', session_id='s1')
+    options = {'exclude_plan_item_id': exclude_item} if exclude_item is not None else {}
+    loader.assert_awaited_once_with(db, user_id='u1', idol_id='i1', session_id='s1', **options)
     if unavailable:
         assert 'practice_evidence' not in ctx['learner_baseline']
     else:

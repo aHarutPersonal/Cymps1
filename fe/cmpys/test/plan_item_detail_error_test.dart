@@ -52,6 +52,7 @@ class _ScriptedRepo extends Fake implements PlanRepository {
     final step = _jobScript[_jobCalls.clamp(0, _jobScript.length - 1)];
     _jobCalls++;
     if (step is Exception) throw step;
+    if (step is Future<PlanJobStatus>) return step;
     return step as PlanJobStatus;
   }
 
@@ -71,6 +72,7 @@ class _ScriptedRepo extends Fake implements PlanRepository {
 class _BookGuideRepo extends Fake implements PlanRepository {
   final guide = Completer<String?>();
   int guideWaits = 0;
+  BookReadingAccess access = const BookReadingAccess();
 
   @override
   Future<PlanItemDetailed> getPlanItemDetailed(String itemId) async =>
@@ -99,6 +101,22 @@ class _BookGuideRepo extends Fake implements PlanRepository {
       );
 
   @override
+  Future<BookReadingAccess> resolveBookReadingAccess(
+    String key,
+    String title,
+    String? author,
+  ) async => access;
+
+  @override
+  Future<String?> resolveContentResourceId(String canonicalKey) async => null;
+
+  @override
+  Future<String?> resolveOriginalBookSource(
+    String title,
+    String? author,
+  ) async => null;
+
+  @override
   Future<String?> waitForContentResourceId(
     String canonicalKey, {
     List<Duration> pollDelays = const [],
@@ -121,13 +139,14 @@ PlanItemDetailed _availableItem() => PlanItemDetailed(
   detailsStatus: 'available',
 );
 
-PlanItemDetailed _partialItem() => PlanItemDetailed(
+PlanItemDetailed _partialItem({String? error}) => PlanItemDetailed(
   item: BackendPlanItem.fromJson(const {
     'id': 'x',
     'title': 'Build the prototype',
     'description': 'Build and review a useful prototype.',
   }),
   detailsStatus: 'partial',
+  detailsError: error,
   jobId: 'detail-job',
   detailsStep: 'first_lesson_ready',
   detailsProgress: 70,
@@ -174,7 +193,7 @@ const _failedJob = PlanJobStatus(
   errorMessage: 'This lesson failed its final quality check.',
 );
 
-PlanItemDetailed _failedItem() => PlanItemDetailed(
+PlanItemDetailed _failedItem({String? jobId}) => PlanItemDetailed(
   item: BackendPlanItem.fromJson(const {
     'id': 'x',
     'title': 'Build the prototype',
@@ -182,6 +201,7 @@ PlanItemDetailed _failedItem() => PlanItemDetailed(
   }),
   detailsStatus: 'failed',
   detailsError: 'This lesson could not be prepared.',
+  jobId: jobId,
 );
 
 PlanItemDetailed _dailyItem({bool completed = false}) => PlanItemDetailed(
@@ -202,6 +222,60 @@ Widget _app(PlanRepository repo) => ProviderScope(
 );
 
 void main() {
+  testWidgets('resuming refreshes saved lessons without another generation', (
+    tester,
+  ) async {
+    final repo = _ScriptedRepo(
+      [_pendingItem(jobId: 'detail-job'), _availableItem()],
+      jobScript: const [_runningJob],
+    );
+    await tester.pumpWidget(_app(repo));
+    await tester.pump();
+    await tester.pump();
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    await tester.pump(const Duration(minutes: 11));
+    expect(repo.calls, 1);
+    expect(repo.jobCalls, 0);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+    await tester.pump();
+    expect(repo.calls, 2);
+    expect(find.textContaining('Writing your lesson'), findsNothing);
+    expect(find.text('Generate again'), findsNothing);
+    expect(repo.retries, 0);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('late old job failure cannot overwrite an explicit retry', (
+    tester,
+  ) async {
+    final oldStatus = Completer<PlanJobStatus>();
+    final repo = _ScriptedRepo(
+      [_failedItem(jobId: 'old-job'), _pendingItem(jobId: 'retry-job')],
+      jobScript: [oldStatus.future, _runningJob],
+    );
+    await tester.pumpWidget(_app(repo));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 2));
+    expect(repo.polledJobIds, ['old-job']);
+
+    await tester.tap(find.text('Generate again'));
+    await tester.pump();
+    await tester.pump();
+    oldStatus.complete(_failedJob);
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('Generate again'), findsNothing);
+    expect(find.textContaining('Writing your lesson'), findsOneWidget);
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pump();
+    expect(repo.polledJobIds, ['old-job', 'retry-job']);
+    expect(repo.retries, 1);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   for (final scale in [1.0, 2.0]) {
     testWidgets('detail actions clear floating navigation at $scale text scale', (
       tester,
@@ -419,6 +493,81 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
+  for (final failsDuringPolling in [false, true]) {
+    testWidgets(
+      'failed partial lesson stops its preparing indicator, polled=$failsDuringPolling',
+      (tester) async {
+        final repo = _ScriptedRepo(
+          [
+            _partialItem(
+              error: failsDuringPolling ? null : 'Preparation failed.',
+            ),
+          ],
+          jobScript: const [_failedJob],
+        );
+        await tester.pumpWidget(_app(repo));
+        await tester.pump();
+        await tester.pump();
+        if (failsDuringPolling) {
+          await tester.pump(const Duration(seconds: 2));
+          await tester.pump();
+          await tester.pump();
+        }
+        expect(find.text('NOT READY'), findsOneWidget);
+        expect(find.text('PREPARING'), findsNothing);
+        expect(
+          find.text(
+            'Some lessons could not be prepared. Your ready lessons '
+            'and progress are saved.',
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.text(
+            'Your outline is saved. Check the status above for next steps.',
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: find.byKey(const Key('lesson-2-active')),
+            matching: find.byType(CircularProgressIndicator),
+          ),
+          findsNothing,
+        );
+        expect(find.byKey(const Key('lesson-1-completed')), findsOneWidget);
+        await tester.scrollUntilVisible(
+          find.byKey(const Key('lesson-3-locked')),
+          180,
+        );
+        expect(find.byKey(const Key('lesson-3-locked')), findsOneWidget);
+        expect(repo.retries, 0);
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+  }
+
+  testWidgets(
+    'explicit retry restores preparing despite a stale failed detail',
+    (tester) async {
+      final repo = _ScriptedRepo(
+        [_partialItem(error: 'Preparation failed.')],
+        jobScript: const [_runningJob],
+      );
+      await tester.pumpWidget(_app(repo));
+      await tester.pump();
+      await tester.pump();
+      expect(find.text('NOT READY'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('plan-detail-regenerate')));
+      await tester.pump();
+      await tester.pump();
+      expect(repo.retries, 1);
+      expect(find.text('PREPARING'), findsOneWidget);
+      expect(find.text('NOT READY'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
   testWidgets('first lesson checkpoint refreshes partial content immediately', (
     tester,
   ) async {
@@ -620,6 +769,56 @@ void main() {
     await tester.pumpAndSettle();
   });
 
+  testWidgets('author excerpt is labelled before the reader opens', (
+    tester,
+  ) async {
+    final repo = _BookGuideRepo()
+      ..access = const BookReadingAccess(
+        source: BookReadingSource(
+          url:
+              'https://www.editorialdepartment.com/self-editing-for-fiction-writers/',
+          scope: 'excerpt',
+          description: 'Author excerpt. Full book not included.',
+        ),
+        unavailable: BookGuideUnavailableException(
+          status: 'failed_quality',
+          message: 'No verified source',
+        ),
+      );
+    await tester.pumpWidget(_app(repo));
+    await tester.pumpAndSettle();
+    expect(find.text('Read excerpt'), findsOneWidget);
+    expect(find.text('Read'), findsNothing);
+    expect(
+      find.text('Author excerpt. Full book not included.'),
+      findsOneWidget,
+    );
+    expect(repo.guideWaits, 0);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('unavailable book has no false read action or polling', (
+    tester,
+  ) async {
+    final repo = _BookGuideRepo()
+      ..access = const BookReadingAccess(
+        unavailable: BookGuideUnavailableException(
+          status: 'failed_quality',
+          message: 'No verified source',
+        ),
+      );
+    await tester.pumpWidget(_app(repo));
+    await tester.pumpAndSettle();
+    expect(find.text('Read'), findsNothing);
+    expect(find.text('Check access'), findsNothing);
+    expect(
+      find.text('No readable edition is available in CMPYS yet.'),
+      findsOneWidget,
+    );
+    expect(repo.guideWaits, 0);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('book guide action stays single-flight while preparation runs', (
     tester,
   ) async {
@@ -627,8 +826,8 @@ void main() {
     await tester.pumpWidget(_app(repo));
     await tester.pumpAndSettle();
 
-    expect(find.text('Open guide'), findsOneWidget);
-    await tester.tap(find.text('Open guide'));
+    expect(find.text('Check access'), findsOneWidget);
+    await tester.tap(find.text('Check access'));
     await tester.pump();
 
     expect(find.text('Preparing…'), findsOneWidget);
@@ -640,7 +839,7 @@ void main() {
     repo.guide.complete(null);
     await tester.pump();
     await tester.pump();
-    expect(find.text('Open guide'), findsOneWidget);
+    expect(find.text('Check access'), findsOneWidget);
     await tester.pump(const Duration(seconds: 3));
     await tester.pumpWidget(const SizedBox());
   });

@@ -13,6 +13,7 @@ import 'package:flutter_test/flutter_test.dart';
 class _Sessions extends Fake implements SessionRepository {
   int starts = 0;
   bool failRead = false;
+  Map<String, dynamic>? generationError;
 
   @override
   Future<Session> getSession(String sessionId) async {
@@ -32,6 +33,12 @@ class _Sessions extends Fake implements SessionRepository {
   @override
   Stream<Map<String, dynamic>> generateResults(String sessionId) async* {
     starts++;
+    if (generationError != null) {
+      yield {'type': 'plan_job', 'job_id': 'job-1'};
+      yield {'type': 'section', 'section': 'comparison'};
+      yield {'type': 'error', ...generationError!};
+      return;
+    }
     yield {'type': 'section', 'section': 'comparison'};
     yield {'type': 'chunk', 'content': 'Saved comparison'};
     yield {'type': 'section', 'section': 'blueprint'};
@@ -117,6 +124,74 @@ Future<void> _mount(
 }
 
 void main() {
+  testWidgets(
+    'provider billing failure preserves intake without reconnect advice',
+    (tester) async {
+      final sessions = _Sessions()
+        ..generationError = {
+          'code': 'generation_unavailable',
+          'retryable': false,
+          'message': 'PRIVATE provider response',
+        };
+      final plans = _Plans();
+      final draft = CmpysOnboardingDraft()..sessionId = 'session-1';
+      await _mount(tester, sessions, plans, draft: draft);
+      expect(
+        find.text('Generation paused. Your progress is saved.'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('Generation is unavailable right now.'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Connection interrupted'), findsNothing);
+      expect(find.textContaining('PRIVATE'), findsNothing);
+      expect(draft.sessionId, 'session-1');
+      expect(draft.planJobId, 'job-1');
+      final polls = plans.polls;
+      await tester.tap(find.byKey(const Key('mentor-lab-retry')));
+      await tester.pump(const Duration(seconds: 3));
+      expect(sessions.starts, 1);
+      expect(plans.polls, polls);
+      // A retry after access is restored continues the same saved intake.
+      for (var i = 0; i < 60; i++) {
+        await tester.pump(const Duration(seconds: 1));
+      }
+      expect(sessions.starts, 1);
+      sessions.generationError = null;
+      plans.status = 'completed';
+      await tester.tap(find.text('Continue generation'));
+      await tester.pumpAndSettle();
+      expect(sessions.starts, 2);
+      expect(find.text('Enter CMPYS'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'legacy generation errors also remain distinct from network errors',
+    (tester) async {
+      final sessions = _Sessions()
+        ..generationError = {'message': 'Comparison generation failed.'};
+      await _mount(
+        tester,
+        sessions,
+        _Plans(),
+        draft: CmpysOnboardingDraft()..sessionId = 'session-1',
+      );
+      expect(
+        find.text('Generation paused. Your progress is saved.'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('Generation could not finish.'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Connection interrupted'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
   testWidgets('saved results resume their job without regenerating documents', (
     tester,
   ) async {

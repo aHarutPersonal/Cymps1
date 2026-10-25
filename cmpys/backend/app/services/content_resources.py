@@ -16,6 +16,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services.llm.admission import background_generation
+from app.services.llm.tracing import traced_operation
 from app.models.content_resource import (
     ContentResource,
     ContentResourceKind,
@@ -61,11 +63,11 @@ NO_VERIFIED_BOOK_SOURCE_CONTEXT = (
     "No verified source text was available. Reject direct quotations and specific "
     "dates that cannot be verified."
 )
-MAX_BOOK_SOURCE_CONTEXT_CHARS = 60_000
-# Long-form output needs more room than extraction, but a dead provider must
-# not hold a catalog worker for three minutes at every quality stage. The
-# fallback client opens a short circuit after the first operational timeout.
-BOOK_MODULE_PROVIDER_TIMEOUT_SECONDS = 75.0
+MAX_BOOK_SOURCE_CONTEXT_CHARS = 120_000
+# A streamed guide can still be producing valid content after 75 seconds.
+# Allow its complete long-form response while retaining the shared 510-second
+# stage budget; operational failures still open the fallback short circuit.
+BOOK_MODULE_PROVIDER_TIMEOUT_SECONDS = 150.0
 # Pro is only used after the economical draft and targeted repairs fail.  Its
 # longer generations routinely need more than the interactive-provider budget,
 # while the catalog task itself has a ten-minute hard limit.
@@ -154,11 +156,16 @@ def _book_core_is_sound(report: Any) -> bool:
 def book_resource_has_current_quality(resource: ContentResource) -> bool:
     """Return whether a cached generated book is safe to attach or serve."""
     quality = (resource.metadata_json or {}).get("quality_report") or {}
+    from app.services.book_fidelity import FIDELITY_VERSION
+    from app.services.planning.lesson_package import digest
+    fidelity = quality.get("fidelity") or {}
     return bool(
         resource.status == CatalogStatus.PUBLISHED
         and len((resource.content_markdown or "").split()) >= MIN_BOOK_MODULE_WORDS
         and quality.get("passed") is True
         and quality.get("gate_version") == BOOK_MODULE_QUALITY_GATE_VERSION
+        and fidelity.get("version") == FIDELITY_VERSION and fidelity.get("passed") is True
+        and fidelity.get("content_hash") == digest(resource.content_markdown or "")
     )
 
 
@@ -168,6 +175,7 @@ def servable_content_resource_clause():
         ContentResourceKind.LLM_BOOK_SUMMARY,
         ContentResourceKind.PUBLIC_DOMAIN_BOOK,
     )
+    from app.services.book_fidelity import FIDELITY_VERSION
     quality = ContentResource.metadata_json["quality_report"]
     return and_(
         ContentResource.status == CatalogStatus.PUBLISHED,
@@ -178,6 +186,8 @@ def servable_content_resource_clause():
                 quality["gate_version"].as_integer()
                 == BOOK_MODULE_QUALITY_GATE_VERSION,
                 quality["metrics"]["word_count"].as_integer() >= MIN_BOOK_MODULE_WORDS,
+                quality["fidelity"]["passed"].as_boolean().is_(True),
+                quality["fidelity"]["version"].as_integer() == FIDELITY_VERSION,
             ),
         ),
     )
@@ -549,15 +559,15 @@ def _book_identity_score(
     if not requested_author:
         return title_score
     requested_tokens = set(_slug(requested_author).split("_"))
-    candidate_tokens = set(
-        token for author in candidate_authors for token in _slug(author).split("_")
-    )
-    author_score = (
-        len(requested_tokens & candidate_tokens)
-        / len(requested_tokens | candidate_tokens)
-        if requested_tokens and candidate_tokens
-        else 0.0
-    )
+    # Match each recorded name/alias independently. Combining coauthors or
+    # aliases dilutes a correct identity; a matching title alone is insufficient.
+    author_score = max((
+        len(requested_tokens & tokens) / len(requested_tokens | tokens)
+        for candidate in candidate_authors
+        if (tokens := set(_slug(candidate).split("_"))) and requested_tokens
+    ), default=0.0)
+    if author_score < .5:
+        return 0.0
     return title_score * 0.75 + author_score * 0.25
 
 
@@ -740,6 +750,8 @@ async def get_or_create_content_resource(
     return resource
 
 
+@background_generation
+@traced_operation("book_module_generation")
 async def generate_book_module(
     *,
     title: str,
@@ -1389,6 +1401,167 @@ async def lookup_public_domain_book(
     return None
 
 
+def _gutenberg_catalog_ids(document: str, requested_title: str) -> list[int]:
+    """Read bounded official OPDS results; never follow arbitrary feed links."""
+    import xml.etree.ElementTree as ET
+    atom = '{http://www.w3.org/2005/Atom}'
+    root = ET.fromstring(document)
+    ranked = []
+    for entry in root.findall(atom + 'entry')[:30]:
+        identifier = entry.findtext(atom + 'id') or ''
+        match = re.fullmatch(r'https?://www\.gutenberg\.org/ebooks/(\d+)(?:\.opds)?', identifier)
+        if not match:
+            continue
+        candidate_title = entry.findtext(atom + 'title') or ''
+        score = _book_identity_score(requested_title, None, candidate_title, [])
+        if score >= .72:
+            ranked.append((score, int(match[1])))
+    return list(dict.fromkeys(identifier for _, identifier in sorted(ranked, reverse=True)))[:4]
+
+
+def _gutenberg_text_url(url: str, book_id: int) -> str | None:
+    """Permit only this official book's text, including after redirects."""
+    parsed = urlparse(url)
+    if (parsed.scheme not in {'http', 'https'} or parsed.hostname not in {'www.gutenberg.org', 'gutenberg.org'}
+            or parsed.username or parsed.password or parsed.port not in (None, 443)
+            or parsed.query or parsed.fragment):
+        return None
+    if not any(re.fullmatch(pattern, parsed.path) for pattern in (
+        rf'/ebooks/{book_id}\.txt\.utf-8',
+        rf'/cache/epub/{book_id}/pg{book_id}(?:-[a-z0-9]+)?\.txt',
+        rf'/files/{book_id}/{book_id}(?:-[a-z0-9]+)?\.txt',
+    )):
+        return None
+    return 'https://www.gutenberg.org' + parsed.path
+
+
+def _gutenberg_rdf_source(document: str, book_id: int, title: str, author: str | None) -> dict | None:
+    import xml.etree.ElementTree as ET
+    ns = {'rdf': 'http://www.w3.org/1999/02/22-rdf-syntax-ns#',
+          'pg': 'http://www.gutenberg.org/2009/pgterms/', 'dc': 'http://purl.org/dc/terms/'}
+    root = ET.fromstring(document)
+    book = root.find('pg:ebook', ns)
+    if book is None or book.get('{' + ns['rdf'] + '}about') not in (f'ebooks/{book_id}', f'https://www.gutenberg.org/ebooks/{book_id}'):
+        return None
+    if book.findtext('dc:rights', namespaces=ns) != 'Public domain in the USA.':
+        return None
+    candidate_title = book.findtext('dc:title', namespaces=ns) or ''
+    agents = book.findall('dc:creator/pg:agent', ns)
+    names = [node.text for agent in agents for node in agent.findall('pg:name', ns) if node.text]
+    aliases = [node.text for agent in agents for node in agent.findall('pg:alias', ns) if node.text]
+    if not names or _book_identity_score(title, author, candidate_title, names + aliases) < .72:
+        return None
+    urls = []
+    reading_urls = []
+    for entry in book.findall('dc:hasFormat/pg:file', ns):
+        formats = [node.text or '' for node in entry.findall('dc:format/rdf:Description/rdf:value', ns)]
+        if any(value.startswith('text/html') for value in formats):
+            parsed = urlparse(entry.get('{' + ns['rdf'] + '}about') or '')
+            if (parsed.scheme in {'http', 'https'} and parsed.hostname in {'www.gutenberg.org', 'gutenberg.org'}
+                    and not parsed.username and not parsed.password and parsed.port in (None, 443)
+                    and not parsed.query and not parsed.fragment and any(re.fullmatch(pattern, parsed.path) for pattern in (
+                        rf'/ebooks/{book_id}\.html\.images',
+                        rf'/cache/epub/{book_id}/pg{book_id}(?:-[a-z0-9]+)?\.html?',
+                        rf'/files/{book_id}/{book_id}-h/{book_id}-h\.html?',
+                    ))):
+                reading_urls.append('https://www.gutenberg.org' + parsed.path)
+        if any(value.startswith('text/plain') for value in formats):
+            safe = _gutenberg_text_url(entry.get('{' + ns['rdf'] + '}about') or '', book_id)
+            if safe:
+                urls.append(safe)
+    if not urls:
+        return None
+    return {'title': candidate_title, 'author_or_creator': ', '.join(names),
+            'source_url': f'https://www.gutenberg.org/ebooks/{book_id}',
+            'license_status': 'public_domain', 'content_markdown': None,
+            'summary_json': {'source': 'project_gutenberg', 'text_url': urls[0],
+                             'reading_url': reading_urls[0] if reading_urls else urls[0]},
+            'metadata_json': {'provider': 'project_gutenberg', 'gutenberg_id': book_id}}
+
+
+async def lookup_gutenberg_book(*, title: str, author: str | None) -> dict[str, Any] | None:
+    """Official OPDS/RDF fallback when the third-party catalog is unavailable."""
+    import httpx
+    import xml.etree.ElementTree as ET
+    from urllib.parse import urljoin
+    try:
+        async with asyncio.timeout(25), httpx.AsyncClient(timeout=8, follow_redirects=False) as client:
+            response = await client.get('https://www.gutenberg.org/ebooks/search.opds/', params={'query': title})
+            response.raise_for_status()
+            if len(response.content) > 1_000_000:
+                return None
+            for book_id in _gutenberg_catalog_ids(response.text, title):
+                rdf = await client.get(f'https://www.gutenberg.org/cache/epub/{book_id}/pg{book_id}.rdf')
+                if rdf.status_code != 200 or len(rdf.content) > 1_000_000:
+                    continue
+                candidate = _gutenberg_rdf_source(rdf.text, book_id, title, author)
+                if candidate is None:
+                    continue
+                url = candidate['summary_json']['text_url']
+                for _ in range(4):
+                    text_response = await client.get(url)
+                    if text_response.is_redirect:
+                        redirected = _gutenberg_text_url(urljoin(url, text_response.headers.get('location', '')), book_id)
+                        if redirected is None:
+                            break
+                        url = redirected
+                        continue
+                    if text_response.status_code == 200 and len(text_response.content) <= 8_000_000:
+                        context = _sample_book_text(text_response.text)
+                        from app.services.book_fidelity import sufficient_source
+                        if sufficient_source(context):
+                            candidate['source_context'] = context
+                            candidate['summary_json']['text_url'] = url
+                            return candidate
+                    break
+    except (TimeoutError, ValueError, ET.ParseError, httpx.HTTPError):
+        return None
+    return None
+
+
+# These author-published excerpts are reading links, not full-book evidence.
+# Keep them separate from lookup_book_source: a preface cannot ground a guide
+# that claims to cover the entire book. Verified against the authors' pages.
+def author_book_excerpt(*, title: str, author: str | None) -> dict | None:
+    def normalize(value: str) -> str:
+        return " ".join(re.findall(r"[a-z0-9]+", value.casefold()))
+
+    name = normalize(title.split(":", 1)[0])
+    writer = normalize(author or "")
+    if name in {"self editing for fiction writers", "self editing for fiction writers second edition"} and writer in {
+        "renni browne", "dave king", "renni browne and dave king",
+        "renni browne dave king", "dave king and renni browne",
+    }:
+        return {
+            "url": "https://www.editorialdepartment.com/self-editing-for-fiction-writers/",
+            "scope": "excerpt",
+            "description": "Chapter 12 excerpt on the coauthor’s website. Full book not included.",
+            "sectionTitle": "Excerpt from Chapter 12",
+        }
+    if name == "into the woods" and writer in {"john yorke", "yorke john"}:
+        return {
+            "url": "https://www.johnyorkestory.com/2017/01/into-the-woods-preface-to-the-us-edition/",
+            "scope": "excerpt",
+            "description": "US edition preface on the author’s website. Full book not included.",
+        }
+    return None
+
+
+async def lookup_book_reading_source(*, title: str, author: str | None) -> dict | None:
+    """Return an honestly scoped reading link without generating any content."""
+    excerpt = author_book_excerpt(title=title, author=author)
+    if excerpt is not None:
+        return excerpt
+    source = await lookup_gutenberg_book(title=title, author=author)
+    if source is None:
+        return None
+    metadata = source.get("summary_json") or {}
+    url = metadata.get("reading_url") or metadata.get("text_url") or source.get("source_url")
+    if not url:
+        return None
+    return {"url": url, "scope": "full_text", "description": "Full public-domain text from Project Gutenberg."}
+
+
 async def lookup_book_reference_context(
     *,
     title: str,
@@ -1468,9 +1641,13 @@ async def lookup_book_source(
         lookup_public_domain_book(title=title, author=author),
         lookup_book_reference_context(title=title, author=author),
     )
-    if public_domain:
+    from app.services.book_fidelity import sufficient_source
+    if public_domain and sufficient_source(str(public_domain.get("source_context") or "")):
         return public_domain
-    return reference
+    official_source = await lookup_gutenberg_book(title=title, author=author)
+    if official_source:
+        return official_source
+    return public_domain or reference
 
 
 async def get_or_create_book_module_resource(
@@ -1489,7 +1666,7 @@ async def get_or_create_book_module_resource(
         select(ContentResource).where(ContentResource.canonical_key == canonical_key)
     )
     existing = result.scalar_one_or_none()
-    existing_revalidation_report: Any | None = None
+    existing_revalidation_report: dict[str, Any] | None = None
     if existing:
         existing_words = len((existing.content_markdown or "").split())
         if book_resource_has_current_quality(existing):
@@ -1497,6 +1674,37 @@ async def get_or_create_book_module_resource(
 
     async def _save(resource: ContentResource) -> ContentResource:
         """Replace a thin legacy row in place, preserving all foreign keys."""
+        from app.services.book_fidelity import review_book_fidelity
+        quality = (resource.metadata_json or {}).get("quality_report") or {}
+        if quality.get("passed"):
+            fidelity = await review_book_fidelity({
+                "title": resource.title, "author": resource.author_or_creator,
+                "content_markdown": resource.content_markdown,
+            }, source=str((source or {}).get("source_context") or (source or {}).get("content_markdown") or ""),
+               source_id=(source or {}).get("source_url"))
+            if fidelity.get("review_completed") is True and not fidelity["passed"]:
+                from app.services.book_fidelity import repair_book_fidelity
+                source_text = str((source or {}).get("source_context") or (source or {}).get("content_markdown") or "")
+                candidate = {
+                    "title": resource.title, "author_or_creator": resource.author_or_creator,
+                    "content_markdown": resource.content_markdown,
+                    **(resource.summary_json or {}),
+                }
+                repaired = await repair_book_fidelity(candidate, source=source_text, review=fidelity)
+                if repaired is not None:
+                    repaired_quality = evaluate_book_module(repaired, source_context=source_text).to_dict()
+                    if repaired_quality["passed"]:
+                        fresh_review = await review_book_fidelity(repaired, source=source_text,
+                                                                  source_id=(source or {}).get("source_url"))
+                        if fresh_review["passed"]:
+                            resource.content_markdown = repaired["content_markdown"]
+                            resource.read_minutes = resource.duration_minutes = max(5, round(len(resource.content_markdown.split()) / 200))
+                            quality = {**quality, **repaired_quality, "fidelity_repaired": True}
+                            fidelity = fresh_review
+            quality = {**quality, "fidelity": fidelity, "passed": fidelity["passed"]}
+            resource.metadata_json = {**(resource.metadata_json or {}), "quality_report": quality}
+            if not fidelity["passed"]:
+                resource.status = CatalogStatus.FLAGGED
         if existing is None:
             db.add(resource)
             await db.flush()
@@ -1515,13 +1723,14 @@ async def get_or_create_book_module_resource(
                     else {}
                 )
                 old_quality = old_metadata.get("quality_report") or {}
-                report_data = existing_revalidation_report.to_dict()
+                report_data = dict(existing_revalidation_report)
                 if isinstance(old_quality.get("generation"), dict):
                     report_data["generation"] = old_quality["generation"]
                 existing.metadata_json = {
                     **old_metadata,
                     "quality_report": report_data,
                     "quality_revalidation_failed": True,
+                    "last_recovery_quality_report": quality,
                 }
             existing.status = CatalogStatus.FLAGGED
             await db.flush()
@@ -1574,11 +1783,39 @@ async def get_or_create_book_module_resource(
             candidate,
             source_context=effective_source_context,
         )
-        existing_revalidation_report = report
+        existing_revalidation_report = report.to_dict()
         if not report.passed:
             return None
 
         report_data = report.to_dict()
+        from app.services.book_fidelity import FIDELITY_VERSION, review_book_fidelity
+        from app.services.planning.lesson_package import digest
+        previous = ((existing.metadata_json or {}).get("quality_report") or {}).get("fidelity") or {}
+        # A completed negative verdict for these exact bytes and this source
+        # already justifies replacement. Rechecking it cannot repair the text.
+        if (previous.get("review_completed") is True and previous.get("passed") is False
+                and previous.get("version") == FIDELITY_VERSION
+                and previous.get("content_hash") == digest(candidate["content_markdown"])
+                and previous.get("source_hash") == digest(effective_source_context)
+                and previous.get("source_id") == (source or {}).get("source_url")):
+            fidelity = previous
+        else:
+            fidelity = await review_book_fidelity(candidate, source=effective_source_context,
+                                                  source_id=(source or {}).get("source_url"))
+        report_data["fidelity"] = fidelity
+        if not fidelity["passed"]:
+            report_data["passed"] = False
+            existing_revalidation_report = dict(report_data)
+            existing.metadata_json = {**(existing.metadata_json or {}), "quality_report": report_data}
+            existing.status = CatalogStatus.FLAGGED
+            if fidelity.get("review_completed") is True:
+                # Continue to the normal bounded generator and independent gate.
+                # Returning the existing row here made every retry a dead end.
+                return None
+            # An unavailable review is not a content rejection. Preserve the
+            # guide and avoid paying for replacement during a provider outage.
+            await db.flush()
+            return existing
         old_metadata = (
             existing.metadata_json if isinstance(existing.metadata_json, dict) else {}
         )
@@ -1603,6 +1840,25 @@ async def get_or_create_book_module_resource(
 
     lookup = source_lookup or lookup_book_source
     source = await lookup(title=title, author=author)
+    from app.services.book_fidelity import sufficient_source
+    verified_text = str((source or {}).get("source_context") or (source or {}).get("content_markdown") or "")
+    if not (source or {}).get("source_url") or not sufficient_source(verified_text):
+        # An expensive long draft cannot manufacture missing source evidence.
+        # Keep existing text for recovery; never serve an unsupported book guide.
+        if existing is not None:
+            existing.status = CatalogStatus.FLAGGED
+            existing.metadata_json = {**(existing.metadata_json or {}), "source_sufficiency": "insufficient"}
+            await db.flush()
+            return existing
+        return await _save(ContentResource(
+            kind=ContentResourceKind.LLM_BOOK_SUMMARY, canonical_key=canonical_key,
+            title=title, author_or_creator=author, license_status=LicenseStatus.LLM_SUMMARY,
+            content_markdown="", summary_json={}, status=CatalogStatus.FLAGGED,
+            metadata_json={"source_sufficiency": "insufficient", "quality_report": {
+                "passed": False, "gate_version": BOOK_MODULE_QUALITY_GATE_VERSION,
+                "issues": ["Verified source text is required before generating a faithful book guide"],
+                "metrics": {"word_count": 0}}},
+        ))
     if source:
         source_md = source.get("content_markdown", "") or ""
         source_metadata = source.get("metadata_json") or {}
@@ -1626,6 +1882,14 @@ async def get_or_create_book_module_resource(
                 "do not invent scenes, quotations, chapter names, or author anecdotes."
             )
         )
+        if existing is not None:
+            # Keep verified source provenance even when a recovery attempt fails.
+            # This supports reading the original and a later source-bound retry.
+            existing.source_url = source.get("source_url")
+            existing.source_provider = source_metadata.get("provider")
+            existing.source_external_id = str(source_external_id or "") or None
+            existing.metadata_json = {**(existing.metadata_json or {}), **source_metadata}
+            existing.summary_json = {**(existing.summary_json or {}), **(source.get("summary_json") or {})}
         revalidated = await _revalidate_existing(effective_source_context)
         if revalidated is not None:
             return revalidated
@@ -2008,6 +2272,10 @@ async def attach_content_resources_to_materials(
     ) -> dict[str, Any]:
         lookup = book_source_lookup or lookup_book_source
         source = await lookup(title=title, author=author)
+        from app.services.book_fidelity import sufficient_source
+        text = str((source or {}).get("source_context") or (source or {}).get("content_markdown") or "")
+        if not (source or {}).get("source_url") or not sufficient_source(text):
+            return {"source": source, "module": None}
         if source is not None:
             source_md = source.get("content_markdown", "") or ""
             factory = book_module_factory or generate_book_module

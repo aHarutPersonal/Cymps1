@@ -78,3 +78,15 @@ and material object shapes only as many times as your chosen counts require:
   "definition_of_done": "One binary artifact and quality-check criterion.",
   "mental_model": "One specific mental model"
 }
+
+Every required lesson activity must be executable from supplied in-app inputs.
+If the mission mentions a friend's verdict, use a clearly labeled simulated verdict
+for the lesson's guided exercise; real-world feedback can remain optional application.
+Do not require waiting for another person to finish a lesson. Do not promise a specific
+book excerpt, attributed scene or video analysis unless its verified text is supplied
+in context. Otherwise plan an explicitly original fictional worked example and keep
+the named book or video as optional further reading. A title or URL is not source text.
+
+For a two-hour mission, prefer two substantive lessons sharing the work rather
+than three short lessons. Keep the distinction between the mission's real-world
+application and the self-contained practice completed inside each lesson explicit.

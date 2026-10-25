@@ -252,6 +252,24 @@ def parse_weekly_hours_answer(
                 total = int(scheduled[1])
                 return total if 3 <= total <= 60 else None
 
+    # Accept a complete session breakdown only when it agrees with the
+    # explicit weekly total; conflicting or ambiguous quantities need clarification.
+    if not clamp_legacy:
+        sessions = re.fullmatch(
+            r"(\d{1,2})\s+hours?\s+(?:per|a|each)\s+week\s*[,;:]?\s*"
+            r"(?:in|split into|across)\s+([a-z -]+|\d{1,2})\s+"
+            r"(\d{1,3})[ -]minutes?\s+sessions?\.?",
+            normalized, re.IGNORECASE,
+        )
+        if sessions:
+            total = int(sessions[1])
+            count_text = sessions[2].strip()
+            count = int(count_text) if count_text.isdigit() else _exact_word_number(count_text)
+            minutes = int(sessions[3])
+            if count is not None and count > 0 and minutes > 0 and count * minutes == total * 60:
+                return total if 3 <= total <= 60 else None
+            return None
+
     range_matches = list(_RANGE_RE.finditer(normalized))
 
     # A keyed weekly-hours answer is a confirmed planning constraint, not an

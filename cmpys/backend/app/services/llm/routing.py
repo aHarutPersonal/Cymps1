@@ -3,16 +3,21 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.llm_usage_event import LLMUsageEvent
 
 logger = logging.getLogger(__name__)
+_stats_cache: OrderedDict[tuple, tuple[float, "RoutingStats"]] = OrderedDict()
+STATS_CACHE_SECONDS = 30
+STATS_CACHE_SIZE = 128
 
 
 @dataclass(frozen=True)
@@ -23,6 +28,7 @@ class RoutingStats:
     average_quality: float | None = None
     average_total_tokens: float | None = None
     average_duration_ms: float | None = None
+    critical_defects: int = 0
 
     @property
     def success_rate(self) -> float:
@@ -84,6 +90,8 @@ def decide_tier(
         return RoutingDecision(default_tier, "adaptive_disabled", fast_model, stats, bucket)
     if fast_model is None or default_tier != "balanced":
         return RoutingDecision(default_tier, "tier_not_eligible", fast_model, stats, bucket)
+    if stats.critical_defects:
+        return RoutingDecision(default_tier, "critical_defect_veto", fast_model, stats, bucket)
 
     enough_data = (
         stats.samples >= settings.adaptive_routing_min_samples
@@ -121,6 +129,7 @@ async def choose_llm_tier(
     routing_key: str,
     default_tier: str = "balanced",
     db: AsyncSession | None = None,
+    subtask: str | None = None,
 ) -> RoutingDecision:
     fast_model = _model_for_tier("fast")
     bucket = exploration_bucket(operation, routing_key)
@@ -132,12 +141,22 @@ async def choose_llm_tier(
             bucket=bucket,
         )
 
+    contract = None
+    if operation == "plan_item_detail_generation":
+        from app.services.planning.lesson_package import routing_validation_contract
+        contract = routing_validation_contract()
     cutoff = datetime.now(timezone.utc) - timedelta(
         days=settings.adaptive_routing_lookback_days
     )
 
     async def _query(session: AsyncSession) -> RoutingStats:
         stage = LLMUsageEvent.metadata_json["stage"].astext
+        meta = LLMUsageEvent.metadata_json
+        selection = stage == "draft"
+        if operation == "plan_item_detail_generation":
+            selection = and_(meta["attempt_role"].astext == "initial",
+                             meta["subtask"].astext == (subtask or "lesson"),
+                             meta["validation_contract"].astext == contract)
         row = (
             await session.execute(
                 select(
@@ -149,11 +168,13 @@ async def choose_llm_tier(
                     func.avg(LLMUsageEvent.quality_score),
                     func.avg(LLMUsageEvent.total_tokens),
                     func.avg(LLMUsageEvent.duration_ms),
+                    func.count(LLMUsageEvent.id).filter(meta["critical_defect"].astext == "true"),
                 ).where(
                     LLMUsageEvent.operation == operation,
+                    LLMUsageEvent.provider == settings.llm_provider,
                     LLMUsageEvent.model == fast_model,
                     LLMUsageEvent.created_at >= cutoff,
-                    stage == "draft",
+                    selection,
                 )
             )
         ).one()
@@ -164,16 +185,26 @@ async def choose_llm_tier(
             average_quality=float(row[3]) if row[3] is not None else None,
             average_total_tokens=float(row[4]) if row[4] is not None else None,
             average_duration_ms=float(row[5]) if row[5] is not None else None,
+            critical_defects=int(row[6] or 0) if len(row) > 6 else 0,
         )
 
     try:
-        if db is not None:
+        cache_key = (operation, subtask, settings.llm_provider, fast_model, contract, settings.adaptive_routing_lookback_days)
+        cached = _stats_cache.get(cache_key)
+        if cached and time.monotonic() - cached[0] < STATS_CACHE_SECONDS:
+            stats = cached[1]
+        elif db is not None:
             stats = await _query(db)
         else:
             from app.core.db import async_session_maker
 
             async with async_session_maker() as routing_db:
                 stats = await _query(routing_db)
+        if not cached or time.monotonic() - cached[0] >= STATS_CACHE_SECONDS:
+            _stats_cache[cache_key] = (time.monotonic(), stats)
+            _stats_cache.move_to_end(cache_key)
+            while len(_stats_cache) > STATS_CACHE_SIZE:
+                _stats_cache.popitem(last=False)
     except Exception as exc:  # pragma: no cover - external DB availability
         logger.warning("[LLM_ROUTING] Falling back to %s: %s", default_tier, exc)
         return RoutingDecision(

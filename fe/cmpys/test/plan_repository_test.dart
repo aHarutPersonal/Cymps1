@@ -4,10 +4,21 @@ import 'package:cmpys/core/network/api_error.dart';
 import 'package:cmpys/core/network/dio_client.dart';
 import 'package:cmpys/core/storage/token_store.dart';
 import 'package:cmpys/features/plan/data/plan_repository.dart';
+import 'package:cmpys/features/plan/models/plan_models.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('reviewed minute duration overrides the legacy hour estimate', () {
+    final item = BackendPlanItem.fromJson({
+      'estimatedHours': 8,
+      'estimatedMinutes': 42,
+    });
+    expect(item.requiredMinutes, 42);
+    expect(item.durationLabel, '42m');
+    expect(BackendPlanItem.fromJson({'estimatedHours': 2}).durationLabel, '2h');
+    expect(BackendPlanItem.formatMinutes(95), '1h 35m');
+  });
   test('default book-guide polling covers long quality generation', () {
     expect(
       PlanRepository.bookGuidePollWindow,
@@ -81,6 +92,28 @@ void main() {
 
       expect(id, 'resource-123');
       expect(client.calls, 3);
+    },
+  );
+
+  test(
+    'missing guide stops immediately instead of waiting six minutes',
+    () async {
+      final client = _TerminalResolveDioClient(status: 'missing');
+      final repository = PlanRepository(dioClient: client);
+      await expectLater(
+        repository.waitForContentResourceId(
+          'book:author:missing',
+          pollDelays: const [Duration.zero, Duration.zero, Duration.zero],
+        ),
+        throwsA(
+          isA<BookGuideUnavailableException>().having(
+            (error) => error.status,
+            'status',
+            'missing',
+          ),
+        ),
+      );
+      expect(client.calls, 1);
     },
   );
 
@@ -231,7 +264,10 @@ class _EventuallyReadyDioClient extends DioClient {
 }
 
 class _TerminalResolveDioClient extends DioClient {
-  _TerminalResolveDioClient() : super(tokenStore: TokenStore());
+  _TerminalResolveDioClient({this.status = 'failed_quality'})
+    : super(tokenStore: TokenStore());
+
+  final String status;
 
   int calls = 0;
 
@@ -248,7 +284,7 @@ class _TerminalResolveDioClient extends DioClient {
       data:
           <String, dynamic>{
                 'id': null,
-                'status': 'failed_quality',
+                'status': status,
                 'message':
                     'This guide did not meet the reading-quality standard.',
                 'canonicalKey': queryParameters?['canonicalKey'],

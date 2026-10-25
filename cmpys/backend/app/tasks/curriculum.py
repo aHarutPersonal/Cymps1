@@ -7,6 +7,7 @@ provider calls never hold a database transaction open.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import socket
@@ -1911,6 +1912,29 @@ async def _run_stage(
         PipelineStage.ORIGINALITY_REVIEW: "originality",
     }
     reviewer = reviewer_by_stage[stage]
+    parallel_key = sha256_json({"draft": draft.model_dump(mode="json"),
+        "manifest": manifest.model_dump(mode="json"), "technique": plan.model_dump(mode="json"),
+        "target": target, "review_tier": review_tier, "gate_version": QUALITY_GATE_VERSION,
+        "prompt_version": PROMPT_VERSION})
+    cached_reviews = checkpoints.get("parallel_reviews") or {}
+    parallel_updates = {}
+    parallel_usage = {}
+    if settings.curriculum_parallel_reviews and stage == PipelineStage.FACTUAL_REVIEW:
+        async def independent(kind):
+            return await review_module(reviewer=kind, module_target=target, manifest=manifest,
+                technique_plan=plan, draft=draft, comparison_texts=[], tier=review_tier,
+                repair_attempt=repair_attempts, telemetry_metadata=telemetry_metadata)
+        # Originality waits for its fresh catalog corpus. These two reviewers
+        # consume exactly the same immutable draft and source dependencies.
+        async with asyncio.TaskGroup() as group:
+            factual_task = group.create_task(independent("factual"))
+            pedagogy_task = group.create_task(independent("pedagogy"))
+        factual, pedagogy = factual_task.result(), pedagogy_task.result()
+        cached_reviews = {"input_hash": parallel_key,
+            "factual": QualityReview.model_validate(factual.value).model_dump(mode="json"),
+            "pedagogy": QualityReview.model_validate(pedagogy.value).model_dump(mode="json")}
+        parallel_updates["parallel_reviews"] = cached_reviews
+        parallel_usage = {"factual": _model_usage(factual), "pedagogy": _model_usage(pedagogy)}
     originality_corpus = None
     comparisons: list[str] = []
     if reviewer == "originality":
@@ -1922,7 +1946,8 @@ async def _run_stage(
             originality_corpus,
             limit=MAX_LLM_COMPARISON_MODULES,
         )
-    generated = await review_module(
+    reused = cached_reviews.get("input_hash") == parallel_key and reviewer in cached_reviews
+    generated = None if reused else await review_module(
         reviewer=reviewer,
         module_target=target,
         manifest=manifest,
@@ -1933,13 +1958,13 @@ async def _run_stage(
         repair_attempt=repair_attempts,
         telemetry_metadata=telemetry_metadata,
     )
-    review = QualityReview.model_validate(generated.value)
+    review = QualityReview.model_validate(cached_reviews[reviewer] if reused else generated.value)
     reviews = dict(checkpoints.get("reviews") or {})
     reviews[reviewer] = review.model_dump(mode="json")
     passed = review.passed and review.score >= MIN_REVIEW_SCORE
     issues = tuple(issue.model_dump(mode="json") for issue in review.issues)
     quality_score = review.score
-    updates: dict[str, Any] = {"reviews": reviews}
+    updates: dict[str, Any] = {"reviews": reviews, **parallel_updates}
     if originality_corpus is not None:
         updates["originality_corpus_manifest"] = originality_corpus["versions"]
         updates["originality_corpus_hash"] = originality_corpus["corpus_hash"]
@@ -1967,7 +1992,7 @@ async def _run_stage(
         }
     return StageResult(
         updates=updates,
-        model_usage=_model_usage(generated),
+        model_usage=parallel_usage or ({"reused_review_input_hash": parallel_key} if reused else _model_usage(generated)),
         passed=passed,
         issues=issues,
         quality_score=quality_score,

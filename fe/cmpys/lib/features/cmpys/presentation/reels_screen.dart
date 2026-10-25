@@ -365,7 +365,10 @@ class _CmpysReelsScreenState extends ConsumerState<CmpysReelsScreen> {
   }
 
   Widget _circleBtn(IconData icon, VoidCallback onTap) {
-    return GestureDetector(
+    return CmpysPressable(
+      semanticLabel: icon == PhosphorIconsRegular.arrowClockwise
+          ? 'Refresh ideas'
+          : 'Back',
       onTap: onTap,
       child: Container(
         width: 44,
@@ -514,9 +517,16 @@ class _CmpysReelsScreenState extends ConsumerState<CmpysReelsScreen> {
                   // rest of the sheet doesn't need to rebuild while typing.
                   ValueListenableBuilder<TextEditingValue>(
                     valueListenable: controller,
-                    builder: (_, value, _) => GestureDetector(
-                      onTap: () =>
-                          _submitComment(store, idea.id, controller, setSheet),
+                    builder: (_, value, _) => CmpysPressable(
+                      semanticLabel: 'Send comment',
+                      onTap: value.text.trim().isEmpty
+                          ? null
+                          : () => _submitComment(
+                              store,
+                              idea.id,
+                              controller,
+                              setSheet,
+                            ),
                       child: Container(
                         width: 44,
                         height: 44,

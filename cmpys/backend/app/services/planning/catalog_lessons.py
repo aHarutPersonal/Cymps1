@@ -13,6 +13,8 @@ import copy
 import hashlib
 import json
 import logging
+import math
+from collections import Counter
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import nullcontext
@@ -41,6 +43,8 @@ MAX_SESSION_MINUTES = 60
 STRONG_SEMANTIC_SCORE = 0.82
 MIN_CATALOG_QUALITY_SCORE = 0.80
 CLOSED_WORLD_GAP_PAGE_SIZE = 100
+CATALOG_MATCH_TIMEOUT_SECONDS = 20
+CATALOG_MATCH_VERSION = "closed-world-shortlist-v3"
 MAX_BRIEF_COMPARISON_CHARS = 6_000
 MAX_BRIEF_FACT_CHARS = 1_000
 MAX_BRIEF_FACT_VALUE_CHARS = 18_000
@@ -48,6 +52,25 @@ MAX_BRIEF_LIST_ITEMS = 8
 PERSONAL_COMPOSER_VERSION = "catalog-personal-composer-v3-reuse"
 PERSONALIZATION_GATE_VERSION = "personalization-binding-v4-reuse"
 PERSONALIZATION_ROUTING_VERSION = "balanced-quality-v1"
+
+
+def shortlist_catalog_candidates(context: str, candidates: Sequence[Mapping[str, Any]], *, limit=100) -> list[Mapping[str, Any]]:
+    """Stable lexical retrieval over metadata, followed by one closed-world judge.
+
+    Rare skill/outcome terms outrank generic titles. This is an abstaining
+    prefilter, not semantic evidence; the classifier still must quote the gap.
+    """
+    def terms(value):
+        return set(re.findall(r"[^\W_]{3,}", str(value).casefold())) - {
+            "the", "and", "for", "with", "from", "this", "that", "learn", "learning", "skill"}
+    query = terms(context)
+    documents = [terms(" ".join(str(c.get(k, "")) for k in
+                 ("skill_id", "skill_name", "learning_outcome", "artifact_type", "title"))) for c in candidates]
+    frequencies = Counter(t for document in documents for t in document)
+    scored = [(sum(math.log1p(len(candidates) / frequencies[t]) for t in query & document),
+               str(candidate["module_key"]), candidate)
+              for candidate, document in zip(candidates, documents)]
+    return [candidate for score, _, candidate in sorted(scored, key=lambda r: (-r[0], r[1]))[:limit] if score > 0]
 
 
 def _truncate_for_brief(
@@ -868,6 +891,7 @@ async def resolve_structured_gap_from_catalog(
     session_context: Mapping[str, Any] | None,
     locale: str = "en",
     classifier: GapClassifier | None = None,
+    release_for_inference: bool = False,
 ) -> StructuredLearningGap | None:
     """Resolve free-form comparison prose against a closed active taxonomy.
 
@@ -944,6 +968,7 @@ async def resolve_structured_gap_from_catalog(
             "artifact_type": module.artifact_type,
             "locale": module.language,
             "title": module.title,
+            "published_version": str(getattr(module, "current_published_version_id", "unknown")),
         }
         for module in modules
         if _locale(module.language).split("-", 1)[0] == _locale(locale).split("-", 1)[0]
@@ -951,20 +976,31 @@ async def resolve_structured_gap_from_catalog(
     if not candidate_payloads:
         return None
 
+    lookup_key = hashlib.sha256(json.dumps(
+        [CATALOG_MATCH_VERSION, mission_context, candidate_payloads],
+        sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    cached_miss = (getattr(item, "meta_json", None) or {}).get("catalog_no_match") or {}
+    if cached_miss.get("key") == lookup_key and cached_miss.get("expires_at", "") > datetime.now(timezone.utc).isoformat():
+        return None
+    candidate_payloads = shortlist_catalog_candidates(mission_context, candidate_payloads,
+                                                      limit=CLOSED_WORLD_GAP_PAGE_SIZE)
+
     folded_context = _fold_text("\n\n".join((comparison, structured_comparison)))
     eligible_selections: list[
         tuple[float, str, ClosedWorldGapSelection, Mapping[str, Any], list[str]]
     ] = []
     for offset in range(0, len(candidate_payloads), CLOSED_WORLD_GAP_PAGE_SIZE):
         page = candidate_payloads[offset : offset + CLOSED_WORLD_GAP_PAGE_SIZE]
+        if release_for_inference:
+            await db.commit()
         if classifier is None:
-            raw_selection = await _llm_closed_world_gap_classifier(
+            raw_selection = await asyncio.wait_for(_llm_closed_world_gap_classifier(
                 mission_context,
                 page,
                 db=db,
-            )
+            ), timeout=CATALOG_MATCH_TIMEOUT_SECONDS)
         else:
-            raw_selection = await classifier(mission_context, page)
+            raw_selection = await asyncio.wait_for(classifier(mission_context, page), timeout=CATALOG_MATCH_TIMEOUT_SECONDS)
         page_selection = (
             raw_selection
             if isinstance(raw_selection, ClosedWorldGapSelection)
@@ -993,6 +1029,9 @@ async def resolve_structured_gap_from_catalog(
             )
         )
     if not eligible_selections:
+        item.meta_json = {**(getattr(item, "meta_json", None) or {}), "catalog_no_match": {
+            "key": lookup_key, "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()}}
+        db.add(item)
         return None
     # Page-local confidence is only a coarse ranking signal. The stable key
     # tie-break keeps retries deterministic while ensuring no module is omitted
@@ -1038,7 +1077,7 @@ async def resolve_structured_gap_from_catalog(
             "catalog_module_key": selection.module_key,
             "resolver_confidence": selection.confidence,
             "comparison_evidence": evidence_quotes,
-            "resolver_version": "closed-world-paged-v2",
+            "resolver_version": CATALOG_MATCH_VERSION,
         },
     }
     db.add(item)
@@ -2219,7 +2258,7 @@ Requirements:
 - Return only approved source IDs in reference_source_ids; references are rendered
   by the server. Use only mentor claims carrying evidence IDs.
 - Never invent a mentor quote, preference, habit, book, or biographical claim.
-- Include executable substeps; each includes scope/timer, action, output, and success check.
+- Include executable substeps; each includes concrete scope or approximate budget (no built-in timer), action, output, and success check.
 - For all five binding dimensions, cite brief fact IDs and copy a natural 3-160
   character anchor that appears verbatim both in that brief fact and in that section.
 - If a mentor fact is used, list the bare evidence ID in used_mentor_evidence_ids.
@@ -4684,6 +4723,7 @@ async def _try_catalog_personalized_lesson_in_savepoint(
     semantic_candidate_hook: SemanticCandidateHook | None = None,
     session_composer: SessionComposer | None = None,
     gap_classifier: GapClassifier | None = None,
+    release_for_inference: bool = False,
 ) -> CatalogLessonAttempt:
     continuation = await _load_pinned_continuation(db, plan=plan, item=item)
     pinned_assignment_ids: tuple[str, ...] = ()
@@ -4714,6 +4754,7 @@ async def _try_catalog_personalized_lesson_in_savepoint(
             item=item,
             session_context=session_context,
             classifier=gap_classifier,
+            release_for_inference=release_for_inference,
         )
         if gap is None:
             return CatalogLessonAttempt(
@@ -4801,6 +4842,10 @@ async def _try_catalog_personalized_lesson_in_savepoint(
                     "catalog technique version was revoked before composition",
                     match.verdict,
                 )
+            if release_for_inference:
+                # Only the wrapper's owned session may commit here. Inputs are
+                # frozen dataclasses; final publication rechecks revocable rows.
+                await db.commit()
             composition = await compose_personalized_lesson(
                 candidate,
                 brief,
@@ -4875,10 +4920,55 @@ async def try_catalog_personalized_lesson(
     db: Any,
     **kwargs: Any,
 ) -> CatalogLessonAttempt:
-    """Run the optional catalog path in a SAVEPOINT and fail open to bespoke."""
+    """Own the inference session; keep publication locks in a short transaction.
+
+    Caller changes are never committed implicitly. The production caller first
+    commits its job checkpoint; dirty callers abstain and can use bespoke.
+    """
 
     item = kwargs.get("item")
     try:
+        from sqlalchemy.ext.asyncio import AsyncSession
+        if isinstance(db, AsyncSession):
+            if db.new or db.dirty or db.deleted:
+                return CatalogLessonAttempt(None, "catalog requires a committed caller checkpoint")
+            from app.core.db import async_session_maker
+            # Release even the caller's read-only transaction before inference.
+            await db.commit()
+            async with async_session_maker() as owned:
+                inputs = dict(kwargs)
+                for key in ("plan", "item", "user_profile", "idol"):
+                    if inputs.get(key) is not None:
+                        inputs[key] = await owned.merge(inputs[key], load=False)
+                # Retain only a hash of the inputs whose edits would invalidate
+                # the adaptation. Publication must not attach an old brief to
+                # a plan/profile edited while the connection was released.
+                input_fields = {
+                    "plan": ("user_id", "idol_id", "roadmap_json"),
+                    "item": ("plan_id", "title", "description", "success_metric", "estimated_hours", "week_start", "week_end"),
+                    "user_profile": ("updated_at",),
+                }
+                def input_identity():
+                    return _content_hash({key: {field: getattr(inputs[key], field, None)
+                        for field in fields} for key, fields in input_fields.items() if inputs.get(key) is not None})
+                input_hash = input_identity()
+                async with asyncio.timeout(240):
+                    result = await _try_catalog_personalized_lesson_in_savepoint(
+                        owned, **inputs, release_for_inference=True)
+                    if result.details is not None:
+                        # Assignment persistence has already acquired the global
+                        # Personalized -> Plan -> Assignment -> Item lock order.
+                        for key in input_fields:
+                            if inputs.get(key) is not None:
+                                await owned.refresh(inputs[key], with_for_update=True)
+                        if input_identity() != input_hash:
+                            raise ValueError("catalog learner inputs changed during inference")
+                    await owned.commit()
+                # The caller can now observe gap/cache metadata written by the
+                # owned session without overwriting it with an older JSON value.
+                await db.refresh(item)
+                return result
+        # Small repository doubles retain the savepoint contract in unit tests.
         async with db.begin_nested():
             with db.no_autoflush:
                 return await _try_catalog_personalized_lesson_in_savepoint(db, **kwargs)

@@ -97,12 +97,16 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
   Timer? _poll;
   String? _pollingJobId;
   String? _failedJobId;
+  String? _readyJobId;
   int _pollFailures = 0;
   int _missingPlanChecks = 0;
   int _refreshRevision = 0;
   int _pollRevision = 0;
 
-  static const _pollInterval = Duration(seconds: 3);
+  int _unchangedPolls = 0;
+  Duration get _pollInterval => Duration(
+    seconds: state.jobProgress >= 85 ? 1 : (1 + _unchangedPolls).clamp(1, 5),
+  );
 
   @override
   void dispose() {
@@ -188,6 +192,7 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
           (planIdol != null && planIdol.isNotEmpty && planIdol == wantIdol);
       if (fetched != null && fetched.items.isNotEmpty && matchesActiveIdol) {
         _failedJobId = null;
+        _readyJobId = jobId;
         _missingPlanChecks = 0;
         state = CurrentPlanState(
           status: CurrentPlanStatus.ready,
@@ -221,6 +226,26 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
     } catch (e) {
       if (!mounted || revision != _refreshRevision) return;
       debugPrint('📋 Plan fetch failed: $e');
+      final previousPlan = state.plan;
+      final activeIdol = _readIdolName?.call()?.toLowerCase().trim();
+      final sameMentor =
+          activeIdol == null ||
+          activeIdol.isEmpty ||
+          previousPlan?.idolName?.toLowerCase().trim() == activeIdol;
+      final transient =
+          e is NetworkError ||
+          e is TimeoutError ||
+          (e is ApiError && (e.statusCode ?? 0) >= 500);
+      if (transient &&
+          state.status == CurrentPlanStatus.ready &&
+          previousPlan != null &&
+          sameMentor &&
+          _readJobId() == _readyJobId) {
+        // A temporary read failure must not take a usable saved plan away.
+        // New generation jobs and mentor changes clear the ready state first;
+        // authorization failures must still reach the normal error boundary.
+        return;
+      }
       state = CurrentPlanState(
         status: CurrentPlanStatus.failed,
         error: e.toString(),
@@ -323,8 +348,12 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
     _poll?.cancel();
     final revision = ++_pollRevision;
     _pollingJobId = jobId;
-    _poll = Timer.periodic(_pollInterval, (_) => _checkJob(jobId, revision));
-    if (checkImmediately) _checkJob(jobId, revision);
+    _unchangedPolls = 0;
+    if (checkImmediately) {
+      _checkJob(jobId, revision);
+    } else {
+      _poll = Timer(_pollInterval, () => _checkJob(jobId, revision));
+    }
   }
 
   int? _checkingRevision;
@@ -356,7 +385,12 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
         );
         // Skip the assignment when nothing the UI reads changed, so watchers
         // don't rebuild on every 3s tick.
-        if (next != state) state = next;
+        if (next != state) {
+          _unchangedPolls = 0;
+          state = next;
+        } else {
+          _unchangedPolls++;
+        }
       }
     } catch (e) {
       if (!mounted || _pollRevision != revision || _pollingJobId != jobId) {
@@ -378,6 +412,9 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
       }
     } finally {
       if (_checkingRevision == revision) _checkingRevision = null;
+      if (mounted && _pollRevision == revision && _pollingJobId == jobId) {
+        _poll = Timer(_pollInterval, () => _checkJob(jobId, revision));
+      }
     }
   }
 }

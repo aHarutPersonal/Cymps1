@@ -353,12 +353,16 @@ final class ExpressiveBookNarrator
     late final Future<BookNarrationAudio> request;
     request = () async {
       try {
-        return await _repository.prepareNarration(
+        final audio = await _repository.prepareNarration(
           _resourceId,
           text: text,
           style: _style.apiName,
           narratorProfile: narratorProfile,
         );
+        if (audio.alignmentPending) {
+          unawaited(_refreshAlignment(text, key, audio));
+        }
+        return audio;
       } catch (_) {
         if (identical(_prepared[key], request)) _prepared.remove(key);
         rethrow;
@@ -366,6 +370,49 @@ final class ExpressiveBookNarrator
     }();
     _prepared[key] = request;
     return request;
+  }
+
+  bool _alignmentDisposed = false;
+
+  Future<void> _refreshAlignment(
+    String text,
+    String key,
+    BookNarrationAudio original,
+  ) async {
+    final requestedStyle = _style.apiName;
+    for (final delay in [1, 2, 4, 8]) {
+      await Future<void>.delayed(Duration(seconds: delay));
+      if (_alignmentDisposed ||
+          _style.apiName != requestedStyle ||
+          !_prepared.containsKey(key)) {
+        return;
+      }
+      try {
+        final updated = await _repository.prepareNarration(
+          _resourceId,
+          text: text,
+          style: requestedStyle,
+          narratorProfile: narratorProfile,
+        );
+        if (_alignmentDisposed || _style.apiName != requestedStyle) return;
+        if (updated.sourceTextHash != original.sourceTextHash ||
+            updated.audioUri != original.audioUri) {
+          return;
+        }
+        if (!updated.alignmentPending) {
+          _prepared[key] = Future.value(updated);
+          for (var i = 0; i < _trackAssets.length; i++) {
+            if (_trackAssets[i].audioUri == updated.audioUri &&
+                _trackAssets[i].sourceTextHash == updated.sourceTextHash) {
+              _trackAssets[i] = updated;
+            }
+          }
+          return;
+        }
+      } catch (_) {
+        return; // Playable audio and approximate progress remain available.
+      }
+    }
   }
 
   Future<BookNarrationAudio> _requestTrackChunk(int index, {required int run}) {
@@ -1086,6 +1133,7 @@ final class ExpressiveBookNarrator
 
   @override
   Future<void> dispose() async {
+    _alignmentDisposed = true;
     _progressHandler = null;
     _errorHandler = null;
     _trackHandler = null;

@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/design_tokens.dart';
+import '../../../core/network/api_error.dart';
+import '../../../core/ui/motion/page_transition.dart';
 import '../../../core/ui/app_shell.dart';
 import '../../../core/ui/cmpys/cmpys_markdown.dart';
 import '../../../core/ui/cmpys/learning_comparison_view.dart';
@@ -18,6 +20,7 @@ import '../state/book_narration_remote_controller.dart';
 import 'book_narration.dart';
 import 'book_narration_checkpoint.dart';
 import 'book_narration_dock.dart';
+import 'material_web_screen.dart';
 
 /// Full-screen, chaptered reading experience for shared book resources.
 ///
@@ -30,6 +33,7 @@ class BookReaderScreen extends ConsumerStatefulWidget {
     super.key,
     required this.resourceId,
     required this.fallbackTitle,
+    this.fallbackSourceUrl,
     this.narrator,
     this.checkpointStore,
     this.activeResumeStore,
@@ -39,6 +43,7 @@ class BookReaderScreen extends ConsumerStatefulWidget {
 
   final String resourceId;
   final String fallbackTitle;
+  final String? fallbackSourceUrl;
   final BookNarrator? narrator;
   final BookNarrationCheckpointStore? checkpointStore;
   final ActiveBookNarrationResumeStore? activeResumeStore;
@@ -107,8 +112,8 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
   bool _remoteDockAttached = false;
   late final BookNarrationRemoteController _remoteDockController;
   bool _autoplayOnRestoreConsumed = false;
-  bool _allowPop = false;
   bool _leavingReader = false;
+  bool _readerPopped = false;
 
   ContentResourcesRepository get _repository =>
       ref.read(contentResourcesRepositoryProvider);
@@ -317,12 +322,19 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
           }
         });
       }
-    } catch (_) {
+    } catch (error) {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error =
-            'Couldn’t open this book. Check your connection and try again.';
+        _error = switch (error) {
+          ApiError(statusCode: 404) =>
+            'This book guide is not available for reading right now.',
+          ApiError(statusCode: 401) =>
+            'Please sign in again to open this book.',
+          NetworkError() || TimeoutError() =>
+            'Couldn’t open this book. Check your connection and try again.',
+          _ => 'Couldn’t open this book right now. Please try again.',
+        };
       });
     }
   }
@@ -525,9 +537,10 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
         'narrationTextVersion': checkpoint.textVersion,
       },
     };
+    final repository = _repository;
     _progressWrite = _progressWrite.then((_) async {
       try {
-        await _repository.updateProgress(
+        await repository.updateProgress(
           widget.resourceId,
           progressPercent: progress,
           completed: completed,
@@ -1541,6 +1554,10 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
     );
   }
 
+  String? get _originalBookUrl => safeDirectMaterialUrl(
+    (_resource?.summaryJson?['reading_url'] ?? _resource?.summaryJson?['text_url'])?.toString(),
+  );
+
   Future<void> _showContents() async {
     await showModalBottomSheet<void>(
       context: context,
@@ -1716,7 +1733,8 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
   ) {
     final selected = _readingTheme == value;
     return Expanded(
-      child: GestureDetector(
+      child: CmpysPressable(
+        selected: _readingTheme == value,
         onTap: () {
           setState(() => _readingTheme = value);
           setSheetState(() {});
@@ -1862,7 +1880,10 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
                                           ),
                                         ),
                                         IconButton(
-                                          visualDensity: VisualDensity.compact,
+                                          constraints: const BoxConstraints(
+                                            minWidth: 48,
+                                            minHeight: 48,
+                                          ),
                                           onPressed: () async {
                                             try {
                                               await _repository.deleteHighlight(
@@ -1924,10 +1945,9 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
     }
     await _closeNarration();
     await _persistProgress(completed: true);
-    if (!mounted) return;
+    if (!mounted || _readerPopped) return;
     _toast('Book completed');
     _leavingReader = true;
-    setState(() => _allowPop = true);
     Navigator.of(context).pop();
   }
 
@@ -1948,17 +1968,17 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
       _syncRemoteDock();
     }
     final stop = _narrator.stop().catchError((_) {});
+    // Start progress sync before disposal; the write captures its repository.
+    unawaited(_persistProgress());
     if (checkpoint != null) {
       await _queueNarrationCheckpointWrite(
         checkpoint,
         includeActiveResume: false,
       );
-      unawaited(_persistProgress());
     }
     await _clearActiveResume();
     await stop;
-    if (!mounted) return;
-    setState(() => _allowPop = true);
+    if (!mounted || _readerPopped) return;
     Navigator.of(context).pop(result);
   }
 
@@ -1968,22 +1988,31 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
         ? _resource!.title
         : widget.fallbackTitle;
     return PopScope<Object?>(
-      canPop: _allowPop,
       onPopInvokedWithResult: (didPop, result) {
-        if (!didPop) unawaited(_leaveReader(result: result));
+        if (didPop) {
+          _readerPopped = true;
+          unawaited(_leaveReader(result: result));
+        }
       },
       child: Scaffold(
         backgroundColor: _background,
         body: SafeArea(
-          child: _loading
-              ? const Center(
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: AppColors.green,
-                  ),
+          child: _loading || _error != null
+              ? Column(
+                  children: [
+                    _topBar(title, readerReady: false),
+                    Expanded(
+                      child: _loading
+                          ? const Center(
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: AppColors.green,
+                              ),
+                            )
+                          : _errorState(),
+                    ),
+                  ],
                 )
-              : _error != null
-              ? _errorState()
               : Column(
                   children: [
                     _topBar(title),
@@ -2024,7 +2053,7 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
     );
   }
 
-  Widget _topBar(String title) {
+  Widget _topBar(String title, {bool readerReady = true}) {
     final chapterTitle = _chapters.isEmpty
         ? 'Book guide'
         : _chapters[_chapterIndex].title;
@@ -2035,6 +2064,7 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
           _circleButton(
             Icons.chevron_left_rounded,
             () => unawaited(_leaveReader()),
+            tooltip: 'Back',
           ),
           const SizedBox(width: 8),
           Expanded(
@@ -2064,50 +2094,65 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
               ],
             ),
           ),
-          _circleButton(Icons.format_size_rounded, _showReaderSettings),
-          if (!_narrationVisible && _chapters.isNotEmpty)
-            IconButton(
-              key: const Key('book-listen-button'),
-              tooltip: 'Listen',
-              onPressed: () => unawaited(_toggleNarration()),
-              icon: const Icon(
-                Icons.headphones_rounded,
-                color: AppColors.green2,
-              ),
+          if (readerReady) ...[
+            _circleButton(
+              Icons.format_size_rounded,
+              _showReaderSettings,
+              tooltip: 'Reading settings',
             ),
-          PopupMenuButton<String>(
-            tooltip: 'Book menu',
-            icon: Icon(Icons.more_horiz_rounded, color: _muted),
-            onSelected: (action) {
-              switch (action) {
-                case 'contents':
-                  _showContents();
-                case 'notes':
-                  _showNotes();
-                case 'save':
-                  _toggleSaved();
-              }
-            },
-            itemBuilder: (_) => [
-              const PopupMenuItem(value: 'contents', child: Text('Contents')),
-              PopupMenuItem(
-                value: 'notes',
-                child: Text(
-                  _notes.isEmpty
-                      ? 'Notes & highlights'
-                      : 'Notes & highlights (${_notes.length})',
+            if (!_narrationVisible && _chapters.isNotEmpty)
+              IconButton(
+                key: const Key('book-listen-button'),
+                tooltip: 'Listen',
+                onPressed: () => unawaited(_toggleNarration()),
+                icon: const Icon(
+                  Icons.headphones_rounded,
+                  color: AppColors.green2,
                 ),
               ),
-              PopupMenuItem(
-                value: 'save',
-                child: Text(
-                  _resource?.isSaved == true
-                      ? 'Remove saved book'
-                      : 'Save book',
+            PopupMenuButton<String>(
+              tooltip: 'Book menu',
+              icon: Icon(Icons.more_horiz_rounded, color: _muted),
+              onSelected: (action) {
+                switch (action) {
+                  case 'contents':
+                    _showContents();
+                  case 'notes':
+                    _showNotes();
+                  case 'original':
+                    final url = _originalBookUrl;
+                    if (url != null) {
+                      Navigator.of(context, rootNavigator: true).push(CmpysPageRoute<void>(
+                        builder: (_) => MaterialWebScreen(title: _resource!.title, url: url),
+                      ));
+                    }
+                  case 'save':
+                    _toggleSaved();
+                }
+              },
+              itemBuilder: (_) => [
+                const PopupMenuItem(value: 'contents', child: Text('Contents')),
+                if (_originalBookUrl != null)
+                  const PopupMenuItem(value: 'original', child: Text('Read original book')),
+                PopupMenuItem(
+                  value: 'notes',
+                  child: Text(
+                    _notes.isEmpty
+                        ? 'Notes & highlights'
+                        : 'Notes & highlights (${_notes.length})',
+                  ),
                 ),
-              ),
-            ],
-          ),
+                PopupMenuItem(
+                  value: 'save',
+                  child: Text(
+                    _resource?.isSaved == true
+                        ? 'Remove saved book'
+                        : 'Save book',
+                  ),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );
@@ -2117,10 +2162,12 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
     IconData icon,
     VoidCallback onTap, {
     bool active = false,
+    required String tooltip,
   }) {
     return IconButton(
+      tooltip: tooltip,
       onPressed: onTap,
-      visualDensity: VisualDensity.compact,
+      constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
       style: IconButton.styleFrom(
         backgroundColor: _chrome,
         side: BorderSide(color: _muted.withValues(alpha: .15)),
@@ -2261,6 +2308,7 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
   }
 
   Widget _errorState() {
+    final sourceUrl = safeDirectMaterialUrl(widget.fallbackSourceUrl);
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(28),
@@ -2280,6 +2328,22 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
               leadingIcon: Icons.refresh_rounded,
               child: const Text('Try again'),
             ),
+            if (sourceUrl != null) ...[
+              const SizedBox(height: 12),
+              TextButton.icon(
+                onPressed: () =>
+                    Navigator.of(context, rootNavigator: true).push(
+                      CmpysPageRoute<void>(
+                        builder: (_) => MaterialWebScreen(
+                          title: widget.fallbackTitle,
+                          url: sourceUrl,
+                        ),
+                      ),
+                    ),
+                icon: const Icon(Icons.open_in_new_rounded),
+                label: const Text('Open source'),
+              ),
+            ],
           ],
         ),
       ),

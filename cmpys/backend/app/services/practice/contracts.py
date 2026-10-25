@@ -5,9 +5,9 @@ import hashlib
 import json
 import math
 import operator
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class StrictModel(BaseModel):
@@ -21,7 +21,7 @@ class Datum(StrictModel):
     unit: str = Field(default="", max_length=40)
 
 
-def calculate(expression: str, data: dict[str, float]) -> float:
+def calculate(expression: str, data: dict[str, float], *, allow_comparisons: bool = False) -> float:
     """Evaluate bounded arithmetic only. Never execute generated/user code."""
     try:
         tree = ast.parse(expression, mode="eval")
@@ -49,6 +49,14 @@ def calculate(expression: str, data: dict[str, float]) -> float:
             result = visit(node.operand) * (-1 if isinstance(node.op, ast.USub) else 1)
         elif isinstance(node, ast.BinOp) and type(node.op) in operations:
             result = operations[type(node.op)](visit(node.left), visit(node.right))
+        elif allow_comparisons and isinstance(node, ast.Compare) and len(node.ops) == 1:
+            comparisons = {ast.Lt: operator.lt, ast.LtE: operator.le,
+                           ast.Gt: operator.gt, ast.GtE: operator.ge,
+                           ast.Eq: operator.eq, ast.NotEq: operator.ne}
+            operation = comparisons.get(type(node.ops[0]))
+            if operation is None:
+                raise ValueError("Unsupported comparison")
+            result = float(operation(visit(node.left), visit(node.comparators[0])))
         elif (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Name)
@@ -115,6 +123,45 @@ class Diagram(StrictModel):
     closed: bool = True
 
 
+class SolutionStep(StrictModel):
+    """Private reasoning for one existing answer field; arithmetic is rendered."""
+
+    field_id: str = Field(pattern=r"^[a-z][a-z0-9_]{0,39}$")
+    explanation: str = Field(min_length=20, max_length=4000)
+
+    @field_validator("explanation")
+    @classmethod
+    def substantive_explanation(cls, value: str) -> str:
+        if len(value.strip()) < 20:
+            raise ValueError("Solution explanation needs substantive reasoning")
+        return value
+
+
+class SolutionDocument(StrictModel):
+    """Versioned author input, never model-authored arithmetic provenance."""
+
+    version: Literal[1]
+    steps: list[SolutionStep] = Field(min_length=1, max_length=10)
+
+    @field_validator("version", mode="before")
+    @classmethod
+    def strict_version(cls, value):
+        if type(value) is not int or value != 1:
+            raise ValueError("Unsupported private solution document version")
+        return value
+
+    @model_validator(mode="after")
+    def bounded_complete_document(self):
+        if len({step.field_id for step in self.steps}) != len(self.steps):
+            raise ValueError("Duplicate solution field IDs")
+        if not 40 <= sum(len(step.explanation) for step in self.steps) <= 4000:
+            raise ValueError("Combined solution explanations must contain 40 to 4000 characters")
+        return self
+
+
+LegacyWorkedSolution = Annotated[str, Field(min_length=40, max_length=4000)]
+
+
 class Activity(StrictModel):
     id: str = Field(pattern=r"^[a-z][a-z0-9_]{0,39}$")
     title: str = Field(min_length=1, max_length=160)
@@ -123,7 +170,7 @@ class Activity(StrictModel):
     data: list[Datum] = Field(default_factory=list, max_length=20)
     fields: list[AnswerField] = Field(min_length=1, max_length=10)
     hint: str = Field(min_length=10, max_length=1500)
-    worked_solution: str = Field(min_length=40, max_length=4000)
+    worked_solution: LegacyWorkedSolution | SolutionDocument
     minutes_min: int = Field(ge=1, le=45)
     minutes_max: int = Field(ge=1, le=60)
     diagram: Diagram | None = None
@@ -140,6 +187,9 @@ class Activity(StrictModel):
         for field in self.fields:
             if field.kind == "number":
                 calculate(field.expression, values)
+        if isinstance(self.worked_solution, SolutionDocument):
+            if [step.field_id for step in self.worked_solution.steps] != [field.id for field in self.fields]:
+                raise ValueError("Solution steps must cover every activity field in its exact order")
         return self
 
 
@@ -195,6 +245,13 @@ def lesson_version(item, step: dict) -> str:
     # Includes immutable job identity AND content, covering old artifacts too.
     generation = (item.details_json or {}).get("_generation") or {}
     payload = {"job": generation.get("job_id"), "step": step}
+    if generation.get("lesson_package_version") == 1:
+        approval = (generation.get("lesson_validation") or {}).get(step.get("id"), {})
+        if not approval.get("package_hash"):
+            raise ValueError("Prepared practice lacks immutable package provenance")
+        # Equivalent approved packages survive a retry/job change. A changed
+        # answer key always creates a distinct version, even if prose is equal.
+        payload = {"version": 2, "step": step, "package_hash": approval["package_hash"]}
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()
     ).hexdigest()

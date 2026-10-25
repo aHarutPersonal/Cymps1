@@ -64,6 +64,8 @@ _loaded_prompts: set[str] = set()
 # Documents required placeholders for each prompt file
 
 PROMPT_PLACEHOLDERS = {
+    "lesson_package_generate.txt": [],
+    "curriculum_block_repair.txt": ["module_target_json", "source_pack_json", "technique_plan_json", "outline_json", "draft_json", "repair_issues_json"],
     "lesson_practice_generate.txt": [],
     "lesson_practice_review.txt": [],
     "extractor_system.txt": [],  # No placeholders - pure system prompt
@@ -138,7 +140,7 @@ PROMPT_PLACEHOLDERS = {
     ],
 
     "learning_materials_generate.txt": [
-        "topic",
+        "topic", "learner_context",
     ],
 
     "persona_system.txt": [
@@ -717,6 +719,7 @@ PROMPT_REGISTRY = {
             "curriculum_outline.txt",
             "curriculum_module_write.txt",
             "curriculum_module_repair.txt",
+            "curriculum_block_repair.txt",
         ],
         "independent_reviews": [
             "curriculum_review_structure.txt",

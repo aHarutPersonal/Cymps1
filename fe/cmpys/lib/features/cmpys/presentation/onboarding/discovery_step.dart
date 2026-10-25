@@ -484,7 +484,7 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
 
   Widget _featuredCard(CmpysIdolSuggestion suggestion) {
     final idol = suggestion.idol;
-    return GestureDetector(
+    return CmpysPressable(
       onTap: () => widget.onPick(idol),
       child: Container(
         padding: const EdgeInsets.fromLTRB(22, 20, 22, 22),

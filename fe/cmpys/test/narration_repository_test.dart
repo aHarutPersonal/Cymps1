@@ -31,6 +31,15 @@ class _NarrationClient extends Fake implements DioClient {
 }
 
 void main() {
+  test('playable audio can return before its alignment is ready', () async {
+    final client = _NarrationClient();
+    client.responseData['alignmentPending'] = true;
+    final audio = await ContentResourcesRepository(dioClient: client)
+        .prepareNarration('book', text: 'Hello world', style: 'expressive');
+    expect(audio.audioUri.path, '/media/narration/clip.mp3');
+    expect(audio.alignmentPending, isTrue);
+    expect(audio.alignment, isEmpty);
+  });
   test(
     'transcription keeps valid UTF-16 cues and skips malformed ranges',
     () async {

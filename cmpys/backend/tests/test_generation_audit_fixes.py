@@ -1,3 +1,4 @@
+from tests.section_client_fixture import section_client
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 import pytest
@@ -58,7 +59,7 @@ async def test_reviewer_receives_real_work_not_provisional_duration():
     import json
     response = SimpleNamespace(error=None, data={
         "acceptable": True, "issues": [], "advisories": ["Harmless one-minute rounding."],
-        "practice_minutes": 46, "contains_calculations": False, "calculations": [],
+        "practice_minutes": 46, "contains_calculations": False, "calculations": [], "literal_fact_ids": ["n1"],
     })
     client = SimpleNamespace(generate_json=AsyncMock(return_value=response))
     prose = "Phase budgets: 10+12+8+10+6 minutes. " + "reading " * 2400

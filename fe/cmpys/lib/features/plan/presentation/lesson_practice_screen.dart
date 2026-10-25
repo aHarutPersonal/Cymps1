@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/design_tokens.dart';
+import '../../../core/network/api_error.dart';
 import '../../../core/ui/cmpys/cmpys_markdown.dart';
 import '../data/practice_repository.dart';
 import '../models/practice_models.dart';
@@ -15,11 +16,15 @@ class LessonPracticeScreen extends ConsumerStatefulWidget {
     required this.lessonTitle,
     required this.lessonContent,
     this.artifactJobId,
+    this.onArtifactRefreshed,
     this.dark = false,
+    this.isTutorial = false,
   });
   final String itemId, stepId, lessonTitle, lessonContent;
   final String? artifactJobId;
+  final ValueChanged<String>? onArtifactRefreshed;
   final bool dark;
+  final bool isTutorial;
   @override
   ConsumerState<LessonPracticeScreen> createState() =>
       _LessonPracticeScreenState();
@@ -27,7 +32,9 @@ class LessonPracticeScreen extends ConsumerStatefulWidget {
 
 class _LessonPracticeScreenState extends ConsumerState<LessonPracticeScreen>
     with WidgetsBindingObserver {
+  String get _unit => widget.isTutorial ? 'tutorial' : 'lesson';
   LessonPracticeState? _state;
+  late String? _artifactJobId = widget.artifactJobId;
   final _controllers = <String, TextEditingController>{};
   final _scroll = ScrollController();
   Timer? _debounce;
@@ -36,6 +43,7 @@ class _LessonPracticeScreenState extends ConsumerState<LessonPracticeScreen>
   Future<bool>? _saveFlight;
   bool _loading = true, _busy = false, _dirty = false, _saving = false;
   bool _preparing = false;
+  bool _leaving = false;
   int _editVersion = 0, _index = 0;
   String? _error;
   PracticeRepository get _repo => ref.read(practiceRepositoryProvider);
@@ -87,16 +95,46 @@ class _LessonPracticeScreenState extends ConsumerState<LessonPracticeScreen>
     }
   }
 
+  Future<T> _withArtifactRefresh<T>(Future<T> Function() operation) async {
+    try {
+      return await operation();
+    } on ApiError catch (error) {
+      final previous = _state;
+      if (error.statusCode != 409) rethrow;
+      final refreshed = previous == null && !_dirty
+          ? await _repo.refreshUnopened(
+              widget.itemId,
+              widget.stepId,
+              _artifactJobId,
+              widget.lessonTitle,
+              widget.lessonContent,
+            )
+          : previous == null
+          ? null
+          : await _repo.refreshUnchanged(
+              widget.itemId,
+              widget.stepId,
+              _artifactJobId,
+              previous,
+            );
+      if (refreshed == null || !mounted) rethrow;
+      setState(() {
+        _artifactJobId = refreshed.artifact;
+        _accept(refreshed.state);
+      });
+      widget.onArtifactRefreshed?.call(refreshed.artifact);
+      return operation(); // One retry, retaining local edits and the revision.
+    }
+  }
+
   Future<void> _load({bool discardLocal = false}) async {
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
-      final result = await _repo.load(
-        widget.itemId,
-        widget.stepId,
-        widget.artifactJobId,
+      final result = await _withArtifactRefresh<LessonPracticeState>(
+        () => _repo.load(widget.itemId, widget.stepId, _artifactJobId),
       );
       if (!mounted) return;
       setState(() {
@@ -132,20 +170,16 @@ class _LessonPracticeScreenState extends ConsumerState<LessonPracticeScreen>
     try {
       var result =
           pending ??
-          await _repo.prepare(
-            widget.itemId,
-            widget.stepId,
-            widget.artifactJobId,
+          await _withArtifactRefresh<LessonPracticeState>(
+            () => _repo.prepare(widget.itemId, widget.stepId, _artifactJobId),
           );
       // Another client may already own preparation. Poll without another paid POST.
       // Cover its 120-second lease while allowing the user to leave at any time.
       for (var i = 0; result.state == 'preparing' && i < 24 && mounted; i++) {
         await _waitForPreparationPoll();
         if (!mounted) return;
-        result = await _repo.load(
-          widget.itemId,
-          widget.stepId,
-          widget.artifactJobId,
+        result = await _withArtifactRefresh<LessonPracticeState>(
+          () => _repo.load(widget.itemId, widget.stepId, _artifactJobId),
         );
       }
       if (mounted) setState(() => _accept(result, restore: true));
@@ -224,12 +258,14 @@ class _LessonPracticeScreenState extends ConsumerState<LessonPracticeScreen>
         final answers = {
           for (final e in _controllers.entries) e.key: e.value.text,
         };
-        final result = await _repo.save(
-          widget.itemId,
-          widget.stepId,
-          widget.artifactJobId,
-          _state!.revision,
-          answers,
+        final result = await _withArtifactRefresh<LessonPracticeState>(
+          () => _repo.save(
+            widget.itemId,
+            widget.stepId,
+            _artifactJobId,
+            _state!.revision,
+            answers,
+          ),
         );
         if (!mounted) return false;
         setState(() {
@@ -260,26 +296,27 @@ class _LessonPracticeScreenState extends ConsumerState<LessonPracticeScreen>
     try {
       if (!await _save() || !mounted) return;
       final a = _state!.activities[_index];
-      final result = await _repo.act(
-        widget.itemId,
-        widget.stepId,
-        widget.artifactJobId,
-        action: action,
-        revision: _state!.revision,
-        activity: a.id,
-        requestId:
-            '${DateTime.now().microsecondsSinceEpoch}_${_state!.revision}',
-        solution: solution,
+      final requestId =
+          '${DateTime.now().microsecondsSinceEpoch}_${_state!.revision}';
+      final result = await _withArtifactRefresh<LessonPracticeState>(
+        () => _repo.act(
+          widget.itemId,
+          widget.stepId,
+          _artifactJobId,
+          action: action,
+          revision: _state!.revision,
+          activity: a.id,
+          requestId: requestId,
+          solution: solution,
+        ),
       );
       if (mounted) setState(() => _accept(result));
     } catch (_) {
       // Recover a committed response after a transport timeout. The server
       // also deduplicates unchanged answer snapshots before charging again.
       try {
-        final result = await _repo.load(
-          widget.itemId,
-          widget.stepId,
-          widget.artifactJobId,
+        final result = await _withArtifactRefresh<LessonPracticeState>(
+          () => _repo.load(widget.itemId, widget.stepId, _artifactJobId),
         );
         if (mounted) setState(() => _accept(result));
       } catch (_) {
@@ -299,9 +336,43 @@ class _LessonPracticeScreenState extends ConsumerState<LessonPracticeScreen>
   Future<void> _leave({bool completed = false}) async {
     // Preparation cannot change an answer: leaving it is safe. Answer review
     // and pending saves retain their existing protection against lost work.
-    if (_busy && !_preparing) return;
-    if (!await _save() || !mounted) return;
-    Navigator.of(context).pop(completed && (_state?.complete ?? false));
+    if (_leaving || (_busy && !_preparing)) return;
+    _leaving = true;
+    try {
+      final saved = await _save();
+      if (!mounted) return;
+      if (!saved) {
+        final discard = await showDialog<bool>(
+          context: context,
+          builder: (c) => AlertDialog(
+            title: const Text('Leave without saving?'),
+            content: const Text(
+              'Your changes have not been saved. Stay to retry, or leave and discard the changes on this screen.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(c, false),
+                child: const Text('Keep editing'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(c, true),
+                child: const Text('Leave without saving'),
+              ),
+            ],
+          ),
+        );
+        if (discard != true || !mounted) return;
+        _debounce?.cancel();
+        setState(() => _dirty = false);
+        await WidgetsBinding.instance.endOfFrame;
+        if (!mounted) return;
+      }
+      Navigator.of(
+        context,
+      ).pop(saved && completed && (_state?.complete ?? false));
+    } finally {
+      _leaving = false;
+    }
   }
 
   Future<void> _reloadSaved() async {
@@ -361,14 +432,14 @@ class _LessonPracticeScreenState extends ConsumerState<LessonPracticeScreen>
                 : const Color(0xFFFAFAF8),
             foregroundColor: _ink,
             leading: IconButton(
-              tooltip: 'Back to lesson',
+              tooltip: 'Back to $_unit',
               onPressed: _busy && !_preparing ? null : () => _leave(),
               icon: const Icon(Icons.arrow_back),
             ),
             title: Text('Practice', style: TextStyle(color: _ink)),
             actions: [
               IconButton(
-                tooltip: 'Refer to lesson',
+                tooltip: 'Refer to $_unit',
                 onPressed: _showLesson,
                 icon: const Icon(Icons.menu_book_outlined),
               ),
@@ -381,6 +452,8 @@ class _LessonPracticeScreenState extends ConsumerState<LessonPracticeScreen>
                   child: ConstrainedBox(
                     constraints: const BoxConstraints(maxWidth: 760),
                     child: SingleChildScrollView(
+                      keyboardDismissBehavior:
+                          ScrollViewKeyboardDismissBehavior.onDrag,
                       controller: _scroll,
                       padding: const EdgeInsets.fromLTRB(24, 12, 24, 40),
                       child: Column(
@@ -392,7 +465,7 @@ class _LessonPracticeScreenState extends ConsumerState<LessonPracticeScreen>
                           ),
                           const SizedBox(height: 8),
                           Text(
-                            state?.title ?? 'Put the lesson into practice',
+                            state?.title ?? 'Put the $_unit into practice',
                             style: TextStyle(
                               color: _ink,
                               fontSize: 27,
@@ -442,7 +515,7 @@ class _LessonPracticeScreenState extends ConsumerState<LessonPracticeScreen>
                           if (state == null || state.activities.isEmpty) ...[
                             Text(
                               _preparing
-                                  ? 'You can return to the lesson while these exercises prepare.'
+                                  ? 'You can return to the $_unit while these exercises prepare.'
                                   : waitingOnServer
                                   ? 'Your exercises are still preparing. Check their status in a moment.'
                                   : state?.canRetry == false
@@ -540,11 +613,11 @@ class _LessonPracticeScreenState extends ConsumerState<LessonPracticeScreen>
                               const SizedBox(height: 24),
                               Text(
                                 state.evidenceStatus == 'transfer_without_hint'
-                                    ? 'New case passed without an in-app hint. This result can guide future lessons.'
+                                    ? 'New case passed without an in-app hint. This result can guide future ${_unit}s.'
                                     : state.evidenceStatus ==
                                           'completed_with_support'
-                                    ? 'Practice completed with support on the new case. Future lessons can include another independent check.'
-                                    : 'Practice completed. You can return to finish the lesson.',
+                                    ? 'Practice completed with support on the new case. Future ${_unit}s can include another independent check.'
+                                    : 'Practice completed. You can return to finish the $_unit.',
                                 style: TextStyle(
                                   color: _ink,
                                   fontWeight: FontWeight.w600,
@@ -556,7 +629,7 @@ class _LessonPracticeScreenState extends ConsumerState<LessonPracticeScreen>
                                     ? null
                                     : () => _leave(completed: true),
                                 icon: const Icon(Icons.check),
-                                label: const Text('Finish lesson'),
+                                label: Text('Finish $_unit'),
                               ),
                             ],
                           ],
@@ -696,6 +769,8 @@ class _LessonPracticeScreenState extends ConsumerState<LessonPracticeScreen>
               controller: _controllers['${a.id}.${f.id}'],
               enabled: !blocked,
               onChanged: _changed,
+              onTapOutside: (_) =>
+                  FocusManager.instance.primaryFocus?.unfocus(),
               keyboardType: f.kind == 'number'
                   ? const TextInputType.numberWithOptions(
                       decimal: true,
@@ -856,7 +931,10 @@ class _LessonPracticeScreenState extends ConsumerState<LessonPracticeScreen>
         child: Column(
           children: [
             ListTile(
-              title: Text('Lesson reference', style: TextStyle(color: _ink)),
+              title: Text(
+                widget.isTutorial ? 'Tutorial reference' : 'Lesson reference',
+                style: TextStyle(color: _ink),
+              ),
               trailing: IconButton(
                 tooltip: 'Close reference',
                 onPressed: () => Navigator.pop(c),
@@ -865,6 +943,8 @@ class _LessonPracticeScreenState extends ConsumerState<LessonPracticeScreen>
             ),
             Expanded(
               child: SingleChildScrollView(
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
                 padding: const EdgeInsets.all(24),
                 child: CmpysMarkdown(widget.lessonContent, onDark: widget.dark),
               ),

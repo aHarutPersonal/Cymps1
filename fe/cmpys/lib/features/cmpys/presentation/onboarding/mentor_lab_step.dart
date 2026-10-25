@@ -42,11 +42,14 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep>
   final PageController _cards = PageController();
   Timer? _cardTimer;
   Timer? _jobTimer;
+  Timer? _retryTimer;
 
   int _cardIndex = 0;
   int _progress = 6;
   String _status = 'Organizing what you shared…';
   String? _error;
+  bool _connectionInterrupted = false;
+  int _retrySeconds = 0;
   String? _pollingJobId;
   bool _checkingJob = false;
   bool _starting = false;
@@ -125,6 +128,7 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep>
     WidgetsBinding.instance.removeObserver(this);
     _cardTimer?.cancel();
     _jobTimer?.cancel();
+    _retryTimer?.cancel();
     _cards.dispose();
     super.dispose();
   }
@@ -151,7 +155,7 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep>
 
   Future<void> _startPipeline() async {
     final sessionId = widget.draft.sessionId;
-    if (sessionId == null || _starting) {
+    if (sessionId == null || _starting || _retrySeconds > 0) {
       if (sessionId == null && mounted) {
         setState(() => _error = 'No active session. Go back and try again.');
       }
@@ -172,6 +176,7 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep>
       _jobCompleted = false;
       _planReady = false;
       _error = null;
+      _connectionInterrupted = false;
       _pollFailures = 0;
       _jobFailed = false;
       // A failed attempt may have reached a later stage than its valid saved
@@ -273,21 +278,44 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep>
       // must be distinguishable from a plan dispatch failure.
       debugPrint(
         'Mentor lab request failed: stage=$requestStage type=${e.runtimeType}'
+        '${e is ResultsGenerationException ? ' code=${e.code}' : ''}'
         '${e is ApiError ? ' status=${e.statusCode} code=${e.code}' : ''}',
       );
       widget.draft.resultsFailed = true;
       // A running plan remains recoverable even if the results connection
       // closes. Do not discard its polling handle.
       if (recoverPlan) _jobFailed = true;
+      if (e is ResultsGenerationException) {
+        // The plan cannot run before its strategy exists. Keep the saved job
+        // identity, but stop polling its waiting state until an explicit retry.
+        _jobTimer?.cancel();
+        _jobTimer = null;
+        _pollingJobId = null;
+        _retrySeconds = e.retryAfterSeconds;
+        _retryTimer?.cancel();
+        if (_retrySeconds > 0) {
+          _retryTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+            if (!mounted) return timer.cancel();
+            setState(() => _retrySeconds--);
+            if (_retrySeconds <= 0) timer.cancel();
+          });
+        }
+      }
       setState(() {
-        _error = switch (requestStage) {
-          'saved_session' =>
-            'Your saved session couldn’t be loaded. Your answers are safe. Try again.',
-          'plan_restart' =>
-            'Your plan couldn’t restart. Your progress is saved. Try again.',
-          _ =>
-            'Your answers are saved. Reconnect to continue from the last completed step.',
-        };
+        _connectionInterrupted =
+            e is NetworkError || e is TimeoutError || e is TimeoutException;
+        _error = e is ResultsGenerationException
+            ? e.message
+            : switch (requestStage) {
+                'saved_session' =>
+                  'Your saved session couldn’t be loaded. Your answers are safe. Try again.',
+                'plan_restart' =>
+                  'Your plan couldn’t restart. Your progress is saved. Try again.',
+                _ when _connectionInterrupted =>
+                  'Your answers are saved. Reconnect to continue from the last completed step.',
+                _ =>
+                  'Generation could not finish. Your answers are saved. Please try again.',
+              };
       });
     } finally {
       if (mounted) setState(() => _starting = false);
@@ -356,10 +384,15 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep>
       } else if (_pollFailures >= 3) {
         _jobTimer?.cancel();
         _jobTimer = null;
-        setState(
-          () => _error =
-              'We can’t check your plan right now. Check your connection and continue.',
-        );
+        setState(() {
+          _connectionInterrupted =
+              error is NetworkError ||
+              error is TimeoutError ||
+              error is TimeoutException;
+          _error = _connectionInterrupted
+              ? 'We can’t check your plan right now. Check your connection and continue.'
+              : 'We can’t check your plan right now. Please try again later.';
+        });
       }
     } finally {
       _checkingJob = false;
@@ -493,7 +526,9 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep>
     final status = paused
         ? _jobFailed
               ? 'Plan paused. Your progress is saved.'
-              : 'Connection interrupted. Your progress is saved.'
+              : _connectionInterrupted
+              ? 'Connection interrupted. Your progress is saved.'
+              : 'Generation paused. Your progress is saved.'
         : _status;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -791,11 +826,15 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep>
                       variant: CmpysBtnVariant.primary,
                       size: CmpysBtnSize.lg,
                       full: true,
-                      disabled: _starting,
+                      disabled: _starting || _retrySeconds > 0,
                       leadingIcon: Icons.refresh_rounded,
                       onTap: _startPipeline,
                       child: Text(
-                        _starting ? 'Restarting…' : 'Continue generation',
+                        _starting
+                            ? 'Restarting…'
+                            : _retrySeconds > 0
+                            ? 'Try again in ${_retrySeconds}s'
+                            : 'Continue generation',
                       ),
                     ),
                   ],

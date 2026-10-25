@@ -340,7 +340,7 @@ class CmpysYouScreen extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: 14),
-          GestureDetector(
+          CmpysPressable(
             onTap: () => Navigator.of(context).push(
               CmpysPageRoute(builder: (_) => CmpysIdolDetailScreen(idol: idol)),
             ),
@@ -427,9 +427,8 @@ class CmpysYouScreen extends ConsumerWidget {
     bool last = false,
     bool danger = false,
   }) {
-    return GestureDetector(
+    return CmpysPressable(
       onTap: onTap,
-      behavior: HitTestBehavior.opaque,
       child: Container(
         decoration: BoxDecoration(
           border: first

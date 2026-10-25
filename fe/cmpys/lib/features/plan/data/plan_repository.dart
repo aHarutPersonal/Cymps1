@@ -26,11 +26,37 @@ class BookGuideUnavailableException implements Exception {
   String toString() => message;
 }
 
+/// A reading source states whether it contains the entire book or an excerpt.
+class BookReadingSource {
+  const BookReadingSource({
+    required this.url,
+    required this.scope,
+    required this.description,
+    this.sectionTitle,
+  });
+  final String url;
+  final String scope;
+  final String description;
+  final String? sectionTitle;
+  String get actionLabel =>
+      scope == 'excerpt' ? 'Read excerpt' : 'Read original';
+}
+
+class BookReadingAccess {
+  const BookReadingAccess({this.resourceId, this.source, this.unavailable});
+  final String? resourceId;
+  final BookReadingSource? source;
+  final BookGuideUnavailableException? unavailable;
+}
+
 /// API access for the generated 12-week plan: current plan, generation-job
 /// polling, and per-item lesson details.
 class PlanRepository {
   Future<void> saveDailyReflection(String itemId, String text) async {
-    await _dioClient.put('/plan-items/$itemId/reflection', data: {'text': text});
+    await _dioClient.put(
+      '/plan-items/$itemId/reflection',
+      data: {'text': text},
+    );
   }
 
   PlanRepository({required DioClient dioClient}) : _dioClient = dioClient;
@@ -59,6 +85,86 @@ class PlanRepository {
 
   @visibleForTesting
   static int get bookGuidePollAttempts => _bookGuidePollDelays.length;
+
+  /// A verified public-domain original can be read while its guide is unavailable.
+  Future<String?> resolveOriginalBookSource(
+    String title,
+    String? author,
+  ) async {
+    final response = await _dioClient.get(
+      '/content-resources/original-source',
+      queryParameters: {'title': title, if (author != null) 'author': author},
+    );
+    final value = (response.data as Map<String, dynamic>?)?['url'];
+    if (value is! String) return null;
+    final uri = Uri.tryParse(value);
+    if (uri == null ||
+        uri.scheme != 'https' ||
+        !{'www.gutenberg.org', 'gutenberg.org'}.contains(uri.host) ||
+        uri.userInfo.isNotEmpty ||
+        uri.hasQuery ||
+        uri.hasFragment ||
+        (uri.hasPort && uri.port != 443)) {
+      return null;
+    }
+    return value;
+  }
+
+  Future<BookReadingSource?> resolveBookReadingSource(
+    String title,
+    String? author,
+  ) async {
+    final response = await _dioClient.get(
+      '/content-resources/reading-source',
+      queryParameters: {'title': title, if (author != null) 'author': author},
+    );
+    final data = response.data as Map<String, dynamic>?;
+    final value = data?['url'];
+    if (value is! String) return null;
+    final uri = Uri.tryParse(value);
+    final scope = data?['scope'];
+    const excerptPaths = {
+      'www.editorialdepartment.com': '/self-editing-for-fiction-writers/',
+      'www.johnyorkestory.com':
+          '/2017/01/into-the-woods-preface-to-the-us-edition/',
+    };
+    if (uri == null ||
+        uri.scheme != 'https' ||
+        uri.userInfo.isNotEmpty ||
+        uri.hasQuery ||
+        uri.hasFragment ||
+        (uri.hasPort && uri.port != 443)) {
+      return null;
+    }
+    final valid = scope == 'full_text'
+        ? {'www.gutenberg.org', 'gutenberg.org'}.contains(uri.host)
+        : scope == 'excerpt' && excerptPaths[uri.host] == uri.path;
+    if (!valid) return null;
+    return BookReadingSource(
+      url: value,
+      scope: scope as String,
+      description: data?['description'] as String? ?? '',
+      sectionTitle: data?['sectionTitle'] as String?,
+    );
+  }
+
+  /// Quality-approved guides take priority. A terminal guide failure can still
+  /// have an official excerpt; checking access never starts a generation job.
+  Future<BookReadingAccess> resolveBookReadingAccess(
+    String canonicalKey,
+    String title,
+    String? author,
+  ) async {
+    BookGuideUnavailableException? unavailable;
+    try {
+      final id = await resolveContentResourceId(canonicalKey);
+      if (id != null) return BookReadingAccess(resourceId: id);
+    } on BookGuideUnavailableException catch (error) {
+      unavailable = error;
+    }
+    final source = await resolveBookReadingSource(title, author);
+    return BookReadingAccess(source: source, unavailable: unavailable);
+  }
 
   final DioClient _dioClient;
   final Map<String, String> _resolvedContentResourceIds = {};
@@ -145,13 +251,16 @@ class PlanRepository {
       }
       final resolutionStatus = data['status']?.toString() ?? '';
       if (resolutionStatus == 'failed_quality' ||
-          resolutionStatus == 'failed') {
+          resolutionStatus == 'failed' ||
+          resolutionStatus == 'missing') {
         throw BookGuideUnavailableException(
           status: resolutionStatus,
           message: data['message']?.toString().trim().isNotEmpty == true
               ? data['message'].toString().trim()
               : resolutionStatus == 'failed_quality'
               ? 'This guide did not meet the reading-quality standard.'
+              : resolutionStatus == 'missing'
+              ? 'This guide is not available yet.'
               : 'This guide could not be generated after several attempts.',
         );
       }

@@ -8,6 +8,7 @@
 
 import 'dart:async';
 
+import 'package:cmpys/core/network/api_error.dart';
 import 'package:cmpys/features/plan/data/plan_repository.dart';
 import 'package:cmpys/features/plan/models/plan_models.dart';
 import 'package:cmpys/features/plan/state/current_plan_provider.dart';
@@ -41,9 +42,13 @@ class _FakePlanRepo implements PlanRepository {
   final jobs = <String, PlanJobStatus>{};
   final pendingJobs = <String, Completer<PlanJobStatus>>{};
   Completer<BackendPlan?>? pendingPlan;
+  Exception? planError;
 
   @override
-  Future<BackendPlan?> getCurrentPlan() async => pendingPlan?.future ?? plan;
+  Future<BackendPlan?> getCurrentPlan() async {
+    if (planError case final error?) throw error;
+    return pendingPlan?.future ?? plan;
+  }
 
   @override
   Future<PlanJobStatus> getJobStatus(String jobId) async {
@@ -57,6 +62,77 @@ class _FakePlanRepo implements PlanRepository {
 }
 
 void main() {
+  for (final error in [
+    const NetworkError(),
+    const TimeoutError(),
+    const ApiError(message: 'Unavailable', statusCode: 503),
+  ]) {
+    test(
+      'a transient refresh failure retains the saved plan: $error',
+      () async {
+        final saved = _planFor('Seneca');
+        final repo = _FakePlanRepo(saved);
+        var generationRequests = 0;
+        final controller = CurrentPlanController(
+          repo: repo,
+          readJobId: () => null,
+          readIdolName: () => 'Seneca',
+          requestGeneration: () async {
+            generationRequests++;
+            return null;
+          },
+        );
+        addTearDown(controller.dispose);
+        await pumpEventQueue();
+        repo.planError = error;
+        await controller.refresh();
+        expect(controller.state.status, CurrentPlanStatus.ready);
+        expect(controller.state.plan, same(saved));
+        expect(generationRequests, 0);
+      },
+    );
+  }
+
+  for (final status in [401, 403]) {
+    test(
+      'authorization failure does not retain the saved plan: $status',
+      () async {
+        final repo = _FakePlanRepo(_planFor('Seneca'));
+        final controller = CurrentPlanController(
+          repo: repo,
+          readJobId: () => null,
+        );
+        addTearDown(controller.dispose);
+        await pumpEventQueue();
+        repo.planError = ApiError(message: 'Denied', statusCode: status);
+        await controller.refresh();
+        expect(controller.state.status, CurrentPlanStatus.failed);
+        expect(controller.state.plan, isNull);
+      },
+    );
+  }
+
+  test(
+    'a failed mentor refresh never restores the previous mentor plan',
+    () async {
+      final repo = _FakePlanRepo(_planFor('Seneca'));
+      var mentor = 'Seneca';
+      final controller = CurrentPlanController(
+        repo: repo,
+        readJobId: () => null,
+        readIdolName: () => mentor,
+      );
+      addTearDown(controller.dispose);
+      await pumpEventQueue();
+      mentor = 'Warren Buffett';
+      repo.planError = const NetworkError();
+      controller.onIdolChanged(mentor);
+      await pumpEventQueue();
+      expect(controller.state.status, CurrentPlanStatus.failed);
+      expect(controller.state.plan, isNull);
+    },
+  );
+
   test(
     'an obsolete response for the same job cannot fail a restarted poll',
     () async {

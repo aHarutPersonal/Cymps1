@@ -77,7 +77,8 @@ class _CmpysPersonalizeStepState extends State<CmpysPersonalizeStep> {
               child: Row(
                 children: [
                   if (_step > 0)
-                    GestureDetector(
+                    CmpysPressable(
+                      semanticLabel: 'Back',
                       onTap: _back,
                       child: Container(
                         width: 44,
@@ -405,7 +406,8 @@ class _CmpysPersonalizeStepState extends State<CmpysPersonalizeStep> {
 
   Widget _goalRow(CmpysGoal g) {
     final on = widget.draft.goalId == g.id;
-    return GestureDetector(
+    return CmpysPressable(
+      selected: on,
       onTap: () => setState(() => widget.draft.goalId = g.id),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 140),

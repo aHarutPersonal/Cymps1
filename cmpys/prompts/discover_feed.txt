@@ -7,7 +7,7 @@ Their goals: {goals_json}
 ALREADY SHOWN (recently generated titles — do NOT repeat these or produce near-duplicates of their ideas):
 {exclude_titles_json}
 
-Generate exactly {count} items. ONLY these two types are allowed:
+Generate up to {count} well-supported items; return fewer when evidence or topic variety is limited. ONLY these two types are allowed:
 
 **INSIGHTS FROM BOOKS & THINKERS (type "quote", a legacy transport label):**
 You do NOT have a search tool here, so you CANNOT verify exact wording. Therefore PARAPHRASE BY DEFAULT —
@@ -47,7 +47,7 @@ Rules:
   verified quotations are supplied by a separate source-backed catalog.
 - Do NOT generate tasks, action items, suggestions, or actionable advice. ONLY quotes and videos.
 - All content in English only.
-- Choose the insight/video mix to fit exactly {count} items; there is no minimum for either type.
+- Choose the insight/video mix to fit at most {count} items; there is no minimum for either type.
 - Vary categories when the requested count and topic support it; never add items to fill a quota.
 - Each item carries ONE singular takeaway — never a platitude, never a repeat of another item.
 

@@ -487,7 +487,7 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
             ),
           ),
           const SizedBox(height: 10),
-          GestureDetector(
+          CmpysPressable(
             onTap: () => Navigator.of(context).push(
               CmpysPageRoute(
                 builder: (_) => CmpysMarkdownScreen(
@@ -532,11 +532,10 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
       pad: EdgeInsets.zero,
       child: Column(
         children: [
-          GestureDetector(
+          CmpysPressable(
             onTap: () => Navigator.of(
               context,
             ).push(CmpysSheetRoute(builder: (_) => const CmpysRecordScreen())),
-            behavior: HitTestBehavior.opaque,
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Row(
@@ -603,9 +602,8 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
             ),
           ),
           if (pending > 0)
-            GestureDetector(
+            CmpysPressable(
               onTap: _openReassess,
-              behavior: HitTestBehavior.opaque,
               child: Container(
                 decoration: const BoxDecoration(
                   color: AppColors.paper,
@@ -735,9 +733,8 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            GestureDetector(
+            CmpysPressable(
               onTap: () => setState(() => _open = open ? null : d.id),
-              behavior: HitTestBehavior.opaque,
               child: Column(
                 children: [
                   Row(
@@ -925,7 +922,7 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
             ? null
             : const Border(top: BorderSide(color: AppColors.hair)),
       ),
-      child: GestureDetector(
+      child: CmpysPressable(
         onTap: () {
           if (hit) {
             ref.read(cmpysStoreProvider.notifier).toggleMilestone(m.id);
@@ -937,7 +934,6 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
             );
           }
         },
-        behavior: HitTestBehavior.opaque,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 13),
           child: Row(

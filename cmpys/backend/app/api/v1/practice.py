@@ -34,6 +34,7 @@ from app.services.practice.evidence import (
     passed_activities,
     practice_summary,
 )
+from app.services.practice.solution_compiler import render_worked_solution
 
 logger = logging.getLogger(__name__)
 
@@ -292,7 +293,9 @@ async def prepare_practice(
     generated, failed = None, False
     failure_code = None
     try:
-        generated = prepared if prepared is not None else await generate_workbook(step, context)
+        from app.services.llm.admission import admission_scope
+        with admission_scope("foreground", user_id):
+            generated = prepared if prepared is not None else await generate_workbook(step, context)
     except Exception as exc:
         failed = True
         failure_code = "provider_timeout" if isinstance(exc, TimeoutError) else "invalid_practice"
@@ -376,7 +379,7 @@ async def get_hint(
             {
                 "activity_id": activity.id,
                 "kind": kind,
-                "content": activity.worked_solution if solution else activity.hint,
+                "content": render_worked_solution(activity) if solution else activity.hint,
             },
         ]
         row.revision += 1
@@ -447,7 +450,9 @@ async def submit_practice(
         else:
             if any(f.kind == "text" for f in activity.fields):
                 kwargs = {"recovery_response": recovery} if recovery is not None else {}
-                review = await review_text(activity, answers, step.get("lesson_content", ""), **kwargs)
+                from app.services.llm.admission import admission_scope
+                with admission_scope("foreground", user_id):
+                    review = await review_text(activity, answers, step.get("lesson_content", ""), **kwargs)
             feedback = combine_review(activity, fixed, review)
     except Exception:
         failed = True

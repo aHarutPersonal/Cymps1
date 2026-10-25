@@ -38,15 +38,19 @@ class ZaiLLMClient(OpenLuxLLMClient):
                 {"role": "user", "content": user_prompt},
             ],
             "stream": True,
+            "temperature": self.temperature,
             "max_tokens": min((self.max_tokens or 4096) + settings.zai_reasoning_token_reserve, 128000),
             "reasoning_effort": self.thinking_level,
             "extra_body": {"thinking": {"type": "enabled"}},
         }
         if schema is not None:
             kwargs["response_format"] = {"type": "json_object"}
+        self._effective_parameters = {k: v for k, v in kwargs.items() if k not in {"messages", "stream"}}
         # Z.ai sends usage on the final streaming chunk without stream_options.
         # Never forward reasoning_content to users or application storage.
-        async with asyncio.timeout(self.timeout):
+        from app.services.llm.admission import provider_permit
+        async with provider_permit(self.provider_name, self.model, timeout=self.timeout) as wait_ms, asyncio.timeout(self.timeout):
+            self._admission_wait_ms = wait_ms
             stream = await self._get_client(self.api_key).chat.completions.create(**kwargs)
             try:
                 async for chunk in stream:

@@ -6,6 +6,7 @@ import json
 from app.core.config import settings
 from app.services.llm import get_llm_client
 from app.services.llm.telemetry import record_llm_response
+from app.services.llm.tracing import traced_operation
 from app.services.practice.contracts import Activity, TextReview, Workbook
 
 
@@ -26,6 +27,7 @@ def _is_provider_timeout(response) -> bool:
     )
 
 
+@traced_operation("lesson_practice")
 async def _structured(prompt: str, payload: dict, schema, operation: str, *, recovery_response=None):
     budget = (
         PRACTICE_GENERATION_BUDGET_SECONDS
@@ -34,13 +36,14 @@ async def _structured(prompt: str, payload: dict, schema, operation: str, *, rec
     )
     # Includes primary inference, the one authorized operational recovery,
     # and telemetry. Per-call bounds alone previously exceeded the API lease.
+    deadline = asyncio.get_running_loop().time() + budget
     async with asyncio.timeout(budget):
         return await _structured_request(
-            prompt, payload, schema, operation, recovery_response=recovery_response
+            prompt, payload, schema, operation, recovery_response=recovery_response, deadline=deadline
         )
 
 
-async def _structured_request(prompt: str, payload: dict, schema, operation: str, *, recovery_response=None):
+async def _structured_request(prompt: str, payload: dict, schema, operation: str, *, recovery_response=None, deadline=None):
     from app.services.llm.prompt_loader import load_and_render
 
     system = load_and_render(prompt, {})
@@ -55,14 +58,18 @@ async def _structured_request(prompt: str, payload: dict, schema, operation: str
         # Live workbook attempts on GLM Flash repeatedly timed out at 45s.
         # Use the proven balanced route for this reasoning/answer-key task,
         # with compact output and enough time to finish a complete workbook.
+        # Six-field text reviews also need reasoning time: the former 15s
+        # limit cancelled valid streaming reviews. Leave time for telemetry
+        # and persistence within the unchanged 55s review / 60s lease.
         primary_timeout = (
-            90 if operation == "lesson_practice_generate" else 45
+            60 if operation == "lesson_practice_generate" else 45
         ) if settings.llm_provider == "zai" else 15
         client = get_llm_client(
             tier="balanced",
             timeout=primary_timeout, max_tokens=PRACTICE_OUTPUT_TOKENS, allow_fallback=False,
             thinking_level="low" if settings.llm_provider == "zai" else None
         )
+    recovery_timeout = 30
     model = None
     for attempt in range(2):
         try:
@@ -73,14 +80,15 @@ async def _structured_request(prompt: str, payload: dict, schema, operation: str
                     output_model=schema,
                     repair_on_failure=False,
                 ),
-                timeout=primary_timeout + 3 if attempt == 0 and recovery_response is None else 32,
+                timeout=primary_timeout + 3 if attempt == 0 and recovery_response is None else recovery_timeout + 2,
             )
         except TimeoutError:
-            response = LLMResponse(
+            response = getattr(client, "last_attempt", None) or LLMResponse(
                 data={}, error="Practice provider timeout",
                 provider=getattr(client, "provider_name", None),
                 model=getattr(client, "model", None),
             )
+            response.error = "Practice provider timeout"
         try:
             await asyncio.wait_for(
                 record_llm_response(
@@ -101,7 +109,12 @@ async def _structured_request(prompt: str, payload: dict, schema, operation: str
             pass  # Telemetry cannot extend the enclosing operation budget.
         if model is not None or attempt == 1 or recovery_response is not None:
             break
-        recovery = operational_recovery_client(response, timeout=30, max_tokens=PRACTICE_OUTPUT_TOKENS)
+        # Do not start a paid recovery that the enclosing deadline would
+        # immediately cancel. Early failures can still use authorized recovery.
+        recovery_timeout = min(30, deadline - asyncio.get_running_loop().time() - 5) if deadline is not None else 30
+        if recovery_timeout < 15:
+            break
+        recovery = operational_recovery_client(response, timeout=recovery_timeout, max_tokens=PRACTICE_OUTPUT_TOKENS)
         if recovery is None:
             break
         client = recovery

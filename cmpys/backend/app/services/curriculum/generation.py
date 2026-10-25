@@ -11,6 +11,8 @@ from typing import Any, Literal, TypeVar
 
 from pydantic import BaseModel
 
+from app.services.llm.admission import background_generation
+from app.services.llm.tracing import traced_operation
 from app.services.curriculum.gates import (
     MIN_REVIEW_SCORE,
     TECHNIQUE_BLOCK_REQUIREMENTS,
@@ -26,6 +28,7 @@ from app.services.curriculum.gates import (
 from app.services.curriculum.pilot import TECHNIQUE_REGISTRY
 from app.services.curriculum.schemas import (
     CanonicalModuleDraft,
+    BlockRepairResult,
     CurriculumOutline,
     LessonBlockType,
     QualityReview,
@@ -99,6 +102,8 @@ def curriculum_recovery_route(route: dict[str, Any] | None):
         _RECOVERY_ROUTE.reset(token)
 
 
+@background_generation
+@traced_operation("curriculum_generation")
 async def _generate(
     *,
     operation: str,
@@ -740,9 +745,12 @@ async def repair_module_draft(
     repair_attempt: int,
     telemetry_metadata: dict[str, Any] | None = None,
 ) -> GeneratedArtifact:
+    block_ids = {block.block_id for block in draft.blocks}
+    targeted_ids = {issue.get("block_id") for issue in issues}
+    targeted = bool(issues) and None not in targeted_ids and 0 < len(targeted_ids) <= 3 and targeted_ids <= block_ids
     generated = await _generate(
         operation="curriculum_module_repair",
-        prompt_name="curriculum_module_repair",
+        prompt_name="curriculum_block_repair" if targeted else "curriculum_module_repair",
         prompt_variables={
             "module_target_json": module_target,
             "source_pack_json": writer_source_pack(manifest),
@@ -751,22 +759,36 @@ async def repair_module_draft(
             "draft_json": draft.model_dump(mode="json"),
             "repair_issues_json": issues,
         },
-        output_model=RepairResult,
+        output_model=BlockRepairResult if targeted else RepairResult,
         tier=tier,
-        max_tokens=26000,
+        max_tokens=10000 if targeted else 26000,
         metadata={
             "stage": "writing",
             "repair": True,
+            "repair_scope": "blocks" if targeted else "module",
             "attempt": repair_attempt,
             **(telemetry_metadata or {}),
         },
     )
-    repaired = RepairResult.model_validate(generated.value)
+    repaired = (BlockRepairResult if targeted else RepairResult).model_validate(generated.value)
     requested_codes = {str(issue.get("code") or "") for issue in issues}
     if not requested_codes.issubset(set(repaired.addressed_issue_codes)):
         raise ValueError("repair did not acknowledge every targeted issue code")
+    if targeted:
+        replacements = {block.block_id: block for block in repaired.repaired_blocks}
+        if set(replacements) != targeted_ids or len(replacements) != len(repaired.repaired_blocks):
+            raise ValueError("block repair changed the requested scope")
+        blocks = [replacements.get(block.block_id, block) for block in draft.blocks]
+        if any(old.block_type != new.block_type for old, new in zip(draft.blocks, blocks)):
+            raise ValueError("block repair changed a block type")
+        payload = draft.model_dump(mode="json")
+        payload["blocks"] = [block.model_dump(mode="json") for block in blocks]
+        payload["estimated_minutes"] = sum(block.minutes for block in blocks)
+        repaired_draft = CanonicalModuleDraft.model_validate(payload)
+    else:
+        repaired_draft = repaired.repaired_draft
     return GeneratedArtifact(
-        value=repaired.repaired_draft,
+        value=repaired_draft,
         model_name=generated.model_name,
         provider=generated.provider,
         input_tokens=generated.input_tokens,

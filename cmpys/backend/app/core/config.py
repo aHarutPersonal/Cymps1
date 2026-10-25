@@ -21,6 +21,12 @@ class Settings(BaseSettings):
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"
+    # Opt in only after provider quota/load measurement. Keys are provider:model.
+    llm_admission_limits: dict[str, int] = {}
+    llm_admission_foreground_reserve: int = Field(default=1, ge=1)
+    llm_admission_per_user: int = Field(default=2, ge=1)
+    llm_admission_wait_seconds: float = Field(default=30, gt=0, le=120)
+    curriculum_parallel_reviews: bool = False
     google_books_api_key: str | None = Field(default=None, repr=False, exclude=True)
     google_books_secret_id: str | None = None
     google_books_secret_region: str = "us-east-1"

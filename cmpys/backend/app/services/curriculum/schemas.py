@@ -511,6 +511,11 @@ class RepairResult(StrictModel):
     change_summary: list[str] = Field(min_length=1, max_length=30)
 
 
+class BlockRepairResult(StrictModel):
+    repaired_blocks: list[LessonBlock] = Field(min_length=1, max_length=3)
+    addressed_issue_codes: list[str] = Field(min_length=1, max_length=40)
+
+
 class MentorClaimCandidate(StrictModel):
     claim_type: Literal[
         "recommended_book",

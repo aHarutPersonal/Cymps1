@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -80,6 +81,7 @@ class PlanItemResponse(BaseModel):
     weekEnd: int
     successMetric: str
     estimatedHours: int
+    estimatedMinutes: int | None = Field(default=None, ge=0)
     status: PlanItemStatus
     progressPercent: int
     notes: str | None = None
@@ -127,6 +129,7 @@ class StepDetail(BaseModel):
 
     id: str
     title: str
+    lesson_format: Literal["tutorial_v1"] | None = None
     description: str | None = None
     # Additional fields from LLM prompt schema
     expected_output: str | None = None  # Artifact/deliverable for this step
@@ -172,6 +175,7 @@ class ItemDetails(BaseModel):
     """Detailed steps and materials for a plan item."""
 
     steps: list[StepDetail] = []
+    lesson_format: Literal["tutorial_v1"] | None = None
     materials: list[MaterialDetail] = []
     generated_from_prompt_version: str | None = None
     generated_at: str | None = None

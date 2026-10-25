@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:cmpys/core/ui/motion/page_transition.dart';
 
 import 'package:cmpys/app/design_tokens.dart';
 import 'package:cmpys/core/network/dio_client.dart';
@@ -222,6 +223,7 @@ class _MemoryBookNarrationCheckpointStore
     implements BookNarrationCheckpointStore {
   final Map<String, BookNarrationCheckpoint> values = {};
   int writeCount = 0;
+  Completer<void>? pendingWrite;
 
   @override
   Future<BookNarrationCheckpoint?> read(String resourceId) async =>
@@ -232,6 +234,7 @@ class _MemoryBookNarrationCheckpointStore
     String resourceId,
     BookNarrationCheckpoint checkpoint,
   ) async {
+    await pendingWrite?.future;
     writeCount++;
     values[resourceId] = checkpoint;
   }
@@ -1253,4 +1256,90 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+  for (final overlap in [false, true]) {
+    testWidgets(
+      'reader swipe saves position and stops audio; pending button=$overlap',
+      (tester) async {
+        tester.view.physicalSize = const Size(390, 844);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final repository = _FakeContentResourcesRepository();
+        final narrator = _FakeBookNarrator();
+        final checkpoints = _MemoryBookNarrationCheckpointStore();
+        final resumes = _MemoryActiveBookNarrationResumeStore();
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              contentResourcesRepositoryProvider.overrideWithValue(repository),
+            ],
+            child: MaterialApp(
+              theme: ThemeData(platform: TargetPlatform.iOS),
+              home: Scaffold(
+                body: Builder(
+                  builder: (context) => TextButton(
+                    onPressed: () => Navigator.of(context).push(
+                      CmpysPageRoute<void>(
+                        builder: (context) => Scaffold(
+                          body: TextButton(
+                            child: const Text('Open book'),
+                            onPressed: () => Navigator.of(context).push(
+                              CmpysPageRoute<void>(
+                                builder: (_) => BookReaderScreen(
+                                  resourceId: 'book-1',
+                                  fallbackTitle: 'Decision Systems',
+                                  narrator: narrator,
+                                  checkpointStore: checkpoints,
+                                  activeResumeStore: resumes,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    child: const Text('Open library'),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.tap(find.text('Open library'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Open book'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('book-listen-button')));
+        await tester.pumpAndSettle();
+        narrator.emitProgress(start: 7, end: 13, word: 'decision');
+        await tester.pump();
+
+        // Cancelling the edge gesture must not stop playback or clear its resume.
+        final gesture = await tester.startGesture(const Offset(1, 150));
+        await gesture.moveBy(const Offset(60, 0));
+        await tester.pump(const Duration(milliseconds: 400));
+        await gesture.up();
+        await tester.pumpAndSettle();
+        expect(narrator.stopCalls, 0);
+        expect(find.byType(BookReaderScreen), findsOneWidget);
+
+        if (overlap) {
+          checkpoints.pendingWrite = Completer<void>();
+          await tester.tap(find.byTooltip('Back'));
+          await tester.pump();
+        }
+        await tester.dragFrom(const Offset(1, 150), const Offset(340, 0));
+        await tester.pumpAndSettle();
+        checkpoints.pendingWrite?.complete();
+        await tester.pumpAndSettle();
+        expect(find.text('Open book'), findsOneWidget);
+        expect(find.text('Open library'), findsNothing);
+        expect(narrator.stopCalls, greaterThan(0));
+        expect(checkpoints.values['book-1']?.characterOffset, 7);
+        expect(repository.lastCursorJson?['narrationCharacterOffset'], 7);
+        expect(resumes.values['local'], isNull);
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
 }

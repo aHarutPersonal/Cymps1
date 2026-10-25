@@ -465,6 +465,32 @@ async def get_continue_reading(
     return ContinueReadingResponse(resource=resource_resp)
 
 
+@router.get("/original-source")
+async def resolve_original_book_source(
+    current_user: Annotated[User, Depends(get_current_user)],
+    title: str = Query(..., min_length=1, max_length=300),
+    author: str | None = Query(default=None, max_length=200),
+) -> dict[str, str | None]:
+    """Resolve a verified public-domain original independently of AI guides."""
+    from app.services.content_resources import lookup_gutenberg_book
+    source = await lookup_gutenberg_book(title=title, author=author)
+    if source is None:
+        return {"url": None}
+    metadata = source.get("summary_json") or {}
+    return {"url": metadata.get("reading_url") or metadata.get("text_url") or source.get("source_url")}
+
+
+@router.get("/reading-source")
+async def resolve_book_reading_source(
+    current_user: Annotated[User, Depends(get_current_user)],
+    title: str = Query(..., min_length=1, max_length=300),
+    author: str | None = Query(default=None, max_length=200),
+) -> dict:
+    """Verified originals or explicitly labelled author-published excerpts."""
+    from app.services.content_resources import lookup_book_reading_source
+    return await lookup_book_reading_source(title=title, author=author) or {"url": None}
+
+
 @router.get("/resolve", response_model=ContentResourceReferenceResponse)
 async def resolve_content_resource(
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -529,8 +555,10 @@ async def resolve_content_resource(
             status=ContentResourceResolutionStatus.FAILED_QUALITY,
             retryable=False,
             message=(
-                "The generated guide did not meet the reading-quality standard. "
-                "Use another recommended resource while it is reviewed."
+                "A verified source text is not available for this book, so its study guide could not be prepared."
+                if resource is not None and (resource.metadata_json or {}).get("source_sufficiency") == "insufficient"
+                else "The generated guide did not meet the reading-quality standard. "
+                     "Use another recommended resource while it is reviewed."
             ),
             qualityScore=_content_quality_score(resource),
         )
@@ -540,6 +568,17 @@ async def resolve_content_resource(
             status=ContentResourceResolutionStatus.FAILED,
             retryable=False,
             message="The book guide could not be generated after several attempts.",
+        )
+    if resource is not None:
+        return ContentResourceReferenceResponse(
+            canonicalKey=canonicalKey,
+            status=ContentResourceResolutionStatus.FAILED_QUALITY,
+            retryable=False,
+            message=(
+                "This saved guide needs a new reading-quality review before it "
+                "can be opened. Use the original source while it is unavailable."
+            ),
+            qualityScore=_content_quality_score(resource),
         )
     return ContentResourceReferenceResponse(
         canonicalKey=canonicalKey,
@@ -631,6 +670,7 @@ async def prepare_content_narration(
         sourceTextHash=asset.source_text_hash,
         disclosure=asset.disclosure,
         cached=asset.cached,
+        alignmentPending=asset.alignment_pending,
     )
 
 

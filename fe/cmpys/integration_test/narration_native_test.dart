@@ -24,6 +24,7 @@ class _NativeRepository extends Fake implements ContentResourcesRepository {
   final Uri uri;
   int requests = 0;
   bool sparseAlignment = false;
+  bool pendingFirstAlignment = false;
   final serviceTimes = <int>[];
   final resource = const ContentResource(
     id: 'native-narration-fixture',
@@ -49,14 +50,19 @@ class _NativeRepository extends Fake implements ContentResourcesRepository {
     await Future<void>.delayed(const Duration(milliseconds: 400));
     serviceTimes.add(clock.elapsedMilliseconds);
     final words = RegExp(r'\S+').allMatches(text).toList();
+    final pending = pendingFirstAlignment && requests == 1;
     return BookNarrationAudio(
       audioUri: uri,
       style: style,
       voice: 'Synthetic fixture',
       provider: 'test',
       duration: const Duration(seconds: 4),
+      sourceTextHash: 'native-synthetic-passage',
+      alignmentPending: pending,
       alignmentSource: 'transcription',
-      alignment: sparseAlignment
+      alignment: pending
+          ? const []
+          : sparseAlignment
           ? [
               BookNarrationCue(
                 start: words.first.start,
@@ -182,6 +188,49 @@ Future<void> _until(
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+  testWidgets(
+    'native playback continues when delayed alignment becomes available',
+    (tester) async {
+      final repo = _NativeRepository(await _makeWav())
+        ..pendingFirstAlignment = true;
+      final player = _MeasuredPlayer();
+      final narrator = ExpressiveBookNarrator(
+        repository: repo,
+        resourceId: repo.resource.id,
+        audioPlayer: player,
+      );
+      addTearDown(narrator.dispose);
+      var alignedWhilePlaying = false;
+      narrator.setTrackHandler((event) {
+        if (event.phase == BookNarrationPlaybackPhase.playing &&
+            event.audio?.alignmentPending == false &&
+            event.highlightStart != null) {
+          alignedWhilePlaying = true;
+        }
+      });
+      await narrator.initialize(speed: 1);
+      await narrator.loadTrack(
+        sessionId: 1,
+        chapters: [BookNarrationDocument.fromMarkdown(_passage)],
+        initialChapterIndex: 0,
+        initialSegmentIndex: 0,
+      );
+      expect(repo.requests, 1);
+      await narrator.playTrack();
+      await _until(tester, () => player.position.inMilliseconds > 250);
+      final beforeAlignment = player.position;
+      final sourceLoads = player.sourceTimes.length;
+      final seeks = player.seekTimes.length;
+      await _until(tester, () => alignedWhilePlaying);
+      expect(player.position, greaterThan(beforeAlignment));
+      expect(player.playing, isTrue);
+      expect(player.sourceTimes.length, sourceLoads);
+      expect(player.seekTimes.length, seeks);
+      expect(repo.requests, 2);
+      debugPrint('NARRATION_DELAYED_ALIGNMENT_PASSED without reload or seek');
+    },
+    timeout: const Timeout(Duration(seconds: 30)),
+  );
   testWidgets(
     'native playback timing, resume, speed and reader controls',
     (tester) async {

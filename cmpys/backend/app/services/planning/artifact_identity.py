@@ -22,7 +22,7 @@ from sqlalchemy.orm import aliased
 
 from app.models.item_detail_job import PlanItemDetailJob
 from app.models.plan import PlanItem, PlanItemCompletion, PlanItemStepCompletion
-from app.services.content_quality import MIN_PLAN_DETAIL_LESSON_WORDS
+from app.services.content_quality import TUTORIAL_LESSON_FORMAT, plan_detail_min_words
 
 
 ACTIVE_DETAIL_JOB_STATUSES = frozenset({"pending", "queued", "running"})
@@ -202,6 +202,8 @@ def validated_lesson_steps(
     validated: list[Mapping[str, Any]] = []
     for step in raw_steps:
         if not isinstance(step, Mapping):
+            return None
+        if "lesson_format" in step and step["lesson_format"] != TUTORIAL_LESSON_FORMAT:
             return None
         raw_step_id = step.get("id")
         if not isinstance(raw_step_id, str):
@@ -479,7 +481,7 @@ def progressive_ready_step_ids(details_json: Any) -> tuple[str, ...]:
         for step in steps
         if str(step["id"]) in ready_ids
         and len(str(step.get("lesson_content") or "").split())
-        >= MIN_PLAN_DETAIL_LESSON_WORDS
+        >= plan_detail_min_words(step)
     )
 
 

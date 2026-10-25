@@ -39,7 +39,7 @@ from app.services.ingestion.extract import (
     run_timeline_normalization,
 )
 from app.services.content_quality import (
-    MIN_PLAN_DETAIL_LESSON_WORDS,
+    plan_detail_min_words,
     MIN_PLAN_DETAIL_MATERIAL_WORDS,
 )
 from app.services.llm.schemas import (
@@ -1076,11 +1076,11 @@ def _normalize_plan_item_details(details: dict) -> dict:
             step.setdefault("completed", False)
 
     # --- Validate content depth ---
-    min_lesson_words = MIN_PLAN_DETAIL_LESSON_WORDS
     min_material_words = MIN_PLAN_DETAIL_MATERIAL_WORDS
 
     # Flag steps below the substantial lesson floor enforced by the prompt.
     for step in details.get("steps", []):
+        min_lesson_words = plan_detail_min_words(step)
         lesson = step.get("lesson_content", "")
         if lesson and len(lesson.split()) < min_lesson_words:
             logger.warning(

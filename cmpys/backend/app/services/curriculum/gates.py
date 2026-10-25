@@ -735,6 +735,16 @@ def _draft_prose_segments_with_locations(
                 prefix = f"session_workbooks[{session_index}].activities[{activity_index}]"
                 for key in ("title", "instructions", "hint", "worked_solution"):
                     append_text(activity.get(key), field_name=f"{prefix}.{key}")
+                # New private solutions separate authored explanation from
+                # server-rendered arithmetic. Scan each explanation exactly as
+                # prose, retaining its field location; generated equations are
+                # not original writing and must not dilute or inflate overlap.
+                solution = activity.get("worked_solution")
+                if isinstance(solution, Mapping) and isinstance(solution.get("steps"), list):
+                    for step_index, step in enumerate(solution["steps"]):
+                        if isinstance(step, Mapping):
+                            append_text(step.get("explanation"), field_name=(
+                                f"{prefix}.worked_solution.steps[{step_index}].explanation"))
                 for field_index, field in enumerate(activity.get("fields", [])):
                     append_text(field.get("label"), field_name=f"{prefix}.fields[{field_index}].label")
                     for criterion_index, criterion in enumerate(field.get("criteria", [])):

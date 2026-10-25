@@ -34,6 +34,7 @@ class PracticeActivity {
 class LessonPracticeState {
   LessonPracticeState.fromJson(Map<String, dynamic> j)
     : state = j['state'] as String,
+      lessonVersion = j['lesson_version'] as String?,
       revision = (j['revision'] as num?)?.toInt() ?? 0,
       retryAfterSeconds = (j['retry_after_seconds'] as num?)?.toInt() ?? 0,
       title = (j['workbook'] as Map?)?['title'] as String? ?? 'Lesson practice',
@@ -50,6 +51,7 @@ class LessonPracticeState {
       preparedAvailable = j['prepared_available'] == true;
   final String state, title;
   final String? evidenceStatus;
+  final String? lessonVersion;
   final int revision, retryAfterSeconds;
   final List<PracticeActivity> activities;
   final Map<String, String> answers;

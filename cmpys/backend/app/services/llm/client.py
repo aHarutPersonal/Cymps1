@@ -14,7 +14,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from app.services.llm.gemini_compat import (
     ThinkingLevel,
@@ -152,12 +152,30 @@ class LLMResponse(BaseModel):
     raw_response: str | None = None
     retried: bool = False
     error: str | None = None
+    error_code: str | None = None
+    # Sanitized transport policy only. None leaves malformed/unfinished output
+    # recovery to the operation's schema and content contract.
+    retryable: bool | None = None
+    retry_after_seconds: int | None = Field(default=None, ge=1, le=3600)
     model: str | None = None
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     total_tokens: int | None = None
     thoughts_tokens: int | None = None
     duration_ms: float | None = None
+    first_event_ms: float | None = None
+    first_content_ms: float | None = None
+    response_chars: int | None = None
+    admission_wait_ms: float | None = None
+    cached_prompt_tokens: int | None = None
+    effective_parameters: dict[str, Any] = Field(default_factory=dict)
+    transport_success: bool | None = None
+    json_valid: bool | None = None
+    semantic_accepted: bool | None = None
+    critical_defect: bool = False
+    trace_id: str | None = None
+    attempt_id: str | None = None
+    trace_recorded: bool = False
     finish_reason: str | None = None
     provider: str | None = None
     fallback_from_model: str | None = None

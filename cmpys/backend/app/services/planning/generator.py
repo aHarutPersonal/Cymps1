@@ -37,6 +37,7 @@ from app.services.llm.schemas import (
     PlanWeek,
 )
 from app.services.llm.telemetry import record_llm_response
+from app.services.llm.tracing import traced_operation
 
 logger = logging.getLogger(__name__)
 
@@ -1228,6 +1229,7 @@ async def _generate_llm_items(
 # =============================================================================
 
 
+@traced_operation("plan_generation")
 async def generate_plan(
     idol_name: str = "the idol",
     user_goal: str = "personal and professional growth",

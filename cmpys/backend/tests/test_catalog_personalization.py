@@ -400,7 +400,7 @@ def test_matcher_returns_exact_and_strong_but_never_waives_hard_fields():
 
 
 @pytest.mark.asyncio
-async def test_free_form_gap_resolution_pages_beyond_first_hundred_modules():
+async def test_free_form_gap_shortlist_finds_match_beyond_first_hundred_modules():
     modules = []
     for index in range(101):
         is_target = index == 100
@@ -464,12 +464,11 @@ async def test_free_form_gap_resolution_pages_beyond_first_hundred_modules():
     assert gap is not None
     assert gap.skill_id == "investing.valuation"
     assert gap.outcome_id == "estimate.downside"
-    assert len(pages) == 2
-    assert len(pages[0]) == catalog.CLOSED_WORLD_GAP_PAGE_SIZE
-    assert pages[1] == ["zz.relevant.module"]
+    assert len(pages) == 1
+    assert pages[0] == ["zz.relevant.module"]
     assert "LIMIT" not in str(db.statements[0]).upper()
     assert item.meta_json["structured_gap"]["resolver_version"] == (
-        "closed-world-paged-v2"
+        "closed-world-shortlist-v3"
     )
 
 
@@ -2418,11 +2417,10 @@ async def test_mentor_evidence_is_locked_in_stable_order_before_ready_persistenc
 
 @pytest.mark.asyncio
 async def test_prefetch_threads_owner_and_item_into_database_readiness(monkeypatch):
-    monkeypatch.setattr(plan_tasks, "MIN_PLAN_DETAIL_LESSON_WORDS", 1)
     checker = AsyncMock(return_value=False)
     monkeypatch.setattr(catalog, "catalog_details_are_ready_in_database", checker)
     details = {
-        "steps": [{"id": "step_1", "lesson_content": "complete lesson"}],
+        "steps": [{"id": "step_1", "lesson_content": "complete lesson " * 950}],
         "_generation": {
             "content_origin": "catalog_personalized",
             "status": "ready",
