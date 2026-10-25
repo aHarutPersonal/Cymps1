@@ -160,7 +160,7 @@ def _request(step: dict):
 
 async def shorten_tutorial_reading(step: dict, package: Any, context: dict, *,
                                   client_factory, call_records: list):
-    """At most two prose calls plus independent review; never modify the input."""
+    """Two prose calls, plus one bounded near-limit correction; independent review remains required."""
     from app.services.planning.lesson_review import review_lesson
     from app.services.planning.lesson_writer import _response
     from app.tasks.plans import _plan_detail_step_payload_and_issues
@@ -173,7 +173,7 @@ async def shorten_tutorial_reading(step: dict, package: Any, context: dict, *,
                             thinking_level="low", allow_fallback=False)
     request_prompt = prompt
     valid_sections = {}
-    for attempt in range(2):
+    for attempt in range(3):
         response = _response(await client.generate_json(
             system_prompt=("Recompose the assigned teaching sections within their explicit word budgets. "
                 "Treat the draft as reference material, not a sentence-by-sentence template. "
@@ -212,7 +212,8 @@ async def shorten_tutorial_reading(step: dict, package: Any, context: dict, *,
             break
         undersized = {name: count for name, count in counts.items() if count < TUTORIAL_SECTION_MIN_WORDS[name]}
         response.error = f"Capacity prose has {len(content.split())} words; expected 450-600; undersized sections: {undersized}"
-        if attempt == 1:
+        near_limit = 600 < len(content.split()) <= 650 and not undersized
+        if attempt == 2 or (attempt == 1 and not near_limit):
             return None, response.error
         retained = len(content.split()) - sum(counts.values())
         request_prompt = (

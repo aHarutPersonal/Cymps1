@@ -325,3 +325,31 @@ def test_capacity_keeps_reviewed_visual_bytes_before_counting_or_review():
     for invalid in ["Missing visual", rewritten + "\n" + visual, rewritten.replace("```comparison", "```diagram")]:
         with pytest.raises(ValueError, match="retain every native visual"):
             _retain_native_visuals(original, invalid)
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("recovers", [True, False])
+async def test_one_extra_correction_only_for_valid_near_limit_drafts(monkeypatch, recovers):
+    step = long_tutorial(); original = copy.deepcopy(step); package = short_package()
+    base = render_public_package_results(sections(), package.writer_context())
+    source = _sections(step); requests = []
+    class Client:
+        model = "offline"
+        async def generate_json(self, **kwargs):
+            requests.append(kwargs)
+            data = {name: base[name].strip() for name in kwargs["output_model"].model_fields}
+            if len(requests) < 3 or not recovers:
+                whole = _render(step["title"], {**source, **data})
+                data["core_framework"] += "\n\n" + "substantive " * (610 - len(whole.split()))
+            return LLMResponse(data=data, finish_reason="stop")
+    review = AsyncMock(return_value=([], LLMResponse(data={"practice_minutes": 3}), SimpleNamespace(model="review")))
+    monkeypatch.setattr("app.services.planning.lesson_review.review_lesson", review)
+    records = []
+    result, error = await shorten_tutorial_reading(step, package, {}, client_factory=lambda **kw: Client(), call_records=records)
+    assert len(requests) == 3 and step == original
+    assert review.await_count == int(recovers)
+    if recovers:
+        assert result and not error and 450 <= len(result["lesson_content"].split()) <= 600
+    else:
+        assert result is None and error
