@@ -1201,6 +1201,16 @@ async def _generate_plan_item_details_parallel(
         str | None,
     ]:
         allotted_minutes = tutorial_allocations.get(str(step.get("id")), target_step_minutes)
+        capacity_allocation = None
+        if tutorial:
+            from app.services.planning.tutorial_capacity import pending_tutorial_allocation
+            capacity_allocation = pending_tutorial_allocation(
+                list(ready_by_id.values()), mission_hours,
+                pending_count=len(outline_steps) - len(ready_by_id),
+                planned_minutes=allotted_minutes,
+            )
+            if capacity_allocation is not None:
+                allotted_minutes = capacity_allocation
         reading_budget = 4 if allotted_minutes == 8 else 3
         practice_target = allotted_minutes - reading_budget if tutorial else target_practice_minutes
         prior_error = ""
@@ -1217,6 +1227,8 @@ async def _generate_plan_item_details_parallel(
                 "mentor": idol_name, "domain": idol_domain, "evidence": idol_evidence,
                 "context": session_context, "minutes": allotted_minutes,
                 **({"tutorial_workload_policy": "honest_5_to_8_minutes"} if tutorial else {}),
+                **({"pending_capacity_allocation": capacity_allocation}
+                   if capacity_allocation is not None else {}),
             })
         step_hash = current_step_hash()
         resumed_sections: dict[str, Any] = {}
@@ -1338,7 +1350,7 @@ async def _generate_plan_item_details_parallel(
         from app.services.planning.package_builder import generate_initial_package
         if package is None:
             package, package_response, package_client = await generate_initial_package(
-                step, {"lesson_format": lesson_format, "allotted_lesson_minutes": None, "goal": user_goal, "mentor_evidence": idol_evidence,
+                step, {"lesson_format": lesson_format, "allotted_lesson_minutes": capacity_allocation, "goal": user_goal, "mentor_evidence": idol_evidence,
                        "component_recovery": "bounded_per_component",
                        "learner_context": lesson_context,
                        "target_practice_minutes": practice_target},
@@ -1351,7 +1363,7 @@ async def _generate_plan_item_details_parallel(
             if package is None:
                 return None, step_calls, package_response.error or "Invalid exercise contract"
         package_context = await restore_review_context({
-            "lesson_format": lesson_format, "allotted_lesson_minutes": None, "goal": user_goal, "mentor_evidence": idol_evidence, "learner_context": lesson_context,
+            "lesson_format": lesson_format, "allotted_lesson_minutes": capacity_allocation, "goal": user_goal, "mentor_evidence": idol_evidence, "learner_context": lesson_context,
         })
         await save_package_checkpoint(approved=preflight_passed)
         if expected_id not in packages and not preflight_passed:
@@ -1447,7 +1459,7 @@ async def _generate_plan_item_details_parallel(
             from app.services.planning.lesson_review import review_lesson
             failures, reviewed, reviewer = await review_lesson(
                 old_step, client_factory=factory,
-                context={"lesson_format": lesson_format, "allotted_lesson_minutes": None, "goal": user_goal, "mentor_evidence": idol_evidence,
+                context={"lesson_format": lesson_format, "allotted_lesson_minutes": capacity_allocation, "goal": user_goal, "mentor_evidence": idol_evidence,
                              "learner_context": lesson_context,
                              "mission_context": {"description": mission_description, "success_metric": mission_success_metric},
                          "lesson_package": package.review_context(),
@@ -1476,7 +1488,7 @@ async def _generate_plan_item_details_parallel(
 
         from app.services.planning.lesson_writer import validate_completed_sections
         reusable_sections = validate_completed_sections(resumed_sections, package.writer_context(),
-            lesson_format=lesson_format, allotted_lesson_minutes=None,
+            lesson_format=lesson_format, allotted_lesson_minutes=capacity_allocation,
             lesson_title=str(step.get("title") or ""))
         if reusable_sections != resumed_sections:
             # Storage rejects conflicting snapshots. Remove only invalid groups
@@ -1516,13 +1528,20 @@ async def _generate_plan_item_details_parallel(
                                   "Its actual reading plus independently reviewed practice must take 5–8 minutes. "
                                   "A planning target is not an exact duration requirement. Keep the approved "
                                   "exercise scope and honest timing unchanged; never pad or inflate them.\n")
+                if capacity_allocation is not None:
+                    lesson_prompt += (
+                        f"The remaining mission capacity allocates {capacity_allocation} minutes to this "
+                        "unpublished tutorial. Its newly scoped package must fit that allocation with "
+                        "honest reading and independently reviewed practice. Preserve the learning "
+                        "objective and both guided and independent practice; never relabel estimates.\n"
+                    )
             from app.services.planning.lesson_writer import generate_lesson_sections
             response, _ = await generate_lesson_sections(
                 system_prompt=system_prompt,
                 lesson_prompt=lesson_prompt,
                 package_context=package.writer_context(),
                 lesson_format=lesson_format,
-                allotted_lesson_minutes=None,
+                allotted_lesson_minutes=capacity_allocation,
                 lesson_title=str(step.get("title") or ""),
                 client_factory=factory,
                 tier=lesson_tier,
@@ -1748,7 +1767,7 @@ async def _generate_plan_item_details_parallel(
                 from app.services.planning.lesson_review import review_lesson
                 failures, review_response, review_client = await review_lesson(
                     response.data, client_factory=factory,
-                    context={"lesson_format": lesson_format, "allotted_lesson_minutes": None, "goal": user_goal, "mentor_evidence": idol_evidence,
+                    context={"lesson_format": lesson_format, "allotted_lesson_minutes": capacity_allocation, "goal": user_goal, "mentor_evidence": idol_evidence,
                              "learner_context": lesson_context,
                              "mission_context": {"description": mission_description, "success_metric": mission_success_metric},
                              "lesson_package": package.review_context(),
@@ -1779,7 +1798,7 @@ async def _generate_plan_item_details_parallel(
                     rebuild_package_scope = repair_targets == ["package"]
                     repair_context = {
                         "lesson_format": lesson_format,
-                        "allotted_lesson_minutes": None,
+                        "allotted_lesson_minutes": capacity_allocation,
                         "goal": user_goal, "mentor_evidence": idol_evidence,
                         "learner_context": lesson_context,
                         "target_practice_minutes": practice_target,
@@ -1834,7 +1853,7 @@ async def _generate_plan_item_details_parallel(
                     response.error = None
                     failures, review_response, review_client = await review_lesson(
                         response.data, client_factory=factory,
-                        context={"lesson_format": lesson_format, "allotted_lesson_minutes": None, "goal": user_goal, "mentor_evidence": idol_evidence,
+                        context={"lesson_format": lesson_format, "allotted_lesson_minutes": capacity_allocation, "goal": user_goal, "mentor_evidence": idol_evidence,
                              "learner_context": lesson_context,
                              "mission_context": {"description": mission_description, "success_metric": mission_success_metric},
                                  "lesson_package": package.review_context(),
@@ -1893,7 +1912,7 @@ async def _generate_plan_item_details_parallel(
                                 await save_sections_checkpoint(draft_sections)
                                 failures, review_response, review_client = await review_lesson(
                                     response.data, client_factory=factory,
-                                    context={"lesson_format": lesson_format, "allotted_lesson_minutes": None, "goal": user_goal, "mentor_evidence": idol_evidence,
+                                    context={"lesson_format": lesson_format, "allotted_lesson_minutes": capacity_allocation, "goal": user_goal, "mentor_evidence": idol_evidence,
                              "learner_context": lesson_context,
                              "mission_context": {"description": mission_description, "success_metric": mission_success_metric},
                                              "lesson_package": package.review_context(),

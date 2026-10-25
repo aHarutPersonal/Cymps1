@@ -21,6 +21,26 @@ class TutorialCapacityError(ValueError):
     pass
 
 
+def pending_tutorial_allocation(ready_steps: list[dict], mission_hours: float, *,
+                                pending_count: int, planned_minutes: int) -> int | None:
+    """Scope only unpublished work when reviewed lessons have consumed its margin.
+
+    The original 5–8 minute contract remains flexible while the planning share
+    fits. A smaller remaining share must reach package construction and review,
+    not become a cosmetic edit to the published duration. Concurrent pending
+    writers reserve equal shares of the same remaining capacity.
+    """
+    if pending_count < 1 or not 5 <= planned_minutes <= 8:
+        raise TutorialCapacityError("Invalid pending tutorial allocation")
+    allocated = round(mission_hours * 60)
+    used = sum(plan_detail_reading_minutes(len(step["lesson_content"].split()), "tutorial_v1")
+               + step["practice_minutes"] for step in ready_steps)
+    remaining_share = (allocated + max(5, round(allocated * .1)) - used) // pending_count
+    if remaining_share < 5:
+        raise TutorialCapacityError("Pending tutorials require rescheduling; protected work is retained")
+    return remaining_share if remaining_share < planned_minutes else None
+
+
 def reading_capacity_targets(steps: list[dict], mission_hours: float,
                              protected_step_ids: set[str], *, pending_count: int = 0) -> list[str]:
     allocated = round(mission_hours * 60)
