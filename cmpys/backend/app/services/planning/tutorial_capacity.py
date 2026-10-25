@@ -102,7 +102,7 @@ def _request(step: dict):
     sections = _sections(step)
     # Leave room for the model's counting variance and for a meaningful visual.
     # A narrow single-section edit repeatedly overshot the hard 600-word ceiling.
-    remaining = len(step["lesson_content"].split()) - 520
+    remaining = len(step["lesson_content"].split()) - 500
     # Exercise directions, references and executable actions remain byte exact.
     candidates = [name for name in sections if name not in {"guided_practice", "references"}]
     # Distribute the reduction across editable prose. Concentrating it in the

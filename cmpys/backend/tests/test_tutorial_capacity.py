@@ -285,11 +285,11 @@ async def test_reviewed_partial_is_checkpointed_before_a_failed_capacity_edit(mo
     assert events == ['capacity_pending']
 
 
-def test_capacity_request_leaves_eighty_words_of_counting_margin():
+def test_capacity_request_leaves_one_hundred_words_of_counting_margin():
     step = long_tutorial()
     source, targets, _, _ = _request(step)
     retained = len(step["lesson_content"].split()) - sum(len(source[key].split()) for key in targets)
-    assert retained + sum(targets.values()) == 520
+    assert retained + sum(targets.values()) == 500
 
 
 
@@ -307,7 +307,7 @@ def test_capacity_distributes_cuts_across_editable_prose_without_changing_practi
     for name, target in targets.items():
         assert TUTORIAL_SECTION_MIN_WORDS[name] <= target < len(source[name].split())
     retained = len(step["lesson_content"].split()) - sum(len(source[k].split()) for k in targets)
-    assert retained + sum(targets.values()) == 520
+    assert retained + sum(targets.values()) == 500
     assert _request(step)[1] == targets and step == original
 
 
