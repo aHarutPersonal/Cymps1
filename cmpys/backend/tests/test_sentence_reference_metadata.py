@@ -188,3 +188,38 @@ def test_plural_reference_preserves_surrounding_quantities_and_custom_units():
                           literal_fact_ids=list(numeric_spans(lesson)))
     assert grounded_failures(review, lesson, {})
     assert reviewed_sentence_reference_intervals("Criteria 1 and 4 widgets.", ["widgets"]) == []
+
+
+@pytest.mark.parametrize("text", [
+    "Give the correct stimulus-then-reaction order of sentences (1) and (2), quoting each by its opening words.",
+    "Compare sentences (1), (2), and (4) before revising.",
+    "Revisit sentence (3) to remove the telling clause.",
+    "Check criteria (1) or (3) against the draft.",
+])
+def test_parenthesized_references_require_explicit_review(text):
+    test_plural_references_keep_inventory_and_require_independent_coverage(text)
+
+
+@pytest.mark.parametrize("text", [
+    'A witness said "sentences (1) and (4) explain the motive."',
+    "Sentences (1) and (4) years are the penalties.",
+    "Criteria (1) and (4) kg are quantities.",
+    "Sentences (1) and (4.5) are not ordinal labels.",
+    "Sentences (1) and (4) / 2 form a quotient.",
+    "Sentences (1) and (4), (7.5) contain an ambiguous final item.",
+    "Sentence (3).5 is not an ordinal.",
+    "Sentences (1 and (4) are malformed.",
+])
+def test_parenthesized_references_preserve_ambiguous_values(text):
+    assert reviewed_sentence_reference_intervals(text) == []
+
+
+def test_parenthesized_reference_preserves_surrounding_quantity():
+    text = "Sentences (1) and (4) say the fee is 200 dollars."
+    assert [text[a:b] for a, b in reviewed_sentence_reference_intervals(text)] == ["1", "4"]
+    lesson = {"lesson_content": text}
+    review = LessonReview(acceptable=True, issues=[], practice_minutes=1,
+                          contains_calculations=False, calculations=[],
+                          literal_fact_ids=list(numeric_spans(lesson)))
+    assert grounded_failures(review, lesson, {})
+    assert reviewed_sentence_reference_intervals("Criteria (1) and (4) widgets.", ["widgets"]) == []

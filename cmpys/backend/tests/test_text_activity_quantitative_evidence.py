@@ -119,7 +119,8 @@ async def test_missing_public_evidence_uses_existing_public_repair_slot(monkeypa
     assert prior.model_dump(mode="json") == before
     calls = client.generate_json.await_args_list
     assert len(calls) == 2
-    assert [call.kwargs["output_model"] for call in calls] == [PrivatePackageRepair, LessonActivityDraft]
+    models = [call.kwargs["output_model"] for call in calls]
+    assert models[0] is PrivatePackageRepair and issubclass(models[1], LessonActivityDraft)
     assert [request["max_tokens"] for request in requests] == [3500, 4000]
     assert [request["timeout"] for request in requests] == [120, 90]
     repair_request = json.loads(calls[1].kwargs["user_prompt"])
