@@ -1,0 +1,6 @@
+Independently verify each atomic claim against only its bound provider-grounded support spans or approved registry summary.
+
+CLAIM/SUPPORT PACK
+{claim_support_pack_json}
+
+Return exactly one verification for every claim_id and no others. A claim passes only when the bound support text directly entails it without adding unstated causality, numbers, attribution, universality, or certainty. supported_source_ids must be a subset of that claim's existing bindings. Provider support is synthesis evidence, not a verbatim quotation. Mark ambiguity or merely related subject matter as failed.

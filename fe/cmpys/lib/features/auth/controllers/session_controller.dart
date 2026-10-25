@@ -43,6 +43,7 @@ class SessionError extends SessionState {
 abstract class SessionKeys {
   static const String currentIdolId = 'current_idol_id';
   static const String onboardingComplete = 'onboarding_complete';
+  static const String accountId = 'session_account_id';
 }
 
 /// Session controller provider.
@@ -110,6 +111,8 @@ class SessionController extends StateNotifier<SessionState> {
     await _tokenStore.clear();
     await _prefs?.remove(SessionKeys.currentIdolId);
     await _prefs?.remove(SessionKeys.onboardingComplete);
+    await _prefs?.remove(SessionKeys.accountId);
+    await _resetLocalAccountData?.call();
     state = const SessionUnauthenticated();
   }
 
@@ -124,11 +127,13 @@ class SessionController extends StateNotifier<SessionState> {
     await _tokenStore.ensureTokenBoundTo(Env.apiBaseUrl);
 
     // Check if we have a valid token
-    final hasToken = await _tokenStore.hasValidToken();
+    // /me and the shared interceptor validate/refresh stored credentials.
+    // An expired access token alone does not mean the session has expired.
+    final hasToken = await _tokenStore.isAuthenticated();
     debugPrint('🔑 hasValidToken: $hasToken');
     if (!hasToken) {
       debugPrint('🔑 No token, setting SessionUnauthenticated');
-      state = const SessionUnauthenticated();
+      await _resetToUnauthenticated();
       return;
     }
 
@@ -136,7 +141,7 @@ class SessionController extends StateNotifier<SessionState> {
     try {
       debugPrint('🔑 Fetching user profile...');
       final user = await _meRepository.getMe();
-      debugPrint('🔑 Got user: ${user.email}');
+      debugPrint('🔑 User profile loaded');
       await _determineSessionState(user);
       debugPrint('🔑 Final state: ${state.runtimeType}');
     } catch (e) {
@@ -150,8 +155,17 @@ class SessionController extends StateNotifier<SessionState> {
   }
 
   /// Determine session state based on user profile.
-  Future<void> _determineSessionState(Me user) async {
+  Future<void> _determineSessionState(Me user, {bool resetUnowned = false}) async {
     debugPrint('🔑 _determineSessionState called');
+
+    final previousAccount = _prefs?.getString(SessionKeys.accountId);
+    if ((previousAccount != null && previousAccount != user.id) ||
+        (previousAccount == null && resetUnowned)) {
+      await _prefs?.remove(SessionKeys.currentIdolId);
+      await _prefs?.remove(SessionKeys.onboardingComplete);
+      await _resetLocalAccountData?.call();
+    }
+    await _prefs?.setString(SessionKeys.accountId, user.id);
 
     // Check if onboarding is complete
     final needsOnboarding = _needsOnboarding(user);
@@ -206,34 +220,24 @@ class SessionController extends StateNotifier<SessionState> {
     try {
       debugPrint('🔑 Fetching user profile after auth...');
       final user = await _meRepository.getMe();
-      debugPrint('🔑 Got user: ${user.email}');
-      await _determineSessionState(user);
+      debugPrint('🔑 User profile loaded');
+      await _determineSessionState(user, resetUnowned: !isNewRegistration);
       debugPrint('🔑 Final state after auth: ${state.runtimeType}');
     } on ApiError catch (e) {
       debugPrint('🔑 onAuthenticated ApiError: ${e.message}');
       if (_isMissingUserError(e)) {
         await _resetToUnauthenticated();
       } else {
-        // Still authenticated but error fetching profile - go to onboarding
-        debugPrint('🔑 Setting SessionNeedsOnboarding with empty user');
-        state = SessionNeedsOnboarding(
-          user: const Me(id: '', email: ''),
-        );
+        state = SessionError(message: e.message);
       }
     } catch (e) {
-      debugPrint('🔑 onAuthenticated Error: $e');
-      // Still authenticated but error - go to onboarding with empty user
-      state = SessionNeedsOnboarding(
-        user: const Me(id: '', email: ''),
-      );
+      state = SessionError(message: e.toString());
     }
   }
 
   /// Called after logout.
-  void onLogout() {
-    _prefs?.remove(SessionKeys.currentIdolId);
-    _prefs?.remove(SessionKeys.onboardingComplete);
-    state = const SessionUnauthenticated();
+  Future<void> onLogout() async {
+    await _resetToUnauthenticated();
   }
 
   /// Update user profile in session.
@@ -305,7 +309,7 @@ class SessionController extends StateNotifier<SessionState> {
   /// Handle auth error (e.g., token expired).
   Future<void> handleAuthError() async {
     await _authController.logout();
-    onLogout();
+    await onLogout();
   }
 
   /// Calculate user's current age.

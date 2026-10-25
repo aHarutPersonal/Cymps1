@@ -22,6 +22,7 @@ def _current_scores(**overrides):
     scores = {
         "version": 2,
         "methodology": "like_for_like_evidence",
+        "placement_version": 1,
         "overall": {"status": "insufficient_evidence"},
         "dimensions": [],
         "milestones": [],
@@ -61,3 +62,9 @@ def test_legacy_scores_are_hidden_until_regenerated():
         _session({"dimensions": [{"id": "capital", "you": 45, "idol": 90}]})
     )
     assert out["comparisonScores"] is None
+
+
+def test_pre_placement_v2_scores_are_hidden_until_regenerated():
+    scores = _current_scores()
+    scores.pop("placement_version")
+    assert _build_session_response(_session(scores))["comparisonScores"] is None

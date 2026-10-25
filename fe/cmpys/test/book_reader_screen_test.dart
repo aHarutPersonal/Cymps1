@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:cmpys/core/ui/motion/page_transition.dart';
 
 import 'package:cmpys/app/design_tokens.dart';
 import 'package:cmpys/core/network/dio_client.dart';
@@ -7,12 +8,16 @@ import 'package:cmpys/features/plan/presentation/book_narration.dart';
 import 'package:cmpys/features/plan/presentation/book_narration_checkpoint.dart';
 import 'package:cmpys/features/plan/presentation/book_reader_screen.dart';
 import 'package:cmpys/features/plan/presentation/reading_library_screen.dart';
+import 'package:cmpys/features/plan/state/book_narration_remote_controller.dart';
 import 'package:cmpys/features/session/data/content_resources_repository.dart';
 import 'package:cmpys/features/session/models/content_resource.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:just_audio/just_audio.dart';
+
+import 'support/fake_book_audio_player.dart';
 
 class _FakeContentResourcesRepository extends ContentResourcesRepository {
   _FakeContentResourcesRepository()
@@ -79,6 +84,64 @@ Combine the decision label and return point in one daily review.
   }) async {
     lastCursorJson = cursorJson;
     return resource;
+  }
+}
+
+class _TrackContentResourcesRepository extends _FakeContentResourcesRepository {
+  int preparations = 0;
+  bool audioOnly = false;
+  bool singleChapter = false;
+  bool failPreparation = false;
+  Completer<BookNarrationAudio>? pendingPreparation;
+
+  @override
+  Future<ContentResource> getResource(String resourceId) async => singleChapter
+      ? ContentResource(
+          id: resource.id,
+          kind: resource.kind,
+          canonicalKey: resource.canonicalKey,
+          title: resource.title,
+          licenseStatus: resource.licenseStatus,
+          isSaved: true,
+          progressPercent: 0,
+          contentMarkdown:
+              '## Decisions\n\n${List.generate(8, (index) => 'Passage $index describes a useful decision.').join('\n\n')}',
+        )
+      : resource;
+
+  @override
+  Future<BookNarrationAudio> prepareNarration(
+    String resourceId, {
+    required String text,
+    required String style,
+    String? narratorProfile,
+  }) async {
+    preparations++;
+    if (failPreparation) throw StateError('Preparation failed');
+    if (pendingPreparation case final pending?) return pending.future;
+    final timed = !audioOnly && preparations == 1;
+    return BookNarrationAudio(
+      audioUri: Uri.parse('https://audio.example.test/$preparations.wav'),
+      style: style,
+      voice: 'expressive',
+      provider: 'gemini',
+      duration: const Duration(seconds: 20),
+      alignment: timed
+          ? const [
+              BookNarrationCue(
+                start: 0,
+                end: 1,
+                startTime: Duration.zero,
+                endTime: Duration(seconds: 1),
+              ),
+            ]
+          : const [],
+      alignmentGranularity: timed
+          ? BookNarrationAlignmentGranularity.word
+          : BookNarrationAlignmentGranularity.none,
+      alignmentSource: timed ? 'transcription' : 'none',
+      isAiGenerated: true,
+    );
   }
 }
 
@@ -160,6 +223,7 @@ class _MemoryBookNarrationCheckpointStore
     implements BookNarrationCheckpointStore {
   final Map<String, BookNarrationCheckpoint> values = {};
   int writeCount = 0;
+  Completer<void>? pendingWrite;
 
   @override
   Future<BookNarrationCheckpoint?> read(String resourceId) async =>
@@ -170,6 +234,7 @@ class _MemoryBookNarrationCheckpointStore
     String resourceId,
     BookNarrationCheckpoint checkpoint,
   ) async {
+    await pendingWrite?.future;
     writeCount++;
     values[resourceId] = checkpoint;
   }
@@ -251,9 +316,388 @@ bool _containsLiveWordHighlight(InlineSpan span) {
   return false;
 }
 
+bool _containsNarrationHighlight(InlineSpan span) {
+  if (span.style?.backgroundColor == AppColors.green ||
+      span.style?.backgroundColor == AppColors.greenSoft) {
+    return true;
+  }
+  return span is TextSpan &&
+      (span.children?.any(_containsNarrationHighlight) ?? false);
+}
+
 void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
+  });
+
+  Future<
+    ({FakeBookAudioPlayer player, _TrackContentResourcesRepository repository})
+  >
+  mountProductionTrack(
+    WidgetTester tester, {
+    bool audioOnly = false,
+    bool singleChapter = false,
+    BookNarrationCheckpointStore? checkpointStore,
+    Completer<BookNarrationAudio>? initialPreparation,
+  }) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final player = FakeBookAudioPlayer();
+    final repository = _TrackContentResourcesRepository()
+      ..audioOnly = audioOnly
+      ..singleChapter = singleChapter
+      ..pendingPreparation = initialPreparation;
+    final narrator = ExpressiveBookNarrator(
+      repository: repository,
+      resourceId: 'book-1',
+      audioPlayer: player,
+      configureAudioSession: () async {},
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          contentResourcesRepositoryProvider.overrideWithValue(repository),
+        ],
+        child: MaterialApp(
+          home: BookReaderScreen(
+            resourceId: 'book-1',
+            fallbackTitle: 'Decision Systems',
+            narrator: narrator,
+            checkpointStore: checkpointStore,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('book-listen-button')));
+    if (initialPreparation == null) {
+      await tester.pumpAndSettle();
+    } else {
+      await tester.pump();
+    }
+    return (player: player, repository: repository);
+  }
+
+  String narrationSemantics(WidgetTester tester) =>
+      tester
+          .widget<Semantics>(
+            find.byWidgetPredicate(
+              (widget) =>
+                  widget is Semantics &&
+                  widget.properties.label == 'Audiobook controls',
+            ),
+          )
+          .properties
+          .value ??
+      '';
+
+  testWidgets(
+    'transcription gaps clear both the word and sentence background',
+    (tester) async {
+      final setup = await mountProductionTrack(tester);
+      final highlights = find.byWidgetPredicate(
+        (widget) =>
+            widget is RichText && _containsNarrationHighlight(widget.text),
+      );
+      expect(highlights, findsWidgets);
+      await setup.player.seek(const Duration(milliseconds: 1200));
+      await tester.pump();
+      expect(highlights, findsNothing);
+      await setup.player.seek(const Duration(milliseconds: 300));
+      await tester.pump();
+      expect(highlights, findsWidgets);
+      await tester.tap(find.byKey(const Key('book-narration-play-pause')));
+      await tester.pumpAndSettle();
+      expect(highlights, findsNothing);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    },
+  );
+
+  testWidgets(
+    'changing chapter during preparation starts the selected chapter',
+    (tester) async {
+      final pending = Completer<BookNarrationAudio>();
+      final setup = await mountProductionTrack(
+        tester,
+        initialPreparation: pending,
+      );
+      expect(narrationSemantics(tester), contains('Preparing narration.'));
+      setup.repository.pendingPreparation = null;
+      tester.widget<PageView>(find.byType(PageView)).controller!.jumpToPage(1);
+      await tester.pump();
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.pumpAndSettle();
+      expect(setup.player.playing, isTrue);
+      expect(
+        narrationSemantics(tester),
+        isNot(contains('Preparing narration.')),
+      );
+      final loads = setup.player.loads;
+      pending.complete(
+        BookNarrationAudio(
+          audioUri: Uri.parse('https://audio.example.test/obsolete.wav'),
+          style: 'expressive',
+          voice: 'voice',
+          duration: const Duration(seconds: 20),
+          alignment: const [],
+          isAiGenerated: true,
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(setup.player.loads, loads);
+      expect(setup.player.playing, isTrue);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    },
+  );
+
+  testWidgets(
+    'native playback failure exits buffering and Play reloads the expressive track',
+    (tester) async {
+      final setup = await mountProductionTrack(tester);
+      expect(find.byTooltip('Pause narration'), findsOneWidget);
+      final prepared = setup.repository.preparations;
+      setup.player.emitState(ProcessingState.buffering);
+      await tester.pump();
+      expect(narrationSemantics(tester), contains('Preparing narration.'));
+      setup.player.errors.add(
+        PlayerException(-11800, 'Native stream failed', 0),
+      );
+      await tester.pump();
+      expect(
+        find.text('Narration audio couldn’t be loaded. Try again.'),
+        findsOneWidget,
+      );
+      expect(find.byTooltip('Play narration'), findsOneWidget);
+      expect(
+        narrationSemantics(tester),
+        isNot(contains('Preparing narration.')),
+      );
+      await tester.tap(find.byKey(const Key('book-narration-play-pause')));
+      // Broadcast-stream cancellation completes outside the widget fake clock.
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Pause narration'), findsOneWidget);
+      expect(setup.player.loads, 2);
+      expect(setup.repository.preparations, prepared);
+      expect(find.textContaining('device voice'), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    },
+  );
+
+  testWidgets(
+    'audio-only next clip clears the previous synchronized timing claim',
+    (tester) async {
+      final setup = await mountProductionTrack(tester);
+      expect(narrationSemantics(tester), contains('Word synchronized.'));
+      expect(setup.player.sources.length, greaterThan(1));
+      await setup.player.seek(Duration.zero, index: 1);
+      await tester.pump();
+      expect(narrationSemantics(tester), isNot(contains('Word synchronized.')));
+      expect(
+        narrationSemantics(tester),
+        contains('Text highlighting unavailable.'),
+      );
+      expect(find.byTooltip('Pause narration'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    },
+  );
+
+  testWidgets('Gemini audio-only WAV plays without guessing text highlights', (
+    tester,
+  ) async {
+    final setup = await mountProductionTrack(tester, audioOnly: true);
+    expect(find.byTooltip('Pause narration'), findsOneWidget);
+    expect(
+      narrationSemantics(tester),
+      contains('Text highlighting unavailable.'),
+    );
+    expect(narrationSemantics(tester), isNot(contains('synchronized')));
+    await setup.player.seek(const Duration(seconds: 5));
+    await tester.pump();
+    expect(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is RichText && _containsNarrationHighlight(widget.text),
+      ),
+      findsNothing,
+    );
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets(
+    'pause keeps the current sentence, progress and durable resume offset',
+    (tester) async {
+      final checkpoints = _MemoryBookNarrationCheckpointStore();
+      final setup = await mountProductionTrack(
+        tester,
+        audioOnly: true,
+        checkpointStore: checkpoints,
+      );
+      final remote = ProviderScope.containerOf(
+        tester.element(find.byType(BookReaderScreen)),
+      ).read(bookNarrationRemoteControllerProvider);
+      setup.player.repeatedIndexOnPause = 0;
+      await setup.player.seek(const Duration(seconds: 15));
+      await tester.pump();
+      final progress = remote.progress;
+      expect(progress, greaterThan(0));
+      expect(
+        narrationSemantics(tester),
+        contains('Speed belongs to the first category'),
+      );
+
+      await tester.tap(find.byKey(const Key('book-narration-play-pause')));
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Play narration'), findsOneWidget);
+      expect(
+        narrationSemantics(tester),
+        contains('Speed belongs to the first category'),
+      );
+      expect(remote.progress, progress);
+      final saved = checkpoints.values['book-1']!;
+      expect(saved.segmentIndex, 1);
+      expect(saved.characterOffset, greaterThan(0));
+      expect(
+        setup.repository.lastCursorJson?['narrationSegment'],
+        saved.segmentIndex,
+      );
+      expect(
+        setup.repository.lastCursorJson?['narrationCharacterOffset'],
+        saved.characterOffset,
+      );
+
+      await tester.tap(find.byKey(const Key('book-narration-play-pause')));
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Pause narration'), findsOneWidget);
+      expect(remote.progress, progress);
+      expect(setup.player.position, const Duration(seconds: 15));
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    },
+  );
+
+  testWidgets(
+    'an unprepared far seek reports failure and keeps manual retry available',
+    (tester) async {
+      final setup = await mountProductionTrack(tester, audioOnly: true);
+      final remote = ProviderScope.containerOf(
+        tester.element(find.byType(BookReaderScreen)),
+      ).read(bookNarrationRemoteControllerProvider);
+      setup.repository.failPreparation = true;
+      await tester.runAsync(() => remote.seek(1));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Couldn’t move the narration. Try again.'),
+        findsOneWidget,
+      );
+      expect(find.byTooltip('Play narration'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+
+      setup.repository.failPreparation = false;
+      await tester.tap(find.byKey(const Key('book-narration-play-pause')));
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Pause narration'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    },
+  );
+
+  testWidgets(
+    'pausing a pending far seek prevents late audio from restarting',
+    (tester) async {
+      final setup = await mountProductionTrack(tester, audioOnly: true);
+      final remote = ProviderScope.containerOf(
+        tester.element(find.byType(BookReaderScreen)),
+      ).read(bookNarrationRemoteControllerProvider);
+      final pending = Completer<BookNarrationAudio>();
+      setup.repository.pendingPreparation = pending;
+      final plays = setup.player.plays;
+      var seekFinished = false;
+      unawaited(remote.seek(1).then((_) => seekFinished = true));
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.pump();
+      expect(remote.preparing, isTrue);
+      unawaited(remote.toggle());
+      await tester.pump();
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.pump();
+      pending.complete(
+        BookNarrationAudio(
+          audioUri: Uri.parse('https://audio.example.test/late.wav'),
+          style: 'expressive',
+          voice: 'Sulafat',
+          provider: 'gemini',
+          duration: const Duration(seconds: 20),
+          alignment: const [],
+          isAiGenerated: true,
+        ),
+      );
+      await tester.pump();
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.pumpAndSettle();
+      expect(seekFinished, isTrue);
+      expect(setup.player.plays, plays);
+      expect(setup.player.playing, isFalse);
+      expect(find.byTooltip('Play narration'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    },
+  );
+
+  testWidgets('an obsolete far-seek failure cannot interrupt a newer track', (
+    tester,
+  ) async {
+    final setup = await mountProductionTrack(
+      tester,
+      audioOnly: true,
+      singleChapter: true,
+    );
+    final remote = ProviderScope.containerOf(
+      tester.element(find.byType(BookReaderScreen)),
+    ).read(bookNarrationRemoteControllerProvider);
+    final pending = Completer<BookNarrationAudio>();
+    setup.repository.pendingPreparation = pending;
+    var firstSeekFinished = false;
+    unawaited(remote.seek(1).then((_) => firstSeekFinished = true));
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+    await tester.pump();
+    expect(remote.preparing, isTrue);
+
+    setup.repository.pendingPreparation = null;
+    unawaited(remote.seek(0));
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Pause narration'), findsOneWidget);
+
+    pending.completeError(StateError('Obsolete preparation failed'));
+    await tester.pump();
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+    await tester.pumpAndSettle();
+    expect(firstSeekFinished, isTrue);
+    expect(setup.player.playing, isTrue);
+    expect(find.byTooltip('Pause narration'), findsOneWidget);
+    expect(find.text('Couldn’t move the narration. Try again.'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
   });
 
   testWidgets('reader exposes chapters, notes, and typography controls', (
@@ -293,10 +737,29 @@ void main() {
     Navigator.of(tester.element(find.text('Reading settings'))).pop();
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.format_list_bulleted_rounded));
+    await tester.tap(find.byTooltip('Book menu'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Contents'));
     await tester.pumpAndSettle();
     expect(find.text('Contents'), findsOneWidget);
     expect(find.text('Attention Loops'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    await tester.tap(find.text('Attention Loops'));
+    await tester.pumpAndSettle();
+    expect(find.text('CHAPTER 02 OF 03'), findsOneWidget);
+    final next = find.byKey(const ValueKey('book-chapter-next-1'));
+    await tester.ensureVisible(next);
+    await tester.pumpAndSettle();
+    await tester.tap(next);
+    await tester.pumpAndSettle();
+    expect(find.text('CHAPTER 03 OF 03'), findsOneWidget);
+    expect(find.text('Finish book'), findsOneWidget);
+    await tester.tap(find.byTooltip('Book menu'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Notes & highlights'));
+    await tester.pumpAndSettle();
+    expect(find.text('Notes & highlights'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -793,4 +1256,90 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+  for (final overlap in [false, true]) {
+    testWidgets(
+      'reader swipe saves position and stops audio; pending button=$overlap',
+      (tester) async {
+        tester.view.physicalSize = const Size(390, 844);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final repository = _FakeContentResourcesRepository();
+        final narrator = _FakeBookNarrator();
+        final checkpoints = _MemoryBookNarrationCheckpointStore();
+        final resumes = _MemoryActiveBookNarrationResumeStore();
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              contentResourcesRepositoryProvider.overrideWithValue(repository),
+            ],
+            child: MaterialApp(
+              theme: ThemeData(platform: TargetPlatform.iOS),
+              home: Scaffold(
+                body: Builder(
+                  builder: (context) => TextButton(
+                    onPressed: () => Navigator.of(context).push(
+                      CmpysPageRoute<void>(
+                        builder: (context) => Scaffold(
+                          body: TextButton(
+                            child: const Text('Open book'),
+                            onPressed: () => Navigator.of(context).push(
+                              CmpysPageRoute<void>(
+                                builder: (_) => BookReaderScreen(
+                                  resourceId: 'book-1',
+                                  fallbackTitle: 'Decision Systems',
+                                  narrator: narrator,
+                                  checkpointStore: checkpoints,
+                                  activeResumeStore: resumes,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    child: const Text('Open library'),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.tap(find.text('Open library'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Open book'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('book-listen-button')));
+        await tester.pumpAndSettle();
+        narrator.emitProgress(start: 7, end: 13, word: 'decision');
+        await tester.pump();
+
+        // Cancelling the edge gesture must not stop playback or clear its resume.
+        final gesture = await tester.startGesture(const Offset(1, 150));
+        await gesture.moveBy(const Offset(60, 0));
+        await tester.pump(const Duration(milliseconds: 400));
+        await gesture.up();
+        await tester.pumpAndSettle();
+        expect(narrator.stopCalls, 0);
+        expect(find.byType(BookReaderScreen), findsOneWidget);
+
+        if (overlap) {
+          checkpoints.pendingWrite = Completer<void>();
+          await tester.tap(find.byTooltip('Back'));
+          await tester.pump();
+        }
+        await tester.dragFrom(const Offset(1, 150), const Offset(340, 0));
+        await tester.pumpAndSettle();
+        checkpoints.pendingWrite?.complete();
+        await tester.pumpAndSettle();
+        expect(find.text('Open book'), findsOneWidget);
+        expect(find.text('Open library'), findsNothing);
+        expect(narrator.stopCalls, greaterThan(0));
+        expect(checkpoints.values['book-1']?.characterOffset, 7);
+        expect(repository.lastCursorJson?['narrationCharacterOffset'], 7);
+        expect(resumes.values['local'], isNull);
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
 }

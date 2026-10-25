@@ -14,7 +14,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from app.services.llm.gemini_compat import (
     ThinkingLevel,
@@ -152,12 +152,30 @@ class LLMResponse(BaseModel):
     raw_response: str | None = None
     retried: bool = False
     error: str | None = None
+    error_code: str | None = None
+    # Sanitized transport policy only. None leaves malformed/unfinished output
+    # recovery to the operation's schema and content contract.
+    retryable: bool | None = None
+    retry_after_seconds: int | None = Field(default=None, ge=1, le=3600)
     model: str | None = None
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     total_tokens: int | None = None
     thoughts_tokens: int | None = None
     duration_ms: float | None = None
+    first_event_ms: float | None = None
+    first_content_ms: float | None = None
+    response_chars: int | None = None
+    admission_wait_ms: float | None = None
+    cached_prompt_tokens: int | None = None
+    effective_parameters: dict[str, Any] = Field(default_factory=dict)
+    transport_success: bool | None = None
+    json_valid: bool | None = None
+    semantic_accepted: bool | None = None
+    critical_defect: bool = False
+    trace_id: str | None = None
+    attempt_id: str | None = None
+    trace_recorded: bool = False
     finish_reason: str | None = None
     provider: str | None = None
     fallback_from_model: str | None = None
@@ -376,6 +394,12 @@ class FallbackLLMClient(BaseLLMClient):
     _circuit_open_until: dict[tuple[str, str], float] = {}
     _circuit_last_error: dict[tuple[str, str], str] = {}
     _circuit_cooldown_seconds = 300.0
+    # A rate limit is not an outage. Free/shared-pool routes (e.g. OpenRouter's
+    # stealth models) answer 429 with "retry shortly" and recover in seconds, so
+    # holding the circuit open for the full outage cooldown converts a momentary
+    # limit into minutes of paid-fallback traffic. Genuine transport failures keep
+    # the long cooldown.
+    _rate_limit_cooldown_seconds = 20.0
 
     def __init__(self, primary: BaseLLMClient, fallback: BaseLLMClient):
         self.primary = primary
@@ -389,6 +413,17 @@ class FallbackLLMClient(BaseLLMClient):
                 or self.primary.__class__.__name__
             ),
             str(getattr(self.primary, "base_url", None) or "default"),
+        )
+
+    @staticmethod
+    def _is_rate_limit_failure(error: str | None) -> bool:
+        """Throttling that the provider itself says will clear shortly."""
+        if not error:
+            return False
+        normalized = error.casefold()
+        return any(
+            marker in normalized
+            for marker in ("rate limit", "rate-limited", "429", "quota")
         )
 
     @staticmethod
@@ -415,6 +450,9 @@ class FallbackLLMClient(BaseLLMClient):
                 "http 502",
                 "http 503",
                 "http 504",
+                "insufficient_quota",
+                "quota is not enough",
+                "quota exceeded",
             )
         )
 
@@ -473,9 +511,12 @@ class FallbackLLMClient(BaseLLMClient):
                     provider=getattr(self.primary, "provider_name", None),
                 )
             if self._is_operational_failure(primary_response.error):
-                self._circuit_open_until[circuit_key] = (
-                    time.monotonic() + self._circuit_cooldown_seconds
+                cooldown = (
+                    self._rate_limit_cooldown_seconds
+                    if self._is_rate_limit_failure(primary_response.error)
+                    else self._circuit_cooldown_seconds
                 )
+                self._circuit_open_until[circuit_key] = time.monotonic() + cooldown
                 self._circuit_last_error[circuit_key] = str(primary_response.error)
             elif not primary_response.error:
                 self._circuit_open_until.pop(circuit_key, None)
@@ -563,7 +604,7 @@ class OpenAILLMClient(BaseLLMClient):
         loop = asyncio.get_running_loop()
         # Yunwu already has an independent Gemini fallback. Retrying the same
         # timed-out gateway first can multiply a 60-second user-facing wait.
-        max_retries = 0 if self.provider_name == "yunwu" else 2
+        max_retries = 0 if self.provider_name in {"yunwu", "openlux", "zai"} else 2
         cache_key = (
             self.base_url or "https://api.openai.com/v1",
             api_key,
@@ -955,6 +996,104 @@ def _gemini_compatibility_prompt(
     )
 
 
+def _gemini_compatible_shape(
+    value: object,
+    *,
+    definitions: dict[str, Any],
+    resolving_refs: frozenset[str] = frozenset(),
+) -> dict[str, Any]:
+    """Recursively reduce one schema node to provider-safe structure.
+
+    Gemini accepts the structural JSON Schema subset used here, while some
+    generated Pydantic constraints make otherwise valid schemas fail request
+    validation.  Keep object fields, required lists, arrays, primitive types,
+    and enums so nested objects cannot collapse to empty placeholders.  The
+    complete schema still lives in the compatibility prompt and Pydantic
+    remains the authoritative response validator.
+    """
+
+    if not isinstance(value, dict):
+        return {}
+    ref = value.get("$ref")
+    if isinstance(ref, str) and ref.startswith("#/$defs/"):
+        ref_name = ref.rsplit("/", 1)[-1]
+        if ref_name in resolving_refs:
+            return {"type": "object"}
+        target = definitions.get(ref_name, {})
+        return _gemini_compatible_shape(
+            target,
+            definitions=definitions,
+            resolving_refs=resolving_refs | {ref_name},
+        )
+    variants = value.get("anyOf")
+    if isinstance(variants, list):
+        compatible_variants = [
+            _gemini_compatible_shape(
+                item,
+                definitions=definitions,
+                resolving_refs=resolving_refs,
+            )
+            for item in variants
+            if isinstance(item, dict)
+        ]
+        compatible_variants = [item for item in compatible_variants if item]
+        if compatible_variants:
+            return {"anyOf": compatible_variants}
+    kind = value.get("type")
+    if isinstance(kind, list):
+        kind = next((item for item in kind if item != "null"), None)
+    result: dict[str, Any] = {"type": kind} if isinstance(kind, str) else {}
+    if isinstance(value.get("enum"), list):
+        result["enum"] = value["enum"]
+    required = value.get("required")
+    if isinstance(required, list):
+        result["required"] = required
+    properties = value.get("properties")
+    if isinstance(properties, dict):
+        result["properties"] = {
+            key: _gemini_compatible_shape(
+                field_schema,
+                definitions=definitions,
+                resolving_refs=resolving_refs,
+            )
+            for key, field_schema in properties.items()
+        }
+    items = value.get("items")
+    if isinstance(items, dict):
+        result["items"] = _gemini_compatible_shape(
+            items,
+            definitions=definitions,
+            resolving_refs=resolving_refs,
+        )
+    return result
+
+
+def _gemini_compatibility_schema(
+    *,
+    json_schema: dict[str, Any] | None,
+    output_model: type[BaseModel] | None,
+) -> dict[str, Any]:
+    """Keep complete structural shape when a full schema is too complex.
+
+    Some Gemini generate-content models reject otherwise valid, deeply nested
+    JSON Schemas.  A recursively simplified schema is broadly supported and
+    prevents malformed JSON as well as empty nested-object responses.  The full
+    schema remains in the prompt and the caller's Pydantic model remains the
+    authoritative validator.
+    """
+
+    schema = (
+        output_model.model_json_schema() if output_model is not None else json_schema
+    )
+    if not isinstance(schema, dict):
+        return {"type": "object"}
+    definitions = schema.get("$defs")
+    if not isinstance(definitions, dict):
+        definitions = {}
+    result = _gemini_compatible_shape(schema, definitions=definitions)
+    return result or {"type": "object"}
+
+
 class GeminiLLMClient(BaseLLMClient):
     """
     Google Gemini LLM client for production use.
@@ -1058,9 +1197,16 @@ class GeminiLLMClient(BaseLLMClient):
             if self.max_tokens:
                 config_kwargs["max_output_tokens"] = self.max_tokens
             if output_model is not None:
-                # Native schema-constrained decoding prevents most malformed
-                # JSON responses and avoids an otherwise expensive repair call.
-                config_kwargs["response_schema"] = output_model
+                # Pydantic models may contain standard JSON Schema keywords such
+                # as ``additionalProperties`` (for example on strict objects or
+                # mapping fields).  Passing the model through ``response_schema``
+                # makes the SDK convert it to Gemini's narrower OpenAPI ``Schema``
+                # shape, where those keywords have historically been rejected.
+                # ``response_json_schema`` is the API's standard JSON Schema path
+                # and keeps native constrained decoding for those models.
+                config_kwargs["response_json_schema"] = (
+                    output_model.model_json_schema()
+                )
             elif json_schema is not None:
                 config_kwargs["response_json_schema"] = json_schema
             config = types.GenerateContentConfig(
@@ -1090,7 +1236,17 @@ class GeminiLLMClient(BaseLLMClient):
                 )
                 compatibility_kwargs: dict[str, Any] = {
                     "response_mime_type": "application/json",
+                    "response_json_schema": _gemini_compatibility_schema(
+                        json_schema=json_schema,
+                        output_model=output_model,
+                    ),
                     "http_options": types.HttpOptions(timeout=int(self.timeout * 1000)),
+                    **generation_config_kwargs(
+                        model=self.model,
+                        temperature=self.temperature,
+                        thinking_level=self.thinking_level,
+                        thinking_budget=self.thinking_budget,
+                    ),
                 }
                 if self.max_tokens:
                     compatibility_kwargs["max_output_tokens"] = self.max_tokens
@@ -1098,15 +1254,50 @@ class GeminiLLMClient(BaseLLMClient):
                     system_instruction=system_prompt,
                     **compatibility_kwargs,
                 )
-                response = await client.aio.models.generate_content(
-                    model=self.model,
-                    contents=_gemini_compatibility_prompt(
-                        user_prompt,
-                        json_schema=json_schema,
-                        output_model=output_model,
-                    ),
-                    config=compatibility_config,
+                compatibility_prompt = _gemini_compatibility_prompt(
+                    user_prompt,
+                    json_schema=json_schema,
+                    output_model=output_model,
                 )
+                try:
+                    response = await client.aio.models.generate_content(
+                        model=self.model,
+                        contents=compatibility_prompt,
+                        config=compatibility_config,
+                    )
+                except Exception as compatibility_exc:
+                    if not _is_gemini_invalid_argument_error(compatibility_exc):
+                        raise
+                    # If the original 400 was caused by a thinking option rather
+                    # than schema complexity, retry the shallow native schema once
+                    # more without reasoning controls.  This remains bounded at
+                    # three request shapes, and only the accepted request is billed.
+                    logger.warning(
+                        "[LLM] Gemini rejected compatibility thinking config for "
+                        "model=%s; retrying with JSON framing only: %s",
+                        self.model,
+                        compatibility_exc,
+                    )
+                    framing_kwargs: dict[str, Any] = {
+                        "response_mime_type": "application/json",
+                        "response_json_schema": _gemini_compatibility_schema(
+                            json_schema=json_schema,
+                            output_model=output_model,
+                        ),
+                        "http_options": types.HttpOptions(
+                            timeout=int(self.timeout * 1000)
+                        ),
+                    }
+                    if self.max_tokens:
+                        framing_kwargs["max_output_tokens"] = self.max_tokens
+                    response = await client.aio.models.generate_content(
+                        model=self.model,
+                        contents=compatibility_prompt,
+                        config=types.GenerateContentConfig(
+                            system_instruction=system_prompt,
+                            **framing_kwargs,
+                        ),
+                    )
 
             duration_ms = (time.perf_counter() - start_time) * 1000
 
@@ -1278,7 +1469,7 @@ def get_llm_client(
     """
     Factory function to get the configured LLM client.
 
-    Uses LLM_PROVIDER env var: 'dummy', 'openai', 'gemini', or 'yunwu'
+    Uses LLM_PROVIDER: dummy, openai, gemini, yunwu, openlux, or openrouter.
 
     Args:
         timeout: Request timeout in seconds (default: 60s)
@@ -1298,6 +1489,33 @@ def get_llm_client(
     if resolved_tier not in {"fast", "balanced", "quality"}:
         raise ValueError(f"Unknown LLM tier: {resolved_tier}")
 
+    if provider == "zai":
+        from app.services.llm.zai import ZaiLLMClient
+
+        return ZaiLLMClient(
+            model={"fast": settings.zai_fast_model, "balanced": settings.zai_model,
+                   "quality": settings.zai_quality_model}[resolved_tier],
+            api_key=settings.zai_api_key, base_url=settings.zai_base_url,
+            timeout=timeout, max_tokens=max_tokens,
+            thinking_level=thinking_level or ("low" if resolved_tier == "fast" else "high"),
+            temperature=temperature,
+        )
+    if provider == "openlux":
+        from app.services.llm.openlux import OpenLuxLLMClient
+
+        return OpenLuxLLMClient(
+            model={
+                "fast": settings.openlux_fast_model,
+                "balanced": settings.openlux_model,
+                "quality": settings.openlux_quality_model,
+            }[resolved_tier],
+            api_key=settings.openlux_api_key,
+            base_url=settings.openlux_base_url,
+            timeout=timeout,
+            max_tokens=max_tokens,
+            thinking_level=thinking_level or ("high" if resolved_tier == "quality" else "low"),
+            temperature=temperature,
+        )
     if provider == "gemini":
         if not settings.gemini_api_key:
             logger.warning(
@@ -1344,6 +1562,64 @@ def get_llm_client(
             max_tokens=max_tokens,
             temperature=temperature,
         )
+    elif provider == "openrouter":
+        # OpenRouter speaks the OpenAI wire format, so it reuses OpenAILLMClient
+        # exactly as the Yunwu gateway does. Gemini remains the fallback because
+        # grounded discovery is Gemini-native regardless of this setting.
+        fallback_client = None
+        if (
+            allow_fallback
+            and settings.openrouter_fallback_enabled
+            and settings.gemini_api_key
+        ):
+            fallback_model = {
+                "fast": settings.gemini_fast_model,
+                "balanced": settings.gemini_model,
+                "quality": settings.gemini_quality_model,
+            }[resolved_tier]
+            fallback_thinking_level, fallback_thinking_budget = resolve_thinking_config(
+                model=fallback_model,
+                tier=resolved_tier,
+                thinking_level=thinking_level,
+                thinking_budget=thinking_budget,
+            )
+            fallback_client = GeminiLLMClient(
+                model=fallback_model,
+                timeout=timeout,
+                max_tokens=max_tokens,
+                thinking_budget=fallback_thinking_budget,
+                thinking_level=fallback_thinking_level,
+                temperature=temperature,
+            )
+
+        if not settings.openrouter_api_key:
+            if fallback_client is not None:
+                logger.warning(
+                    "LLM_PROVIDER=openrouter but OPENROUTER_API_KEY not set; using Gemini."
+                )
+                return fallback_client
+            logger.warning(
+                "Neither OPENROUTER_API_KEY nor Gemini fallback is configured."
+            )
+            return DummyLLMClient()
+
+        model = {
+            "fast": settings.openrouter_fast_model,
+            "balanced": settings.openrouter_model,
+            "quality": settings.openrouter_quality_model,
+        }[resolved_tier]
+        primary_client = OpenAILLMClient(
+            model=model,
+            api_key=settings.openrouter_api_key,
+            base_url=settings.openrouter_base_url,
+            provider_name="openrouter",
+            timeout=timeout,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        if fallback_client is not None:
+            return FallbackLLMClient(primary_client, fallback_client)
+        return primary_client
     elif provider == "yunwu":
         fallback_client = None
         if (

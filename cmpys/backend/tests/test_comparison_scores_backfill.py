@@ -10,6 +10,7 @@ def _current_scores() -> dict:
     return {
         "version": 2,
         "methodology": "like_for_like_evidence",
+        "placement_version": 1,
         "overall": {},
         "dimensions": [],
         "milestones": [],

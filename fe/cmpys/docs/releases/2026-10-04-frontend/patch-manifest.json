@@ -1,0 +1,152 @@
+{
+  "status": "ready_for_integration",
+  "base_commit": "0358778ae702a8ee7ff9fa996812c3442a86bd11",
+  "patch_sha256": "45a6597f1f532c3c6ab07dffdced7624ef5c6fd6a0125b1dd91b1e4d09007e47",
+  "files": [
+    {
+      "path": "fe/cmpys/docs/releases/2026-10-04-frontend-validation.md",
+      "base_sha256": null,
+      "fixed_sha256": "5ed7a58b613ef5933e2fef2fe03cfeab8ffe83e4b618594c888dca20f74ca506"
+    },
+    {
+      "path": "fe/cmpys/docs/releases/2026-10-04-frontend/live-timings.json",
+      "base_sha256": null,
+      "fixed_sha256": "d980128aac0212e3093e7e16d1ccd249e295b0617eac0fa456613ec8a119c229"
+    },
+    {
+      "path": "fe/cmpys/docs/releases/2026-10-04-frontend/native-timings.json",
+      "base_sha256": null,
+      "fixed_sha256": "a9007e66c224778687a4d44603a7e05c2e07cc06a41a79368bec34e6d5f57e26"
+    },
+    {
+      "path": "fe/cmpys/integration_test/narration_live_test.dart",
+      "base_sha256": null,
+      "fixed_sha256": "777367bde27d1684ab52d74facc9b9ab545a5c169798d27a3482bbb5bf787305"
+    },
+    {
+      "path": "fe/cmpys/integration_test/narration_native_test.dart",
+      "base_sha256": null,
+      "fixed_sha256": "3161be24671ab162d7b1af21031a987c5351cd6caa35b3f9877a593596295920"
+    },
+    {
+      "path": "fe/cmpys/integration_test/password_recovery_native_test.dart",
+      "base_sha256": null,
+      "fixed_sha256": "a3c69cc8b5695e04555bd2c70dc2fb97c8bfd5d55bda54cecf9c7987d9935408"
+    },
+    {
+      "path": "fe/cmpys/ios/Podfile.lock",
+      "base_sha256": "e02db7513af6889d74b5fcea0e1e68c67cc795163f75eb5890766f950b2748ae",
+      "fixed_sha256": "f751fad3419bc35089f14f72c3e8e2fa94c4fa8993fff822018239cb45dc51ed"
+    },
+    {
+      "path": "fe/cmpys/lib/app/env.dart",
+      "base_sha256": "e6cbcd6464b18cf852832774a8d7e6009c16c34d9723e6eb2d8219168d45929d",
+      "fixed_sha256": "17bdf0b2455b774a96ab068828fad6cc6f088a1d7c309ca2f3319ae0b8ed489d"
+    },
+    {
+      "path": "fe/cmpys/lib/core/network/api_error.dart",
+      "base_sha256": "d3dba183a09a4b9deedc70f82ebdadfc4bdaf38e57a6fbf5dcab665806d75308",
+      "fixed_sha256": "bb56f44f08cb0b55d06ea4eda3ef43e82dc89beb89042f2d0467f2c349d21b3d"
+    },
+    {
+      "path": "fe/cmpys/lib/core/network/dio_client.dart",
+      "base_sha256": "98356ee2418f289091f7001ea6f035903f799137dcc4a3dd0297b27095671cc7",
+      "fixed_sha256": "ecc8d4ad942b4b864d39017cbf3259617dfb8ba7bb4176d569d8421972fdd699"
+    },
+    {
+      "path": "fe/cmpys/lib/features/auth/data/password_recovery_repository.dart",
+      "base_sha256": null,
+      "fixed_sha256": "470482a35fe3e81247b481037d00af45d4f9af7c1157b834be7e60aac66d9c95"
+    },
+    {
+      "path": "fe/cmpys/lib/features/auth/presentation/auth_screen.dart",
+      "base_sha256": "6ea34efdd387c3e0778799c86db73bf85482becc1fbb898a38ad3c33b2f62b26",
+      "fixed_sha256": "ea44636757ff55db2769fbe0acfc9183e3773c47d991510c57808cb003874a14"
+    },
+    {
+      "path": "fe/cmpys/lib/features/auth/presentation/forgot_password_screen.dart",
+      "base_sha256": "081e4da58389de5210f2cea9362e108ee69543d80ba1d6d3c6215f4778587367",
+      "fixed_sha256": "978c6eadd97d1c045cbd9df9990737fdba991d1506e545212742971b40ec9001"
+    },
+    {
+      "path": "fe/cmpys/lib/features/plan/presentation/book_narration.dart",
+      "base_sha256": "71dad04629fe4dac34e50ad95d37e6604c8c8692f6d58cf614b1dd7775f55d85",
+      "fixed_sha256": "7c6bca34b3a6ec82b2bc16c71ba253e66edf98678a4344eacf38c7cc0c80040d"
+    },
+    {
+      "path": "fe/cmpys/lib/features/plan/presentation/book_reader_screen.dart",
+      "base_sha256": "2a72fe561ccca81860c1ee02f5112573ea4333df282e433cf23ce084eb669426",
+      "fixed_sha256": "cabb739b45931fac44e8ed0fca796ec999ab76b844c5cdaa86627a5f2245cc16"
+    },
+    {
+      "path": "fe/cmpys/lib/features/plan/presentation/lesson_reader_screen.dart",
+      "base_sha256": "8222b81da9592a29e1c6990c81b97c1b0d6766aa0e11b7040f5309364d9045f5",
+      "fixed_sha256": "7e289385160c8245046dd4d3d4bd5014477e18966a136bd8e4a8573e20766c3e"
+    },
+    {
+      "path": "fe/cmpys/lib/features/plan/state/current_plan_provider.dart",
+      "base_sha256": "08b7b048c5368dd28ec845512657221e0bd560238f57f2828bd731e6320a58b4",
+      "fixed_sha256": "ff0175b2dbec3bbd2343cdda9b81caa441bd44988142eb8d451d009105a25e01"
+    },
+    {
+      "path": "fe/cmpys/lib/features/session/data/content_resources_repository.dart",
+      "base_sha256": "bfd81ebd8b53d5beaa9f3d53a98fc5c55433c3e590e30e192e7cef405aac82a4",
+      "fixed_sha256": "855ef3e1457b67e5f876d5d7da1b70750c570fa67011a788ead71c2f10a08685"
+    },
+    {
+      "path": "fe/cmpys/pubspec.lock",
+      "base_sha256": "1bc4049a52620da3c32ad6908ef0f9983e1998b6d7345f20cdab646d53b356bf",
+      "fixed_sha256": "85ebbe413c3e45ae229bf6aa59f862c1fa0e1526b9491dcaffddbc07f81525d9"
+    },
+    {
+      "path": "fe/cmpys/pubspec.yaml",
+      "base_sha256": "c78faabce2effa8e572c28e877ee809a2f0c93dfbe3cd0227daa5a870fc66532",
+      "fixed_sha256": "c98b20dc05c7ec47914bde1245d2d62902138d98280e8ab7efa5d59cf4bd429a"
+    },
+    {
+      "path": "fe/cmpys/test/book_narration_track_test.dart",
+      "base_sha256": "ead46aea571dc5a1dfa07d540e6ad68f5edfa089f8117fddedfad5a7397cea83",
+      "fixed_sha256": "dbdfac92772177cd547db9f9768d9e2e01a83ba0c5aeff4c8076f205b5a4554f"
+    },
+    {
+      "path": "fe/cmpys/test/book_reader_screen_test.dart",
+      "base_sha256": "e34a700c6e9aeeaac3f27fcb3a2ac54238ac4fbd06d9cda07da939283fc4829f",
+      "fixed_sha256": "3afca0d4b0895163aa8b1deac3a9d3a6b3be55fd05c76c4d32ea9d1b31de1f10"
+    },
+    {
+      "path": "fe/cmpys/test/current_plan_idol_switch_test.dart",
+      "base_sha256": "ca2052eee402be468bf7be24de88e8512c959f556f0456af3f132c9c01b7a5bb",
+      "fixed_sha256": "c7c4501d8c814785492e98f0210c556df1627fa827d7a9367fca4f98d7d69894"
+    },
+    {
+      "path": "fe/cmpys/test/env_test.dart",
+      "base_sha256": "0fa65e2fb7a66ec669531a5d333c13ce514bfdccbf7da39307fd5bda5edb8664",
+      "fixed_sha256": "d7df6c38d379d38477ac0337c7010ba425d3e0636513098e6f2986841f8d6729"
+    },
+    {
+      "path": "fe/cmpys/test/forgot_password_screen_test.dart",
+      "base_sha256": "5d782e18615fa8f2dcf0891285d4bc5a05a5438ad775732e7c79c9c92c5feac0",
+      "fixed_sha256": "6075b11c3afdaddac6b0aeae1d36964ac8ebe0edcd378e31a95bf108d946ad6d"
+    },
+    {
+      "path": "fe/cmpys/test/lesson_practice_test.dart",
+      "base_sha256": "b35a8e234ec2d7102af398bb36f583005b22422f0b13a89ae7913299da770068",
+      "fixed_sha256": "80607824821fd331746802dacd3177f67aa4f97e9d4cb62667a0c8faf4876199"
+    },
+    {
+      "path": "fe/cmpys/test/narration_repository_test.dart",
+      "base_sha256": "dd12aca6c940f675867ccac7d17c54c72c5eec2fb2242eabb0ac2e0d6030ed4c",
+      "fixed_sha256": "05a6ecbcf9121a566be9201f3dfde0d6397e56cbaa66a8f2781eff1f252ad898"
+    },
+    {
+      "path": "fe/cmpys/test/password_recovery_repository_test.dart",
+      "base_sha256": null,
+      "fixed_sha256": "14b48076fb7821334c4c921543729f0efb1369dc3b235d967c249645608c39f5"
+    },
+    {
+      "path": "fe/cmpys/test/support/fake_book_audio_player.dart",
+      "base_sha256": "0ff481901caba64d62ab2a14456a6e86edd9582519455dc48b08b0d212370b28",
+      "fixed_sha256": "3e48fd1e6f0d5e3cc078f2d3aa32d8258c6d26753875702c3896c762e2fe1b84"
+    }
+  ]
+}

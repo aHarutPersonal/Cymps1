@@ -9,6 +9,8 @@ the ingestion evidence model handle that part of the pipeline.
 from __future__ import annotations
 
 import re
+import math
+from collections.abc import Mapping
 from collections import Counter
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -26,6 +28,28 @@ MIN_PLAN_DETAIL_LESSON_WORDS = 1900
 TARGET_PLAN_DETAIL_LESSON_WORDS = 2600
 MAX_PLAN_DETAIL_LESSON_WORDS = 4200
 MIN_PLAN_DETAIL_MATERIAL_WORDS = 350
+
+# An explicit version opts into short tutorials; an absent or unknown marker
+# must never lower the existing lesson's substantive-content requirements.
+TUTORIAL_LESSON_FORMAT = "tutorial_v1"
+MIN_TUTORIAL_WORDS = 450
+MAX_TUTORIAL_WORDS = 800
+
+
+def plan_detail_min_words(step: Mapping[str, Any]) -> int:
+    return (MIN_TUTORIAL_WORDS if step.get("lesson_format") == TUTORIAL_LESSON_FORMAT
+            else MIN_PLAN_DETAIL_LESSON_WORDS)
+
+
+def plan_detail_max_words(step: Mapping[str, Any]) -> int:
+    return (MAX_TUTORIAL_WORDS if step.get("lesson_format") == TUTORIAL_LESSON_FORMAT
+            else MAX_PLAN_DETAIL_LESSON_WORDS)
+
+
+def plan_detail_reading_minutes(word_count: int, lesson_format: str | None = None) -> int:
+    """Measure actual prose; tutorial rounding reserves a complete reading minute."""
+    rounding = math.ceil if lesson_format == TUTORIAL_LESSON_FORMAT else round
+    return max(1, rounding(word_count / 200))
 
 _FILLER_PHRASES = (
     "in this section we'll explore",
@@ -1530,3 +1554,20 @@ def build_book_retry_instruction(report: ContentQualityReport) -> str:
         "do not pad, repeat paragraphs, or invent facts. Preserve supported claims while varying "
         "paragraph structure and sentence openings, and remove canned labels or transitions."
     )
+
+
+PLAN_DETAIL_SECTION_ROWS = (
+    ("why_this_matters", "## Why This Matters"),
+    ("core_framework", "## Core Framework"),
+    ("worked_example", "## Worked Example"),
+    ("failure_modes", "## Failure Modes"),
+    ("guided_practice", "## Guided Practice"),
+    ("check_your_understanding", "## Check Your Understanding"),
+    ("references", "## References"),
+)
+
+def lesson_sections_word_count(title: str, sections: Mapping[str, Any]) -> int:
+    """Count the exact canonical title, headings and already-rendered reading."""
+    return len(("# " + title).split()) + sum(
+        len(heading.split()) + len(str(sections[name]).strip().split())
+        for name, heading in PLAN_DETAIL_SECTION_ROWS)

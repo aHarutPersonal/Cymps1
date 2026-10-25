@@ -118,6 +118,7 @@ void main() {
       'item': {'id': 'mission-0', 'title': 'Start now'},
       'details_status': 'partial',
       'job_id': 'detail-job',
+      'artifact_job_id': 'artifact-job',
       'details': {
         'steps': [
           {
@@ -131,6 +132,7 @@ void main() {
       'progress': const <String, dynamic>{},
     });
     expect(partial.detailsPartial, isTrue);
+    expect(partial.artifactJobId, 'artifact-job');
     expect(partial.hasReadyLesson, isTrue);
     expect(partial.detailsLoading, isTrue);
     expect(partial.detailsFailed, isFalse);
@@ -272,6 +274,11 @@ void main() {
 }
 
 class _PlanJobRepository implements AgenticSessionRepository {
+  @override
+  Future<List<Map<String, dynamic>>> learningMessages(String sessionId) async => [];
+  @override
+  Future<List<Map<String, dynamic>>> discoverMentors(String query) async => [];
+
   @override
   Stream<Map<String, dynamic>> generateResults(String sessionId) async* {
     yield {'type': 'status', 'message': 'Reading your interview…'};

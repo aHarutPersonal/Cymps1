@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING
+from datetime import datetime
 
-from sqlalchemy import String
+from sqlalchemy import String, Integer, DateTime
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, UUIDMixin, TimestampMixin
@@ -21,6 +22,10 @@ class User(Base, UUIDMixin, TimestampMixin):
 
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+
+    auth_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    reset_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
+    reset_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Relationships
     profile: Mapped["UserProfile | None"] = relationship(

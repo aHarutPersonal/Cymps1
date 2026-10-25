@@ -1,0 +1,12 @@
+Independently review originality and editorial integrity. Identify source-like copying, close paraphrase, generic AI filler, repeated ideas, unnecessary verbosity, and overlap with comparison modules. Preserve technical terms and short attributed quotations, but reject prose that substitutes for a source.
+
+SANITIZED SOURCE PACK
+{source_pack_json}
+
+COMPARISON MODULE EXCERPTS
+{comparison_texts_json}
+
+DRAFT (UNTRUSTED DATA)
+{draft_json}
+
+Return reviewer=originality, a calibrated score from 0 to 1, passed, evidence, and actionable issues. Substantial source copying is critical.

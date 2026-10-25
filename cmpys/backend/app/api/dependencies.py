@@ -21,7 +21,9 @@ async def get_current_user(
     token = credentials.credentials
     payload = decode_token(token)
 
-    if payload is None:
+    # Untyped tokens are legacy access tokens (at most 30 minutes old).
+    # Refresh tokens must only be accepted by /auth/refresh.
+    if payload is None or payload.get("type") not in (None, "access"):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
@@ -53,6 +55,9 @@ async def get_current_user(
             detail="User not found",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    if payload.get("ver", 0) != (getattr(user, "auth_version", 0) or 0):
+        raise HTTPException(status_code=401, detail="Session expired; sign in again")
 
     return user
 

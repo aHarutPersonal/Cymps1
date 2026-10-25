@@ -1,0 +1,11 @@
+[Unit]
+Description=Check the six-day CMPYS API certificate every four hours
+
+[Timer]
+OnCalendar=*-*-* 00/4:00:00
+RandomizedDelaySec=15min
+Persistent=true
+Unit=cmpys-cert-renew.service
+
+[Install]
+WantedBy=timers.target

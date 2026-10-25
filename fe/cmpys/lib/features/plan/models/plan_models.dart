@@ -34,6 +34,7 @@ class BackendPlanItem {
     required this.weekEnd,
     required this.successMetric,
     required this.estimatedHours,
+    this.estimatedMinutes,
     required this.status,
     required this.progressPercent,
     this.notes,
@@ -50,6 +51,16 @@ class BackendPlanItem {
   final int weekEnd;
   final String successMetric;
   final int estimatedHours;
+  final int? estimatedMinutes;
+  int get requiredMinutes => estimatedMinutes ?? estimatedHours * 60;
+  String get durationLabel => formatMinutes(requiredMinutes);
+  static String formatMinutes(int minutes) {
+    final hours = minutes ~/ 60;
+    final remainder = minutes % 60;
+    if (hours == 0) return '${remainder}m';
+    return remainder == 0 ? '${hours}h' : '${hours}h ${remainder}m';
+  }
+
   final String status; // not_started | in_progress | completed | skipped
   final int progressPercent;
   final String? notes;
@@ -70,6 +81,7 @@ class BackendPlanItem {
     weekEnd: (j['weekEnd'] as num?)?.toInt() ?? 1,
     successMetric: j['successMetric'] as String? ?? '',
     estimatedHours: (j['estimatedHours'] as num?)?.toInt() ?? 1,
+    estimatedMinutes: (j['estimatedMinutes'] as num?)?.toInt(),
     status: j['status'] as String? ?? 'not_started',
     progressPercent: (j['progressPercent'] as num?)?.toInt() ?? 0,
     notes: j['notes'] as String?,
@@ -281,6 +293,7 @@ class PlanJobStatus {
     this.step,
     this.errorMessage,
     this.thinkingLine,
+    this.readyLessonCount,
   });
 
   final String id;
@@ -292,6 +305,9 @@ class PlanJobStatus {
   /// Latest "AI thinking" line for progress UI.
   final String? thinkingLine;
 
+  /// Persisted content count, independent of rounded job progress.
+  final int? readyLessonCount;
+
   bool get isCompleted => status == 'completed';
   bool get isFailed => status == 'failed';
 
@@ -302,6 +318,8 @@ class PlanJobStatus {
     step: j['step'] as String?,
     errorMessage: j['errorMessage'] as String?,
     thinkingLine: (j['thinkingStream'] as Map?)?['currentLine']?.toString(),
+    readyLessonCount: ((j['results'] as Map?)?['ready_lesson_count'] as num?)
+        ?.toInt(),
   );
 }
 
@@ -318,6 +336,7 @@ class PlanStepDetail {
     this.resources = const [],
     this.substeps = const [],
     this.lessonContent,
+    this.lessonFormat,
   });
 
   final String id;
@@ -332,16 +351,48 @@ class PlanStepDetail {
 
   /// Full markdown lesson for this step.
   final String? lessonContent;
+  final String? lessonFormat;
 
-  factory PlanStepDetail.fromJson(Map<String, dynamic> j) => PlanStepDetail(
+  bool get isTutorial => lessonFormat == 'tutorial_v1';
+  bool get hasContent => lessonContent?.trim().isNotEmpty ?? false;
+
+  /// Pending steps have no inferred reading time. Published content can use a
+  /// word-count estimate when older payloads omit explicit timing metadata.
+  int? get effectiveReadingMinutes {
+    final minutes = readingMinutes;
+    if (minutes != null && minutes > 0) return minutes;
+    if (!hasContent) return null;
+    final words = lessonContent!.trim().split(RegExp(r'\s+')).length;
+    return (words / 200).ceil().clamp(1, 60);
+  }
+
+  int? get effectivePracticeMinutes {
+    final minutes = practiceMinutes;
+    return minutes != null && minutes > 0 ? minutes : null;
+  }
+
+  int? get totalMinutes {
+    final reading = readingMinutes;
+    final practice = effectivePracticeMinutes;
+    if (reading != null && reading > 0 && practice != null) {
+      return reading + practice;
+    }
+    final estimate = estimateMinutes;
+    return estimate != null && estimate > 0 ? estimate : null;
+  }
+
+  factory PlanStepDetail.fromJson(
+    Map<String, dynamic> j, {
+    String? defaultLessonFormat,
+  }) => PlanStepDetail(
     id: j['id']?.toString() ?? '',
     title: j['title'] as String? ?? '',
     description: j['description'] as String?,
     expectedOutput: j['expected_output'] as String?,
     estimateMinutes: (j['estimate_minutes'] as num?)?.toInt(),
-    readingMinutes: (j['reading_minutes'] ?? j['readingMinutes'] as num?)
+    readingMinutes: ((j['reading_minutes'] ?? j['readingMinutes']) as num?)
         ?.toInt(),
-    practiceMinutes: (j['practice_minutes'] ?? j['practiceMinutes'] as num?)
+    practiceMinutes: ((j['practice_minutes'] ?? j['practiceMinutes']) as num?)
         ?.toInt(),
     resources:
         (j['resources'] as List?)?.map((e) => e.toString()).toList() ??
@@ -349,6 +400,7 @@ class PlanStepDetail {
     substeps:
         (j['substeps'] as List?)?.map((e) => e.toString()).toList() ?? const [],
     lessonContent: j['lesson_content'] as String?,
+    lessonFormat: j['lesson_format'] as String? ?? defaultLessonFormat,
   );
 }
 
@@ -657,11 +709,14 @@ class PlanItemDetailed {
     this.completedSteps = 0,
     this.totalSteps = 0,
     this.jobId,
+    this.artifactJobId,
     this.detailsError,
     this.detailsProgress = 0,
     this.detailsStep,
     this.dailyInstructions,
+    this.dailyReflection = '',
     this.completedToday = false,
+    this.lessonFormat,
   });
 
   final BackendPlanItem item;
@@ -674,11 +729,22 @@ class PlanItemDetailed {
   final int completedSteps;
   final int totalSteps;
   final String? jobId;
+
+  /// Optimistic-concurrency token for completion mutations. This is distinct
+  /// from [jobId], which is only the operational job currently being polled.
+  final String? artifactJobId;
   final String? detailsError;
   final int detailsProgress;
   final String? detailsStep;
   final String? dailyInstructions;
+  final String dailyReflection;
   final bool completedToday;
+  final String? lessonFormat;
+
+  bool get isTutorialSequence =>
+      lessonFormat == 'tutorial_v1' ||
+      (steps.isNotEmpty && steps.every((step) => step.isTutorial));
+  int get readyLessonCount => steps.where((step) => step.hasContent).length;
 
   bool get detailsReady => detailsStatus == 'available';
   bool get detailsPartial => detailsStatus == 'partial';
@@ -708,15 +774,22 @@ class PlanItemDetailed {
   factory PlanItemDetailed.fromJson(Map<String, dynamic> j) {
     final details = j['details'] as Map<String, dynamic>?;
     final progress = j['progress'] as Map<String, dynamic>?;
+    final lessonFormat = details?['lesson_format'] as String?;
     return PlanItemDetailed(
       item: BackendPlanItem.fromJson(
         (j['item'] as Map?)?.cast<String, dynamic>() ?? const {},
       ),
       detailsStatus: j['details_status'] as String? ?? 'available',
+      lessonFormat: lessonFormat,
       steps:
           (details?['steps'] as List?)
               ?.whereType<Map<String, dynamic>>()
-              .map(PlanStepDetail.fromJson)
+              .map(
+                (step) => PlanStepDetail.fromJson(
+                  step,
+                  defaultLessonFormat: lessonFormat,
+                ),
+              )
               .toList() ??
           const [],
       materials:
@@ -734,10 +807,12 @@ class PlanItemDetailed {
       completedSteps: (progress?['completed_steps'] as num?)?.toInt() ?? 0,
       totalSteps: (progress?['total_steps'] as num?)?.toInt() ?? 0,
       jobId: j['job_id']?.toString(),
+      artifactJobId: (j['artifact_job_id'] ?? j['artifactJobId'])?.toString(),
       detailsError: j['details_error']?.toString(),
       detailsProgress: (j['details_progress'] as num?)?.toInt() ?? 0,
       detailsStep: j['details_step']?.toString(),
       dailyInstructions: j['daily_instructions']?.toString(),
+      dailyReflection: j['daily_reflection']?.toString() ?? '',
       completedToday: j['completed_today'] as bool? ?? false,
     );
   }

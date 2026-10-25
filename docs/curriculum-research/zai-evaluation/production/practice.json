@@ -1,0 +1,626 @@
+{
+  "title": "Track Profit and Cash Separately — Practice Workbook",
+  "activities": [
+    {
+      "id": "lena_classification",
+      "title": "Classify the Six Lena's Landscaping Transactions",
+      "kind": "practice",
+      "instructions": "Lena's Landscaping starts the month with a clean slate. Classify each of the six transactions using the two-ledgers model: ask 'was value earned this period?' for the Profit Ledger and 'did money move this period?' for the Cash Ledger. Some transactions need two labels. Commit every classification before computing any totals. All data is fictional.",
+      "data": [
+        {
+          "id": "t1_amount",
+          "label": "T1: Invoice sent for completed lawn job, unpaid",
+          "value": 800.0,
+          "unit": "USD"
+        },
+        {
+          "id": "t2_amount",
+          "label": "T2: Cash rent paid for this month's storage yard",
+          "value": 600.0,
+          "unit": "USD"
+        },
+        {
+          "id": "t3_amount",
+          "label": "T3: Cash paid for six months of insurance starting now",
+          "value": 300.0,
+          "unit": "USD"
+        },
+        {
+          "id": "t4_amount",
+          "label": "T4: Customer deposit for next month's garden redesign",
+          "value": 500.0,
+          "unit": "USD"
+        },
+        {
+          "id": "t5_amount",
+          "label": "T5: Cash supplies bought and consumed this month",
+          "value": 150.0,
+          "unit": "USD"
+        },
+        {
+          "id": "t6_amount",
+          "label": "T6: Collection of T1 invoice plus old prior-period invoice",
+          "value": 900.0,
+          "unit": "USD"
+        }
+      ],
+      "fields": [
+        {
+          "id": "t1_class",
+          "label": "T1: $800 invoice for a job completed this month, payable next month",
+          "kind": "choice",
+          "unit": "",
+          "choices": [
+            {
+              "id": "rev_only",
+              "label": "Revenue only (no cash)"
+            },
+            {
+              "id": "cash_in_only",
+              "label": "Cash in only"
+            },
+            {
+              "id": "rev_and_cash",
+              "label": "Revenue and cash in"
+            },
+            {
+              "id": "neither",
+              "label": "Neither ledger yet"
+            }
+          ],
+          "expression": null,
+          "correct_choice": "rev_only",
+          "tolerance": 0.01,
+          "criteria": [],
+          "rubric_criterion": null
+        },
+        {
+          "id": "t2_class",
+          "label": "T2: $600 cash rent for this month's yard",
+          "kind": "choice",
+          "unit": "",
+          "choices": [
+            {
+              "id": "expense_only",
+              "label": "Expense only (no cash)"
+            },
+            {
+              "id": "cash_out_only",
+              "label": "Cash out only"
+            },
+            {
+              "id": "exp_and_cash",
+              "label": "Expense and cash out"
+            },
+            {
+              "id": "deferred",
+              "label": "Cash out now, expense in a later period"
+            }
+          ],
+          "expression": null,
+          "correct_choice": "exp_and_cash",
+          "tolerance": 0.01,
+          "criteria": [],
+          "rubric_criterion": null
+        },
+        {
+          "id": "t3_class",
+          "label": "T3: $300 cash for six months of insurance starting this month",
+          "kind": "choice",
+          "unit": "",
+          "choices": [
+            {
+              "id": "full_exp",
+              "label": "Expense the full $300 now and cash out $300"
+            },
+            {
+              "id": "cash_and_split",
+              "label": "Cash out $300; expense only the one-month portion used this period"
+            },
+            {
+              "id": "asset_only",
+              "label": "Prepaid asset only — no expense, no cash"
+            },
+            {
+              "id": "no_record",
+              "label": "Nothing this period because no work was done"
+            }
+          ],
+          "expression": null,
+          "correct_choice": "cash_and_split",
+          "tolerance": 0.01,
+          "criteria": [],
+          "rubric_criterion": null
+        },
+        {
+          "id": "t4_class",
+          "label": "T4: $500 deposit received for next month's redesign",
+          "kind": "choice",
+          "unit": "",
+          "choices": [
+            {
+              "id": "rev_only",
+              "label": "Revenue only"
+            },
+            {
+              "id": "cash_in_only",
+              "label": "Cash in only (unearned revenue liability)"
+            },
+            {
+              "id": "rev_and_cash",
+              "label": "Revenue and cash in"
+            },
+            {
+              "id": "neither",
+              "label": "Neither ledger"
+            }
+          ],
+          "expression": null,
+          "correct_choice": "cash_in_only",
+          "tolerance": 0.01,
+          "criteria": [],
+          "rubric_criterion": null
+        },
+        {
+          "id": "t5_class",
+          "label": "T5: $150 cash supplies bought and consumed this month",
+          "kind": "choice",
+          "unit": "",
+          "choices": [
+            {
+              "id": "exp_and_cash",
+              "label": "Expense and cash out"
+            },
+            {
+              "id": "cash_out_only",
+              "label": "Cash out only"
+            },
+            {
+              "id": "asset",
+              "label": "Prepaid asset only"
+            },
+            {
+              "id": "rev",
+              "label": "Revenue and cash in"
+            }
+          ],
+          "expression": null,
+          "correct_choice": "exp_and_cash",
+          "tolerance": 0.01,
+          "criteria": [],
+          "rubric_criterion": null
+        },
+        {
+          "id": "t6_class",
+          "label": "T6: $900 collected (the $800 T1 invoice plus $100 owed from before this period)",
+          "kind": "choice",
+          "unit": "",
+          "choices": [
+            {
+              "id": "rev_and_cash",
+              "label": "Revenue $900 and cash in $900"
+            },
+            {
+              "id": "cash_in_only",
+              "label": "Cash in $900 only — the $800 revenue was already earned in T1 and the $100 predates this period"
+            },
+            {
+              "id": "rev_only",
+              "label": "Revenue $900 only"
+            },
+            {
+              "id": "cash_and_partial_rev",
+              "label": "Cash in $900 and new revenue $100"
+            }
+          ],
+          "expression": null,
+          "correct_choice": "cash_in_only",
+          "tolerance": 0.01,
+          "criteria": [],
+          "rubric_criterion": null
+        }
+      ],
+      "hint": "For each transaction ask two independent questions: 'was the work delivered this period?' (Profit Ledger) and 'did money enter or leave the bank?' (Cash Ledger). Remember: a collected invoice is a transfer from receivable to cash, not new earning.",
+      "worked_solution": "T1: Revenue only — the job was delivered, so $800 is earned; no cash moved (accounts receivable). T2: Expense and cash out — the yard benefit is consumed this month and $600 left the bank. T3: Cash out $300; only one month of coverage is used, so only $50 is expense and $250 is a prepaid asset. T4: Cash in only — no work done, so the $500 is unearned revenue, a liability. T5: Expense and cash out — supplies consumed this month, $150 on both ledgers. T6: Cash in only — the $800 revenue was recorded in T1 when the work was done, and the $100 relates to work before this period, so collecting adds no current revenue.",
+      "minutes_min": 6,
+      "minutes_max": 10,
+      "diagram": null
+    },
+    {
+      "id": "lena_timing_calcs",
+      "title": "Timing Decisions: Insurance Split and Deposit Test",
+      "kind": "practice",
+      "instructions": "Work the two tricky timing cases from Lena's month with numbers. First, split the $300 six-month insurance payment between this month's expense and the prepaid asset. Second, apply the earning test to the $500 deposit. Enter each amount and justify it in one or two sentences naming the rule you applied (prepayment split or earning test).",
+      "data": [
+        {
+          "id": "ins_total",
+          "label": "Insurance paid for six months of coverage",
+          "value": 300.0,
+          "unit": "USD"
+        },
+        {
+          "id": "ins_months",
+          "label": "Months of coverage purchased",
+          "value": 6.0,
+          "unit": "months"
+        },
+        {
+          "id": "deposit",
+          "label": "Customer deposit for next month's work",
+          "value": 500.0,
+          "unit": "USD"
+        }
+      ],
+      "fields": [
+        {
+          "id": "ins_expense",
+          "label": "Insurance expense recognized this month (coverage used: 1 of 6 months)",
+          "kind": "number",
+          "unit": "USD",
+          "choices": [],
+          "expression": "ins_total / ins_months",
+          "correct_choice": null,
+          "tolerance": 0.01,
+          "criteria": [],
+          "rubric_criterion": null
+        },
+        {
+          "id": "prepaid_asset",
+          "label": "Prepaid insurance asset remaining after this month",
+          "kind": "number",
+          "unit": "USD",
+          "choices": [],
+          "expression": "ins_total - (ins_total / ins_months)",
+          "correct_choice": null,
+          "tolerance": 0.01,
+          "criteria": [],
+          "rubric_criterion": null
+        },
+        {
+          "id": "deposit_revenue",
+          "label": "Revenue recognized this month from the $500 deposit",
+          "kind": "number",
+          "unit": "USD",
+          "choices": [],
+          "expression": "0",
+          "correct_choice": null,
+          "tolerance": 0.01,
+          "criteria": [],
+          "rubric_criterion": null
+        },
+        {
+          "id": "ins_why",
+          "label": "In one or two sentences, justify the insurance split — name the rule applied.",
+          "kind": "text",
+          "unit": "",
+          "choices": [],
+          "expression": null,
+          "correct_choice": null,
+          "tolerance": 0.01,
+          "criteria": [
+            "States the full $300 leaves the bank as cash out",
+            "Computes $300 / 6 = $50 as the used-up monthly expense",
+            "Identifies the remaining $250 as a prepaid asset carrying future benefit",
+            "Names the matching / benefit-consumed rule"
+          ],
+          "rubric_criterion": null
+        },
+        {
+          "id": "dep_why",
+          "label": "In one or two sentences, justify why the $500 deposit is not revenue — name the rule applied.",
+          "kind": "text",
+          "unit": "",
+          "choices": [],
+          "expression": null,
+          "correct_choice": null,
+          "tolerance": 0.01,
+          "criteria": [
+            "States no work has been delivered yet",
+            "Identifies the $500 as unearned (deferred) revenue, a liability",
+            "Says the deposit becomes revenue only when the redesign is performed",
+            "Names the earning test"
+          ],
+          "rubric_criterion": null
+        }
+      ],
+      "hint": "The insurance expense is the portion of benefit consumed this month: divide the total by the number of months, then subtract that from the total for the prepaid asset. For the deposit, ask whether the service has been delivered — cash arriving early is a liability, not earnings.",
+      "worked_solution": "Insurance expense = $300 / 6 = $50 (matching: only one month of coverage is consumed this period). Prepaid asset = $300 − $50 = $250 (future benefit not yet used). Deposit revenue = $0 (earning test: the garden redesign happens next month, so the $500 is unearned revenue, a liability, recorded only on the Cash Ledger until the work is performed).",
+      "minutes_min": 8,
+      "minutes_max": 12,
+      "diagram": null
+    },
+    {
+      "id": "lena_two_column",
+      "title": "Build Lena's Two-Column Summary",
+      "kind": "practice",
+      "instructions": "Enter each Lena transaction's amount into the correct column with its sign: the Profit column takes revenues (positive) and expenses (negative); the Cash column takes bank receipts (positive) and payments (negative). Use the data table below. Then compute the two totals and write one sentence explaining why they differ. Commit your totals before checking.",
+      "data": [
+        {
+          "id": "t1_revenue",
+          "label": "T1 revenue earned (unpaid invoice)",
+          "value": 800.0,
+          "unit": "USD"
+        },
+        {
+          "id": "t2_rent",
+          "label": "T2 rent expense and cash out",
+          "value": 600.0,
+          "unit": "USD"
+        },
+        {
+          "id": "t3_cash",
+          "label": "T3 insurance cash out",
+          "value": 300.0,
+          "unit": "USD"
+        },
+        {
+          "id": "t3_expense",
+          "label": "T3 insurance expense (one month)",
+          "value": 50.0,
+          "unit": "USD"
+        },
+        {
+          "id": "t4_cash_in",
+          "label": "T4 deposit cash in",
+          "value": 500.0,
+          "unit": "USD"
+        },
+        {
+          "id": "t5_both",
+          "label": "T5 supplies expense and cash out",
+          "value": 150.0,
+          "unit": "USD"
+        },
+        {
+          "id": "t6_cash_in",
+          "label": "T6 collection cash in",
+          "value": 900.0,
+          "unit": "USD"
+        }
+      ],
+      "fields": [
+        {
+          "id": "accrual_profit",
+          "label": "Accrual profit for the month (revenues minus expenses)",
+          "kind": "number",
+          "unit": "USD",
+          "choices": [],
+          "expression": "t1_revenue - (t2_rent + t3_expense + t5_both)",
+          "correct_choice": null,
+          "tolerance": 0.01,
+          "criteria": [],
+          "rubric_criterion": null
+        },
+        {
+          "id": "net_cash",
+          "label": "Net cash change for the month (inflows minus outflows)",
+          "kind": "number",
+          "unit": "USD",
+          "choices": [],
+          "expression": "(t4_cash_in + t6_cash_in) - (t2_rent + t3_cash + t5_both)",
+          "correct_choice": null,
+          "tolerance": 0.01,
+          "criteria": [],
+          "rubric_criterion": null
+        },
+        {
+          "id": "gap_expl",
+          "label": "In one sentence, explain why the two totals differ.",
+          "kind": "text",
+          "unit": "",
+          "choices": [],
+          "expression": null,
+          "correct_choice": null,
+          "tolerance": 0.01,
+          "criteria": [
+            "Names the $500 deposit as a gap driver (cash in, no revenue)",
+            "Names the insurance prepayment timing as a gap driver (full $300 cash out, only $50 expensed)",
+            "Does not treat the T1 invoice or its collection as double-counted"
+          ],
+          "rubric_criterion": null
+        }
+      ],
+      "hint": "Profit column: T1 revenue is the only inflow to earnings; expenses are T2 rent, one month of T3 insurance, and T5 supplies. Cash column: inflows are the deposit and the collection; outflows are rent, the full insurance payment, and supplies. Do not add the collected invoice to revenue again.",
+      "worked_solution": "Profit: $800 revenue − ($600 rent + $50 insurance + $150 supplies) = $800 − $800 = $0. Lena broke even on earnings. Cash: ($500 + $900) − ($600 + $300 + $150) = $1,400 − $1,050 = +$350. The gap of +$350 is explained by the $500 unearned deposit (cash in with no revenue) and the insurance timing ($300 cash out but only $50 expensed). Profit says 'treading water'; cash says 'money in the bank' — both are true and both must be read together.",
+      "minutes_min": 10,
+      "minutes_max": 15,
+      "diagram": null
+    },
+    {
+      "id": "devon_transfer",
+      "title": "Transfer Case: Devon's Delivery Co.",
+      "kind": "transfer",
+      "instructions": "A fresh fictional case, same two-ledgers model. Devon's Delivery Co. has four transactions this month. First classify each (a choice per transaction), then build the two-column summary using one-twelfth of the annual insurance as this month's expense. Commit your classifications before computing any total. Note the reasoning demands are different here: the prepayment spans a year, not six months, and you must judge the advance and the invoice yourself.",
+      "data": [
+        {
+          "id": "d_invoice",
+          "label": "(a) Delivery services invoiced, unpaid",
+          "value": 1200.0,
+          "unit": "USD"
+        },
+        {
+          "id": "d_wages",
+          "label": "(b) Cash driver wages paid for this month",
+          "value": 700.0,
+          "unit": "USD"
+        },
+        {
+          "id": "d_advance",
+          "label": "(c) Cash advance received for next month's deliveries",
+          "value": 400.0,
+          "unit": "USD"
+        },
+        {
+          "id": "d_insurance",
+          "label": "(d) Cash paid for a one-year vehicle insurance policy starting this month",
+          "value": 240.0,
+          "unit": "USD"
+        }
+      ],
+      "fields": [
+        {
+          "id": "da_class",
+          "label": "(a) $1,200 invoiced for deliveries completed this month, unpaid",
+          "kind": "choice",
+          "unit": "",
+          "choices": [
+            {
+              "id": "rev_only",
+              "label": "Revenue only (accounts receivable)"
+            },
+            {
+              "id": "cash_in",
+              "label": "Cash in only"
+            },
+            {
+              "id": "both",
+              "label": "Revenue and cash in"
+            },
+            {
+              "id": "neither",
+              "label": "Neither — payment pending"
+            }
+          ],
+          "expression": null,
+          "correct_choice": "rev_only",
+          "tolerance": 0.01,
+          "criteria": [],
+          "rubric_criterion": null
+        },
+        {
+          "id": "db_class",
+          "label": "(b) $700 cash wages for this month's driving",
+          "kind": "choice",
+          "unit": "",
+          "choices": [
+            {
+              "id": "exp_and_cash",
+              "label": "Expense and cash out"
+            },
+            {
+              "id": "cash_only",
+              "label": "Cash out only"
+            },
+            {
+              "id": "exp_only",
+              "label": "Expense only"
+            },
+            {
+              "id": "prepaid",
+              "label": "Prepaid asset only"
+            }
+          ],
+          "expression": null,
+          "correct_choice": "exp_and_cash",
+          "tolerance": 0.01,
+          "criteria": [],
+          "rubric_criterion": null
+        },
+        {
+          "id": "dc_class",
+          "label": "(c) $400 cash advance for next month's deliveries",
+          "kind": "choice",
+          "unit": "",
+          "choices": [
+            {
+              "id": "unearned",
+              "label": "Cash in only — unearned revenue liability"
+            },
+            {
+              "id": "revenue",
+              "label": "Revenue and cash in"
+            },
+            {
+              "id": "rev_only",
+              "label": "Revenue only"
+            },
+            {
+              "id": "loan",
+              "label": "Neither ledger — it is a loan"
+            }
+          ],
+          "expression": null,
+          "correct_choice": "unearned",
+          "tolerance": 0.01,
+          "criteria": [],
+          "rubric_criterion": null
+        },
+        {
+          "id": "dd_class",
+          "label": "(d) $240 cash for a year's vehicle insurance starting this month",
+          "kind": "choice",
+          "unit": "",
+          "choices": [
+            {
+              "id": "split",
+              "label": "Cash out $240; expense one-twelfth this month"
+            },
+            {
+              "id": "full",
+              "label": "Expense and cash out the full $240"
+            },
+            {
+              "id": "asset_only",
+              "label": "Prepaid asset only"
+            },
+            {
+              "id": "no_exp",
+              "label": "Cash out only, no expense ever"
+            }
+          ],
+          "expression": null,
+          "correct_choice": "split",
+          "tolerance": 0.01,
+          "criteria": [],
+          "rubric_criterion": null
+        },
+        {
+          "id": "d_profit",
+          "label": "Devon's accrual profit this month",
+          "kind": "number",
+          "unit": "USD",
+          "choices": [],
+          "expression": "d_invoice - (d_wages + d_insurance / 12)",
+          "correct_choice": null,
+          "tolerance": 0.01,
+          "criteria": [],
+          "rubric_criterion": null
+        },
+        {
+          "id": "d_cash",
+          "label": "Devon's net cash change this month",
+          "kind": "number",
+          "unit": "USD",
+          "choices": [],
+          "expression": "d_advance - (d_wages + d_insurance)",
+          "correct_choice": null,
+          "tolerance": 0.01,
+          "criteria": [],
+          "rubric_criterion": null
+        },
+        {
+          "id": "d_read",
+          "label": "In two or three sentences, read both ledgers together: what do they say about Devon's performance and solvency this month?",
+          "kind": "text",
+          "unit": "",
+          "choices": [],
+          "expression": null,
+          "correct_choice": null,
+          "tolerance": 0.01,
+          "criteria": [
+            "States the business earned a positive profit (deliveries delivered exceed wages plus one month's insurance)",
+            "States cash fell because outflows exceeded the advance inflow",
+            "Explains the gap using the timing of the invoice (earned, not collected) and the advance (collected, not earned)",
+            "Does not treat one ledger alone as a verdict on the business"
+          ],
+          "rubric_criterion": null
+        }
+      ],
+      "hint": "Classification first: apply the earning test to (a) and (c), and split (d) by months of coverage used ($240 / 12). Then build the Profit column from revenue minus this month's expenses, and the Cash column from the only cash inflow minus the three cash payments. Here the two ledgers point in opposite directions — explain both.",
+      "worked_solution": "Classifications: (a) revenue $1,200 only — work delivered, no cash (receivable). (b) expense and cash out $700. (c) cash in $400 only — unearned revenue, deliveries happen next month. (d) cash out $240; expense = $240 / 12 = $20, prepaid asset $220. Profit = $1,200 − ($700 + $20) = $480. Net cash = $400 − ($700 + $240) = −$540. Devon earned $480 this month but the bank balance fell $540: the month's earnings are sitting in a receivable, while the only cash inflow was an advance for work not yet done. Performance looks positive; solvency needs watching — both ledgers together tell the story.",
+      "minutes_min": 6,
+      "minutes_max": 12,
+      "diagram": null
+    }
+  ]
+}

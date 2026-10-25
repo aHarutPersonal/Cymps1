@@ -29,6 +29,30 @@ from app.services.content_resources import (
 )
 
 
+def _fidelity(content):
+    from app.services.planning.lesson_package import digest
+    from app.services.book_fidelity import FIDELITY_VERSION
+    return {"version": FIDELITY_VERSION, "passed": True, "content_hash": digest(content), "claims": []}
+
+
+@pytest.fixture(autouse=True)
+def isolate_semantic_book_review(monkeypatch):
+    # This module tests storage/structural behavior. Independent source/claim
+    # review is exercised with real contracts in test_generation_improvements.
+    async def reviewed(module, **kwargs):
+        assert len(kwargs["source"].split()) >= 300
+        assert kwargs["source_id"]
+        return _fidelity(module["content_markdown"])
+    monkeypatch.setattr("app.services.book_fidelity.review_book_fidelity", reviewed)
+
+
+def _source_fixture(title="Deep Work", author="Cal Newport"):
+    return {"title": title, "author_or_creator": author,
+            "source_url": "https://example.test/verified-source", "license_status": "llm_summary",
+            "source_context": "Verified source explanation of a concrete teaching method. " * 50}
+
+
+
 class ScalarResult:
     def __init__(self, value=None):
         self._value = value
@@ -1330,6 +1354,7 @@ async def test_get_or_create_book_module_resource_reuses_existing_without_genera
         "quality_report": {
             "passed": True,
             "gate_version": BOOK_MODULE_QUALITY_GATE_VERSION,
+            "fidelity": _fidelity(existing.content_markdown),
         }
     }
     db = AsyncMock()
@@ -1380,7 +1405,8 @@ async def test_get_or_create_book_module_resource_revalidates_sound_flagged_cach
         return {
             "title": "The Mom Test",
             "author_or_creator": "Rob Fitzpatrick",
-            "source_context": "Verified catalog metadata without direct quotations.",
+            "source_context": "Verified source explanation without direct quotations. " * 60,
+            "source_url": "https://example.test/verified-source",
             "metadata_json": {"provider": "catalog"},
         }
 
@@ -1437,7 +1463,8 @@ async def test_get_or_create_book_module_resource_revalidates_stale_published_ca
         return {
             "title": "The Mom Test",
             "author_or_creator": "Rob Fitzpatrick",
-            "source_context": "Verified catalog metadata without direct quotations.",
+            "source_context": "Verified source explanation without direct quotations. " * 60,
+            "source_url": "https://example.test/verified-source",
             "metadata_json": {"provider": "catalog"},
         }
 
@@ -1465,7 +1492,7 @@ async def test_get_or_create_book_module_resource_revalidates_stale_published_ca
 
 
 @pytest.mark.asyncio
-async def test_get_or_create_book_module_resource_generates_and_saves_once_when_missing():
+async def test_missing_book_source_abstains_before_paid_generation():
     db = AsyncMock()
     db.add = MagicMock()
     db.execute.return_value = ScalarResult(None)
@@ -1488,19 +1515,11 @@ async def test_get_or_create_book_module_resource_generates_and_saves_once_when_
         module_factory=factory,
     )
 
-    assert len(factory_calls) == 1
-    assert factory_calls[0]["title"] == "Deep Work"
-    assert factory_calls[0]["author"] == "Cal Newport"
-    assert factory_calls[0]["source_context"] == (
-        "Catalog overview supplied during idle discovery."
-    )
+    assert factory_calls == []
     assert result.canonical_key == "book:cal_newport:deep_work"
-    assert result.kind == ContentResourceKind.LLM_BOOK_SUMMARY
-    assert result.license_status == LicenseStatus.LLM_SUMMARY
-    assert result.is_public_domain is False
-    assert result.duration_minutes == 17
-    assert result.content_markdown.startswith("# Deep Work")
-    assert result.summary_json["ideas"][0]["title"] == "Idea 1"
+    assert result.status == CatalogStatus.FLAGGED
+    assert result.content_markdown == ""
+    assert result.metadata_json["source_sufficiency"] == "insufficient"
     db.add.assert_called_once_with(result)
     db.flush.assert_called_once()
 
@@ -1538,7 +1557,7 @@ async def test_caller_plan_prose_cannot_serve_as_book_grounding_evidence():
     quality = resource.metadata_json["quality_report"]
     assert resource.status == CatalogStatus.FLAGGED
     assert quality["passed"] is False
-    assert quality["metrics"]["unmatched_attributed_quote_count"] == 1
+    assert resource.metadata_json["source_sufficiency"] == "insufficient"
 
 
 @pytest.mark.asyncio
@@ -1595,7 +1614,7 @@ async def test_book_module_upgrade_never_writes_null_public_domain_flag():
         return _valid_book_module(kwargs["title"], kwargs["author"])
 
     async def no_source(**kwargs):
-        return None
+        return _source_fixture(kwargs["title"], kwargs["author"])
 
     result = await get_or_create_book_module_resource(
         db,
@@ -1626,7 +1645,7 @@ async def test_get_or_create_book_module_resource_grounds_public_domain_source_b
             "source_url": "https://www.gutenberg.org/ebooks/2680",
             "license_status": "public_domain",
             "content_markdown": None,
-            "source_context": "A sampled passage from the public-domain source.",
+            "source_context": "A sampled passage from the public-domain source. " * 50,
             "summary_json": {"source": "project_gutenberg"},
             "duration_minutes": 15,
             "metadata_json": {"provider": "gutenberg"},
@@ -1665,7 +1684,7 @@ async def test_attach_content_resources_generates_missing_book_module():
         return _valid_book_module(kwargs["title"], kwargs["author"])
 
     async def no_source(**kwargs):
-        return None
+        return _source_fixture(kwargs["title"], kwargs["author"])
 
     materials = await attach_content_resources_to_materials(
         db,
@@ -1736,13 +1755,13 @@ async def test_attach_content_resources_prefers_public_domain_book_source():
             "source_url": "https://www.gutenberg.org/ebooks/2680",
             "license_status": "public_domain",
             "content_markdown": None,
-            "source_context": "Sampled public-domain source text.",
+            "source_context": "Sampled public-domain source text. " * 80,
             "summary_json": {"source": "project_gutenberg"},
             "duration_minutes": 15,
         }
 
     async def factory(**kwargs):
-        assert kwargs["source_context"] == "Sampled public-domain source text."
+        assert kwargs["source_context"] == "Sampled public-domain source text. " * 80
         return _valid_book_module("Meditations", "Marcus Aurelius")
 
     materials = await attach_content_resources_to_materials(
@@ -1927,6 +1946,7 @@ async def test_attach_content_resources_attaches_cached_book_without_enqueue(
         "quality_report": {
             "passed": True,
             "gate_version": BOOK_MODULE_QUALITY_GATE_VERSION,
+            "fidelity": _fidelity(cached.content_markdown),
         }
     }
 
@@ -2026,7 +2046,7 @@ async def test_attach_content_resources_runs_independent_book_prep_concurrently(
     started = {"Deep Work": asyncio.Event(), "Atomic Habits": asyncio.Event()}
 
     async def no_source(**kwargs):
-        return None
+        return _source_fixture(kwargs["title"], kwargs["author"])
 
     async def factory(**kwargs):
         title = kwargs["title"]
@@ -2103,3 +2123,23 @@ async def test_sync_plan_item_content_resource_links_replaces_existing_links():
     assert second.material_index == 2
     assert second.metadata_json["search_query"] == "Warren Buffett interview"
     db.flush.assert_awaited_once()
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('error', [
+    'OpenLux request failed (TimeoutError; finish=missing)',
+    'OpenLux request failed (ValueError; finish=missing)',
+])
+async def test_transport_failure_is_not_retried_as_json_repair(monkeypatch, error):
+    from app.services.llm.client import LLMResponse as Response
+    client = SimpleNamespace(model='gpt-test', generate_json=AsyncMock(
+        return_value=Response(data={}, error=error, provider='openlux', model='gpt-test')))
+    recorded = AsyncMock()
+    monkeypatch.setattr('app.services.llm.client.get_llm_client', lambda **kw: client)
+    monkeypatch.setattr('app.services.llm.telemetry.record_usage_records', recorded)
+    with pytest.raises(RuntimeError, match='OpenLux request failed'):
+        await generate_book_module(title='Test', author='Author', user_goal='Learn')
+    assert client.generate_json.await_count == 1
+    records = recorded.call_args.args[0]
+    assert len(records) == 1
+    assert records[0].result_status == 'provider_unavailable'
+    assert not records[0].success

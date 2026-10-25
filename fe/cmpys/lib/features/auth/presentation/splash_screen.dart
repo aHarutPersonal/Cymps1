@@ -109,7 +109,8 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
 
   late final AnimationController _entrance;
   late final AnimationController _loop; // glow bob + typing-dot pulse
-  late final Future<void> _initFuture;
+  late Future<void> _initFuture;
+  bool _startupFailed = false;
   late final Stopwatch _visitClock;
   bool _navigated = false;
 
@@ -151,6 +152,11 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
     if (!mounted) return;
 
     final session = ref.read(sessionControllerProvider);
+    if (session is SessionError || session is SessionInitializing) {
+      setState(() => _startupFailed = true);
+      _navigated = false;
+      return;
+    }
     var route = switch (session) {
       SessionReady() => AppRoutes.home,
       SessionNeedsOnboarding() => AppRoutes.cmpysOnboarding,
@@ -256,6 +262,45 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
 
   @override
   Widget build(BuildContext context) {
+    if (_startupFailed) {
+      return Scaffold(
+        body: SafeArea(
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.cloud_off_outlined, size: 40),
+                  const SizedBox(height: 20),
+                  Text(
+                    'Could not restore your session',
+                    style: Theme.of(context).textTheme.titleLarge,
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Your saved work is safe. Check your connection and try again.',
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 24),
+                  FilledButton(
+                    onPressed: () {
+                      setState(() => _startupFailed = false);
+                      _initFuture = ref
+                          .read(sessionControllerProvider.notifier)
+                          .initialize();
+                      unawaited(_advance());
+                    },
+                    child: const Text('Try again'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
     SystemChrome.setSystemUIOverlayStyle(
       const SystemUiOverlayStyle(
         statusBarBrightness: Brightness.dark,

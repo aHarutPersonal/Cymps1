@@ -117,3 +117,30 @@ OUTPUT FORMAT (strict JSON, no extra keys, no markdown):
 }
 
 Provide the smallest sufficient sequence of 1-5 focused steps whose combined duration fills the {mission_hours}-hour mission budget. Each step MUST be a complete skill-building lesson targeting 2,400-2,800 words of lesson_content, with an accepted safety range of 1,900-4,200 words, an auditable reading/practice time split, one substantive practice substep per necessary executable action without a fixed count or maximum length, and references to 1-2 exact titles from the materials array. Steps must TEACH, not advise. Choose 1-6 elite materials with no forced type composition, and ensure every material is used by at least one lesson. Never pad or repeat to fill a count.
+
+
+LEARNER PLACEMENT SAFETY:
+- Use learner_baseline.answer_evidence_status and skill_diagnostics when supplied.
+  Unknown, not_assessed, and needs_review are uncertainty, never proof of beginner level.
+- correct_on_item demonstrates only the specific item; it does not certify professional
+  competence or all prerequisites. needs_practice_on_item calls for targeted checking
+  and remediation, not restarting the whole subject.
+- Do not infer knowledge from savings, a portfolio, age, job title, or lack of achievements.
+  A knowledgeable learner without capital can use supplied fictional cases.
+- Skip foundations already supported by concrete skill evidence. A foundation phase means
+  prerequisites for THIS learner's target, not a mandatory introductory course for everyone.
+- When prerequisites are uncertain, begin with a short diagnostic practice and adapt;
+  do not silently assume mastery or force weeks of basics. Keep self-report and checked
+  evidence distinct, and never claim a learning duration has been measured when it has not.
+
+RECENT PRACTICE EVIDENCE:
+When supplied, practice_evidence/recent_practice describes recent work in this same goal
+session, scoped to the named lessons and cases. Prefer this newer checked evidence over
+an older self-rating for the SAME skill. Never generalize it to unrelated skills.
+- needs_practice: revisit the named concept or prerequisite with a changed case.
+- needs_review: clarify the uncertain assessment before concluding the learner is wrong.
+- completed_with_support: offer a fresh independent transfer check before raising difficulty.
+- transfer_without_hint: consider a harder or adjacent case for that skill; this records no
+  in-app hint, not proof of broad mastery, retention, or absence of outside help.
+- not_assessed/in_progress: a draft or partial attempt is not evidence of poor knowledge.
+Do not overwrite already completed work or demand that the learner repeat all foundations.

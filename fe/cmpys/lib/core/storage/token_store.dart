@@ -182,6 +182,9 @@ class TokenStore {
     }
     if (expiry != null) {
       await saveTokenExpiry(expiry);
+    } else {
+      // A newly issued token must not inherit the previous token's expiry.
+      await _delete(_keyTokenExpiry);
     }
     if (apiBase != null) {
       await _write(_keyTokenApiBase, apiBase);

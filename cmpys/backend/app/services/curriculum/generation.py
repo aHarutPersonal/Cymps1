@@ -1,0 +1,939 @@
+"""Bounded LLM stages after grounded source discovery."""
+
+from __future__ import annotations
+
+import re
+import asyncio
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
+from typing import Any, Literal, TypeVar
+
+from pydantic import BaseModel
+
+from app.services.llm.admission import background_generation
+from app.services.llm.tracing import traced_operation
+from app.services.curriculum.gates import (
+    MIN_REVIEW_SCORE,
+    TECHNIQUE_BLOCK_REQUIREMENTS,
+    GateResult,
+    validate_source_attribution,
+    validate_manifest_verification,
+    validate_source_originality,
+    validate_structure,
+    validate_in_app_contract,
+    validate_technique_implementation,
+    validate_module_target,
+)
+from app.services.curriculum.pilot import TECHNIQUE_REGISTRY
+from app.services.curriculum.schemas import (
+    CanonicalModuleDraft,
+    BlockRepairResult,
+    CurriculumOutline,
+    LessonBlockType,
+    QualityReview,
+    RepairResult,
+    ResearchManifest,
+    ReviewIssue,
+    ReviewSeverity,
+    TechniquePlan,
+    TechniqueId,
+)
+from app.services.curriculum.security import writer_source_pack
+from app.services.llm import get_llm_client
+from app.services.llm.prompt_loader import load_and_render, load_prompt
+from app.services.llm.telemetry import record_llm_response
+
+
+T = TypeVar("T", bound=BaseModel)
+ReviewerName = Literal["structure", "factual", "pedagogy", "originality"]
+_BLOCK_ID_PATTERN = re.compile(r"^block_[a-z0-9][a-z0-9_-]{2,63}$")
+_REQUIRED_BASE_BLOCK_TYPES = frozenset(
+    {
+        LessonBlockType.EXPLANATION,
+        LessonBlockType.WORKED_EXAMPLE,
+        LessonBlockType.INDEPENDENT_PRACTICE,
+        LessonBlockType.ASSESSMENT,
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class GeneratedArtifact:
+    value: BaseModel
+    model_name: str
+    provider: str | None
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+
+
+def configured_tier(value: str, *, default: str) -> str:
+    return value if value in {"fast", "balanced", "quality"} else default
+
+
+# Reasoning models spend part of the completion budget thinking before they emit
+# the JSON body, so a ceiling sized for the answer alone yields an empty response
+# rather than a short one -- observed as "Empty response from OPENROUTER" on the
+# review stages while the 24k-token draft stage succeeded. max_tokens is a cap and
+# not a target: providers bill generated tokens, so raising the headroom costs
+# nothing for models that do not need it.
+CURRICULUM_STRUCTURED_MAX_TOKENS = 16000
+
+_RECOVERY_ROUTE: ContextVar[dict[str, Any] | None] = ContextVar("curriculum_recovery_route", default=None)
+
+
+@contextmanager
+def curriculum_recovery_route(route: dict[str, Any] | None):
+    """Scope an audited recovery route to one task's current stage only."""
+    from app.core.config import settings
+
+    if route is not None and (
+        route.get("provider") != "gemini"
+        or route.get("model") != settings.gemini_quality_model
+        or route.get("from_provider") != "openlux"
+        or not settings.gemini_api_key
+    ):
+        raise ValueError("unsupported curriculum recovery route")
+    token = _RECOVERY_ROUTE.set(route)
+    try:
+        yield
+    finally:
+        _RECOVERY_ROUTE.reset(token)
+
+
+@background_generation
+@traced_operation("curriculum_generation")
+async def _generate(
+    *,
+    operation: str,
+    prompt_name: str,
+    prompt_variables: dict[str, Any],
+    output_model: type[T],
+    tier: str,
+    max_tokens: int,
+    metadata: dict[str, Any],
+) -> GeneratedArtifact:
+    recovery = _RECOVERY_ROUTE.get()
+    if recovery:
+        from app.services.llm.client import GeminiLLMClient
+
+        client = GeminiLLMClient(model=recovery["model"], timeout=240,
+                                 max_tokens=max_tokens, thinking_level="high", temperature=0.1)
+    else:
+        client = get_llm_client(tier=tier, timeout=120, max_tokens=max_tokens, temperature=0.1)
+    async with asyncio.timeout(245):
+        validated, response = await client.generate_and_validate(
+            system_prompt=load_prompt("curriculum_writer_system"),
+            user_prompt=load_and_render(prompt_name, prompt_variables),
+            output_model=output_model,
+            repair_on_failure=recovery is None,
+        )
+    if recovery:
+        response.retried = True
+        response.fallback_from_provider = "openlux"
+        response.fallback_from_model = recovery.get("from_model")
+        response.fallback_error = recovery.get("reason")
+        if response.finish_reason not in {"STOP", "stop"} and not response.error:
+            response.error = "Curriculum recovery returned an incomplete response"
+    await record_llm_response(
+        operation=operation,
+        response=response,
+        model=getattr(client, "model", None),
+        result_status="schema_valid" if validated and not response.error else "failed",
+        metadata=metadata,
+    )
+    if validated is None or response.error:
+        raise RuntimeError(response.error or f"{operation} returned no artifact")
+    value = output_model.model_validate(validated)
+    return GeneratedArtifact(
+        value=value,
+        model_name=str(response.model or getattr(client, "model", None) or "unknown"),
+        provider=response.provider,
+        input_tokens=int(response.prompt_tokens or 0),
+        output_tokens=int(response.completion_tokens or 0),
+        total_tokens=int(response.total_tokens or 0),
+    )
+
+
+def _assert_plan_sources(plan: TechniquePlan, manifest: ResearchManifest) -> None:
+    source_ids = {source.source_id for source in manifest.sources}
+    unknown = sorted(
+        {
+            source_id
+            for application in plan.applications
+            for source_id in application.evidence_source_ids
+            if source_id not in source_ids
+        }
+    )
+    if unknown:
+        raise ValueError(f"technique plan invented source ids: {unknown}")
+    source_url_by_id = {source.source_id: source.url for source in manifest.sources}
+    registry_urls = {
+        item.technique_id: set(item.source_urls) for item in TECHNIQUE_REGISTRY
+    }
+    missing_registry_evidence = [
+        application.technique_id.value
+        for application in plan.applications
+        if not any(
+            source_url_by_id.get(source_id)
+            in registry_urls[application.technique_id]
+            for source_id in application.evidence_source_ids
+        )
+    ]
+    if missing_registry_evidence:
+        raise ValueError(
+            "technique plan lacks exact registry evidence for: "
+            f"{sorted(missing_registry_evidence)}"
+        )
+
+
+def _registry_evidence_bindings(
+    manifest: ResearchManifest,
+    *,
+    technique_ids: set[TechniqueId],
+) -> tuple[dict[TechniqueId, str], set[str]]:
+    source_id_by_url = {source.url: source.source_id for source in manifest.sources}
+    registry_urls = {
+        url for entry in TECHNIQUE_REGISTRY for url in entry.source_urls
+    }
+    registry_source_ids = {
+        source_id
+        for url, source_id in source_id_by_url.items()
+        if url in registry_urls
+    }
+    bindings: dict[TechniqueId, str] = {}
+    for entry in TECHNIQUE_REGISTRY:
+        if entry.technique_id not in technique_ids:
+            continue
+        source_id = source_id_by_url.get(entry.source_urls[0])
+        if source_id is None:
+            raise ValueError(
+                "research manifest lacks required registry source for: "
+                f"{entry.technique_id.value}"
+            )
+        bindings[entry.technique_id] = source_id
+    return bindings, registry_source_ids
+
+
+def _bind_exact_registry_evidence(
+    plan: TechniquePlan,
+    manifest: ResearchManifest,
+) -> TechniquePlan:
+    """Replace ambiguous registry citations with the server-pinned source ID."""
+
+    bindings, registry_source_ids = _registry_evidence_bindings(
+        manifest,
+        technique_ids={application.technique_id for application in plan.applications},
+    )
+    applications = []
+    for application in plan.applications:
+        live_source_ids = [
+            source_id
+            for source_id in application.evidence_source_ids
+            if source_id not in registry_source_ids
+        ][:7]
+        evidence_source_ids = list(
+            dict.fromkeys(
+                [*live_source_ids, bindings[application.technique_id]]
+            )
+        )
+        applications.append(
+            application.model_copy(
+                update={"evidence_source_ids": evidence_source_ids}
+            )
+        )
+    return plan.model_copy(update={"applications": applications})
+
+
+def _bind_technique_block_contracts(plan: TechniquePlan) -> TechniquePlan:
+    """Give every selected technique enough valid, stable implementation IDs."""
+
+    used_ids = {
+        block_id
+        for application in plan.applications
+        for block_id in application.implementation_block_ids
+        if _BLOCK_ID_PATTERN.fullmatch(block_id)
+    }
+    applications = []
+    for application in plan.applications:
+        block_ids = list(
+            dict.fromkeys(
+                block_id
+                for block_id in application.implementation_block_ids
+                if _BLOCK_ID_PATTERN.fullmatch(block_id)
+            )
+        )
+        required_count = len(
+            TECHNIQUE_BLOCK_REQUIREMENTS[application.technique_id]
+        )
+        suffix = 1
+        while len(block_ids) < required_count:
+            candidate = f"block_{application.technique_id.value}_{suffix}"
+            suffix += 1
+            if candidate in used_ids:
+                continue
+            block_ids.append(candidate)
+            used_ids.add(candidate)
+        applications.append(
+            application.model_copy(
+                update={"implementation_block_ids": block_ids}
+            )
+        )
+    return plan.model_copy(update={"applications": applications})
+
+
+def _assert_plan_target(plan: TechniquePlan, module_target: dict[str, Any]) -> None:
+    if " ".join(plan.learning_outcome.split()) != " ".join(
+        str(module_target.get("learning_outcome") or "").split()
+    ):
+        raise ValueError("technique plan changed the server-owned learning outcome")
+    if plan.learner_level != module_target.get("level"):
+        raise ValueError("technique plan changed the server-owned learner level")
+
+
+async def generate_technique_plan(
+    *,
+    module_target: dict[str, Any],
+    manifest: ResearchManifest,
+    tier: str,
+    durable_spacing_scheduler_enabled: bool = False,
+    telemetry_metadata: dict[str, Any] | None = None,
+) -> GeneratedArtifact:
+    registry = [
+        item
+        for item in TECHNIQUE_REGISTRY
+        if durable_spacing_scheduler_enabled
+        or item.technique_id != TechniqueId.SPACED_PRACTICE
+    ]
+    registry_bindings, _ = _registry_evidence_bindings(
+        manifest,
+        technique_ids={item.technique_id for item in registry},
+    )
+    generated = await _generate(
+        operation="curriculum_technique_plan",
+        prompt_name="curriculum_technique_plan",
+        prompt_variables={
+            "module_target_json": module_target,
+            "source_pack_json": writer_source_pack(manifest),
+            "technique_registry_json": [
+                {
+                    **item.model_dump(mode="json"),
+                    "required_evidence_source_ids": [
+                        registry_bindings[item.technique_id]
+                    ],
+                }
+                for item in registry
+            ],
+            "runtime_capabilities_json": {
+                "durable_spacing_scheduler": durable_spacing_scheduler_enabled,
+            },
+        },
+        output_model=TechniquePlan,
+        tier=tier,
+        max_tokens=CURRICULUM_STRUCTURED_MAX_TOKENS,
+        metadata={"stage": "technique_design", **(telemetry_metadata or {})},
+    )
+    plan = TechniquePlan.model_validate(generated.value)
+    plan = _bind_exact_registry_evidence(plan, manifest)
+    plan = _bind_technique_block_contracts(plan)
+    _assert_plan_sources(plan, manifest)
+    _assert_plan_target(plan, module_target)
+    if (
+        not durable_spacing_scheduler_enabled
+        and any(
+            item.technique_id == TechniqueId.SPACED_PRACTICE
+            for item in plan.applications
+        )
+    ):
+        raise ValueError("technique plan selected unavailable spaced practice")
+    return GeneratedArtifact(
+        value=plan,
+        model_name=generated.model_name,
+        provider=generated.provider,
+        input_tokens=generated.input_tokens,
+        output_tokens=generated.output_tokens,
+        total_tokens=generated.total_tokens,
+    )
+
+
+def _assert_outline_contract(
+    outline: CurriculumOutline,
+    plan: TechniquePlan,
+    manifest: ResearchManifest,
+    module_target: dict[str, Any],
+) -> None:
+    target_gate = validate_module_target(outline, module_target)
+    if not target_gate.passed:
+        raise ValueError(
+            "outline changed server-owned module target: "
+            + ", ".join(issue.code for issue in target_gate.issues)
+        )
+    actual_types = {block.block_type for block in outline.blocks}
+    missing_base_types = sorted(
+        block_type.value for block_type in _REQUIRED_BASE_BLOCK_TYPES - actual_types
+    )
+    if missing_base_types:
+        raise ValueError(
+            f"outline lacks required block types: {missing_base_types}"
+        )
+    blocks = {block.block_id: block for block in outline.blocks}
+    allowed_sources = {source.source_id for source in manifest.sources}
+    claims = {claim.claim_id: claim for claim in manifest.claims}
+    unknown_sources = sorted(
+        {
+            source_id
+            for block in outline.blocks
+            for source_id in block.source_ids
+            if source_id not in allowed_sources
+        }
+    )
+    if unknown_sources:
+        raise ValueError(f"outline invented source ids: {unknown_sources}")
+    factual_types = {
+        "explanation",
+        "visual_explanation",
+        "worked_example",
+    }
+    for block in outline.blocks:
+        if block.block_type.value in factual_types and not block.claim_ids:
+            raise ValueError(f"outline block {block.block_id} lacks verified claim IDs")
+        unknown_claims = set(block.claim_ids) - set(claims)
+        if unknown_claims:
+            raise ValueError(
+                f"outline invented claim ids: {sorted(unknown_claims)}"
+            )
+        bound_claims = [claims[claim_id] for claim_id in block.claim_ids]
+        supported_sources = {
+            source_id for claim in bound_claims for source_id in claim.source_ids
+        }
+        if bound_claims and set(block.source_ids) - supported_sources:
+            raise ValueError(
+                f"outline block {block.block_id} binds unrelated source IDs"
+            )
+        if any(
+            not set(claim.source_ids).intersection(block.source_ids)
+            for claim in bound_claims
+        ):
+            raise ValueError(
+                f"outline block {block.block_id} has unsupported claim bindings"
+            )
+    for application in plan.applications:
+        for block_id in application.implementation_block_ids:
+            block = blocks.get(block_id)
+            if block is None:
+                raise ValueError(f"outline omitted technique block: {block_id}")
+            if application.technique_id not in block.technique_ids:
+                raise ValueError(
+                    f"outline block {block_id} omitted {application.technique_id.value}"
+                )
+        referenced_types = {
+            blocks[block_id].block_type
+            for block_id in application.implementation_block_ids
+            if block_id in blocks
+        }
+        for allowed_types in TECHNIQUE_BLOCK_REQUIREMENTS[
+            application.technique_id
+        ]:
+            if referenced_types.isdisjoint(allowed_types):
+                raise ValueError(
+                    "outline technique contract incomplete: "
+                    f"{application.technique_id.value} requires one of "
+                    f"{sorted(item.value for item in allowed_types)}"
+                )
+
+
+def _bind_outline_claim_sources(
+    outline: CurriculumOutline,
+    manifest: ResearchManifest,
+) -> CurriculumOutline:
+    """Make block citations the exact union of their verified claim sources.
+
+    A factual block may omit its claim ID while retaining the exact approved
+    source bundle.  Recover the ID only when that bundle identifies one and
+    only one verified manifest claim; ambiguous or absent evidence stays
+    untouched so the downstream contract fails closed.
+    """
+
+    claims = {claim.claim_id: claim for claim in manifest.claims}
+    factual_types = {
+        "explanation",
+        "visual_explanation",
+        "worked_example",
+    }
+    blocks = []
+    for block in outline.blocks:
+        if (
+            block.block_type.value in factual_types
+            and not block.claim_ids
+            and block.source_ids
+        ):
+            source_bundle = set(block.source_ids)
+            exact_claims = [
+                claim
+                for claim in manifest.claims
+                if set(claim.source_ids) == source_bundle
+            ]
+            if len(exact_claims) == 1:
+                block = block.model_copy(
+                    update={"claim_ids": [exact_claims[0].claim_id]}
+                )
+        if block.claim_ids and all(claim_id in claims for claim_id in block.claim_ids):
+            source_ids = list(
+                dict.fromkeys(
+                    source_id
+                    for claim_id in block.claim_ids
+                    for source_id in claims[claim_id].source_ids
+                )
+            )
+            block = block.model_copy(update={"source_ids": source_ids})
+        blocks.append(block)
+    return outline.model_copy(update={"blocks": blocks})
+
+
+def _bind_outline_technique_blocks(
+    outline: CurriculumOutline,
+    plan: TechniquePlan,
+) -> CurriculumOutline:
+    """Align model-chosen block IDs with the server-pinned technique blueprint."""
+
+    blocks = list(outline.blocks)
+    reserved_ids = {
+        block_id
+        for application in plan.applications
+        for block_id in application.implementation_block_ids
+    }
+    for application in plan.applications:
+        expected_ids = list(application.implementation_block_ids)
+        requirements = TECHNIQUE_BLOCK_REQUIREMENTS[application.technique_id]
+        referenced_indexes: set[int] = set()
+
+        for expected_id in expected_ids:
+            index = next(
+                (
+                    candidate_index
+                    for candidate_index, block in enumerate(blocks)
+                    if block.block_id == expected_id
+                ),
+                None,
+            )
+            if index is None:
+                continue
+            referenced_indexes.add(index)
+            block = blocks[index]
+            valid_contract_type = any(
+                block.block_type in allowed_types for allowed_types in requirements
+            )
+            if (
+                valid_contract_type
+                and application.technique_id not in block.technique_ids
+            ):
+                blocks[index] = block.model_copy(
+                    update={
+                        "technique_ids": [
+                            *block.technique_ids,
+                            application.technique_id,
+                        ]
+                    }
+                )
+
+        missing_ids = [
+            expected_id
+            for expected_id in expected_ids
+            if all(block.block_id != expected_id for block in blocks)
+        ]
+        for expected_id in missing_ids:
+            unsatisfied_groups = [
+                allowed_types
+                for allowed_types in requirements
+                if all(
+                    blocks[index].block_type not in allowed_types
+                    for index in referenced_indexes
+                )
+            ]
+            candidates = [
+                (index, block)
+                for index, block in enumerate(blocks)
+                if index not in referenced_indexes
+                and block.block_id not in reserved_ids
+                and application.technique_id in block.technique_ids
+            ]
+            if unsatisfied_groups:
+                preferred = [
+                    candidate
+                    for candidate in candidates
+                    if candidate[1].block_type in unsatisfied_groups[0]
+                ]
+                candidates = preferred or candidates
+            if not candidates:
+                continue
+            index, block = candidates[0]
+            blocks[index] = block.model_copy(update={"block_id": expected_id})
+            referenced_indexes.add(index)
+
+        # The model can preserve every server-owned ID yet attach one to the
+        # wrong semantic block.  Move that ID only to an unreserved block that
+        # the model itself already tagged with the technique and whose type
+        # satisfies the missing contract.  Swapping IDs preserves uniqueness;
+        # absence of a valid candidate remains a fail-closed contract error.
+        for allowed_types in requirements:
+            if any(
+                blocks[index].block_type in allowed_types
+                for index in referenced_indexes
+            ):
+                continue
+            protected_indexes: set[int] = set()
+            for other_types in requirements:
+                match = next(
+                    (
+                        index
+                        for index in referenced_indexes
+                        if index not in protected_indexes
+                        and blocks[index].block_type in other_types
+                    ),
+                    None,
+                )
+                if match is not None:
+                    protected_indexes.add(match)
+            replacement_index = next(
+                (
+                    index
+                    for expected_id in expected_ids
+                    for index, block in enumerate(blocks)
+                    if block.block_id == expected_id
+                    and index in referenced_indexes
+                    and index not in protected_indexes
+                ),
+                None,
+            )
+            candidate = next(
+                (
+                    (index, block)
+                    for index, block in enumerate(blocks)
+                    if index not in referenced_indexes
+                    and block.block_id not in reserved_ids
+                    and block.block_type in allowed_types
+                    and application.technique_id in block.technique_ids
+                ),
+                None,
+            )
+            if replacement_index is None:
+                continue
+            if candidate is None:
+                replacement_block = blocks[replacement_index]
+                if application.technique_id not in replacement_block.technique_ids:
+                    continue
+                replacement_type = min(
+                    allowed_types,
+                    key=lambda item: item.value,
+                )
+                if (
+                    replacement_block.block_type in _REQUIRED_BASE_BLOCK_TYPES
+                    and replacement_block.block_type != replacement_type
+                    and sum(
+                        block.block_type == replacement_block.block_type
+                        for block in blocks
+                    )
+                    == 1
+                ):
+                    continue
+                blocks[replacement_index] = replacement_block.model_copy(
+                    update={"block_type": replacement_type}
+                )
+                continue
+            candidate_index, candidate_block = candidate
+            replacement_block = blocks[replacement_index]
+            blocks[replacement_index] = replacement_block.model_copy(
+                update={"block_id": candidate_block.block_id}
+            )
+            blocks[candidate_index] = candidate_block.model_copy(
+                update={"block_id": replacement_block.block_id}
+            )
+            referenced_indexes.remove(replacement_index)
+            referenced_indexes.add(candidate_index)
+
+    return outline.model_copy(update={"blocks": blocks})
+
+
+async def generate_outline(
+    *,
+    module_target: dict[str, Any],
+    manifest: ResearchManifest,
+    technique_plan: TechniquePlan,
+    tier: str,
+    telemetry_metadata: dict[str, Any] | None = None,
+    contract_feedback: str | None = None,
+) -> GeneratedArtifact:
+    generated = await _generate(
+        operation="curriculum_module_outline",
+        prompt_name="curriculum_outline",
+        prompt_variables={
+            "module_target_json": {
+                **module_target,
+                "required_block_types": sorted(t.value for t in _REQUIRED_BASE_BLOCK_TYPES),
+                **({"prior_contract_error": contract_feedback[:2000]} if contract_feedback else {}),
+            },
+            "source_pack_json": writer_source_pack(manifest),
+            "technique_plan_json": technique_plan.model_dump(mode="json"),
+        },
+        output_model=CurriculumOutline,
+        tier=tier,
+        max_tokens=CURRICULUM_STRUCTURED_MAX_TOKENS,
+        metadata={"stage": "outline", **(telemetry_metadata or {})},
+    )
+    outline = _bind_outline_claim_sources(
+        _bind_outline_technique_blocks(
+            CurriculumOutline.model_validate(generated.value),
+            technique_plan,
+        ),
+        manifest,
+    )
+    _assert_outline_contract(
+        outline,
+        technique_plan,
+        manifest,
+        module_target,
+    )
+    return GeneratedArtifact(
+        value=outline,
+        model_name=generated.model_name,
+        provider=generated.provider,
+        input_tokens=generated.input_tokens,
+        output_tokens=generated.output_tokens,
+        total_tokens=generated.total_tokens,
+    )
+
+
+async def generate_module_draft(
+    *,
+    module_target: dict[str, Any],
+    manifest: ResearchManifest,
+    technique_plan: TechniquePlan,
+    outline: CurriculumOutline,
+    tier: str,
+    telemetry_metadata: dict[str, Any] | None = None,
+) -> GeneratedArtifact:
+    return await _generate(
+        operation="curriculum_module_draft",
+        prompt_name="curriculum_module_write",
+        prompt_variables={
+            "module_target_json": module_target,
+            "source_pack_json": writer_source_pack(manifest),
+            "technique_plan_json": technique_plan.model_dump(mode="json"),
+            "outline_json": outline.model_dump(mode="json"),
+        },
+        output_model=CanonicalModuleDraft,
+        tier=tier,
+        max_tokens=24000,
+        metadata={
+            "stage": "writing",
+            "repair": False,
+            **(telemetry_metadata or {}),
+        },
+    )
+
+
+async def repair_module_draft(
+    *,
+    module_target: dict[str, Any],
+    manifest: ResearchManifest,
+    technique_plan: TechniquePlan,
+    outline: CurriculumOutline,
+    draft: CanonicalModuleDraft,
+    issues: list[dict[str, Any]],
+    tier: str,
+    repair_attempt: int,
+    telemetry_metadata: dict[str, Any] | None = None,
+) -> GeneratedArtifact:
+    block_ids = {block.block_id for block in draft.blocks}
+    targeted_ids = {issue.get("block_id") for issue in issues}
+    targeted = bool(issues) and None not in targeted_ids and 0 < len(targeted_ids) <= 3 and targeted_ids <= block_ids
+    generated = await _generate(
+        operation="curriculum_module_repair",
+        prompt_name="curriculum_block_repair" if targeted else "curriculum_module_repair",
+        prompt_variables={
+            "module_target_json": module_target,
+            "source_pack_json": writer_source_pack(manifest),
+            "technique_plan_json": technique_plan.model_dump(mode="json"),
+            "outline_json": outline.model_dump(mode="json"),
+            "draft_json": draft.model_dump(mode="json"),
+            "repair_issues_json": issues,
+        },
+        output_model=BlockRepairResult if targeted else RepairResult,
+        tier=tier,
+        max_tokens=10000 if targeted else 26000,
+        metadata={
+            "stage": "writing",
+            "repair": True,
+            "repair_scope": "blocks" if targeted else "module",
+            "attempt": repair_attempt,
+            **(telemetry_metadata or {}),
+        },
+    )
+    repaired = (BlockRepairResult if targeted else RepairResult).model_validate(generated.value)
+    requested_codes = {str(issue.get("code") or "") for issue in issues}
+    if not requested_codes.issubset(set(repaired.addressed_issue_codes)):
+        raise ValueError("repair did not acknowledge every targeted issue code")
+    if targeted:
+        replacements = {block.block_id: block for block in repaired.repaired_blocks}
+        if set(replacements) != targeted_ids or len(replacements) != len(repaired.repaired_blocks):
+            raise ValueError("block repair changed the requested scope")
+        blocks = [replacements.get(block.block_id, block) for block in draft.blocks]
+        if any(old.block_type != new.block_type for old, new in zip(draft.blocks, blocks)):
+            raise ValueError("block repair changed a block type")
+        payload = draft.model_dump(mode="json")
+        payload["blocks"] = [block.model_dump(mode="json") for block in blocks]
+        payload["estimated_minutes"] = sum(block.minutes for block in blocks)
+        repaired_draft = CanonicalModuleDraft.model_validate(payload)
+    else:
+        repaired_draft = repaired.repaired_draft
+    return GeneratedArtifact(
+        value=repaired_draft,
+        model_name=generated.model_name,
+        provider=generated.provider,
+        input_tokens=generated.input_tokens,
+        output_tokens=generated.output_tokens,
+        total_tokens=generated.total_tokens,
+    )
+
+
+def deterministic_draft_gate(
+    *,
+    draft: CanonicalModuleDraft,
+    manifest: ResearchManifest,
+    technique_plan: TechniquePlan,
+    module_target: dict[str, Any] | None = None,
+    durable_spacing_scheduler_enabled: bool = False,
+) -> GateResult:
+    results = (
+        *(
+            (validate_module_target(draft, module_target),)
+            if module_target is not None
+            else ()
+        ),
+        validate_structure(draft),
+        validate_in_app_contract(draft, technique_plan, module_target),
+        validate_manifest_verification(manifest),
+        validate_source_attribution(draft, manifest),
+        validate_technique_implementation(
+            draft,
+            technique_plan,
+            manifest,
+            durable_spacing_scheduler_enabled=durable_spacing_scheduler_enabled,
+        ),
+        validate_source_originality(draft, manifest),
+    )
+    issues = tuple(issue for result in results for issue in result.issues)
+    return GateResult(
+        passed=all(result.passed for result in results),
+        # Deterministic gate metrics (e.g. lexical similarity) are not a calibrated
+        # pedagogical score. Every passing hard gate is satisfied in full.
+        score=1.0 if all(result.passed for result in results) else 0.0,
+        issues=issues,
+        metrics={
+            "deterministic_gate_count": len(results),
+            "deterministic_issue_count": len(issues),
+        },
+    )
+
+
+def merge_structure_review(
+    review: QualityReview,
+    deterministic: GateResult,
+) -> QualityReview:
+    issues = [*review.issues, *deterministic.issues]
+    unique: dict[tuple[str, str | None], ReviewIssue] = {
+        (issue.code, issue.block_id): issue for issue in issues
+    }
+    passed = review.passed and deterministic.passed and review.score >= MIN_REVIEW_SCORE
+    return QualityReview(
+        reviewer="structure",
+        passed=passed,
+        score=min(review.score, deterministic.score),
+        issues=list(unique.values()),
+        evidence=[
+            *review.evidence,
+            *[f"{key}={value}" for key, value in deterministic.metrics.items()],
+        ],
+    )
+
+
+async def review_module(
+    *,
+    reviewer: ReviewerName,
+    module_target: dict[str, Any],
+    manifest: ResearchManifest,
+    technique_plan: TechniquePlan,
+    draft: CanonicalModuleDraft,
+    comparison_texts: list[str],
+    tier: str,
+    repair_attempt: int,
+    telemetry_metadata: dict[str, Any] | None = None,
+) -> GeneratedArtifact:
+    variables: dict[str, Any]
+    if reviewer == "structure":
+        variables = {
+            "module_target_json": module_target,
+            "technique_plan_json": technique_plan.model_dump(mode="json"),
+            "draft_json": draft.model_dump(mode="json"),
+        }
+    elif reviewer == "factual":
+        variables = {
+            "source_pack_json": writer_source_pack(manifest),
+            "draft_json": draft.model_dump(mode="json"),
+        }
+    elif reviewer == "pedagogy":
+        variables = {
+            "module_target_json": module_target,
+            "technique_plan_json": technique_plan.model_dump(mode="json"),
+            "draft_json": draft.model_dump(mode="json"),
+        }
+    else:
+        variables = {
+            "source_pack_json": writer_source_pack(manifest),
+            "comparison_texts_json": [text[:12000] for text in comparison_texts[:20]],
+            "draft_json": draft.model_dump(mode="json"),
+        }
+    generated = await _generate(
+        operation=f"curriculum_review_{reviewer}",
+        prompt_name=f"curriculum_review_{reviewer}",
+        prompt_variables=variables,
+        output_model=QualityReview,
+        tier=tier,
+        max_tokens=CURRICULUM_STRUCTURED_MAX_TOKENS,
+        metadata={
+            "stage": f"{reviewer}_review",
+            "repair_attempt": repair_attempt,
+            **(telemetry_metadata or {}),
+        },
+    )
+    review = QualityReview.model_validate(generated.value)
+    if review.reviewer != reviewer:
+        raise ValueError(
+            f"reviewer contract mismatch: expected {reviewer}, got {review.reviewer}"
+        )
+    if review.score < MIN_REVIEW_SCORE and review.passed:
+        review = review.model_copy(
+            update={
+                "passed": False,
+                "issues": [
+                    *review.issues,
+                    ReviewIssue(
+                        code=f"{reviewer}_score_below_threshold",
+                        severity=ReviewSeverity.BLOCKING,
+                        description=(
+                            f"Review score {review.score:.2f} is below the publication floor."
+                        ),
+                        repair_instruction="Repair the identified weaknesses and rerun this independent review.",
+                    ),
+                ],
+            }
+        )
+    return GeneratedArtifact(
+        value=review,
+        model_name=generated.model_name,
+        provider=generated.provider,
+        input_tokens=generated.input_tokens,
+        output_tokens=generated.output_tokens,
+        total_tokens=generated.total_tokens,
+    )

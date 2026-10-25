@@ -1,6 +1,8 @@
 // In-app web view for plan materials that only have an external URL
 // (e.g. a book's store page or an article without extracted text).
 
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
@@ -9,10 +11,18 @@ import '../../../core/ui/app_shell.dart';
 import '../models/plan_models.dart';
 
 class MaterialWebScreen extends StatefulWidget {
-  const MaterialWebScreen({super.key, required this.title, required this.url});
+  const MaterialWebScreen({
+    super.key,
+    required this.title,
+    required this.url,
+    this.sourceDescription,
+    this.initialSectionTitle,
+  });
 
   final String title;
   final String url;
+  final String? sourceDescription;
+  final String? initialSectionTitle;
 
   @override
   State<MaterialWebScreen> createState() => _MaterialWebScreenState();
@@ -21,6 +31,8 @@ class MaterialWebScreen extends StatefulWidget {
 class _MaterialWebScreenState extends State<MaterialWebScreen> {
   WebViewController? _controller;
   int _progress = 0;
+  bool _paging = false;
+  double _readingViewportHeight = 0;
 
   @override
   void initState() {
@@ -31,12 +43,48 @@ class _MaterialWebScreenState extends State<MaterialWebScreen> {
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setNavigationDelegate(
         NavigationDelegate(
+          onPageFinished: (_) async {
+            final section = widget.initialSectionTitle;
+            if (section == null) return;
+            // A known author page may place its excerpt below the book overview.
+            try {
+              await _controller?.runJavaScript("""
+              (() => { const label = ${jsonEncode(section)};
+                const heading = [...document.querySelectorAll('h1,h2,h3,h4,strong,b')]
+                  .find(e => e.textContent.trim().startsWith(label));
+                if (heading) heading.scrollIntoView(); })();
+              """);
+            } catch (_) {
+              // The page remains readable from the top if its heading changes.
+            }
+          },
           onProgress: (p) {
             if (mounted) setState(() => _progress = p);
           },
         ),
       )
       ..loadRequest(Uri.parse(directUrl));
+  }
+
+  Future<void> _turnPage(int direction) async {
+    final controller = _controller;
+    if (controller == null || _paging || _progress < 100) return;
+    // Measure the actual page area after the source banner and safe insets.
+    // Overlap also keeps text below a publisher’s sticky header readable.
+    if (_readingViewportHeight <= 0) return;
+    final distance = (_readingViewportHeight * 0.75).round().clamp(1, 10000);
+    setState(() => _paging = true);
+    try {
+      await controller.scrollBy(0, direction * distance);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not turn the page. Try again.')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _paging = false);
+    }
   }
 
   @override
@@ -49,6 +97,7 @@ class _MaterialWebScreenState extends State<MaterialWebScreen> {
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         leading: IconButton(
+          tooltip: 'Back to lesson',
           icon: const Icon(
             Icons.chevron_left_rounded,
             size: 26,
@@ -62,6 +111,24 @@ class _MaterialWebScreenState extends State<MaterialWebScreen> {
           overflow: TextOverflow.ellipsis,
           style: AppTypography.bodyMedium.copyWith(fontSize: 15),
         ),
+        actions: controller == null
+            ? null
+            : [
+                IconButton(
+                  tooltip: 'Previous page',
+                  icon: const Icon(Icons.keyboard_arrow_up_rounded),
+                  onPressed: _progress < 100 || _paging
+                      ? null
+                      : () => _turnPage(-1),
+                ),
+                IconButton(
+                  tooltip: 'Next page',
+                  icon: const Icon(Icons.keyboard_arrow_down_rounded),
+                  onPressed: _progress < 100 || _paging
+                      ? null
+                      : () => _turnPage(1),
+                ),
+              ],
         bottom: controller != null && _progress < 100
             ? PreferredSize(
                 preferredSize: const Size.fromHeight(2),
@@ -87,7 +154,33 @@ class _MaterialWebScreenState extends State<MaterialWebScreen> {
                   style: AppTypography.bodyMedium,
                 ),
               )
-            : WebViewWidget(controller: controller),
+            : Column(
+                children: [
+                  if (widget.sourceDescription case final description?)
+                    Container(
+                      width: double.infinity,
+                      color: AppColors.greenSoft,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 10,
+                      ),
+                      child: Text(
+                        description,
+                        style: AppTypography.caption.copyWith(
+                          color: AppColors.green2,
+                        ),
+                      ),
+                    ),
+                  Expanded(
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        _readingViewportHeight = constraints.maxHeight;
+                        return WebViewWidget(controller: controller);
+                      },
+                    ),
+                  ),
+                ],
+              ),
       ),
     );
   }

@@ -1,0 +1,106 @@
+{
+  "provider": "zai",
+  "configured": true,
+  "cap_usd": 1.0,
+  "reserved_usd": 0.37809524999999994,
+  "calls": [
+    {
+      "model": "glm-5.3-flash",
+      "reserved_usd": 0.0052404999999999995,
+      "seconds": 6.22,
+      "finish": "stop",
+      "prompt_tokens": 2109,
+      "completion_tokens": 469,
+      "total_tokens": 2578,
+      "estimated_cost_usd": 0.00055085
+    },
+    {
+      "model": "glm-5.3",
+      "reserved_usd": 0.08114275000000001,
+      "seconds": 45.0,
+      "finish": null,
+      "estimated_cost_usd": null
+    },
+    {
+      "model": "glm-5.3",
+      "reserved_usd": 0.12025875,
+      "seconds": 27.91,
+      "finish": "stop",
+      "prompt_tokens": 2551,
+      "completion_tokens": 933,
+      "total_tokens": 3484,
+      "estimated_cost_usd": 0.0076766
+    },
+    {
+      "model": "glm-5.3",
+      "reserved_usd": 0.05180175000000001,
+      "seconds": 27.1,
+      "finish": "stop",
+      "prompt_tokens": 2272,
+      "completion_tokens": 800,
+      "total_tokens": 3072,
+      "estimated_cost_usd": 0.0067008
+    },
+    {
+      "model": "glm-5.3",
+      "reserved_usd": 0.053056500000000006,
+      "seconds": 15.7,
+      "finish": "stop",
+      "prompt_tokens": 2419,
+      "completion_tokens": 561,
+      "total_tokens": 2980,
+      "estimated_cost_usd": 0.005855
+    },
+    {
+      "model": "glm-5.3",
+      "reserved_usd": 0.06452524999999999,
+      "seconds": 45.0,
+      "finish": null,
+      "estimated_cost_usd": null
+    },
+    {
+      "model": "glm-5.3-flash",
+      "reserved_usd": 0.00206975,
+      "seconds": 2.75,
+      "finish": "stop",
+      "prompt_tokens": 52,
+      "completion_tokens": 96,
+      "total_tokens": 148,
+      "estimated_cost_usd": 5.58e-05
+    }
+  ],
+  "checks": {
+    "comparison": {
+      "passed": true,
+      "seconds": 7.63,
+      "dimensions": 5,
+      "missing_evidence_not_scored": true
+    },
+    "plan": {
+      "passed": false,
+      "seconds": 72.94,
+      "error_type": "RuntimeError",
+      "error": "Personalized plan generation failed across configured providers"
+    },
+    "lesson": {
+      "passed": false,
+      "seconds": 42.8,
+      "error_type": "AssertionError",
+      "error": "Plan detail outline validation failed: 1 validation error for PlanItemDetailsOutlineOutput\n  Value error, outline materials cannot use in_app_lesson; choose a real external resource for direct-link resolution [type=value_error, input_value={'steps': [{'id': 'step_1...bles, and prepayments.'}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.13/v/value_error"
+    },
+    "practice": {
+      "passed": false,
+      "seconds": 45.01,
+      "error_type": "ValueError",
+      "error": "Practice response did not satisfy its contract"
+    },
+    "chat": {
+      "passed": true,
+      "seconds": 2.76,
+      "characters": 436,
+      "first_text_seconds": 2.52
+    }
+  },
+  "estimated_cost_usd": 0.02083905,
+  "unknown_cost_calls": 2
+}

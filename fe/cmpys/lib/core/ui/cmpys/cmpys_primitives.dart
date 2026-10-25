@@ -154,6 +154,8 @@ class CmpysMentorAvatar extends StatelessWidget {
               fit: BoxFit.cover,
               errorBuilder: (_, _, _) => fallback,
             )
+          : slug.trim().isEmpty || slug == '__llm__'
+          ? fallback
           : Image.asset(
               'assets/images/mentors/$slug.png',
               fit: BoxFit.cover,
@@ -185,6 +187,8 @@ class CmpysPressable extends StatefulWidget {
     this.pressedScale = 0.975,
     this.haptic = CmpysHaptic.none,
     this.semanticLabel,
+    this.selected,
+    this.toggled,
   });
 
   final Widget child;
@@ -192,6 +196,8 @@ class CmpysPressable extends StatefulWidget {
   final double pressedScale;
   final CmpysHaptic haptic;
   final String? semanticLabel;
+  final bool? selected;
+  final bool? toggled;
 
   @override
   State<CmpysPressable> createState() => _CmpysPressableState();
@@ -254,7 +260,10 @@ class _CmpysPressableState extends State<CmpysPressable> {
             : Duration.zero,
         curve: AppCurves.easeOut,
         scale: motionEnabled && _pressed ? widget.pressedScale : 1,
-        child: widget.child,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+          child: Center(widthFactor: 1, heightFactor: 1, child: widget.child),
+        ),
       ),
     );
 
@@ -287,6 +296,8 @@ class _CmpysPressableState extends State<CmpysPressable> {
       button: true,
       enabled: enabled,
       label: widget.semanticLabel,
+      selected: widget.selected,
+      toggled: widget.toggled,
       onTap: enabled ? _handleTap : null,
       child: widget.semanticLabel == null
           ? interaction
@@ -329,7 +340,7 @@ class _CmpysButtonState extends State<CmpysButton> {
   ({double height, double fontSize, double padH}) get _dims {
     switch (widget.size) {
       case CmpysBtnSize.sm:
-        return (height: 42, fontSize: 14, padH: 18);
+        return (height: 44, fontSize: 14, padH: 18);
       case CmpysBtnSize.md:
         return (height: 52, fontSize: 16, padH: 22);
       case CmpysBtnSize.lg:
@@ -341,14 +352,14 @@ class _CmpysButtonState extends State<CmpysButton> {
     switch (widget.variant) {
       case CmpysBtnVariant.primary:
         return (
-          bg: AppColors.green,
+          bg: AppColors.green2,
           fg: Colors.white,
           border: Border.all(color: AppColors.green2, width: 1),
         );
       case CmpysBtnVariant.ochre:
         return (
           bg: AppColors.ochre,
-          fg: Colors.white,
+          fg: AppColors.ink,
           border: Border.all(color: AppColors.ochre2, width: 1),
         );
       case CmpysBtnVariant.dark:
@@ -388,8 +399,8 @@ class _CmpysButtonState extends State<CmpysButton> {
         onTap: enabled ? widget.onTap : null,
         haptic: CmpysHaptic.light,
         child: Container(
-          height: d.height,
-          padding: EdgeInsets.symmetric(horizontal: d.padH),
+          constraints: BoxConstraints(minHeight: d.height),
+          padding: EdgeInsets.symmetric(horizontal: d.padH, vertical: 12),
           width: widget.full ? double.infinity : null,
           decoration: BoxDecoration(
             color: p.bg,
@@ -410,7 +421,7 @@ class _CmpysButtonState extends State<CmpysButton> {
                     color: p.fg,
                     fontSize: d.fontSize,
                   ),
-                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
                   child: widget.child,
                 ),
               ),
@@ -460,7 +471,8 @@ class CmpysChipPill extends StatelessWidget {
               ? const Duration(milliseconds: 140)
               : Duration.zero,
           curve: AppCurves.easeOut,
-          padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 9),
+          constraints: const BoxConstraints(minHeight: 44),
+          padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 10),
           decoration: BoxDecoration(
             color: active ? tint : Colors.transparent,
             borderRadius: AppRadii.brFull,
@@ -472,7 +484,9 @@ class CmpysChipPill extends StatelessWidget {
           child: Text(
             label,
             style: AppTypography.bodyMedium.copyWith(
-              color: active ? color : AppColors.ink2,
+              color: active
+                  ? (color == AppColors.green ? AppColors.green2 : color)
+                  : AppColors.ink2,
               fontWeight: FontWeight.w500,
               fontSize: 14,
             ),
@@ -559,7 +573,9 @@ class CmpysRing extends StatelessWidget {
         alignment: Alignment.center,
         children: [
           TweenAnimationBuilder<double>(
-            duration: const Duration(milliseconds: 800),
+            duration: MotionConfig.enabled(context)
+                ? const Duration(milliseconds: 800)
+                : Duration.zero,
             curve: AppCurves.easeOut,
             tween: Tween(begin: 0, end: value.clamp(0, 100) / 100),
             builder: (_, v, _) => CustomPaint(
@@ -654,7 +670,9 @@ class CmpysBar extends StatelessWidget {
       child: Align(
         alignment: Alignment.centerLeft,
         child: TweenAnimationBuilder<double>(
-          duration: const Duration(milliseconds: 800),
+          duration: MotionConfig.enabled(context)
+              ? const Duration(milliseconds: 800)
+              : Duration.zero,
           curve: AppCurves.easeOut,
           tween: Tween(begin: 0, end: pct),
           builder: (_, v, _) => FractionallySizedBox(
@@ -744,7 +762,18 @@ class _CmpysTypingDotsState extends State<CmpysTypingDots>
     _c = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1100),
-    )..repeat();
+    );
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MotionConfig.enabled(context)) {
+      if (!_c.isAnimating) _c.repeat();
+    } else {
+      _c.stop();
+      _c.value = 0;
+    }
   }
 
   @override
@@ -770,7 +799,7 @@ class _CmpysTypingDotsState extends State<CmpysTypingDots>
             return Padding(
               padding: EdgeInsets.only(right: i == 2 ? 0 : 4),
               child: Opacity(
-                opacity: o,
+                opacity: MotionConfig.enabled(context) ? o : 0.65,
                 child: Container(
                   width: widget.size,
                   height: widget.size,
@@ -947,6 +976,7 @@ class _ToastWidget extends StatefulWidget {
 class _ToastWidgetState extends State<_ToastWidget>
     with SingleTickerProviderStateMixin {
   late final AnimationController _c;
+  Timer? _dismissTimer;
 
   @override
   void initState() {
@@ -955,15 +985,19 @@ class _ToastWidgetState extends State<_ToastWidget>
       vsync: this,
       duration: const Duration(milliseconds: 220),
     )..forward();
-    Future.delayed(widget.duration, () async {
-      if (!mounted) return;
-      await _c.reverse();
-      widget.onClose();
+    _dismissTimer = Timer(widget.duration, () async {
+      try {
+        await _c.reverse().orCancel;
+        if (mounted) widget.onClose();
+      } on TickerCanceled {
+        // The owning overlay was dismissed before the toast finished.
+      }
     });
   }
 
   @override
   void dispose() {
+    _dismissTimer?.cancel();
     _c.dispose();
     super.dispose();
   }
@@ -973,49 +1007,64 @@ class _ToastWidgetState extends State<_ToastWidget>
     final bottomInset = MediaQuery.of(context).padding.bottom;
     final keyboardInset = MediaQuery.of(context).viewInsets.bottom;
     return Positioned(
-      left: 0,
-      right: 0,
+      left: 16,
+      right: 16,
       bottom: keyboardInset > 0 ? keyboardInset + 16 : 108 + bottomInset,
       child: IgnorePointer(
         child: Center(
-          child: AnimatedBuilder(
-            animation: _c,
-            builder: (_, child) => Opacity(
-              opacity: _c.value,
-              child: Transform.translate(
-                offset: Offset(0, 12 * (1 - _c.value)),
-                child: child,
-              ),
-            ),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 17, vertical: 11),
-              decoration: BoxDecoration(
-                color: AppColors.ink,
-                borderRadius: BorderRadius.circular(14),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Color(0x40000000),
-                    blurRadius: 30,
-                    offset: Offset(0, 10),
+          child: Semantics(
+            container: true,
+            liveRegion: true,
+            label: widget.message,
+            excludeSemantics: true,
+            child: AnimatedBuilder(
+              animation: _c,
+              builder: (_, child) => Opacity(
+                opacity: _c.value,
+                child: Transform.translate(
+                  offset: Offset(
+                    0,
+                    MotionConfig.enabled(context) ? 12 * (1 - _c.value) : 0,
                   ),
-                ],
+                  child: child,
+                ),
               ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (widget.icon != null) ...[
-                    Icon(widget.icon, size: 17, color: widget.tone),
-                    const SizedBox(width: 9),
-                  ],
-                  Text(
-                    widget.message,
-                    style: AppTypography.body.copyWith(
-                      color: Colors.white,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
+              child: Container(
+                constraints: const BoxConstraints(maxWidth: 560),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 17,
+                  vertical: 11,
+                ),
+                decoration: BoxDecoration(
+                  color: AppColors.ink,
+                  borderRadius: BorderRadius.circular(14),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x40000000),
+                      blurRadius: 30,
+                      offset: Offset(0, 10),
                     ),
-                  ),
-                ],
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (widget.icon != null) ...[
+                      Icon(widget.icon, size: 17, color: widget.tone),
+                      const SizedBox(width: 9),
+                    ],
+                    Flexible(
+                      child: Text(
+                        widget.message,
+                        style: AppTypography.body.copyWith(
+                          color: Colors.white,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -1037,6 +1086,9 @@ Future<T?> showCmpysSheet<T>(
   return showModalBottomSheet<T>(
     context: context,
     isScrollControlled: true,
+    useSafeArea: true,
+    showDragHandle: true,
+    requestFocus: true,
     backgroundColor: AppColors.paper,
     barrierColor: const Color(0x6B16161C),
     shape: const RoundedRectangleBorder(
@@ -1051,30 +1103,25 @@ Future<T?> showCmpysSheet<T>(
           ),
           child: Container(
             constraints: BoxConstraints(
-              maxHeight: MediaQuery.of(ctx).size.height * 0.88,
+              maxHeight:
+                  (MediaQuery.sizeOf(ctx).height * 0.88 -
+                          MediaQuery.viewInsetsOf(ctx).bottom)
+                      .clamp(0.0, double.infinity),
             ),
             padding: const EdgeInsets.fromLTRB(18, 10, 18, 34),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Center(
-                  child: Container(
-                    width: 40,
-                    height: 5,
-                    margin: const EdgeInsets.only(bottom: 14, top: 4),
-                    decoration: BoxDecoration(
-                      color: AppColors.hair2,
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                  ),
-                ),
-                if (title != null) ...[
-                  Text(title, style: AppTypography.h3),
-                  const SizedBox(height: 12),
+            child: SingleChildScrollView(
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (title != null) ...[
+                    Text(title, style: AppTypography.h3),
+                    const SizedBox(height: 12),
+                  ],
+                  child,
                 ],
-                Flexible(child: child),
-              ],
+              ),
             ),
           ),
         ),

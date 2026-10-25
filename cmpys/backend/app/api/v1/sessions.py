@@ -17,17 +17,19 @@ import logging
 import re
 import time
 import uuid
+from contextlib import aclosing
 from datetime import date, datetime, timedelta, timezone
 from typing import Annotated
 
 import anyio
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import JSON, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
 from app.api.dependencies import get_current_user
+from app.core.config import settings
 from app.core.db import get_db
 from app.models.chat import ChatThread, ChatMessage, MessageRole
 from app.models.idol import CatalogStatus, Idol
@@ -65,6 +67,7 @@ from app.services.comparison.scoring import (
     comparison_score_retry_delay,
     generate_comparison_scores,
 )
+from app.services.comparison.mentor_facts import catalog_mentor_facts
 from app.services.content_resources import attach_content_resources_to_materials
 from app.services.llm import get_llm_client
 from app.services.llm.prompt_loader import load_and_render, sanitize_untrusted_input
@@ -72,6 +75,7 @@ from app.services.idol_photos import is_verified_idol_photo, resolve_wikimedia_p
 from app.services.interview_inputs import (
     INTERVIEW_ANSWER_KEY_INSTRUCTIONS,
     INTERVIEW_ANSWER_KEYS,
+    INTERVIEW_QUESTION_FALLBACKS,
     build_interview_plan_inputs,
     extract_legacy_weekly_hours,
     next_interview_answer_key,
@@ -84,9 +88,16 @@ logger = logging.getLogger("cmpys.api.sessions")
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
-# Six plan-readiness questions plus one closing mentor response. The eighth
-# turn is a safety ceiling for a provider that asks one necessary clarification.
-MAX_INTERVIEW_TURNS = 8
+# Eight evidence inputs plus a short closing acknowledgment. Coverage, rather
+# than an arbitrary turn ceiling, remains authoritative for resumed sessions.
+MAX_INTERVIEW_TURNS = len(INTERVIEW_ANSWER_KEYS) + 1
+INTERVIEW_QUESTION_TIMEOUT_SECONDS = 18
+INTERVIEW_QUESTION_MAX_WORDS = 55
+INTERVIEW_QUESTION_MAX_CHARACTERS = 450
+INTERVIEW_CLOSING_TEXT = (
+    "Your starting point is saved. Next, we’ll use your answers and weekly time "
+    "to build your comparison and personal plan."
+)
 INTERVIEW_GENERATION_LEASE = timedelta(minutes=2)
 RESULTS_GENERATION_LEASE = timedelta(minutes=15)
 
@@ -1092,6 +1103,26 @@ async def _maybe_enqueue_scores_backfill(
     a broker hiccup must never fail the read path.
     """
     if comparison_scores_are_current(session.comparison_scores_json):
+        saved = session.comparison_scores_json
+        if saved.get("evidence_policy_version") != 2 and getattr(session, "interview_thread_id", None):
+            # Reclassify cached evidence locally; no paid score regeneration.
+            from app.services.comparison.scoring import normalize_comparison_scores
+            messages = (await db.execute(
+                select(ChatMessage).join(ChatThread, ChatMessage.thread_id == ChatThread.id)
+                .where(ChatThread.id == session.interview_thread_id, ChatThread.user_id == session.user_id)
+                .order_by(ChatMessage.created_at, ChatMessage.id)
+            )).scalars().all()
+            if messages:
+                baseline = build_interview_plan_inputs(messages, session_goal=session.user_goal, require_diagnostics=True)
+                revised = normalize_comparison_scores(saved, achievement_baseline_status=baseline["achievement_baseline_status"], learner_baseline=baseline)
+                claim = await db.execute(update(IntakeSession).where(
+                    IntakeSession.id == session.id,
+                    IntakeSession.user_id == session.user_id,
+                    IntakeSession.comparison_scores_json == saved,
+                ).values(comparison_scores_json=revised).execution_options(synchronize_session=False))
+                if claim.rowcount == 1:
+                    session.comparison_scores_json = revised
+                await db.commit()
         session.comparison_scores_status = "ready"
         return
     if not session.comparison_output:
@@ -1115,6 +1146,7 @@ async def _maybe_enqueue_scores_backfill(
             or_(
                 IntakeSession.comparison_scores_status != "ready",
                 IntakeSession.comparison_scores_status.is_(None),
+                IntakeSession.comparison_scores_json["placement_version"].as_integer().is_distinct_from(1),
             ),
             or_(
                 IntakeSession.comparison_scores_status.in_(["not_started", "queued"]),
@@ -1233,6 +1265,19 @@ def _build_session_response(session: IntakeSession) -> dict:
         "created_at": session.created_at.isoformat() if session.created_at else None,
         "updated_at": session.updated_at.isoformat() if session.updated_at else None,
     }
+
+
+async def _build_refreshed_session_response(session: IntakeSession, db: AsyncSession) -> dict:
+    """Materialize server-generated timestamps before synchronous serialization.
+
+    Score backfill may update this row even during GET. An ORM flush expires
+    the SQL-generated updated_at despite expire_on_commit=False; accessing it
+    in the synchronous response builder otherwise attempts forbidden async IO.
+    Refresh only this scalar so already-loaded mentor relationships stay loaded.
+    """
+    await db.flush()
+    await db.refresh(session, attribute_names=["updated_at"])
+    return _build_session_response(session)
 
 
 def _build_chat_history_json(
@@ -1571,10 +1616,8 @@ async def select_idol(
     response = _build_session_response(session)
     await db.commit()
 
-    # Prefetch the grounded idol facts in the background so the first
-    # interview turn doesn't pay the 3-8s Google-Search round trip inline.
-    # Best-effort: the interview path still fetches inline if this hasn't
-    # landed (it only prefills session.idol_facts_json).
+    # Biography research is optional context, never a prerequisite for asking
+    # about the learner. Keep it off the interactive question path.
     asyncio.create_task(
         _prefetch_idol_facts(
             session_id=session.id,
@@ -1596,39 +1639,53 @@ async def _prefetch_idol_facts(
     """Background task: fetch idol facts and store them on the session.
 
     Uses its own DB session — the request's session is closed by the time
-    this runs. Any failure is swallowed; the interview stream falls back to
-    fetching the facts inline (guarded by `not session.idol_facts_json`).
+    this runs. Any failure is swallowed; the interview simply omits unsupported
+    biographical comparisons rather than blocking or fabricating them.
     """
     from app.core.db import async_session_maker
 
     try:
-        facts_prompt = (
-            f"What had {idol_name} achieved by age {user_age}? "
-            f"List specific, verified accomplishments as concise bullet points, "
-            f"one per line, each with the year and {idol_name}'s age at the time."
-        )
-        facts_response = await generate_with_grounding(
-            system_prompt="You are a historical fact checker. Return accurate, sourced facts.",
-            user_message=facts_prompt,
-            operation="idol_fact_lookup",
-            tier="fast",
-            thinking_level="minimal",
-            max_output_tokens=900,
-        )
-        if not facts_response:
-            return
         async with async_session_maker() as bg_db:
-            result = await bg_db.execute(
+            bg_session = (await bg_db.execute(
                 select(IntakeSession).where(IntakeSession.id == session_id)
+            )).scalar_one_or_none()
+            if not bg_session or bg_session.idol_facts_json:
+                return
+            idol_id = bg_session.idol_id
+            # Catalog reads are local and deterministic. Never spend a provider
+            # request or wait for optional web research when cited facts exist.
+            facts = await catalog_mentor_facts(bg_db, idol_id=idol_id, user_age=user_age)
+        if not facts:
+            facts_prompt = (
+                f"What had {idol_name} achieved by age {user_age}? "
+                f"List specific, verified accomplishments as concise bullet points, "
+                f"one per line, each with the year and {idol_name}'s age at the time."
             )
-            bg_session = result.scalar_one_or_none()
-            # Never clobber facts the interview path may have written first.
-            if bg_session and not bg_session.idol_facts_json:
-                bg_session.idol_facts_json = {"raw_facts": facts_response}
-                await bg_db.commit()
-                logger.info(f"[SESSION] Prefetched idol facts for session {session_id}")
+            facts_response = await generate_with_grounding(
+                system_prompt="You are a historical fact checker. Return accurate, sourced facts.",
+                user_message=facts_prompt,
+                operation="idol_fact_lookup",
+                tier="fast",
+                thinking_level="minimal",
+                max_output_tokens=900,
+            )
+            if not facts_response:
+                return
+            facts = {"raw_facts": facts_response}
+        async with async_session_maker() as bg_db:
+            # Compare-and-set avoids overwriting newer evidence or a changed
+            # mentor/age while the optional provider call was in flight.
+            await bg_db.execute(update(IntakeSession).where(
+                IntakeSession.id == session_id,
+                IntakeSession.idol_id == idol_id,
+                IntakeSession.user_age == user_age,
+                or_(IntakeSession.idol_facts_json.is_(None), IntakeSession.idol_facts_json == JSON.NULL,
+                    IntakeSession.idol_facts_json == {}),
+            ).values(idol_facts_json=facts))
+            await bg_db.commit()
+
     except Exception as e:
-        logger.warning(f"[SESSION] Idol facts prefetch failed (will fetch inline): {e}")
+        logger.warning(f"[SESSION] Optional idol facts prefetch failed: {e}")
 
 
 # =============================================================================
@@ -1675,7 +1732,7 @@ async def get_current_session(
         return None
 
     await _maybe_enqueue_scores_backfill(session, db)
-    return _build_session_response(session)
+    return await _build_refreshed_session_response(session, db)
 
 
 @router.get("/latest", response_model=SessionResponse | None)
@@ -1706,7 +1763,7 @@ async def get_latest_session(
         return None
 
     await _maybe_enqueue_scores_backfill(session, db)
-    return _build_session_response(session)
+    return await _build_refreshed_session_response(session, db)
 
 
 @router.get("/{session_id}", response_model=SessionResponse)
@@ -1723,7 +1780,7 @@ async def get_session(
     """
     session = await _get_session(session_id, current_user.id, db)
     await _maybe_enqueue_scores_backfill(session, db)
-    return _build_session_response(session)
+    return await _build_refreshed_session_response(session, db)
 
 
 @router.post(
@@ -1755,7 +1812,7 @@ async def retry_comparison_scores(
     session.comparison_scores_next_retry_at = None
     await db.commit()
     await _maybe_enqueue_scores_backfill(session, db)
-    return _build_session_response(session)
+    return await _build_refreshed_session_response(session, db)
 
 
 # =============================================================================
@@ -1856,6 +1913,52 @@ def _render_interview_prompts(
     return system_prompt, user_prompt
 
 
+async def _generate_concise_interview_question(
+    *, system_prompt: str, user_prompt: str, answer_key: str
+) -> tuple[str, InterviewResponseInput]:
+    """Accept only a complete, short question before publishing it to the UI.
+
+    An intake question needs very little text. Buffering that bounded response
+    prevents partial provider failures, paragraphs of biography or protocol
+    fragments from flashing on screen. The fallback asks for the same evidence
+    and does not mark an unanswered field as complete.
+    """
+    try:
+        async with asyncio.timeout(INTERVIEW_QUESTION_TIMEOUT_SECONDS):
+            raw = ""
+            async with aclosing(interview_stream(
+                system_prompt=system_prompt,
+                user_message=user_prompt,
+            )) as chunks:
+                async for chunk in chunks:
+                    raw += chunk
+                    if len(raw) > 6000:
+                        raise ValueError("Interview response exceeded protocol budget")
+
+        visible, response_input = _split_interview_response(raw)
+        visible = visible.strip()
+        completion_text = _interview_completion_text(raw)
+        if (
+            not visible
+            or len(visible) > INTERVIEW_QUESTION_MAX_CHARACTERS
+            or len(visible.split()) > INTERVIEW_QUESTION_MAX_WORDS
+            or len(re.findall(r"[?？]", visible)) != 1
+            or _INTERVIEW_COMPLETE_RE.search(completion_text)
+            or any(signal in visible.casefold() for signal in _COMPLETION_FALLBACK_SIGNALS)
+            or re.search(r"[<>]|CMPYS_RESPONSE_UI|INTERVIEW_COMPLETE|```|(?:^|\n)\s*(?:[-*]|\d+[.)])\s", visible, re.IGNORECASE)
+        ):
+            raise ValueError("Interview response did not meet the question contract")
+        return visible, response_input
+    except Exception as exc:
+        # Cancellation is a BaseException and deliberately propagates so the
+        # existing shielded cleanup releases the durable retry lease.
+        logger.warning(
+            "[SESSION] Using concise question for %s after %s",
+            answer_key, type(exc).__name__,
+        )
+        return INTERVIEW_QUESTION_FALLBACKS[answer_key], _default_interview_response_input()
+
+
 @router.post("/{session_id}/interview")
 async def interview(
     session_id: str,
@@ -1869,6 +1972,10 @@ async def interview(
     The AI responds in-character as the selected idol, asks exactly
     one plan-readiness question per turn and closes after all required inputs.
     """
+    if not data.is_kickoff and not data.content.strip():
+        _raise_interview_conflict(
+            "invalid_interview_answer", "Add an answer before continuing."
+        )
     session = await _get_session(session_id, current_user.id, db)
 
     if not session.interview_thread_id:
@@ -2121,8 +2228,15 @@ async def interview(
     plan_inputs = build_interview_plan_inputs(
         planning_messages,
         session_goal=session.user_goal,
+        require_diagnostics=True,
     )
     required_answer_key = next_interview_answer_key(planning_messages)
+    from app.services.intake_diagnostics import select_diagnostic
+
+    diagnostic = select_diagnostic(
+        required_answer_key, session.user_goal or "",
+        session.idol.name if session.idol else "",
+    )
 
     # Build context for the prompt
     chat_history_json = _build_chat_history_json(prompt_history)
@@ -2161,10 +2275,7 @@ async def interview(
 
     async def generate_stream():
         nonlocal should_transition
-        full_response = ""
-        response_filter = _InterviewResponseUiStreamFilter()
         generation_committed = False
-        generated_idol_facts: dict | None = None
 
         async def mark_generation_failed() -> None:
             nonlocal generation_committed
@@ -2194,89 +2305,41 @@ async def interview(
                 )
 
         try:
-            # Emit a byte immediately so the client sees the stream is alive
-            # before the (first-turn) Google-Search grounding, which can take
-            # several seconds. Without this the connection is silent and the app
-            # can give up before the first interview chunk arrives.
+            # Acknowledge immediately; optional biography research never blocks
+            # an intake question and the model path has a short total budget.
             yield f"data: {json_lib.dumps({'type': 'status', 'message': 'thinking'})}\n\n"
 
-            # On the first turn, fetch idol facts via Google Search — done
-            # INSIDE the stream so the SSE response starts immediately rather
-            # than blocking on grounding before the first byte.
-            if session.interview_turn_count == 0 and not session.idol_facts_json:
-                logger.info(
-                    f"[SESSION] Fetching idol facts for {idol_name} at age {session.user_age}"
-                )
-                facts_prompt = (
-                    f"What had {idol_name} achieved by age {session.user_age}? "
-                    f"List specific, verified accomplishments as concise bullet points, "
-                    f"one per line, each with the year and {idol_name}'s age at the time."
-                )
-                facts_response = await generate_with_grounding(
-                    system_prompt="You are a historical fact checker. Return accurate, sourced facts.",
-                    user_message=facts_prompt,
-                    operation="interview_idol_fact_lookup",
-                    tier="fast",
-                    thinking_level="minimal",
-                    max_output_tokens=900,
-                )
-                generated_idol_facts = {"raw_facts": facts_response}
-                session.idol_facts_json = generated_idol_facts
-
-            # Render both prompts inside the stream so render errors become SSE
-            # error events. The verified fact sheet now lives in the per-turn
-            # prompt, and the transcript is included exactly once.
-            system_prompt, user_prompt = _render_interview_prompts(
-                session,
-                idol_name=idol_name,
-                idol_persona=idol_persona,
-                chat_history_json=chat_history_json,
-                current_turn=current_turn,
-                user_message=user_content,
-                required_answer_key=required_answer_key,
-                plan_inputs=plan_inputs,
-            )
-
-            async for chunk in interview_stream(
-                system_prompt=system_prompt,
-                user_message=user_prompt,
-            ):
-                full_response += chunk
-                visible_chunk = response_filter.push(chunk)
-                if visible_chunk:
-                    yield f"data: {json_lib.dumps({'type': 'chunk', 'content': visible_chunk})}\n\n"
-
-            final_visible_chunk = response_filter.finish()
-            if final_visible_chunk:
-                yield f"data: {json_lib.dumps({'type': 'chunk', 'content': final_visible_chunk})}\n\n"
-
-            # Persist the AI's response — with the completion marker stripped
-            # so it never pollutes the transcript fed to comparison/blueprint.
-            visible_response, response_input = _split_interview_response(full_response)
-            clean_response = _INTERVIEW_COMPLETE_RE.sub("", visible_response).rstrip()
-            if not clean_response.strip():
-                raise RuntimeError("Interview model returned an empty response")
-
-            # A model cannot close the interview while a required planning
-            # field is still missing. Treat that as a retryable generation
-            # contract failure rather than persisting a closing paragraph as
-            # though it were the next diagnostic question.
-            lower = visible_response.lower()
-            completion_text = _interview_completion_text(full_response)
-            completion_requested = bool(
-                _INTERVIEW_COMPLETE_RE.search(completion_text)
-                or any(sig in lower for sig in _COMPLETION_FALLBACK_SIGNALS)
-            )
-            if completion_requested and required_answer_key is not None:
-                raise RuntimeError(
-                    "Interview model closed before required plan inputs were captured"
-                )
-            if required_answer_key is None:
-                if not completion_requested:
-                    raise RuntimeError(
-                        "Interview model did not emit the required closing marker"
-                    )
+            response_input = _default_interview_response_input()
+            if diagnostic is not None:
+                # The question and grading key must refer to the exact same
+                # versioned case. Do not pay a model to rewrite its conditions.
+                clean_response = diagnostic.question
+            elif required_answer_key is None:
+                # Coverage is owned by the server. Finishing intake should not
+                # depend on another provider call or a model remembering a tag.
+                clean_response = INTERVIEW_CLOSING_TEXT
                 should_transition = True
+            elif effective_kickoff or required_answer_key == "weekly_hours":
+                clean_response = INTERVIEW_QUESTION_FALLBACKS[required_answer_key]
+            else:
+                # Render both prompts inside the stream so render errors become SSE
+                # error events. The transcript is included exactly once.
+                system_prompt, user_prompt = _render_interview_prompts(
+                    session,
+                    idol_name=idol_name,
+                    idol_persona=idol_persona,
+                    chat_history_json=chat_history_json,
+                    current_turn=current_turn,
+                    user_message=user_content,
+                    required_answer_key=required_answer_key,
+                    plan_inputs=plan_inputs,
+                )
+
+                clean_response, response_input = await _generate_concise_interview_question(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    answer_key=required_answer_key,
+                )
 
             # Re-lock the durable gates after generation. A newer lease owner
             # wins over this result, and an abandoned/completed session can
@@ -2309,9 +2372,6 @@ async def interview(
                 yield f"data: {json_lib.dumps({'type': 'error', 'code': 'interview_turn_superseded', 'message': 'The interview has advanced. Refreshing will show the latest question.'})}\n\n"
                 return
 
-            if generated_idol_facts is not None:
-                locked_session.idol_facts_json = generated_idol_facts
-
             persisted_response_input = (
                 None
                 if should_transition
@@ -2320,6 +2380,10 @@ async def interview(
                     required_answer_key,
                 )
             )
+            if diagnostic is not None:
+                persisted_response_input = InterviewResponseInput.model_validate(
+                    diagnostic.response_ui(required_answer_key)
+                )
             ai_msg = ChatMessage(
                 id=str(uuid.uuid4()),
                 thread_id=locked_thread.id,
@@ -2348,6 +2412,10 @@ async def interview(
             _clear_interview_claim(locked_thread)
             await db.commit()
             generation_committed = True
+
+            # Publish only after durable persistence. A lost terminal event can
+            # replay the exact question and controls using the existing IDs.
+            yield f"data: {json_lib.dumps({'type': 'chunk', 'content': clean_response})}\n\n"
 
             # Attach response metadata to the terminal event so prose and its
             # control are accepted atomically by the client.
@@ -2403,8 +2471,8 @@ async def _get_or_create_session_plan_job(
     The job remains at ``waiting_for_strategy`` until comparison + blueprint
     are persisted. This makes the post-interview pipeline immediate and
     observable without sacrificing plan quality by generating before its
-    strategic inputs exist. Replays reuse active/completed work; a failed job
-    gets one fresh row when the user explicitly retries the pipeline.
+    strategic inputs exist. Replays and explicit retries reuse the same row,
+    preserving valid checkpoints and any already-persisted plan.
     """
     if not session.idol_id:
         return None
@@ -2416,33 +2484,29 @@ async def _get_or_create_session_plan_job(
                 PlanGenerationJob.user_id == user_id,
                 PlanGenerationJob.idol_id == session.idol_id,
                 PlanGenerationJob.session_id == session.id,
-                PlanGenerationJob.status.in_(["pending", "running", "completed"]),
+                PlanGenerationJob.status.in_(["pending", "running", "completed", "failed"]),
             )
             .order_by(PlanGenerationJob.created_at.desc())
             .limit(1)
         )
     ).scalar_one_or_none()
     if existing:
-        if existing.status in {"pending", "running"}:
-            last_update = getattr(existing, "updated_at", None) or getattr(
-                existing, "created_at", None
-            )
-            if last_update is not None:
-                if last_update.tzinfo is None:
-                    last_update = last_update.replace(tzinfo=timezone.utc)
-                if datetime.now(timezone.utc) - last_update >= timedelta(minutes=15):
-                    existing.status = "failed"
-                    existing.step = "error"
-                    existing.error_message = (
-                        "Generation worker stopped before completion"
-                    )
-                    await db.commit()
-                    existing = None
+        from app.api.v1.plans import _plan_job_is_stale
 
-    if existing:
+        if existing.status == "failed" or (
+            existing.status in {"pending", "running"}
+            and existing.step != "waiting_for_strategy"
+            and _plan_job_is_stale(existing)
+        ):
+            existing.status = "pending"
+            existing.step = "waiting_for_strategy"
+            existing.progress_percent = 0
+            existing.error_message = None
+            existing.thinking_text = None
         if existing.status == "pending" and existing.step == "waiting_for_strategy":
-            existing.weekly_hours = weekly_hours
-            existing.focus = focus or session.user_goal
+            if not getattr(existing, "plan_id", None):
+                existing.weekly_hours = weekly_hours
+                existing.focus = focus or session.user_goal
             await db.commit()
         return existing
 
@@ -2478,16 +2542,30 @@ async def _dispatch_session_plan_job(db, job: PlanGenerationJob | None) -> None:
     job.error_message = None
     await db.commit()
 
-    try:
-        from app.tasks.plans import run_plan_generation
+    from app.api.v1.plans import publish_plan_generation_job
 
-        run_plan_generation.delay(str(job.id))
-    except Exception as exc:
-        job.status = "failed"
-        job.step = "error"
-        job.error_message = "Plan generation could not be queued"
-        await db.commit()
-        raise exc
+    if await publish_plan_generation_job(db, job) == "failed":
+        raise RuntimeError("Plan generation could not be queued")
+
+
+def _results_error_event(error: Exception, section: str) -> dict:
+    """Expose actionable categories, never upstream bodies or credentials."""
+    from app.services.llm.openlux import OpenLuxStreamError
+
+    code = error.code if isinstance(error, OpenLuxStreamError) else "generation_failed"
+    messages = {
+        "generation_unavailable": "Generation is unavailable right now. Your answers are saved. Please try again later.",
+        "generation_rate_limited": "Generation is busy right now. Your answers are saved. Please wait before trying again.",
+        "generation_failed": "Generation could not finish. Your answers are saved. Please try again.",
+    }
+    event = {
+        "type": "error", "section": section, "code": code,
+        "message": messages[code],
+        "retryable": error.retryable if isinstance(error, OpenLuxStreamError) else True,
+    }
+    if isinstance(error, OpenLuxStreamError) and error.retry_after_seconds is not None:
+        event["retry_after_seconds"] = error.retry_after_seconds
+    return event
 
 
 @router.post("/{session_id}/generate-results")
@@ -2641,6 +2719,12 @@ async def generate_results(
             detail="The intake session changed while results were being claimed.",
         )
 
+    # Resolve the optional-prefetch race before taking a stable input snapshot.
+    # Existing artifacts retain their original evidence; retries replay them.
+    if not session.comparison_output and not session.idol_facts_json:
+        session.idol_facts_json = await catalog_mentor_facts(
+            db, idol_id=session.idol_id, user_age=session.user_age)
+
     _clear_interview_claim(claimed_thread)
     results_claim_token = str(uuid.uuid4())
     claimed_thread.interview_claim_key = "results"
@@ -2682,7 +2766,10 @@ async def generate_results(
     # later persistence calls transparently acquire it again.
     await db.commit()
 
+    scores_task = None
+
     async def _generate_results_stream():
+        nonlocal scores_task
         pipeline_session = session
         if plan_job is not None:
             yield f"data: {json_lib.dumps({'type': 'plan_job', 'job_id': str(plan_job.id)})}\n\n"
@@ -2690,7 +2777,6 @@ async def generate_results(
         # =====================================================================
         # Part 1: Comparison — generate once, then replay on retry/resume.
         # =====================================================================
-        scores_task = None
         full_comparison = pipeline_session.comparison_output or ""
         yield f"data: {json_lib.dumps({'type': 'section', 'section': 'comparison'})}\n\n"
 
@@ -2757,7 +2843,7 @@ async def generate_results(
                 # Remain in COMPARISON so the same endpoint can retry without
                 # making the user repeat the interview.
                 await db.rollback()
-                yield f"data: {json_lib.dumps({'type': 'error', 'section': 'comparison', 'message': 'Comparison generation failed. Please try again.', 'retryable': True})}\n\n"
+                yield f"data: {json_lib.dumps(_results_error_event(e, 'comparison'))}\n\n"
                 return
 
         if not comparison_scores_are_current(pipeline_session.comparison_scores_json):
@@ -2775,7 +2861,7 @@ async def generate_results(
             scores_task = asyncio.create_task(
                 generate_comparison_scores(
                     get_llm_client(
-                        timeout=COMPARISON_SCORE_PROVIDER_TIMEOUT_SECONDS,
+                        timeout=40 if settings.llm_provider == "zai" else COMPARISON_SCORE_PROVIDER_TIMEOUT_SECONDS,
                         max_tokens=3500,
                         tier="fast",
                         thinking_level="minimal",
@@ -2810,7 +2896,9 @@ async def generate_results(
                     "user_age": str(pipeline_session.user_age),
                     "user_profile_json": user_profile_prompt_json,
                     "interview_transcript_json": interview_transcript,
-                    "comparison_summary": full_comparison[:2000],
+                    "comparison_summary": json_lib.dumps({"comparison": full_comparison,
+                        "evidence_status": plan_inputs.get("achievement_baseline_status"),
+                        "learner_baseline": plan_inputs}, ensure_ascii=False),
                     "idol_facts_json": json_lib.dumps(
                         pipeline_session.idol_facts_json or {}
                     ),
@@ -2868,7 +2956,7 @@ async def generate_results(
                     scores_task.cancel()
                 # Remain in BLUEPRINT; the retry reuses the finished comparison.
                 await db.rollback()
-                yield f"data: {json_lib.dumps({'type': 'error', 'section': 'blueprint', 'message': 'Blueprint generation failed. Please try again.', 'retryable': True})}\n\n"
+                yield f"data: {json_lib.dumps(_results_error_event(e, 'blueprint'))}\n\n"
                 return
 
         # =====================================================================
@@ -2951,6 +3039,13 @@ async def generate_results(
             async for event in _generate_results_stream():
                 yield event
         finally:
+            # The scoring request belongs to this stream. A disconnected client
+            # or failed blueprint must not leave an orphan paid provider call.
+            if scores_task is not None:
+                if not scores_task.done():
+                    scores_task.cancel()
+                with anyio.move_on_after(5, shield=True):
+                    await asyncio.gather(scores_task, return_exceptions=True)
             with anyio.move_on_after(5, shield=True):
                 await _release_owned_thread_claim(
                     db,
@@ -2989,7 +3084,7 @@ async def get_learning_materials(
     Fetch curated learning materials for a specific blueprint topic.
     Uses Google Search grounding to find real articles and videos.
     """
-    await _get_session(session_id, current_user.id, db)
+    learning_session = await _get_session(session_id, current_user.id, db)
 
     # The grounded search is network-bound and does not need a database
     # connection.  Close the read transaction until resource attachment.
@@ -2998,7 +3093,14 @@ async def get_learning_materials(
     # Braces in the user-typed topic would read as unresolved placeholders
     # under strict rendering — neutralise them before substitution.
     safe_topic = data.topic.replace("{", "(").replace("}", ")")
-    prompt = load_and_render("learning_materials_generate.txt", {"topic": safe_topic})
+    prompt = load_and_render("learning_materials_generate.txt", {
+        "topic": safe_topic,
+        "learner_context": json_lib.dumps({
+            "goal": getattr(learning_session, "user_goal", None),
+            "skill_evidence": getattr(learning_session, "comparison_scores_json", None),
+            "requested_level": data.level, "language": data.language,
+        }, ensure_ascii=False),
+    })
 
     full_response = await generate_with_grounding(
         system_prompt=load_and_render("learning_materials_system.txt", {}),
@@ -3050,6 +3152,27 @@ async def get_learning_materials(
         raise HTTPException(
             status_code=502, detail="Failed to fetch learning materials"
         )
+
+
+@router.get("/{session_id}/guided-learning/messages")
+async def guided_learning_messages(
+    session_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    session = await _get_session(session_id, current_user.id, db)
+    if not session.learning_thread_id:
+        return {"messages": []}
+    # Restrict both the session and thread to the authenticated learner.
+    rows = (await db.execute(
+        select(ChatMessage).join(ChatThread, ChatMessage.thread_id == ChatThread.id)
+        .where(ChatThread.id == session.learning_thread_id, ChatThread.user_id == current_user.id)
+        .order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc()).limit(200)
+    )).scalars().all()
+    return {"messages": [
+        {"id": str(m.id), "role": m.role.value, "content": m.content}
+        for m in reversed(rows)
+    ]}
 
 
 @router.post("/{session_id}/guided-learning")
@@ -3310,11 +3433,39 @@ async def get_daily_feed(
     # to run it without monopolizing a database connection.
     await db.commit()
 
-    full_response = await generate_with_grounding(
-        system_prompt=_render_persona_system(idol_name, idol_persona),
-        user_message=prompt,
-        operation="daily_feed_generation",
-    )
+    if settings.llm_provider in {"openlux", "zai"}:
+        # These cards interpret supplied evidence; their prompt explicitly
+        # forbids inventing additional biography. No new search is necessary.
+        from app.services.llm.telemetry import (
+            record_usage_records,
+            usage_record_from_response,
+        )
+
+        client = get_llm_client(
+            tier="balanced", max_tokens=1500, timeout=40, allow_fallback=False,
+        )
+        validated, response = await client.generate_and_validate(
+            system_prompt=_render_persona_system(idol_name, idol_persona),
+            user_prompt=prompt,
+            output_model=DailyFeedResponse,
+            repair_on_failure=False,
+        )
+        try:
+            async with asyncio.timeout(3):
+                await record_usage_records([usage_record_from_response(
+                    operation="daily_feed_generation", response=response,
+                )])
+        except Exception:
+            logger.warning("Daily feed usage recording unavailable")
+        if response.error or validated is None:
+            raise HTTPException(status_code=502, detail="Failed to fetch daily feed")
+        full_response = validated.model_dump_json()
+    else:
+        full_response = await generate_with_grounding(
+            system_prompt=_render_persona_system(idol_name, idol_persona),
+            user_message=prompt,
+            operation="daily_feed_generation",
+        )
 
     try:
         parsed = json_lib.loads(_strip_json_fences(full_response))

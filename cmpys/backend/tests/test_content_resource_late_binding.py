@@ -10,6 +10,8 @@ from app.models.user import User
 from app.schemas.content_resource import ContentResourceResolutionStatus
 from app.services.content_quality import BOOK_MODULE_QUALITY_GATE_VERSION
 from app.services.content_resources import MIN_BOOK_MODULE_WORDS
+from app.services.book_fidelity import FIDELITY_VERSION
+from app.services.planning.lesson_package import digest
 
 
 def test_resolve_route_precedes_dynamic_resource_route() -> None:
@@ -33,6 +35,8 @@ async def test_resolve_returns_ready_resource_reference() -> None:
                 content_markdown="word " * MIN_BOOK_MODULE_WORDS,
                 metadata_json={
                     "quality_report": {
+                        "fidelity": {"passed": True, "version": FIDELITY_VERSION,
+                                     "content_hash": digest("word " * MIN_BOOK_MODULE_WORDS)},
                         "passed": True,
                         "gate_version": BOOK_MODULE_QUALITY_GATE_VERSION,
                         "score": 0.94,
@@ -58,7 +62,9 @@ async def test_resolve_returns_ready_resource_reference() -> None:
 
 
 @pytest.mark.asyncio
-async def test_resolve_does_not_expose_stale_published_book_as_ready() -> None:
+@pytest.mark.parametrize("gate_version", [BOOK_MODULE_QUALITY_GATE_VERSION - 1, BOOK_MODULE_QUALITY_GATE_VERSION])
+@pytest.mark.parametrize("job", [None, SimpleNamespace(state=IngestState.DONE)])
+async def test_resolve_does_not_expose_stale_published_book_as_ready(gate_version, job) -> None:
     stale = SimpleNamespace(
         id="resource-1",
         canonical_key="book:author:title",
@@ -69,7 +75,7 @@ async def test_resolve_does_not_expose_stale_published_book_as_ready() -> None:
         metadata_json={
             "quality_report": {
                 "passed": True,
-                "gate_version": BOOK_MODULE_QUALITY_GATE_VERSION - 1,
+                "gate_version": gate_version,
                 "score": 0.94,
             }
         },
@@ -84,7 +90,7 @@ async def test_resolve_does_not_expose_stale_published_book_as_ready() -> None:
 
     class Database:
         def __init__(self):
-            self.results = iter([stale, None])
+            self.results = iter([stale, job])
 
         async def execute(self, _statement):
             return Result(next(self.results))
@@ -98,7 +104,9 @@ async def test_resolve_does_not_expose_stale_published_book_as_ready() -> None:
     )
 
     assert response.id is None
-    assert response.status == ContentResourceResolutionStatus.MISSING
+    assert response.status == ContentResourceResolutionStatus.FAILED_QUALITY
+    assert "new reading-quality review" in response.message
+    assert response.retryable is False
 
 
 @pytest.mark.asyncio

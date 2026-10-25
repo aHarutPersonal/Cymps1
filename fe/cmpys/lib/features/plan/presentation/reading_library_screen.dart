@@ -47,7 +47,8 @@ class _ReadingLibraryScreenState extends ConsumerState<ReadingLibraryScreen> {
       final repository = ref.read(contentResourcesRepositoryProvider);
       final results = await Future.wait<dynamic>([
         repository.listLibraryResources(limit: 100, sort: 'title'),
-        repository.getContinueReading(),
+        // A stale resume entry must not hide the entire reading library.
+        repository.getContinueReading().catchError((_) => null),
       ]);
       if (!mounted) return;
       final all = (results[0] as List<ContentResource>)
@@ -90,6 +91,7 @@ class _ReadingLibraryScreenState extends ConsumerState<ReadingLibraryScreen> {
         builder: (_) => BookReaderScreen(
           resourceId: book.id,
           fallbackTitle: book.title,
+          fallbackSourceUrl: book.sourceUrl,
           shellBranchIndex: 4,
         ),
       ),
@@ -176,7 +178,7 @@ class _ReadingLibraryScreenState extends ConsumerState<ReadingLibraryScreen> {
               borderRadius: AppRadii.brFull,
             ),
             child: Text(
-              '${_books.length} books',
+              '${_books.length} ${_books.length == 1 ? 'book' : 'books'}',
               style: AppTypography.kicker.copyWith(
                 color: AppColors.green2,
                 fontSize: 10,
@@ -299,7 +301,7 @@ class _ReadingLibraryScreenState extends ConsumerState<ReadingLibraryScreen> {
 
   Widget _continueCard(ContentResource book) {
     final progress = book.progressPercent.clamp(0, 100);
-    return GestureDetector(
+    return CmpysPressable(
       onTap: () => _open(book),
       child: Container(
         padding: const EdgeInsets.all(18),

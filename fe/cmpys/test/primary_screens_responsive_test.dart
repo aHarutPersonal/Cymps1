@@ -1,3 +1,6 @@
+import 'package:cmpys/app/theme.dart';
+import 'package:cmpys/app/router.dart';
+import 'support/design_capture.dart';
 import 'package:cmpys/app/design_tokens.dart';
 import 'package:cmpys/features/auth/presentation/auth_screen.dart';
 import 'package:cmpys/features/cmpys/data/cmpys_ideas_provider.dart';
@@ -19,6 +22,7 @@ import 'package:cmpys/features/plan/state/current_plan_provider.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class _EmptyPlanRepository implements PlanRepository {
@@ -138,6 +142,7 @@ const _idea = CmpysIdea(
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  setUpAll(prepareDesignCapture);
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
   final screens = <String, Widget Function()>{
@@ -159,12 +164,21 @@ void main() {
   final configurations = <({Size size, double textScale, String label})>[
     (size: const Size(320, 568), textScale: 1, label: 'narrow phone'),
     (size: const Size(390, 844), textScale: 1.3, label: 'large text'),
+    (
+      size: const Size(320, 568),
+      textScale: 2,
+      label: 'narrow phone at 200% text',
+    ),
+    (size: const Size(844, 390), textScale: 1, label: 'landscape'),
   ];
 
   for (final screen in screens.entries) {
     for (final config in configurations) {
       testWidgets('${screen.key} fits ${config.label}', (tester) async {
-        await tester.binding.setSurfaceSize(config.size);
+        tester.view.physicalSize = config.size;
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
         addTearDown(() => tester.binding.setSurfaceSize(null));
         final originalOnError = FlutterError.onError;
         FlutterError.onError = (details) {
@@ -187,13 +201,17 @@ void main() {
               ),
             ],
             child: MaterialApp(
+              theme: AppTheme.light,
               builder: (context, child) => MediaQuery(
                 data: MediaQuery.of(
                   context,
                 ).copyWith(textScaler: TextScaler.linear(config.textScale)),
                 child: child!,
               ),
-              home: screen.value(),
+              home: RepaintBoundary(
+                key: designCaptureKey,
+                child: screen.value(),
+              ),
             ),
           ),
         );
@@ -202,9 +220,94 @@ void main() {
         await tester.pump(const Duration(seconds: 1));
 
         expect(tester.takeException(), isNull);
+        await captureDesign(tester, '${screen.key}-${config.label}');
+        final lists = find.byWidgetPredicate(
+          (widget) =>
+              widget is ListView && widget.scrollDirection == Axis.vertical,
+        );
+        if (lists.evaluate().isNotEmpty) {
+          final scrollable = find
+              .descendant(of: lists.first, matching: find.byType(Scrollable))
+              .first;
+          for (var i = 0; i < 20; i++) {
+            final position = tester.state<ScrollableState>(scrollable).position;
+            if (position.pixels >= position.maxScrollExtent) break;
+            position.jumpTo(
+              (position.pixels + 400).clamp(0.0, position.maxScrollExtent),
+            );
+            await tester.pump(const Duration(milliseconds: 300));
+            expect(tester.takeException(), isNull);
+          }
+        }
+        await tester.pump(const Duration(seconds: 3));
+        await tester.pump(const Duration(seconds: 1));
+        expect(tester.takeException(), isNull);
       });
     }
   }
+
+  testWidgets('Today keeps the next action and loads quotes only in Ideas', (
+    tester,
+  ) async {
+    var quoteLoads = 0;
+    final router = GoRouter(
+      routes: [
+        GoRoute(path: '/', builder: (_, _) => const CmpysTodayScreen()),
+        GoRoute(
+          path: AppRoutes.ideas,
+          builder: (_, _) => const CmpysReelsScreen(),
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          cmpysStoreProvider.overrideWith((ref) => _ResponsiveStore()),
+          cmpysBackendSyncProvider.overrideWith((ref) async {}),
+          cmpysIdeasProvider.overrideWith((ref) async {
+            quoteLoads++;
+            return const [_idea];
+          }),
+          currentPlanProvider.overrideWith((ref) => _ReadyPlanController()),
+          todayViewProvider.overrideWith(
+            (ref) async => const TodayView(
+              items: [
+                TodayTaskItem(
+                  id: 'habit-1',
+                  title: 'Write the next decisive action',
+                  type: 'habit',
+                  estimatedHours: 1,
+                  completedToday: false,
+                  dailyInstructions: 'Choose one concrete next action.',
+                ),
+              ],
+              streak: 0,
+              completedToday: 0,
+              totalToday: 1,
+            ),
+          ),
+        ],
+        child: MaterialApp.router(theme: AppTheme.light, routerConfig: router),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Write the next decisive action'), findsWidgets);
+    expect(find.text('Idea for you today'), findsNothing);
+    expect(find.text(_idea.text), findsNothing);
+    expect(quoteLoads, 0);
+
+    await tester.tap(find.byTooltip('Explore ideas'));
+    // The Ideas screen has a repeating swipe cue; let the route and content
+    // appear without waiting for that intentionally continuous animation.
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.byType(CmpysReelsScreen), findsOneWidget);
+    expect(find.text(_idea.text), findsOneWidget);
+    expect(quoteLoads, 1);
+    expect(tester.takeException(), isNull);
+  });
 
   final generatedScreens = <String, Widget Function()>{
     'Today generated content': () => const CmpysTodayScreen(),
@@ -214,7 +317,10 @@ void main() {
   for (final screen in generatedScreens.entries) {
     for (final config in configurations) {
       testWidgets('${screen.key} fits ${config.label}', (tester) async {
-        await tester.binding.setSurfaceSize(config.size);
+        tester.view.physicalSize = config.size;
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
         addTearDown(() => tester.binding.setSurfaceSize(null));
 
         await tester.pumpWidget(
@@ -245,17 +351,43 @@ void main() {
               ),
             ],
             child: MaterialApp(
+              theme: AppTheme.light,
               builder: (context, child) => MediaQuery(
                 data: MediaQuery.of(
                   context,
                 ).copyWith(textScaler: TextScaler.linear(config.textScale)),
                 child: child!,
               ),
-              home: screen.value(),
+              home: RepaintBoundary(
+                key: designCaptureKey,
+                child: screen.value(),
+              ),
             ),
           ),
         );
         await tester.pump();
+        await tester.pump(const Duration(seconds: 3));
+        await tester.pump(const Duration(seconds: 1));
+        expect(tester.takeException(), isNull);
+        await captureDesign(tester, '${screen.key}-${config.label}');
+        final lists = find.byWidgetPredicate(
+          (widget) =>
+              widget is ListView && widget.scrollDirection == Axis.vertical,
+        );
+        if (lists.evaluate().isNotEmpty) {
+          final scrollable = find
+              .descendant(of: lists.first, matching: find.byType(Scrollable))
+              .first;
+          for (var i = 0; i < 20; i++) {
+            final position = tester.state<ScrollableState>(scrollable).position;
+            if (position.pixels >= position.maxScrollExtent) break;
+            position.jumpTo(
+              (position.pixels + 400).clamp(0.0, position.maxScrollExtent),
+            );
+            await tester.pump(const Duration(milliseconds: 300));
+            expect(tester.takeException(), isNull);
+          }
+        }
         await tester.pump(const Duration(seconds: 3));
         await tester.pump(const Duration(seconds: 1));
         expect(tester.takeException(), isNull);

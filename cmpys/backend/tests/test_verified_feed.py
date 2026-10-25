@@ -143,6 +143,7 @@ async def test_quality_stats_exposes_daily_grounded_usage():
         _ScalarResult(0.014),
         _ScalarResult(0.014),
         _Result([]),
+        MagicMock(scalar_one_or_none=lambda: None),
     ]
 
     stats = await feed.get_feed_quality_stats(db, MagicMock())

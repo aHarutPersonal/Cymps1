@@ -30,10 +30,13 @@ class UsageRecord:
     result_status: str | None = None
     quality_score: float | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    event_id: str | None = None
 
 
 def infer_provider(model: str | None) -> str:
     lowered = (model or "").casefold()
+    if settings.llm_provider == "openlux":
+        return "openlux"
     if settings.llm_provider == "yunwu":
         return "yunwu"
     if "gemini" in lowered:
@@ -68,6 +71,7 @@ def usage_record_from_response(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         total_tokens=total_tokens,
+        event_id=getattr(response, "attempt_id", None),
         duration_ms=getattr(response, "duration_ms", None),
         grounded=grounded,
         search_queries=search_queries,
@@ -77,6 +81,12 @@ def usage_record_from_response(
         quality_score=quality_score,
         metadata={
             **(metadata or {}),
+            **({"trace_id": response.trace_id, "attempt_id": response.attempt_id}
+               if getattr(response, "attempt_id", None) else {}),
+            **{key: getattr(response, key) for key in (
+                "first_event_ms", "first_content_ms", "response_chars", "admission_wait_ms", "cached_prompt_tokens", "effective_parameters",
+                "transport_success", "json_valid", "semantic_accepted", "critical_defect",
+            ) if getattr(response, key, None) is not None},
             **(
                 {"finish_reason": response.finish_reason}
                 if getattr(response, "finish_reason", None)
@@ -105,7 +115,13 @@ def _event(record: UsageRecord) -> LLMUsageEvent:
     from app.services.llm.pricing import PRICING_VERSION, estimate_cost_usd
 
     estimated_cost = record.estimated_cost_usd
-    if estimated_cost is None:
+    usage_unknown = (
+        record.prompt_tokens is None
+        and record.completion_tokens is None
+        and record.total_tokens is None
+        and record.estimated_cost_usd is None
+    )
+    if estimated_cost is None and not usage_unknown:
         estimated_cost = estimate_cost_usd(
             model=record.model,
             provider=record.provider,
@@ -115,7 +131,7 @@ def _event(record: UsageRecord) -> LLMUsageEvent:
             grounded=record.grounded,
             search_queries=record.search_queries,
         )
-    return LLMUsageEvent(
+    event = LLMUsageEvent(
         operation=record.operation,
         provider=record.provider,
         model=record.model,
@@ -130,36 +146,52 @@ def _event(record: UsageRecord) -> LLMUsageEvent:
         error_code=record.error_code,
         result_status=record.result_status,
         quality_score=record.quality_score,
-        metadata_json={**record.metadata, "pricing_version": PRICING_VERSION},
+        metadata_json={**record.metadata, "pricing_version": PRICING_VERSION,
+                       "usage_unknown": usage_unknown},
     )
+    if record.event_id:
+        event.id = record.event_id
+    return event
 
 
 async def record_usage_records(
     records: list[UsageRecord],
     *,
     db: AsyncSession | None = None,
-) -> None:
+) -> bool:
     """Persist records without ever failing the operation being measured."""
     records = [record for record in records if record.model != "unknown"]
     if not settings.llm_usage_telemetry_enabled or not records:
-        return
+        return False
+    async def persist(session):
+        new_events = []
+        for record in records:
+            event = _event(record)
+            if record.event_id:
+                await session.merge(event)
+            else:
+                new_events.append(event)
+        if new_events:
+            session.add_all(new_events)
     try:
         if db is not None:
             # Isolate best-effort telemetry in a SAVEPOINT so a missing table
             # or transient insert failure cannot poison the caller's main
             # transaction (plan/feed/content writes must still commit).
             async with db.begin_nested():
-                db.add_all([_event(record) for record in records])
+                await persist(db)
                 await db.flush()
-            return
+            return True
 
         from app.core.db import async_session_maker
 
         async with async_session_maker() as telemetry_db:
-            telemetry_db.add_all([_event(record) for record in records])
+            await persist(telemetry_db)
             await telemetry_db.commit()
+            return True
     except Exception as exc:  # pragma: no cover - depends on external DB state
         logger.warning("[LLM_USAGE] Could not persist telemetry: %s", exc)
+        return False
 
 
 async def record_llm_response(
@@ -173,8 +205,8 @@ async def record_llm_response(
     result_status: str | None = None,
     quality_score: float | None = None,
     metadata: dict[str, Any] | None = None,
-) -> None:
-    await record_usage_records(
+) -> bool:
+    return await record_usage_records(
         [
             usage_record_from_response(
                 operation=operation,

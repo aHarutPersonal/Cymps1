@@ -38,7 +38,7 @@ class CmpysButton extends StatelessWidget {
 
     final (height, textStyle, iconSize, padding) = switch (size) {
       CmpysButtonSize.small => (
-        40.0,
+        44.0,
         AppTypography.buttonSmall,
         16.0,
         AppSpacing.ph16,
@@ -79,7 +79,13 @@ class CmpysButton extends StatelessWidget {
           ),
           const SizedBox(width: AppSpacing.s8),
         ],
-        Text(label, style: textStyle.copyWith(color: fgColor)),
+        Flexible(
+          child: Text(
+            label,
+            textAlign: TextAlign.center,
+            style: textStyle.copyWith(color: fgColor),
+          ),
+        ),
         if (iconRight != null && !isLoading) ...[
           const SizedBox(width: AppSpacing.s8),
           SvgPicture.asset(
@@ -92,9 +98,9 @@ class CmpysButton extends StatelessWidget {
       ],
     );
 
-    return SizedBox(
+    return Container(
       width: isExpanded ? double.infinity : null,
-      height: height,
+      constraints: BoxConstraints(minHeight: height),
       child: Material(
         color: bgColor,
         borderRadius: AppRadii.brFull,
@@ -102,7 +108,7 @@ class CmpysButton extends StatelessWidget {
           onTap: isDisabled ? null : onPressed,
           borderRadius: AppRadii.brFull,
           child: Container(
-            padding: padding,
+            padding: padding.add(const EdgeInsets.symmetric(vertical: 12)),
             decoration: BoxDecoration(
               borderRadius: AppRadii.brFull,
               border: borderColor != null
@@ -143,7 +149,7 @@ class CmpysButton extends StatelessWidget {
     }
 
     return switch (variant) {
-      CmpysButtonVariant.primary => (AppColors.accent, Colors.white, null),
+      CmpysButtonVariant.primary => (AppColors.green2, Colors.white, null),
       CmpysButtonVariant.secondary => (
         Colors.transparent,
         AppColors.textPrimary,
@@ -165,7 +171,7 @@ class CmpysIconButton extends StatelessWidget {
     super.key,
     required this.icon,
     required this.onPressed,
-    this.size = 40,
+    this.size = 48,
     this.iconSize = 20,
     this.backgroundColor,
     this.iconColor,

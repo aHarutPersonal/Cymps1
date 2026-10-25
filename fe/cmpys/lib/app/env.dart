@@ -71,7 +71,7 @@ abstract final class Env {
   static const String apiBaseUrlAndroidEmulator = 'http://10.0.2.2:8000/api/v1';
 
   /// Production API base URL.
-  static const String apiBaseUrlProduction = 'http://54.158.122.215/api/v1';
+  static const String apiBaseUrlProduction = 'https://54.158.122.215/api/v1';
 
   /// Whether the app is running in debug mode.
   static bool get isDebug => kDebugMode;

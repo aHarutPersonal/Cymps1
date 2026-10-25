@@ -92,6 +92,7 @@ def downgrade() -> None:
     op.drop_table('idol_import_jobs')
     op.drop_table('idol_aliases')
     op.drop_table('idol_achievements')
+    sa.Enum(name='date_precision').drop(op.get_bind(), checkfirst=True)
     op.drop_table('users')
     op.drop_table('idols')
     # ### end Alembic commands ###

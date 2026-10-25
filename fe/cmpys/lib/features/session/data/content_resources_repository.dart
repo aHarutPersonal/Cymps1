@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/dio_client.dart';
@@ -32,6 +33,8 @@ class ContentResourcesRepository {
         if (narratorProfile != null && narratorProfile.isNotEmpty)
           'narratorProfile': narratorProfile,
       },
+      // Synthesis may take 60s, followed by up to two 10s timing passes.
+      options: Options(receiveTimeout: const Duration(seconds: 90)),
     );
     final data = response.data as Map<String, dynamic>;
     final rawUrl = data['audioUrl']?.toString() ?? '';
@@ -43,25 +46,17 @@ class ContentResourcesRepository {
     final origin = base.replace(path: '/', query: null, fragment: null);
     final offsetEncoding =
         data['offsetEncoding']?.toString().trim().toLowerCase() ?? '';
-    final alignment =
-        (data['alignment'] as List? ?? const [])
-            .map(
-              (raw) => BookNarrationCue.fromJson(
-                raw as Map<String, dynamic>,
-                sourceText: text,
-                offsetEncoding: offsetEncoding,
-              ),
-            )
-            .where(
-              (cue) =>
-                  cue.start >= 0 &&
-                  cue.end > cue.start &&
-                  cue.end <= text.length &&
-                  cue.startTime >= Duration.zero &&
-                  cue.endTime > cue.startTime,
-            )
-            .toList()
-          ..sort((left, right) => left.startTime.compareTo(right.startTime));
+    final duration = switch (data['durationMs']) {
+      final num milliseconds when milliseconds.isFinite && milliseconds > 0 =>
+        Duration(milliseconds: milliseconds.round()),
+      _ => null,
+    };
+    final alignment = _parseNarrationAlignment(
+      data['alignment'],
+      text: text,
+      offsetEncoding: offsetEncoding,
+      duration: duration,
+    );
     return BookNarrationAudio(
       audioUri: parsedUrl.hasScheme ? parsedUrl : origin.resolveUri(parsedUrl),
       style: data['style']?.toString() ?? style,
@@ -75,10 +70,7 @@ class ContentResourcesRepository {
       narratorProfile: data['narratorProfile']?.toString().trim() ?? '',
       narratorProfileLabel:
           data['narratorProfileLabel']?.toString().trim() ?? '',
-      duration: switch (data['durationMs']) {
-        final num milliseconds => Duration(milliseconds: milliseconds.round()),
-        _ => null,
-      },
+      duration: duration,
       alignment: alignment,
       alignmentSource:
           data['alignmentSource']?.toString().trim() ??
@@ -91,6 +83,7 @@ class ContentResourcesRepository {
           ? 'unicode_codepoints'
           : offsetEncoding,
       sourceTextHash: data['sourceTextHash']?.toString().trim() ?? '',
+      alignmentPending: data['alignmentPending'] == true,
       disclosure: data['disclosure']?.toString().trim() ?? '',
       isAiGenerated: data['isAiGenerated'] != false,
     );
@@ -204,6 +197,74 @@ class ContentResourcesRepository {
   }
 }
 
+// Bad timing must not make a valid recording unplayable or create guessed
+// highlights. Preserve independently valid cues; leave real gaps elsewhere.
+List<BookNarrationCue> _parseNarrationAlignment(
+  Object? rawAlignment, {
+  required String text,
+  required String offsetEncoding,
+  required Duration? duration,
+}) {
+  if (rawAlignment is! List) return const [];
+  final utf16 = offsetEncoding == 'utf16' || offsetEncoding == 'utf-16';
+  final sourceLength = utf16 ? text.length : text.runes.length;
+  final candidates = <BookNarrationCue>[];
+  for (final raw in rawAlignment) {
+    if (raw is! Map) continue;
+    final fields = [raw['start'], raw['end'], raw['startMs'], raw['endMs']];
+    if (fields.any((value) => value is! num || !value.isFinite)) continue;
+    final values = fields.cast<num>();
+    if (values[0] != values[0].toInt() ||
+        values[1] != values[1].toInt() ||
+        values[0] < 0 ||
+        values[1] <= values[0] ||
+        values[1] > sourceLength ||
+        values[2] < 0 ||
+        values[3] <= values[2]) {
+      continue;
+    }
+    final cue = BookNarrationCue.fromJson(
+      {
+        'start': values[0],
+        'end': values[1],
+        'startMs': values[2],
+        'endMs': values[3],
+      },
+      sourceText: text,
+      offsetEncoding: offsetEncoding,
+    );
+    bool splitsSurrogate(int offset) =>
+        offset > 0 &&
+        offset < text.length &&
+        text.codeUnitAt(offset - 1) >= 0xD800 &&
+        text.codeUnitAt(offset - 1) <= 0xDBFF &&
+        text.codeUnitAt(offset) >= 0xDC00 &&
+        text.codeUnitAt(offset) <= 0xDFFF;
+    if (cue.endTime <= cue.startTime ||
+        (duration != null && cue.endTime > duration) ||
+        splitsSurrogate(cue.start) ||
+        splitsSurrogate(cue.end)) {
+      continue;
+    }
+    candidates.add(cue);
+  }
+  candidates.sort((a, b) => a.startTime.compareTo(b.startTime));
+  final valid = <BookNarrationCue>[];
+  for (var first = 0; first < candidates.length;) {
+    var next = first + 1;
+    var end = candidates[first].endTime;
+    while (next < candidates.length && candidates[next].startTime < end) {
+      if (candidates[next].endTime > end) end = candidates[next].endTime;
+      next++;
+    }
+    // Every cue in an overlapping group is ambiguous, including a long cue
+    // covering several otherwise disjoint words. Do not choose one by order.
+    if (next == first + 1) valid.add(candidates[first]);
+    first = next;
+  }
+  return valid;
+}
+
 class BookNarrationAudio {
   const BookNarrationAudio({
     required this.audioUri,
@@ -220,6 +281,7 @@ class BookNarrationAudio {
     this.alignmentGranularity = BookNarrationAlignmentGranularity.none,
     this.offsetEncoding = 'utf16',
     this.sourceTextHash = '',
+    this.alignmentPending = false,
     this.disclosure = '',
     required this.isAiGenerated,
   });
@@ -238,6 +300,7 @@ class BookNarrationAudio {
   final BookNarrationAlignmentGranularity alignmentGranularity;
   final String offsetEncoding;
   final String sourceTextHash;
+  final bool alignmentPending;
   final String disclosure;
   final bool isAiGenerated;
 }
@@ -252,6 +315,7 @@ enum BookNarrationAlignmentGranularity {
     String? value, {
     required bool hasAlignment,
   }) {
+    if (!hasAlignment) return BookNarrationAlignmentGranularity.none;
     return switch (value?.trim().toLowerCase()) {
       'word' || 'words' => BookNarrationAlignmentGranularity.word,
       'phrase' ||

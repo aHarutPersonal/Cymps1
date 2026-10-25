@@ -1,0 +1,121 @@
+{
+  "test": "synthetic accounting mini-lesson",
+  "budget_usd": 0.1,
+  "reserved_usd": 0.04203275,
+  "results": [
+    {
+      "model": "glm-5.3",
+      "reserve_usd": 0.0377705,
+      "http_status": 200,
+      "elapsed_seconds": 42.44,
+      "finish_reason": "stop",
+      "usage": {
+        "completion_tokens": 1736,
+        "completion_tokens_details": {
+          "reasoning_tokens": 264
+        },
+        "prompt_tokens": 476,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 2212
+      },
+      "characters": 6277,
+      "returned_model": "glm-5.3",
+      "estimated_uncached_cost_usd": 0.008304800000000001,
+      "valid_json": true,
+      "numeric_checks": {
+        "revenue": true,
+        "cogs": true,
+        "gross_profit": true,
+        "operating_expenses": true,
+        "operating_profit": true,
+        "ending_cash": true,
+        "receivables": true,
+        "inventory": true,
+        "loan_principal": true,
+        "equity": true
+      },
+      "required_fields": true,
+      "explanation_words": 372,
+      "transaction_count": 8,
+      "practice_count": 2,
+      "transaction_ids_valid": true,
+      "practice_fields_valid": true
+    },
+    {
+      "model": "glm-5.3-flash",
+      "reserve_usd": 0.00426225,
+      "http_status": 200,
+      "elapsed_seconds": 19.96,
+      "finish_reason": "stop",
+      "usage": {
+        "completion_tokens": 1819,
+        "completion_tokens_details": {
+          "reasoning_tokens": 355
+        },
+        "prompt_tokens": 476,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 2295
+      },
+      "characters": 5396,
+      "returned_model": "glm-5.3-flash",
+      "estimated_uncached_cost_usd": 0.0009809,
+      "valid_json": true,
+      "numeric_checks": {
+        "revenue": true,
+        "cogs": true,
+        "gross_profit": true,
+        "operating_expenses": true,
+        "operating_profit": true,
+        "ending_cash": true,
+        "receivables": true,
+        "inventory": true,
+        "loan_principal": true,
+        "equity": true
+      },
+      "required_fields": true,
+      "explanation_words": 334,
+      "transaction_count": 8,
+      "practice_count": 2,
+      "transaction_ids_valid": true,
+      "practice_fields_valid": true
+    }
+  ],
+  "production_changed": false,
+  "reference_answers": {
+    "revenue": 900,
+    "cogs": 360,
+    "gross_profit": 540,
+    "operating_expenses": 100,
+    "operating_profit": 440,
+    "ending_cash": 1520,
+    "receivables": 100,
+    "inventory": 240,
+    "loan_principal": 500,
+    "equity": 1360
+  },
+  "validation_note": "Recomputed reference cash from signed cash flows ($1520); corrected initial handwritten test fixture ($1420). Both provider answers were already correct. Revalidated saved outputs without additional API calls.",
+  "total_estimated_uncached_cost_usd": 0.009285700000000001,
+  "review": {
+    "scope": "One synthetic 8-transaction mini-lesson per model; high reasoning; non-streaming; no production integration or private learner data.",
+    "passed": [
+      "All 10 numerical reference answers correct",
+      "Complete JSON with required fields",
+      "Eight transaction explanations",
+      "Two practice items with separate hints and solutions",
+      "No external spreadsheet or paper required"
+    ],
+    "needs_revision": [
+      "Both second practice solutions use original case balances without explicitly resetting the scenario after practice 1. Add: For this independent exercise, return to the balances after T8."
+    ],
+    "limitations": [
+      "No source retrieval, mentor compatibility, advanced topics, full-length lesson, app-schema or concurrency validation",
+      "Reported 15-minute duration is untested with learners",
+      "Non-streaming elapsed time is total request latency, not time to first token"
+    ],
+    "fixture_note": "Recomputed reference cash from signed cash flows ($1520); corrected initial handwritten test fixture ($1420). Both provider answers were already correct. Revalidated saved outputs without additional API calls."
+  }
+}

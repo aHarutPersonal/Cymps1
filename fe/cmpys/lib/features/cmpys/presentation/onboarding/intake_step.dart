@@ -18,7 +18,7 @@ import 'intake_answer_composer.dart';
 ///
 /// Drives the backend `/sessions/{id}/interview` SSE endpoint: the mentor asks
 /// LLM-generated questions *in its own voice*, in real time, adapting to the
-/// user's previous answers. The mentor decides when it has enough; the session
+/// user's previous answers. The server owns completion; the session
 /// then transitions to the comparison phase and we advance.
 ///
 /// There is **no scripted fallback** — if the backend is unreachable the user
@@ -62,7 +62,7 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
   String? _lastQuestionId;
   _OptimisticAnswer? _optimisticAnswer;
   int _turns = 0;
-  int _maxTurns = 5;
+  int _maxTurns = 10;
   Timer? _advanceTimer;
 
   /// Hidden protocol message that elicits the mentor's opening question.
@@ -122,10 +122,12 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
       if (session.phase == SessionPhase.comparison ||
           session.phase == SessionPhase.blueprint ||
           session.phase == SessionPhase.completed) {
+        widget.draft.backendIdolId = session.selectedIdol?.id;
         // Interview already finished in a previous attempt.
         _advance();
         return;
       }
+      widget.draft.backendIdolId = session.selectedIdol?.id;
       await _sendTurn(_kickoff, isKickoff: true);
     } catch (e) {
       if (!mounted) return;
@@ -144,6 +146,7 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
 
   Future<void> _answer(String text) async {
     if (text.trim().isEmpty) return;
+    FocusManager.instance.primaryFocus?.unfocus();
     final answeredQuestionId = _questionId;
     final answeredResponseUi = _responseUi;
     final answerKey = answeredQuestionId ?? 'turn_$_turns';
@@ -433,16 +436,25 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
     });
   }
 
-  double get _progress => ((_turns / _maxTurns) * 100).clamp(5, 100).toDouble();
+  double get _progress => ((_turns / (_maxTurns > 0 ? _maxTurns : 10)) * 100)
+      .clamp(5, 100)
+      .toDouble();
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        _header(),
-        Expanded(child: _messages()),
-        _answerArea(),
-      ],
+    return LayoutBuilder(
+      builder: (context, constraints) => Column(
+        children: [
+          _header(),
+          Expanded(child: _messages()),
+          ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: constraints.maxHeight * 0.45,
+            ),
+            child: SingleChildScrollView(child: _answerArea()),
+          ),
+        ],
+      ),
     );
   }
 
@@ -472,33 +484,22 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
                   children: [
                     Text(
                       widget.idol.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: AppTypography.h4.copyWith(fontSize: 16),
                     ),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 7,
-                          height: 7,
-                          decoration: const BoxDecoration(
-                            color: AppColors.green,
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                        const SizedBox(width: 5),
-                        Text(
-                          'Getting to know you',
-                          style: AppTypography.caption.copyWith(
-                            color: AppColors.green2,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ],
+                    Text(
+                      _turns > 0 ? 'Question $_turns' : 'Your starting point',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTypography.caption.copyWith(
+                        color: AppColors.green2,
+                        fontSize: 12,
+                      ),
                     ),
                   ],
                 ),
               ),
-              Text('INTAKE', style: AppTypography.kicker),
             ],
           ),
           const SizedBox(height: 10),
@@ -525,6 +526,14 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
               '${widget.idol.name.toUpperCase()} · AI MENTOR',
               style: AppTypography.kicker.copyWith(fontSize: 10.5),
             ),
+          ),
+        ),
+        const SizedBox(height: 14),
+        Text(
+          'Short answers are fine. “I don’t know yet” is useful too.',
+          style: AppTypography.caption.copyWith(
+            color: AppColors.ink2,
+            height: 1.4,
           ),
         ),
         const SizedBox(height: 14),
@@ -681,13 +690,11 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
                     ? null
                     : Border.all(color: AppColors.hair, width: 1),
               ),
-              child: Text(
-                m.text,
-                style: AppTypography.body.copyWith(
-                  fontSize: 15.5,
-                  height: 1.45,
-                  color: m.me ? Colors.white : AppColors.ink,
-                ),
+              child: _IntakeMessageText(
+                key: ObjectKey(m),
+                text: m.text,
+                isAnswer: m.me,
+                isCurrent: identical(m, _msgs.last),
               ),
             ),
           ),
@@ -745,6 +752,62 @@ class _CmpysIntakeChatStepState extends ConsumerState<CmpysIntakeChatStep> {
           onSubmit: _answer,
         ),
       ),
+    );
+  }
+}
+
+/// Keep the current question complete, while earlier long turns remain
+/// available on demand instead of filling the conversation with repeated text.
+class _IntakeMessageText extends StatefulWidget {
+  const _IntakeMessageText({
+    super.key,
+    required this.text,
+    required this.isAnswer,
+    required this.isCurrent,
+  });
+
+  final String text;
+  final bool isAnswer;
+  final bool isCurrent;
+
+  @override
+  State<_IntakeMessageText> createState() => _IntakeMessageTextState();
+}
+
+class _IntakeMessageTextState extends State<_IntakeMessageText> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final collapsible = !widget.isCurrent && widget.text.length > 240;
+    final color = widget.isAnswer ? Colors.white : AppColors.ink;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          widget.text,
+          maxLines: collapsible && !_expanded ? 3 : null,
+          overflow: collapsible && !_expanded ? TextOverflow.ellipsis : null,
+          style: AppTypography.body.copyWith(
+            fontSize: 15.5,
+            height: 1.45,
+            color: color,
+          ),
+        ),
+        if (collapsible)
+          TextButton(
+            style: TextButton.styleFrom(
+              foregroundColor: widget.isAnswer
+                  ? Colors.white
+                  : AppColors.green2,
+              padding: EdgeInsets.zero,
+              alignment: Alignment.centerLeft,
+            ),
+            onPressed: () => setState(() => _expanded = !_expanded),
+            child: Text(_expanded ? 'Show less' : 'Read full message'),
+          ),
+      ],
     );
   }
 }

@@ -11,7 +11,7 @@ from app.api.v1.content_resources import (
 from app.models.content_resource import ContentResourceKind
 from app.models.idol import CatalogStatus
 from app.schemas.content_resource import ContentNarrationRequest
-from app.services.book_narration import NarrationAsset, NarrationCue
+from app.services.book_narration import BookNarrationUnavailableError, NarrationAsset, NarrationCue
 
 
 class ScalarResult:
@@ -151,3 +151,24 @@ async def test_prepare_narration_rejects_arbitrary_text(monkeypatch):
     assert raised.value.status_code == 422
     renderer.assert_not_awaited()
     db.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_narration_failure_logs_status_without_private_provider_data(monkeypatch, caplog):
+    db = AsyncMock()
+    db.execute.return_value = ScalarResult(MagicMock(
+        content_markdown="PRIVATE_PASSAGE", status=CatalogStatus.PUBLISHED,
+        kind=ContentResourceKind.ARTICLE,
+    ))
+    failure = BookNarrationUnavailableError(
+        "PRIVATE_PROVIDER_BODY PRIVATE_KEY", reason_code="provider_http_error", http_status=403,
+    )
+    monkeypatch.setattr("app.api.v1.content_resources.render_book_narration", AsyncMock(side_effect=failure))
+    with pytest.raises(HTTPException) as raised:
+        await prepare_content_narration("resource-1", ContentNarrationRequest(text="PRIVATE_PASSAGE"),
+                                        db, MagicMock(id="user-1"))
+    assert raised.value.status_code == 503
+    assert raised.value.detail == "Expressive narration is temporarily unavailable"
+    assert "reason=provider_http_error" in caplog.text
+    assert "http_status=403" in caplog.text
+    assert "PRIVATE" not in caplog.text

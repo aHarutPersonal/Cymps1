@@ -15,6 +15,13 @@ from app.models.intake import IntakeSession, SessionPhase
 from app.models.plan_job import PlanGenerationJob
 
 
+@pytest.fixture(autouse=True)
+def catalog_facts(monkeypatch):
+    lookup = AsyncMock(return_value={"origin": "published_catalog", "facts": [{"description": "Sourced milestone"}]})
+    monkeypatch.setattr(sessions_api, "catalog_mentor_facts", lookup)
+    return lookup
+
+
 class _Result:
     def __init__(self, value):
         self.value = value
@@ -372,6 +379,8 @@ async def test_comparison_cas_does_not_overwrite_a_completed_artifact(
         return session
 
     async def fake_comparison(*args, **kwargs):
+        assert "Sourced milestone" in kwargs["user_message"]
+        assert session.idol_facts_json["origin"] == "published_catalog"
         yield "Losing comparison"
 
     async def forbidden_blueprint(*args, **kwargs):
@@ -617,3 +626,44 @@ async def test_active_results_generation_claim_rejects_a_concurrent_retry(
 
     assert exc_info.value.status_code == 409
     assert exc_info.value.detail["code"] == "results_generation_in_progress"
+
+
+@pytest.mark.asyncio
+async def test_results_disconnect_cancels_owned_score_request(monkeypatch):
+    import asyncio
+    import json
+    session = IntakeSession(
+        id='session-1', user_id='user-1', idol_id='idol-1',
+        phase=SessionPhase.BLUEPRINT, user_age=28,
+        interview_thread_id='thread-1', comparison_output='Saved comparison',
+        comparison_scores_json=None, comparison_scores_attempts=0,
+    )
+    session.idol = Idol(id='idol-1', name='Ada Lovelace', domain='technology')
+    thread = ChatThread(id='thread-1', user_id='user-1', idol_id='idol-1')
+    thread.messages = []
+    job = SimpleNamespace(id='job-1', status='pending', step='waiting_for_strategy', weekly_hours=10)
+    db = AsyncMock()
+    db.execute.side_effect = [_Result(thread), _Result(thread), _Result(job)]
+    monkeypatch.setattr(sessions_api, '_get_session', AsyncMock(return_value=session))
+    _use_session_lock(monkeypatch, session)
+    monkeypatch.setattr(sessions_api, '_sync_user_profile_from_interview', AsyncMock())
+    released = AsyncMock()
+    monkeypatch.setattr(sessions_api, '_release_owned_thread_claim', released)
+    started, stopped = asyncio.Event(), asyncio.Event()
+    async def score(*a, **kw):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            stopped.set()
+    monkeypatch.setattr(sessions_api, 'generate_comparison_scores', score)
+    response = await sessions_api.generate_results('session-1', db, SimpleNamespace(id='user-1'))
+    stream = response.body_iterator
+    async for event in stream:
+        value = json.loads(event.removeprefix('data: ').strip())
+        if value.get('section') == 'blueprint':
+            await started.wait()
+            await stream.aclose()
+            break
+    assert stopped.is_set()
+    released.assert_awaited_once()

@@ -9,7 +9,7 @@ import datetime
 from enum import Enum
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 # =============================================================================
@@ -196,7 +196,7 @@ class BinaryTask(BaseModel):
     """A single binary (done/not-done) task within a week."""
 
     title: str = Field(max_length=300)
-    description: str = Field(min_length=10, max_length=1000)
+    description: str = Field(min_length=10, max_length=2000)
     type: str = Field(
         default="project", max_length=50
     )  # project|course|habit|practice|reading|reflection
@@ -242,11 +242,67 @@ class PlanGenerationResponse(BaseModel):
     weeks: list[PlanWeek] = Field(default_factory=list)
 
 
+class ExecutionBinaryTask(BinaryTask):
+    """Generation-only requirements; historical plan readers remain permissive."""
+
+    description: str = Field(
+        min_length=10, max_length=2000,
+        description=(
+            "80-140 substantive words for a mission or 45-80 for a daily rhythm. "
+            "Preserve the approved task intent and recurrence. Lessons offer reading "
+            "and separately generated practice; do not invent a diagnostic dashboard, "
+            "skill-score profile or targeted rerun feature. Work must remain executable "
+            "from supplied explanations/cases when a named book is unavailable; never "
+            "claim a paid resource is free or supplied in-app."
+        ),
+    )
+    daily_instructions: str | None = Field(
+        default=None, max_length=2000,
+        description=(
+            "For a daily rhythm, give 70-120 actionable words including the actual "
+            "small fictional dataset/inputs needed to work from Today alone. Today "
+            "has only one saved free-text reflection and a completion button: no "
+            "structured drill fields, automatically presented cases, scoring, feedback, "
+            "timers or spreadsheet editor. Record answers and manual checks in that "
+            "reflection or the learner's notebook. Preserve the approved session/drill "
+            "count; every prose cadence must agree and fill the task's weekly hours. "
+            "An external clock is optional. Null for a mission."
+        ),
+    )
+    success_metric: str = Field(
+        min_length=10, max_length=300,
+        description=(
+            "Preserve the approved measurable outcome, quantity and recurrence. "
+            "A metric requiring five drills cannot become three sessions elsewhere "
+            "in the task. Do not promise unsupported automatic assessment."
+        ),
+    )
+
+
+class ExecutionPlanWeek(PlanWeek):
+    primary_mission: str = Field(
+        max_length=500,
+        pattern=r"^\s*\S+(?:\s+\S+){34,}\s*$",
+        description="35-70 concrete words describing the skill, artifact and learning progression.",
+    )
+    binary_tasks: list[ExecutionBinaryTask] = Field(min_length=2, max_length=5)
+
+
+class ExecutionPlanResponse(PlanGenerationResponse):
+    weeks: list[ExecutionPlanWeek] = Field(min_length=1, max_length=1)
+
+
 class PlanBackboneTask(BaseModel):
     """Compact task identity used before its execution week is prepared."""
 
     title: str = Field(max_length=200)
-    type: Literal["project", "course", "reading", "habit", "practice"]
+    type: Literal["project", "course", "reading", "habit", "practice"] = Field(
+        description=(
+            "project/course/reading are mission blocks. habit/practice are recurring "
+            "daily rhythms only, never a one-off diagnostic, assessment or case. "
+            "A one-off diagnostic with a submitted artifact is a project mission."
+        )
+    )
     estimated_hours: float = Field(ge=0.1, le=168.0)
     success_metric: str = Field(max_length=300)
 
@@ -318,6 +374,12 @@ class PlanDetailStepOutlineOutput(BaseModel):
     )
 
 
+class PlanOutlineMaterialOutput(PlanDetailMaterialOutput):
+    """Only externally resolvable resources belong in an outline's material list."""
+
+    type: Literal["book", "video", "article", "course", "tool"]
+
+
 class PlanItemDetailsOutlineOutput(BaseModel):
     """Shared lesson sequence and materials for parallel lesson generation."""
 
@@ -325,7 +387,7 @@ class PlanItemDetailsOutlineOutput(BaseModel):
         min_length=MIN_PLAN_DETAIL_LESSONS,
         max_length=MAX_PLAN_DETAIL_LESSONS,
     )
-    materials: list[PlanDetailMaterialOutput] = Field(
+    materials: list[PlanOutlineMaterialOutput] = Field(
         min_length=MIN_PLAN_DETAIL_MATERIALS,
         max_length=MAX_PLAN_DETAIL_MATERIALS,
     )
@@ -400,6 +462,61 @@ class PlanDetailStepOutput(BaseModel):
     substeps: list[str] = Field(min_length=1)
 
 
+# New short lessons opt into a separate contract. The legacy schema and its
+# serialized shape stay unchanged so saved approval hashes remain valid.
+MAX_TUTORIAL_LESSONS = 128
+TUTORIAL_SECTION_MIN_WORDS = {
+    "why_this_matters": 15, "core_framework": 100, "worked_example": 90,
+    "failure_modes": 20, "guided_practice": 55,
+    "check_your_understanding": 20, "references": 10,
+}
+TUTORIAL_SECTION_TARGET_WORDS = {
+    "why_this_matters": 30, "core_framework": 160, "worked_example": 140,
+    "failure_modes": 35, "guided_practice": 85,
+    "check_your_understanding": 40, "references": 20,
+}
+
+
+class PlanTutorialStepOutlineOutput(PlanDetailStepOutlineOutput):
+    lesson_format: Literal["tutorial_v1"]
+
+
+class PlanTutorialOutlineOutput(PlanItemDetailsOutlineOutput):
+    lesson_format: Literal["tutorial_v1"]
+    steps: list[PlanTutorialStepOutlineOutput] = Field(min_length=1, max_length=MAX_TUTORIAL_LESSONS)
+
+
+class PlanTutorialStepOutput(PlanDetailStepOutput):
+    lesson_format: Literal["tutorial_v1"]
+    estimate_minutes: int = Field(ge=5, le=8)
+    reading_minutes: int = Field(ge=3, le=4)
+    practice_minutes: int = Field(ge=2, le=4)
+
+    @model_validator(mode="after")
+    def require_consistent_timing(self) -> "PlanTutorialStepOutput":
+        if self.estimate_minutes != self.reading_minutes + self.practice_minutes:
+            raise ValueError("tutorial timing must equal reading plus practice")
+        return self
+
+
+def plan_detail_step_model(payload: dict) -> type[PlanDetailStepOutput]:
+    marker = payload.get("lesson_format")
+    if marker is None:
+        return PlanDetailStepOutput
+    if marker == "tutorial_v1":
+        return PlanTutorialStepOutput
+    raise ValueError("Unknown lesson format")
+
+
+def plan_detail_outline_model(payload: dict) -> type[PlanItemDetailsOutlineOutput]:
+    marker = payload.get("lesson_format")
+    if marker is None:
+        return PlanItemDetailsOutlineOutput
+    if marker == "tutorial_v1":
+        return PlanTutorialOutlineOutput
+    raise ValueError("Unknown lesson format")
+
+
 PLAN_DETAIL_REQUIRED_HEADINGS = (
     "## Why This Matters",
     "## Core Framework",
@@ -419,11 +536,16 @@ def plan_detail_step_quality_issues(
     """Return all semantic defects in one deterministic validation report."""
     issues: list[str] = []
     lesson_words = len(step.lesson_content.split())
-    if not 1900 <= lesson_words <= 4200:
+    tutorial = getattr(step, "lesson_format", None) == "tutorial_v1"
+    minimum, maximum = (450, 800) if tutorial else (1900, 4200)
+    if not minimum <= lesson_words <= maximum:
         issues.append(
             f"{step.id} lesson_content has {lesson_words} words; "
-            "accepted range is 1900-4200 (target 2400-2800)"
+            f"accepted range is {minimum}-{maximum}"
         )
+    if tutorial:
+        from app.services.planning.tutorial_visuals import tutorial_visual_issues
+        issues.extend(tutorial_visual_issues(step.lesson_content))
     missing = [
         heading
         for heading in PLAN_DETAIL_REQUIRED_HEADINGS
@@ -549,10 +671,22 @@ class PlanDetailLessonSectionsOutput(BaseModel):
         min_length=1,
         description=(
             "One string per necessary executable action; each targets 20-60 "
-            "words and includes scope or timer, tool or behavior, output, and "
+            "words and includes concrete scope or approximate time budget, tool or behavior, output, and "
             "success criterion. Longer actions are allowed when needed."
         ),
     )
+
+
+class PlanTutorialLessonSectionsOutput(PlanDetailLessonSectionsOutput):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    why_this_matters: str = Field(min_length=1, description="25-35 words: one clear purpose.")
+    core_framework: str = Field(min_length=1, description="140-180 words: explain ONE concept and include a meaningful native diagram or comparison fence.")
+    worked_example: str = Field(min_length=1, description="120-160 words: one supplied worked example with reasoning and every result binding.")
+    failure_modes: str = Field(min_length=1, description="25-45 words: one common mistake and its correction.")
+    guided_practice: str = Field(min_length=1, description="70-100 words: one small in-app exercise with its two approved phases and every practice binding; no private answers.")
+    check_your_understanding: str = Field(min_length=1, description="30-50 words: one diagnostic check with qualitative feedback, no private transfer solution.")
+    references: str = Field(min_length=1, description="15-25 words: name approved optional reading.")
+    substeps: list[Annotated[str, Field(min_length=1)]] = Field(min_length=1, max_length=3, description="One or two clear executable actions, each at least 12 words including output and success criterion.")
 
 
 PLAN_DETAIL_SECTION_MIN_WORDS = {
@@ -578,10 +712,12 @@ PLAN_DETAIL_SECTION_TARGET_WORDS = {
 
 def plan_detail_lesson_section_quality_issues(
     sections: PlanDetailLessonSectionsOutput,
+    *, lesson_format: str | None = None,
 ) -> list[str]:
     """Reject placeholders and materially incomplete sections by real words."""
     issues: list[str] = []
-    for field_name, minimum_words in PLAN_DETAIL_SECTION_MIN_WORDS.items():
+    floors = TUTORIAL_SECTION_MIN_WORDS if lesson_format == "tutorial_v1" else PLAN_DETAIL_SECTION_MIN_WORDS
+    for field_name, minimum_words in floors.items():
         word_count = len(str(getattr(sections, field_name)).split())
         if word_count < minimum_words:
             issues.append(
@@ -629,6 +765,20 @@ class PlanDetailSectionsRepairOutput(BaseModel):
                 )
         if issues:
             raise ValueError("; ".join(issues))
+        return self
+
+
+class PlanTutorialSectionsRepairOutput(BaseModel):
+    sections: list[PlanDetailSectionRepairItemOutput] = Field(min_length=1, max_length=7)
+
+    @model_validator(mode="after")
+    def require_short_complete_sections(self) -> "PlanTutorialSectionsRepairOutput":
+        names = [section.field_name for section in self.sections]
+        if len(names) != len(set(names)):
+            raise ValueError("section repair field names must be unique")
+        for section in self.sections:
+            if len(section.content.split()) < TUTORIAL_SECTION_MIN_WORDS[section.field_name]:
+                raise ValueError(f"{section.field_name} tutorial repair is incomplete")
         return self
 
 
@@ -697,6 +847,11 @@ class PlanItemDetailsOutput(PlanItemDetailsDraftOutput):
         if issues:
             raise ValueError("; ".join(issues))
         return self
+
+
+class PlanTutorialDetailsOutput(PlanItemDetailsOutput):
+    lesson_format: Literal["tutorial_v1"]
+    steps: list[PlanTutorialStepOutput] = Field(min_length=1, max_length=MAX_TUTORIAL_LESSONS)
 
 
 # =============================================================================
@@ -906,7 +1061,7 @@ class IdolSuggestion(BaseModel):
 
 
 class IdolSuggestionsResponse(BaseModel):
-    """Response from the session-based idol suggestion flow (exactly 3)."""
+    """Response from the session-based idol suggestion flow (one to three supported matches)."""
 
     suggestions: list[IdolSuggestion] = Field(
         min_length=1,

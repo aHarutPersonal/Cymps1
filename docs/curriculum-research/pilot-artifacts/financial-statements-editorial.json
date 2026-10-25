@@ -1,0 +1,766 @@
+{
+  "skill_key": "investing.financial_statement_literacy",
+  "domain": "investing",
+  "level": "beginner",
+  "locale": "en",
+  "title": "One transaction, three financial statements",
+  "summary": "Master the foundational mechanics of accounting by tracing how single business events ripple across the income statement, balance sheet, and cash-flow statement, maintaining perfect mathematical equilibrium.",
+  "learning_outcome": "Trace how one business event changes the income statement, balance sheet, and cash-flow statement.",
+  "prerequisites": [],
+  "artifact_type": "applied_project",
+  "blocks": [
+    {
+      "block_id": "block_exp_1",
+      "block_type": "explanation",
+      "title": "Fundamentals of the Three Financial Statements",
+      "minutes": 9,
+      "content_markdown": "## 1. Follow the event before following the number\n\nA business receives $12,000 from a bank. Its bank balance rises, but has it earned $12,000? A business pays $9,000 for goods it has not sold. Cash falls, but has it lost $9,000? These are different questions. Learning to separate them is the foundation of reading financial statements.\n\nThe income statement describes revenue and expenses over a period. Their difference is profit or loss for that period. Revenue is not simply every receipt of money: borrowing creates a repayment obligation. An expense is not simply every payment: an equipment purchase can exchange cash for a resource the business will use later. We use accrual accounting in this lesson: recognition depends on what has been earned or consumed, rather than only on when money moves.\n\nThe balance sheet describes what the business has and owes at a particular date. Assets are resources reported by the business. Liabilities are its obligations. Equity is the residual interest after subtracting liabilities from assets. The relationship is:\n\n**Assets = Liabilities + Equity.**\n\nEquity is not a separate bank account. A business can have substantial equity while most of its assets consist of equipment or inventory. Equally, a large cash balance can be financed by a large loan. To interpret a balance sheet, ask both what the resources are and how they were financed.\n\nThe cash-flow statement explains the change in cash during a period. For this lesson, operating cash flows arise from the ordinary business activities in our cases, such as collecting for a completed service or buying inventory. Investing cash flows include buying equipment for cash. Financing cash flows include receiving a bank loan or issuing shares for cash. These categories answer where cash came from and what used it; they are not rankings of whether an activity was good or bad.\n\nFor each event, make three passes in this order:\n\n1. **Identify the exchange.** What did the business receive, give up, earn, consume, or promise? Describe the event before calculating.\n2. **Separate cash from profit.** Did cash actually move? Was revenue earned or an expense recognized at this moment? A zero is a meaningful answer when you can explain it.\n3. **Reconcile the position.** Update the affected asset, liability and equity accounts. Then test the balance-sheet equation and the cash reconciliation independently.\n\nTracing an event through three statements does not mean that all three must change. A cash equipment purchase can leave immediate profit unchanged. A later depreciation entry can reduce profit without another cash payment. Later depreciation is a different event from the original purchase. Keep the transaction date separate from a later reporting period.\n\nUse a consistent sign convention: positive numbers mean an increase or cash inflow; negative numbers mean a decrease or cash outflow. Distinguish a **change** from an **ending balance**. If opening cash is $14,000 and the change is +$3,000, ending cash is $17,000, not $3,000. Many apparent accounting errors are actually answers to the wrong version of that question.\n\nAll examples and workbook cases use invented businesses and US dollars. We isolate the stated transactions: no taxes, fees, interest accrual, dividends, unrelated transactions or revaluation occur. Inventory remains unsold unless stated otherwise. Do not add assumptions about a real company to fill supposed gaps. These exercises teach statement links; they do not establish a company's investment value or whether its shares should be purchased.\n\nBefore moving on, explain to yourself why a loan is not revenue and why an asset can increase without an immediate increase in profit. You will need those distinctions in the workbook, where both numbers and written reasoning are checked.",
+      "learner_instructions": [
+        "Study the supplied explanation and examples; complete the named activities inside the workbook."
+      ],
+      "success_criteria": [
+        "Explain the effect on profit, cash, and the balance-sheet equation using the stated event and assumptions."
+      ],
+      "source_ids": [
+        "src_6f3a1b305ef753e65dba"
+      ],
+      "claim_ids": [
+        "claim_three_statements_interconnected",
+        "claim_capex_vs_depreciation"
+      ],
+      "technique_ids": [],
+      "follow_up_day": null
+    },
+    {
+      "block_id": "block_vv_1",
+      "block_type": "visual_explanation",
+      "title": "Visualizing the Three Statement Flow",
+      "minutes": 5,
+      "content_markdown": "## 2. A map you can use to audit a calculation\n\nThe following map describes the links used in this lesson. Read each arrow as a relationship to reconcile, not as a command to copy the same number into every box.\n\n```text\nRevenue - expenses\n        |\n        v\n     NET INCOME ----------------> RETAINED EARNINGS\n        |                         within balance-sheet equity\n        |                         (no dividends in these cases)\n        v\nIndirect operating cash flow:\nnet income + noncash adjustments\n           + working-capital adjustments\n        |\n        v\nOperating cash + investing cash + financing cash\n        |\n        v\nCHANGE IN CASH + OPENING CASH = ENDING CASH\n                                      |\n                                      v\n                          Balance-sheet cash asset\n```\n\nThe map has two separate routes from the income statement. One explains the change in retained earnings under our simplified assumptions. The other reconciles accrual profit to operating cash flow. These routes are related but they are not interchangeable: profit does not automatically equal the change in cash.\n\n| Event to track | Income-statement question | Balance-sheet link | Cash-flow question |\n|---|---|---|---|\n| Bank loan received | Was anything earned? | Cash and loan liability increase | Financing inflow |\n| Equipment bought with cash | Was the asset consumed immediately? | Cash decreases; equipment increases | Investing outflow |\n| Depreciation for a later period | What expense belongs to this period? | Net equipment value and retained earnings decrease | Noncash adjustment in the indirect reconciliation |\n\nThere are two independent cross-checks. First, ending assets must equal ending liabilities plus equity. Second, opening cash plus the three cash-flow categories must equal the ending cash asset. Passing the first check alone is insufficient. You could wrongly classify a loan as revenue and still construct a balanced sheet by increasing equity instead of liabilities. The arithmetic would balance while the economic explanation would be wrong.\n\nLikewise, net cash change alone does not reveal the transactions. A $10,000 loan receipt followed by a $10,000 inventory payment produces zero net cash change, but it contains both a financing inflow and an operating outflow. Reporting only zero would conceal the two activities.\n\nUse the map in the worked examples. At each step, find the relevant link and ask which other number must agree. In the independent workbook, reconstruct the relationship before consulting a hint. The aim is to learn a checking process you can apply when the transaction or its numbers change.",
+      "learner_instructions": [
+        "Study the supplied explanation and examples; complete the named activities inside the workbook."
+      ],
+      "success_criteria": [
+        "Explain the effect on profit, cash, and the balance-sheet equation using the stated event and assumptions."
+      ],
+      "source_ids": [
+        "src_7f35c25812353e1d5f45"
+      ],
+      "claim_ids": [
+        "claim_cash_flow_bridges"
+      ],
+      "technique_ids": [
+        "visual_verbal"
+      ],
+      "follow_up_day": null
+    },
+    {
+      "block_id": "block_we_1",
+      "block_type": "worked_example",
+      "title": "Worked Example: Cash Equipment Purchase",
+      "minutes": 6,
+      "content_markdown": "## 3. Worked example: exchanging cash for equipment\n\nSynthetic company Cedar Services starts with the following simplified balance sheet. All amounts are dollars. It then pays $12,000 cash for equipment that qualifies as an asset. The transaction is recorded immediately after purchase, before any depreciation for its use.\n\n| Account | Before purchase | Change | After purchase |\n|---|---:|---:|---:|\n| Cash | 30,000 | -12,000 | 18,000 |\n| Equipment, net | 10,000 | +12,000 | 22,000 |\n| Total assets | 40,000 | 0 | 40,000 |\n| Liabilities | 15,000 | 0 | 15,000 |\n| Equity | 25,000 | 0 | 25,000 |\n\n**Pass one: identify the exchange.** Cedar gives up cash and receives equipment. It has not borrowed, issued shares, provided a service or consumed the equipment in the instant being recorded. Both sides of the exchange are assets.\n\n**Pass two: separate cash and profit.** The $12,000 payment is an investing cash outflow. It is not an immediate $12,000 expense in this case. Treating it as an expense would report the purchase as though the whole resource had been consumed immediately. The income-statement effect at this instant is zero. Later use will be considered separately.\n\n**Pass three: reconcile the position.** Cash becomes $30,000 − $12,000 = $18,000. Net equipment becomes $10,000 + $12,000 = $22,000. The composition of assets changes, but total assets remain $40,000. No liability or equity change is needed to make that equation work.\n\nNow perform the two checks without skipping a line:\n\n- Balance sheet: $18,000 cash + $22,000 equipment = $40,000 assets; $15,000 liabilities + $25,000 equity = $40,000.\n- Cash reconciliation: $30,000 opening cash + $0 operating − $12,000 investing + $0 financing = $18,000 ending cash.\n\nNotice that the income statement did not need to move for the statements to be consistent. The correct conclusion is not that the purchase is invisible. It is visible in the asset composition and investing cash flow, with a zero immediate profit effect.\n\nConsider two plausible wrong approaches. One learner subtracts $12,000 from cash and equity, describing the payment as a loss. Their explanation mistakes an asset purchase for immediate consumption. Another increases equipment but forgets to reduce cash. Their assets become $52,000 with no corresponding financing or earnings event. The balance-sheet check catches the second error immediately; understanding the transaction catches the first.\n\nRecalculate the same worked example using a $9,000 purchase instead. Do this before checking the next sentence: ending cash would be $21,000, equipment $19,000, and total assets still $40,000. This small variation demonstrates the relationship; it does not replace the new cases in the assessed workbook.\n\nA balanced result also does not prove the purchase was wise. The accounts show how Cedar recorded the exchange. Whether the equipment will earn an attractive return requires additional business evidence beyond this lesson. Keep accounting description separate from an investment judgment.",
+      "learner_instructions": [
+        "Study the supplied explanation and examples; complete the named activities inside the workbook."
+      ],
+      "success_criteria": [
+        "Explain the effect on profit, cash, and the balance-sheet equation using the stated event and assumptions."
+      ],
+      "source_ids": [
+        "src_6f3a1b305ef753e65dba",
+        "src_7802ebdedc03ee2dde42"
+      ],
+      "claim_ids": [
+        "claim_capex_vs_depreciation",
+        "claim_worked_examples"
+      ],
+      "technique_ids": [
+        "worked_examples"
+      ],
+      "follow_up_day": null
+    },
+    {
+      "block_id": "block_we_2",
+      "block_type": "worked_example",
+      "title": "Worked Example: Recording Later Depreciation",
+      "minutes": 5,
+      "content_markdown": "## 4. Worked example: the later noncash expense\n\nContinue with Cedar immediately after the purchase: cash $18,000, net equipment $22,000, liabilities $15,000 and equity $25,000. In a later period Cedar records $2,000 of depreciation. To isolate this event, assume no revenue, other expenses, taxes, cash movements or dividends during that period. The $2,000 charge is supplied; you are not being asked to choose an accounting estimate or depreciation method.\n\nDepreciation records part of the equipment's cost as an expense for the later period. It is not a second payment to the seller. Confusing those two events would count the cash payment twice.\n\n| Account or measure | Starting amount | Effect of this period's depreciation | Ending amount or period result |\n|---|---:|---:|---:|\n| Cash | 18,000 | 0 | 18,000 |\n| Equipment, net | 22,000 | -2,000 | 20,000 |\n| Total assets | 40,000 | -2,000 | 38,000 |\n| Liabilities | 15,000 | 0 | 15,000 |\n| Equity | 25,000 | -2,000 | 23,000 |\n| Net income for this isolated period | — | -2,000 | -2,000 |\n\nWhy does equity decrease? The expense lowers this period's net income. With no dividends or other equity events, the loss reduces retained earnings within equity. The balance sheet remains consistent: $38,000 assets = $15,000 liabilities + $23,000 equity.\n\nWhy does cash stay at $18,000? No money moved when this depreciation entry was recorded. Under the indirect cash-flow approach, start with net income of −$2,000 and add back the $2,000 noncash depreciation charge. Operating cash flow for this isolated period is therefore zero. Investing and financing cash flows are also zero, so ending cash remains $18,000.\n\nThe add-back does not erase the expense from the income statement. The two calculations answer different questions. Profit includes the recognized cost; the cash reconciliation removes a noncash charge when explaining cash movement. A learner who says 'depreciation does not matter because it is added back' has mixed the purposes of the statements.\n\nAudit an intentionally wrong solution: 'Net income is −$2,000, so cash must also fall by $2,000 to $16,000.' Ask what payment supposedly caused that decrease. There was none. The reasoning copied profit into cash without the noncash adjustment. Correcting only the ending cash figure would fix the output but leave the faulty rule intact; the useful correction is to explain why the extra cash movement never happened.\n\nCompare the two dates. At purchase, cash fell while immediate profit stayed unchanged. In the later period, profit fell while cash stayed unchanged. The same equipment links these events, but their timing and accounting effects differ. In actual company analysis many transactions occur together, which makes the reconciliation more complex. The disciplined questions remain the same: what event occurred, when did cash move, and when was an expense or revenue recognized?",
+      "learner_instructions": [
+        "Study the supplied explanation and examples; complete the named activities inside the workbook."
+      ],
+      "success_criteria": [
+        "Explain the effect on profit, cash, and the balance-sheet equation using the stated event and assumptions."
+      ],
+      "source_ids": [
+        "src_6f3a1b305ef753e65dba",
+        "src_7802ebdedc03ee2dde42"
+      ],
+      "claim_ids": [
+        "claim_capex_vs_depreciation",
+        "claim_worked_examples"
+      ],
+      "technique_ids": [
+        "worked_examples"
+      ],
+      "follow_up_day": null
+    },
+    {
+      "block_id": "block_aa_1",
+      "block_type": "independent_practice",
+      "title": "Practice: Bank Loan and Inventory Purchase",
+      "minutes": 10,
+      "content_markdown": "## 5. Independent practice: borrowing and buying inventory\n\nOpen **Bank loan and inventory purchase** in the in-app workbook. The fictional business begins with cash, inventory and equipment as separate assets and with a stated liability/equity balance. It receives a bank loan, then uses part of the cash to buy inventory that remains unsold. The loan amount and purchase amount differ: net cash is not automatically zero.\n\nEnter the requested ending balances, income effect and cash-flow categories. Read each label carefully: an ending account balance and a transaction's effect are different quantities. All opening values, transaction amounts and simplifying assumptions are supplied in the exercise.\n\nWork in this sequence: identify the two exchanges; update cash and inventory; update the loan liability; determine whether anything was earned or consumed; then reconcile the statements. Finally, explain why the business can hold more assets without having earned the loan proceeds as profit.\n\nMake a complete first attempt before requesting support. The app saves your entries. If you receive a correction, keep the explanation you wrote and change the mistaken link, rather than replacing the answer with an unexplained number. Expect roughly 10–15 minutes for the calculations, the written explanation and an initial check; needing longer is not a failure.",
+      "learner_instructions": [
+        "Study the supplied explanation and examples; complete the named activities inside the workbook."
+      ],
+      "success_criteria": [
+        "Explain the effect on profit, cash, and the balance-sheet equation using the stated event and assumptions."
+      ],
+      "source_ids": [
+        "src_7f35c25812353e1d5f45",
+        "src_d80db0f005032b4e104f"
+      ],
+      "claim_ids": [
+        "claim_cash_flow_bridges",
+        "claim_active_application_artifact"
+      ],
+      "technique_ids": [
+        "active_application"
+      ],
+      "follow_up_day": null
+    },
+    {
+      "block_id": "block_fr_1",
+      "block_type": "feedback",
+      "title": "Checking Statement Equilibrium",
+      "minutes": 5,
+      "content_markdown": "## 6. Diagnose the mistake, not just the red field\n\nAfter submitting the practice case, use the field feedback to locate the first mistaken decision. A failed final total can be caused by an earlier classification or sign error. Changing several totals until they happen to balance is not a reliable method.\n\n| Symptom in a submitted solution | Question that locates the cause | What a meaningful correction explains |\n|---|---|---|\n| Assets exceed liabilities plus equity | Did you increase inventory without recording how it was paid for? | Both sides of the exchange |\n| Profit includes the bank loan | What service or sale was earned by borrowing? | Obligation versus revenue |\n| Operating cash flow includes the loan receipt | Is the cash from customers/operations or from financing? | Source of the inflow |\n| Ending cash equals the loan amount | Did you begin from opening cash and include the purchase payment? | Balance versus change |\n| Inventory purchase immediately lowers profit | Has the inventory been sold or consumed in the stated case? | Asset held versus expense recognized |\n\nA correct choice or calculation is checked deterministically. Your written reasoning is checked against stated criteria. A model-based text review can be uncertain, so read its explanation; a passing label is not a substitute for a reproducible argument. If a review is unavailable, the saved answer should remain available for retry.\n\nUse one cause-and-effect sentence in your correction: 'I treated ___ as ___; it should be ___ because the event says ___. Consequently ___ changes by ___.' This makes your reasoning inspectable. The rubric asks for a balanced position, accurate profit recognition and an explanation of cash movement, not confidence or polished investment vocabulary.",
+      "learner_instructions": [
+        "Study the supplied explanation and examples; complete the named activities inside the workbook."
+      ],
+      "success_criteria": [
+        "Explain the effect on profit, cash, and the balance-sheet equation using the stated event and assumptions."
+      ],
+      "source_ids": [
+        "src_eb8e4126df4f5cd85d4f"
+      ],
+      "claim_ids": [],
+      "technique_ids": [
+        "feedback_revision"
+      ],
+      "follow_up_day": null
+    },
+    {
+      "block_id": "block_feedback_revision_1",
+      "block_type": "revision",
+      "title": "Revising Transaction Inputs",
+      "minutes": 5,
+      "content_markdown": "## 7. Revise and run both checks again\n\nReturn to the same in-app activity, revise the relevant fields and submit again. The workbook retains attempts so the current answer can be distinguished from an earlier error. Reading a hint or worked solution is recorded as support; using help is part of learning, but it is different evidence from solving a new case without it.\n\nAfter changing a number, redo both reconciliations. If cash changes, recalculate total assets and the cash-flow bridge. If a liability changes, check the financing event that caused it. If profit changes, explain its connection to equity under the exercise assumptions. This is why correcting a single highlighted field can require updating another field as well.\n\nIf your first attempt was already correct, do not invent an error to fill time. Use the feedback section to verify your explanation, then proceed. The 40–60 minute study estimate includes room for checks and revision; it is not a requirement to remain on a screen after the work is complete.\n\nBefore moving to assessment, state what would differ if the loan amount stayed the same but the inventory payment increased. Cash would change differently; borrowing would still not become revenue. The next assessed case changes the economic event, so memorizing the first case's numbers will not be enough.",
+      "learner_instructions": [
+        "Study the supplied explanation and examples; complete the named activities inside the workbook."
+      ],
+      "success_criteria": [
+        "Explain the effect on profit, cash, and the balance-sheet equation using the stated event and assumptions."
+      ],
+      "source_ids": [
+        "src_eb8e4126df4f5cd85d4f"
+      ],
+      "claim_ids": [],
+      "technique_ids": [
+        "feedback_revision"
+      ],
+      "follow_up_day": null
+    },
+    {
+      "block_id": "block_assessment_1",
+      "block_type": "assessment",
+      "title": "Assessment: Trace a Complex Transaction",
+      "minutes": 10,
+      "content_markdown": "## 8. Assessment: earnings, expenses and operating cash\n\nOpen **Completed service and paid operating expense**. This synthetic case supplies a fresh starting balance sheet. A service is fully performed and collected in cash, and a stated operating expense is incurred and paid in the same period. Taxes and other transactions are excluded explicitly.\n\nPrepare the ending position and period effects in the workbook. Your text answer must address all three links: why net income has the sign and amount you calculated, how that result reaches equity, and why the actual receipts and payments produce the operating cash flow you report. Saying only 'the balance sheet balances' is insufficient.\n\nApply these observable criteria:\n\n- **Balance Sheet Equilibrium:** the ending asset total agrees with ending liabilities plus equity, with changes supported by the event.\n- **Income Statement Impact:** the earned revenue and recognized expense determine the correct net-income effect.\n- **Cash Flow Bridging:** actual inflows and outflows are assigned to the correct categories and reconcile to ending cash.\n\nThe answers are not printed in this lesson. Make a complete attempt inside the app, read the resulting feedback and revise if needed. The expected artifact is your saved set of statement values plus a causal explanation, not a separate spreadsheet or paper submission.",
+      "learner_instructions": [
+        "Study the supplied explanation and examples; complete the named activities inside the workbook."
+      ],
+      "success_criteria": [
+        "Explain the effect on profit, cash, and the balance-sheet equation using the stated event and assumptions."
+      ],
+      "source_ids": [
+        "src_6f3a1b305ef753e65dba"
+      ],
+      "claim_ids": [
+        "claim_three_statements_interconnected"
+      ],
+      "technique_ids": [],
+      "follow_up_day": null
+    },
+    {
+      "block_id": "block_aa_2",
+      "block_type": "transfer",
+      "title": "Transfer: Noncash Acquisitions",
+      "minutes": 5,
+      "content_markdown": "## 9. Transfer: an asset acquired without a cash payment\n\nOpen **Patent acquired by issuing shares**. It gives a different starting balance sheet and a patent acquired solely in exchange for newly issued company shares. The agreed training-case amount and timing assumptions are explicit. There are no fees, taxes or subsequent amortization in this event.\n\nTrace the transaction through the three statements. Determine the ending balances and the period effects using the supplied facts, then explain each connection. Work through your own three-pass analysis before opening a hint; do not assume that acquiring an asset always follows the same accounting pattern.\n\nThis is the transfer test: the form looks familiar, but the mechanism differs. Try it before opening support. A successful result means that you can apply the three-pass method to this new event under the stated assumptions. It does not prove permanent mastery or general investing skill.\n\nAt the end, review the three common confusions you have practiced avoiding: money received versus revenue earned; money paid versus expense recognized; and a change in an account versus its ending balance. Those distinctions are the tools to carry into a later lesson on real company statements.",
+      "learner_instructions": [
+        "Study the supplied explanation and examples; complete the named activities inside the workbook."
+      ],
+      "success_criteria": [
+        "Explain the effect on profit, cash, and the balance-sheet equation using the stated event and assumptions."
+      ],
+      "source_ids": [
+        "src_d80db0f005032b4e104f",
+        "src_6f3a1b305ef753e65dba"
+      ],
+      "claim_ids": [
+        "claim_active_application_artifact",
+        "claim_three_statements_interconnected"
+      ],
+      "technique_ids": [
+        "active_application"
+      ],
+      "follow_up_day": null
+    }
+  ],
+  "session_workbooks": [
+    {
+      "block_ids": [
+        "block_exp_1",
+        "block_vv_1",
+        "block_we_1",
+        "block_we_2",
+        "block_aa_1",
+        "block_fr_1",
+        "block_feedback_revision_1",
+        "block_assessment_1",
+        "block_aa_2"
+      ],
+      "workbook": {
+        "title": "Trace and reconcile three business events",
+        "activities": [
+          {
+            "id": "act_practice_1",
+            "title": "Bank loan and inventory purchase",
+            "kind": "practice",
+            "instructions": "Opening balance sheet: cash $14,000, inventory $6,000 and equipment $20,000; liabilities $15,000 and equity $25,000. The business receives a $12,000 bank loan, then pays $9,000 cash for additional inventory that remains unsold. Trace both events. Explain why borrowing is not profit and how the two cash flows reconcile to the ending position. All amounts are synthetic US-dollar training data. Record only the stated immediate events. There are no taxes, fees, interest accrual, dividends, depreciation/amortization or other transactions; unsold inventory is not consumed. Enter ending balances where requested and signed period changes/cash flows elsewhere.",
+            "data": [
+              {
+                "id": "cash0",
+                "label": "Opening cash",
+                "value": 14000.0,
+                "unit": "USD"
+              },
+              {
+                "id": "inventory0",
+                "label": "Opening inventory",
+                "value": 6000.0,
+                "unit": "USD"
+              },
+              {
+                "id": "equipment0",
+                "label": "Opening equipment",
+                "value": 20000.0,
+                "unit": "USD"
+              },
+              {
+                "id": "liabilities0",
+                "label": "Opening liabilities",
+                "value": 15000.0,
+                "unit": "USD"
+              },
+              {
+                "id": "equity0",
+                "label": "Opening equity",
+                "value": 25000.0,
+                "unit": "USD"
+              },
+              {
+                "id": "loan",
+                "label": "Bank loan received",
+                "value": 12000.0,
+                "unit": "USD"
+              },
+              {
+                "id": "purchase",
+                "label": "Inventory paid for",
+                "value": 9000.0,
+                "unit": "USD"
+              }
+            ],
+            "fields": [
+              {
+                "id": "cash",
+                "label": "Ending cash",
+                "kind": "number",
+                "unit": "USD",
+                "choices": [],
+                "expression": "cash0+loan-purchase",
+                "correct_choice": null,
+                "tolerance": 0.01,
+                "criteria": [],
+                "rubric_criterion": "Balance Sheet Equilibrium"
+              },
+              {
+                "id": "inventory",
+                "label": "Ending inventory",
+                "kind": "number",
+                "unit": "USD",
+                "choices": [],
+                "expression": "inventory0+purchase",
+                "correct_choice": null,
+                "tolerance": 0.01,
+                "criteria": [],
+                "rubric_criterion": "Balance Sheet Equilibrium"
+              },
+              {
+                "id": "assets",
+                "label": "Ending total assets",
+                "kind": "number",
+                "unit": "USD",
+                "choices": [],
+                "expression": "cash0+inventory0+equipment0+loan",
+                "correct_choice": null,
+                "tolerance": 0.01,
+                "criteria": [],
+                "rubric_criterion": "Balance Sheet Equilibrium"
+              },
+              {
+                "id": "liabilities",
+                "label": "Ending total liabilities",
+                "kind": "number",
+                "unit": "USD",
+                "choices": [],
+                "expression": "liabilities0+loan",
+                "correct_choice": null,
+                "tolerance": 0.01,
+                "criteria": [],
+                "rubric_criterion": "Balance Sheet Equilibrium"
+              },
+              {
+                "id": "equity",
+                "label": "Ending total equity",
+                "kind": "number",
+                "unit": "USD",
+                "choices": [],
+                "expression": "equity0",
+                "correct_choice": null,
+                "tolerance": 0.01,
+                "criteria": [],
+                "rubric_criterion": "Balance Sheet Equilibrium"
+              },
+              {
+                "id": "income",
+                "label": "Immediate net-income change",
+                "kind": "number",
+                "unit": "USD",
+                "choices": [],
+                "expression": "0",
+                "correct_choice": null,
+                "tolerance": 0.01,
+                "criteria": [],
+                "rubric_criterion": "Income Statement Impact"
+              },
+              {
+                "id": "operating",
+                "label": "Operating cash flow",
+                "kind": "number",
+                "unit": "USD",
+                "choices": [],
+                "expression": "0-purchase",
+                "correct_choice": null,
+                "tolerance": 0.01,
+                "criteria": [],
+                "rubric_criterion": "Cash Flow Bridging"
+              },
+              {
+                "id": "financing",
+                "label": "Financing cash flow",
+                "kind": "number",
+                "unit": "USD",
+                "choices": [],
+                "expression": "loan",
+                "correct_choice": null,
+                "tolerance": 0.01,
+                "criteria": [],
+                "rubric_criterion": "Cash Flow Bridging"
+              },
+              {
+                "id": "net_cash",
+                "label": "Net change in cash",
+                "kind": "number",
+                "unit": "USD",
+                "choices": [],
+                "expression": "loan-purchase",
+                "correct_choice": null,
+                "tolerance": 0.01,
+                "criteria": [],
+                "rubric_criterion": "Cash Flow Bridging"
+              },
+              {
+                "id": "reason",
+                "label": "Explain the profit effect, the two cash-flow categories and why the ending balance sheet balances.",
+                "kind": "text",
+                "unit": "",
+                "choices": [],
+                "expression": null,
+                "correct_choice": null,
+                "tolerance": 0.01,
+                "criteria": [
+                  "Explains that the loan creates a liability, not earned revenue, and unsold inventory is an asset rather than a current expense.",
+                  "Links the financing receipt and operating payment to the net cash change and explains the matching increase in total assets and loan liabilities."
+                ],
+                "rubric_criterion": "Cash Flow Bridging"
+              }
+            ],
+            "hint": "Trace the loan and purchase separately. Begin with opening balances; do not report a change where the field requests an ending balance. Ask whether the inventory has been sold.",
+            "worked_solution": "Ending cash = 14,000 + 12,000 - 9,000 = 17,000. Inventory = 6,000 + 9,000 = 15,000. Equipment stays 20,000, so total assets = 52,000. Liabilities = 15,000 + 12,000 = 27,000; equity stays 25,000. Thus 52,000 = 27,000 + 25,000. Net income changes by zero: borrowing is an obligation and the unsold inventory remains an asset. Operating cash flow is -9,000 and financing cash flow +12,000; investing is zero. Net cash change is +3,000, which reconciles opening cash 14,000 to ending cash 17,000.",
+            "minutes_min": 10,
+            "minutes_max": 15,
+            "diagram": null
+          },
+          {
+            "id": "act_assessment_1",
+            "title": "Completed service and paid operating expense",
+            "kind": "practice",
+            "instructions": "A different synthetic business starts with cash $17,000, inventory $15,000 and equipment $20,000; liabilities $27,000 and equity $25,000. It fully performs a service and collects $8,000 cash. In the same period it incurs and pays a $2,200 operating expense. Trace both events. Your explanation must explicitly connect profitability, liquidity and ending balance-sheet equilibrium; do not merely state that the totals balance. All amounts are synthetic US-dollar training data. Record only the stated immediate events. There are no taxes, fees, interest accrual, dividends, depreciation/amortization or other transactions; unsold inventory is not consumed. Enter ending balances where requested and signed period changes/cash flows elsewhere.",
+            "data": [
+              {
+                "id": "cash0",
+                "label": "Opening cash",
+                "value": 17000.0,
+                "unit": "USD"
+              },
+              {
+                "id": "inventory0",
+                "label": "Opening inventory",
+                "value": 15000.0,
+                "unit": "USD"
+              },
+              {
+                "id": "equipment0",
+                "label": "Opening equipment",
+                "value": 20000.0,
+                "unit": "USD"
+              },
+              {
+                "id": "liabilities0",
+                "label": "Opening liabilities",
+                "value": 27000.0,
+                "unit": "USD"
+              },
+              {
+                "id": "equity0",
+                "label": "Opening equity",
+                "value": 25000.0,
+                "unit": "USD"
+              },
+              {
+                "id": "revenue",
+                "label": "Earned and collected service revenue",
+                "value": 8000.0,
+                "unit": "USD"
+              },
+              {
+                "id": "expense",
+                "label": "Incurred and paid operating expense",
+                "value": 2200.0,
+                "unit": "USD"
+              }
+            ],
+            "fields": [
+              {
+                "id": "cash",
+                "label": "Ending cash",
+                "kind": "number",
+                "unit": "USD",
+                "choices": [],
+                "expression": "cash0+revenue-expense",
+                "correct_choice": null,
+                "tolerance": 0.01,
+                "criteria": [],
+                "rubric_criterion": "Balance Sheet Equilibrium"
+              },
+              {
+                "id": "income",
+                "label": "Net income for the isolated period",
+                "kind": "number",
+                "unit": "USD",
+                "choices": [],
+                "expression": "revenue-expense",
+                "correct_choice": null,
+                "tolerance": 0.01,
+                "criteria": [],
+                "rubric_criterion": "Income Statement Impact"
+              },
+              {
+                "id": "assets",
+                "label": "Ending total assets",
+                "kind": "number",
+                "unit": "USD",
+                "choices": [],
+                "expression": "cash0+inventory0+equipment0+revenue-expense",
+                "correct_choice": null,
+                "tolerance": 0.01,
+                "criteria": [],
+                "rubric_criterion": "Balance Sheet Equilibrium"
+              },
+              {
+                "id": "liabilities",
+                "label": "Ending total liabilities",
+                "kind": "number",
+                "unit": "USD",
+                "choices": [],
+                "expression": "liabilities0",
+                "correct_choice": null,
+                "tolerance": 0.01,
+                "criteria": [],
+                "rubric_criterion": "Balance Sheet Equilibrium"
+              },
+              {
+                "id": "equity",
+                "label": "Ending total equity",
+                "kind": "number",
+                "unit": "USD",
+                "choices": [],
+                "expression": "equity0+revenue-expense",
+                "correct_choice": null,
+                "tolerance": 0.01,
+                "criteria": [],
+                "rubric_criterion": "Balance Sheet Equilibrium"
+              },
+              {
+                "id": "operating",
+                "label": "Operating cash flow",
+                "kind": "number",
+                "unit": "USD",
+                "choices": [],
+                "expression": "revenue-expense",
+                "correct_choice": null,
+                "tolerance": 0.01,
+                "criteria": [],
+                "rubric_criterion": "Cash Flow Bridging"
+              },
+              {
+                "id": "investing",
+                "label": "Investing cash flow",
+                "kind": "number",
+                "unit": "USD",
+                "choices": [],
+                "expression": "0",
+                "correct_choice": null,
+                "tolerance": 0.01,
+                "criteria": [],
+                "rubric_criterion": "Cash Flow Bridging"
+              },
+              {
+                "id": "financing",
+                "label": "Financing cash flow",
+                "kind": "number",
+                "unit": "USD",
+                "choices": [],
+                "expression": "0",
+                "correct_choice": null,
+                "tolerance": 0.01,
+                "criteria": [],
+                "rubric_criterion": "Cash Flow Bridging"
+              },
+              {
+                "id": "reason",
+                "label": "Explain the net-income calculation, its effect on equity, and why operating cash flow reconciles to ending cash.",
+                "kind": "text",
+                "unit": "",
+                "choices": [],
+                "expression": null,
+                "correct_choice": null,
+                "tolerance": 0.01,
+                "criteria": [
+                  "Subtracts the recognized expense from earned service revenue to explain the positive net-income amount.",
+                  "Explains that this profit increases retained earnings/equity with no dividends or other equity events.",
+                  "Explains that both the service receipt and expense payment are operating cash flows and reconciles their net amount from opening to ending cash."
+                ],
+                "rubric_criterion": "Cash Flow Bridging"
+              }
+            ],
+            "hint": "Recognized profit and cash flow happen to agree for these two events because both revenue and expense are settled in cash in the same period. Show why; do not assume that they always agree.",
+            "worked_solution": "Net income = 8,000 - 2,200 = 5,800. Both flows are operating, so operating cash flow is +5,800; investing and financing flows are zero. Cash ends at 17,000 + 5,800 = 22,800. Other assets are unchanged, giving total assets 22,800 + 15,000 + 20,000 = 57,800. Liabilities stay 27,000 and equity becomes 25,000 + 5,800 = 30,800. The equation is 57,800 = 27,000 + 30,800. Profit equals the cash change in this isolated case because both recognized amounts were settled in cash, not because profit always measures cash movement.",
+            "minutes_min": 10,
+            "minutes_max": 15,
+            "diagram": null
+          },
+          {
+            "id": "act_transfer_1",
+            "title": "Patent acquired by issuing shares",
+            "kind": "transfer",
+            "instructions": "A third synthetic business has total assets $70,000 (including cash $18,000), liabilities $15,000 and equity $55,000. It acquires a patent by issuing new company shares directly to the patent owner. The patent and issued shares are both measured at the agreed training-case amount of $50,000. No cash is exchanged. Record the immediate acquisition, before any later amortization. Identify what changed and explain why the cash-flow result differs from the cash equipment purchase in the lesson. All amounts are synthetic US-dollar training data. Record only the stated immediate events. There are no taxes, fees, interest accrual, dividends, depreciation/amortization or other transactions; unsold inventory is not consumed. Enter ending balances where requested and signed period changes/cash flows elsewhere.",
+            "data": [
+              {
+                "id": "assets0",
+                "label": "Opening total assets",
+                "value": 70000.0,
+                "unit": "USD"
+              },
+              {
+                "id": "cash0",
+                "label": "Opening cash included in assets",
+                "value": 18000.0,
+                "unit": "USD"
+              },
+              {
+                "id": "liabilities0",
+                "label": "Opening liabilities",
+                "value": 15000.0,
+                "unit": "USD"
+              },
+              {
+                "id": "equity0",
+                "label": "Opening equity",
+                "value": 55000.0,
+                "unit": "USD"
+              },
+              {
+                "id": "patent",
+                "label": "Patent and new shares amount",
+                "value": 50000.0,
+                "unit": "USD"
+              }
+            ],
+            "fields": [
+              {
+                "id": "assets",
+                "label": "Ending total assets",
+                "kind": "number",
+                "unit": "USD",
+                "choices": [],
+                "expression": "assets0+patent",
+                "correct_choice": null,
+                "tolerance": 0.01,
+                "criteria": [],
+                "rubric_criterion": "Balance Sheet Equilibrium"
+              },
+              {
+                "id": "liabilities",
+                "label": "Ending total liabilities",
+                "kind": "number",
+                "unit": "USD",
+                "choices": [],
+                "expression": "liabilities0",
+                "correct_choice": null,
+                "tolerance": 0.01,
+                "criteria": [],
+                "rubric_criterion": "Balance Sheet Equilibrium"
+              },
+              {
+                "id": "equity",
+                "label": "Ending total equity",
+                "kind": "number",
+                "unit": "USD",
+                "choices": [],
+                "expression": "equity0+patent",
+                "correct_choice": null,
+                "tolerance": 0.01,
+                "criteria": [],
+                "rubric_criterion": "Balance Sheet Equilibrium"
+              },
+              {
+                "id": "cash",
+                "label": "Ending cash",
+                "kind": "number",
+                "unit": "USD",
+                "choices": [],
+                "expression": "cash0",
+                "correct_choice": null,
+                "tolerance": 0.01,
+                "criteria": [],
+                "rubric_criterion": "Balance Sheet Equilibrium"
+              },
+              {
+                "id": "income",
+                "label": "Immediate net-income change",
+                "kind": "number",
+                "unit": "USD",
+                "choices": [],
+                "expression": "0",
+                "correct_choice": null,
+                "tolerance": 0.01,
+                "criteria": [],
+                "rubric_criterion": "Income Statement Impact"
+              },
+              {
+                "id": "operating",
+                "label": "Operating cash flow from this event",
+                "kind": "number",
+                "unit": "USD",
+                "choices": [],
+                "expression": "0",
+                "correct_choice": null,
+                "tolerance": 0.01,
+                "criteria": [],
+                "rubric_criterion": "Cash Flow Bridging"
+              },
+              {
+                "id": "investing",
+                "label": "Investing cash flow from this event",
+                "kind": "number",
+                "unit": "USD",
+                "choices": [],
+                "expression": "0",
+                "correct_choice": null,
+                "tolerance": 0.01,
+                "criteria": [],
+                "rubric_criterion": "Cash Flow Bridging"
+              },
+              {
+                "id": "financing",
+                "label": "Financing cash flow from this event",
+                "kind": "number",
+                "unit": "USD",
+                "choices": [],
+                "expression": "0",
+                "correct_choice": null,
+                "tolerance": 0.01,
+                "criteria": [],
+                "rubric_criterion": "Cash Flow Bridging"
+              },
+              {
+                "id": "reason",
+                "label": "Explain your balance-sheet changes, your immediate profit result and the cash-flow classifications you selected.",
+                "kind": "text",
+                "unit": "",
+                "choices": [],
+                "expression": null,
+                "correct_choice": null,
+                "tolerance": 0.01,
+                "criteria": [
+                  "Explains that the patent increases assets and the newly issued shares increase contributed equity by the same amount.",
+                  "States that no cash changes hands and distinguishes a noncash acquisition from a cash investing or financing flow.",
+                  "Explains that this acquisition produces no immediate revenue/expense under the stated timing assumptions; later amortization is a separate event."
+                ],
+                "rubric_criterion": "Cash Flow Bridging"
+              }
+            ],
+            "hint": "Shares exchanged directly for an asset do not create a bank deposit and withdrawal. Distinguish ownership issued from revenue earned, and immediate acquisition from later asset consumption.",
+            "worked_solution": "Total assets increase to 70,000 + 50,000 = 120,000. Liabilities stay 15,000. Equity increases to 55,000 + 50,000 = 105,000 because ownership claims were issued, not because profit was earned. The equation is 120,000 = 15,000 + 105,000. Cash remains 18,000. Immediate net-income change is zero. Operating, investing and financing CASH flows from this event are all zero because the consideration was shares rather than money. This is a noncash transaction; the zero cash-flow entries do not deny the asset and equity changes or possible supplementary disclosure in real reporting.",
+            "minutes_min": 5,
+            "minutes_max": 10,
+            "diagram": null
+          }
+        ]
+      }
+    }
+  ],
+  "artifact_description": "Saved in-app ending balances and cash-flow classifications for three synthetic businesses, with written explanations connecting profitability, liquidity and balance-sheet equilibrium; corrected attempts and transfer evidence are retained.",
+  "rubric": [
+    {
+      "criterion": "Balance Sheet Equilibrium",
+      "evidence_required": "The updated asset values must equal the updated liabilities and equity values after the transaction.",
+      "passing_standard": "Mathematical equality (Assets = Liabilities + Equity) is maintained using the required deterministic numbers."
+    },
+    {
+      "criterion": "Income Statement Impact",
+      "evidence_required": "Identification of whether the transaction creates an immediate expense, revenue, or is a capital expenditure without immediate IS impact (excluding future depreciation).",
+      "passing_standard": "Accurate numerical updates and categorization of the transaction's immediate effect on net income."
+    },
+    {
+      "criterion": "Cash Flow Bridging",
+      "evidence_required": "Tracing the cash inflow or outflow to the correct CFS category (Operating, Investing, or Financing).",
+      "passing_standard": "Accurate classification of the activity and correct directionality (+ or -) reflecting actual liquidity."
+    }
+  ],
+  "estimated_minutes": 60
+}

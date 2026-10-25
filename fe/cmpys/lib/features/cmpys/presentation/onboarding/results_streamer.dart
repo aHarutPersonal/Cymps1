@@ -4,6 +4,29 @@
 import '../../../../core/network/coalesced_text.dart';
 import '../../../session/data/session_repository.dart';
 
+/// A server-reported generation failure, distinct from a broken connection.
+class ResultsGenerationException implements Exception {
+  const ResultsGenerationException({
+    required this.code,
+    this.retryAfterSeconds = 0,
+  });
+
+  final String code;
+  final int retryAfterSeconds;
+
+  String get message => switch (code) {
+    'generation_unavailable' =>
+      'Generation is unavailable right now. Your answers are saved. Please try again later.',
+    'generation_rate_limited' =>
+      'Generation is busy right now. Your answers are saved. Please wait before trying again.',
+    _ =>
+      'Generation could not finish. Your answers are saved. Please try again.',
+  };
+
+  @override
+  String toString() => message;
+}
+
 /// Streams generate-results, invoking callbacks with the *accumulated* text of
 /// each section as chunks arrive. Throws on stream error so callers can show
 /// retry UI. Backend supports re-invocation from the comparison or blueprint
@@ -26,7 +49,12 @@ Future<void> streamGenerateResults({
   );
 
   try {
-    await for (final ev in repo.generateResults(sessionId)) {
+    // An abandoned connection must become recoverable instead of leaving the
+    // user on a spinner forever. Heartbeats count as activity in this stream.
+    await for (final ev
+        in repo
+            .generateResults(sessionId)
+            .timeout(const Duration(seconds: 90))) {
       final type = ev['type'] as String? ?? '';
       switch (type) {
         case 'status':
@@ -58,7 +86,15 @@ Future<void> streamGenerateResults({
           if (jobId.isNotEmpty) onPlanJob?.call(jobId);
           break;
         case 'error':
-          throw StateError(ev['message']?.toString() ?? 'generation failed');
+          final delay = ev['retry_after_seconds'];
+          throw ResultsGenerationException(
+            code: ev['code']?.toString() ?? 'generation_failed',
+            retryAfterSeconds: delay is num && delay.isFinite
+                ? delay.toInt().clamp(0, 3600)
+                : ev['retryable'] == false
+                ? 60
+                : 0,
+          );
         case 'done':
           break;
       }

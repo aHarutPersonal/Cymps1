@@ -3,6 +3,13 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:markdown/markdown.dart' as md;
+import '../../reading/learning_comparison.dart';
+import '../../reading/learning_diagram.dart';
+import '../../reading/markdown_code_text.dart';
+import 'learning_diagram_view.dart';
+import 'cmpys_primitives.dart';
+import 'learning_comparison_view.dart';
 
 import '../../../app/design_tokens.dart';
 
@@ -28,7 +35,12 @@ class CmpysMarkdown extends StatelessWidget {
     return MarkdownBody(
       data: data,
       selectable: false,
+      fitContent: false,
+      builders: {
+        'pre': _LearningBlockBuilder(fontSize: fontSize, dark: onDark),
+      },
       styleSheet: MarkdownStyleSheet(
+        codeblockDecoration: const BoxDecoration(),
         p: AppTypography.reading.copyWith(
           fontSize: fontSize,
           height: lineHeight,
@@ -113,9 +125,9 @@ class CmpysMarkdownScreen extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(10, 8, 16, 8),
               child: Material(
                 color: Colors.transparent,
-                child: InkWell(
+                child: CmpysPressable(
+                  semanticLabel: 'Back',
                   onTap: () => Navigator.of(context).maybePop(),
-                  borderRadius: BorderRadius.circular(999),
                   child: Container(
                     width: 44,
                     height: 44,
@@ -155,6 +167,61 @@ class CmpysMarkdownScreen extends StatelessWidget {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _LearningBlockBuilder extends MarkdownElementBuilder {
+  _LearningBlockBuilder({required this.fontSize, required this.dark});
+  final double fontSize;
+  final bool dark;
+  @override
+  bool isBlockElement() => true;
+  @override
+  Widget visitText(md.Text text, TextStyle? preferredStyle) =>
+      const SizedBox.shrink();
+  @override
+  Widget? visitElementAfter(md.Element element, TextStyle? preferredStyle) {
+    final code = element.children?.whereType<md.Element>().firstOrNull;
+    final language = (code?.attributes['class'] ?? '').replaceFirst(
+      'language-',
+      '',
+    );
+    // FlutterMarkdown already constructs Document(encodeHtml: false).
+    final source = markdownCodeText(element.textContent, encoded: false);
+    final comparison = LearningComparison.parse(source, language: language);
+    if (comparison != null) {
+      return LearningComparisonView(
+        comparison: comparison,
+        fontSize: fontSize,
+        dark: dark,
+      );
+    }
+    final diagram = LearningDiagram.parse(source, language: language);
+    if (diagram != null) {
+      return LearningDiagramView(
+        diagram: diagram,
+        fontSize: fontSize,
+        dark: dark,
+      );
+    }
+    return Container(
+      padding: const EdgeInsets.all(13),
+      decoration: BoxDecoration(
+        color: dark ? Colors.white.withValues(alpha: .06) : AppColors.paper2,
+        borderRadius: AppRadii.br12,
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Text(
+          source.trimRight(),
+          style: AppTypography.monoLabel.copyWith(
+            color: dark ? Colors.white : AppColors.ink,
+            fontSize: fontSize - 2,
+            height: 1.55,
+          ),
         ),
       ),
     );

@@ -15,8 +15,9 @@ class _FakePlanRepository extends PlanRepository {
   @override
   Future<({bool completed, bool itemCompleted})> toggleStepComplete(
     String itemId,
-    String stepId,
-  ) async => (completed: true, itemCompleted: false);
+    String stepId, {
+    String? artifactJobId,
+  }) async => (completed: true, itemCompleted: false);
 }
 
 class _FocusedPlanRepository extends Fake implements PlanRepository {
@@ -208,7 +209,7 @@ Set a timer, write the decision boundary, then test it against two choices.
 
     expect(find.text('LESSON 1 · PART 1 OF 3'), findsOneWidget);
     expect(find.text('8 min read'), findsOneWidget);
-    expect(find.text('37 min practice'), findsOneWidget);
+    expect(find.text('Practice in app'), findsOneWidget);
     expect(find.byType(SelectionArea), findsOneWidget);
     expect(tester.takeException(), isNull);
 
@@ -230,7 +231,7 @@ Set a timer, write the decision boundary, then test it against two choices.
     expect(find.text('Start With Why'), findsOneWidget);
     expect(find.text('Read book'), findsOneWidget);
     expect(find.text('Unrelated article'), findsNothing);
-    expect(find.text('Complete lesson'), findsOneWidget);
+    expect(find.text('Practice & finish'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

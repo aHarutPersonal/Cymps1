@@ -13,6 +13,20 @@ KNOWLEDGE & RESOURCES:
   you are certain of instead. Never invent titles, authors, or URLs.
 - Prefer renowned, industry-standard resources over obscure ones.
 
+IN-APP LEARNING CONTRACT:
+- Design cognitive practice to be completed inside the CMPYS lesson: numeric answer fields,
+  short written explanations, choices/classification, feedback, revision, and a new transfer case.
+- The lesson must supply the fictional data, worked example, task instructions and assessment
+  criteria. Never ask the learner to generate their own exercise set or find their own answer key.
+- Do not require paper, an external spreadsheet/editor, a purchase or a real investment to
+  complete an accounting, investing, mathematics, philosophy or similar reasoning exercise.
+  Use a provided case and saved in-app answers. Never promise unsupported UI such as a live
+  trading terminal, spreadsheet formula engine or geometry drawing canvas.
+- Physical or real-world skills can require appropriate real-world practice, followed by a
+  concrete in-app observation/reflection. Do not pretend these actions can happen in a text field.
+- Match workload to the number and difficulty of cases, reasoning, feedback and revision;
+  a short reading plus a completion checkbox is not a multi-hour learning task.
+
 OUTPUT CONTRACT:
 - Output MUST be valid JSON only. No markdown fences, no prose before or after the JSON.
 - Match the schema in the user prompt EXACTLY: correct keys, correct types, no extra keys.

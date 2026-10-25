@@ -2,7 +2,7 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app.core.config import settings
 from app.services.llm.client import (
@@ -11,6 +11,7 @@ from app.services.llm.client import (
     GeminiLLMClient,
     LLMResponse,
     OpenAILLMClient,
+    _gemini_compatibility_schema,
     get_llm_client,
 )
 from app.services.llm.gemini_compat import generation_config_kwargs
@@ -342,8 +343,139 @@ async def test_content_error_does_not_open_provider_circuit():
     assert next_primary.calls == 1
 
 
+@pytest.mark.asyncio
+async def test_exhausted_quota_opens_provider_circuit_for_next_call():
+    failed_primary = _ResponseClient(
+        LLMResponse(
+            data={},
+            provider="yunwu",
+            error="local:insufficient_quota: user quota is not enough",
+        ),
+        "balanced-test",
+    )
+    first_fallback = _ResponseClient(
+        LLMResponse(data={"attempt": 1}, provider="gemini"),
+        "gemini-test",
+    )
+    first = await FallbackLLMClient(failed_primary, first_fallback).generate_json(
+        "system", "user"
+    )
+
+    healthy_but_skipped_primary = _ResponseClient(
+        LLMResponse(data={"wrong": True}, provider="yunwu"),
+        "quality-test",
+    )
+    second_fallback = _ResponseClient(
+        LLMResponse(data={"attempt": 2}, provider="gemini"),
+        "gemini-test",
+    )
+    second = await FallbackLLMClient(
+        healthy_but_skipped_primary, second_fallback
+    ).generate_json("system", "user")
+
+    assert first.data == {"attempt": 1}
+    assert second.data == {"attempt": 2}
+    assert failed_primary.calls == 1
+    assert healthy_but_skipped_primary.calls == 0
+    assert "circuit open" in str(second.fallback_error).casefold()
+
+
 class _CompatibilityOutput(BaseModel):
     ok: bool
+
+
+class _NativeJsonSchemaOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    values: dict[str, str]
+
+
+class _StructuredItem(BaseModel):
+    value: str
+    follow_up_day: int | None = None
+
+
+class _StructuredOutput(BaseModel):
+    name: str
+    items: list[_StructuredItem]
+    note: str | None = None
+
+
+def test_gemini_compatibility_schema_keeps_required_nested_shape():
+    schema = _gemini_compatibility_schema(
+        json_schema=None,
+        output_model=_StructuredOutput,
+    )
+
+    assert schema == {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "value": {"type": "string"},
+                        "follow_up_day": {
+                            "anyOf": [
+                                {"type": "integer"},
+                                {"type": "null"},
+                            ]
+                        },
+                    },
+                    "required": ["value"],
+                },
+            },
+            "note": {
+                "anyOf": [
+                    {"type": "string"},
+                    {"type": "null"},
+                ]
+            },
+        },
+        "required": ["name", "items"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_gemini_uses_native_json_schema_for_pydantic_models(monkeypatch):
+    from app.services import gemini as gemini_service
+
+    calls = []
+
+    class Models:
+        async def generate_content(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                text='{"values": {"answer": "yes"}}',
+                candidates=[],
+                usage_metadata=None,
+            )
+
+    fake_client = SimpleNamespace(aio=SimpleNamespace(models=Models()))
+    monkeypatch.setattr(settings, "gemini_api_key", "test-key")
+    monkeypatch.setattr(gemini_service, "_gemini_client", lambda: fake_client)
+
+    response = await GeminiLLMClient(
+        model="gemini-3.6-flash",
+        api_key="test-key",
+        timeout=5,
+    ).generate_json(
+        system_prompt="system",
+        user_prompt="return the result",
+        output_model=_NativeJsonSchemaOutput,
+    )
+
+    assert response.error is None
+    assert response.data == {"values": {"answer": "yes"}}
+    assert len(calls) == 1
+    config = calls[0]["config"].model_dump(exclude_none=True)
+    assert "response_schema" not in config
+    assert config["response_json_schema"] == (
+        _NativeJsonSchemaOutput.model_json_schema()
+    )
+    assert config["response_json_schema"]["additionalProperties"] is False
 
 
 @pytest.mark.asyncio
@@ -384,5 +516,61 @@ async def test_gemini_invalid_native_config_retries_without_native_schema(
     assert response.retried is True
     assert len(calls) == 2
     assert "COMPATIBILITY MODE" in calls[1]["contents"]
-    assert "response_schema" not in calls[1]["config"].model_dump(exclude_none=True)
-    assert "thinking_config" not in calls[1]["config"].model_dump(exclude_none=True)
+    compatibility_config = calls[1]["config"].model_dump(exclude_none=True)
+    assert "response_schema" not in compatibility_config
+    assert compatibility_config["response_json_schema"] == {
+        "type": "object",
+        "properties": {"ok": {"type": "boolean"}},
+        "required": ["ok"],
+    }
+    assert "thinking_config" in compatibility_config
+
+
+@pytest.mark.asyncio
+async def test_gemini_compatibility_can_drop_rejected_thinking_config(monkeypatch):
+    from app.services import gemini as gemini_service
+
+    calls = []
+
+    class Models:
+        async def generate_content(self, **kwargs):
+            calls.append(kwargs)
+            if len(calls) < 3:
+                raise RuntimeError("400 INVALID_ARGUMENT: config unsupported")
+            return SimpleNamespace(
+                text='{"ok": true}',
+                candidates=[],
+                usage_metadata=None,
+            )
+
+    fake_client = SimpleNamespace(aio=SimpleNamespace(models=Models()))
+    monkeypatch.setattr(settings, "gemini_api_key", "test-key")
+    monkeypatch.setattr(gemini_service, "_gemini_client", lambda: fake_client)
+
+    response = await GeminiLLMClient(
+        model="gemini-3.6-flash",
+        api_key="test-key",
+        timeout=5,
+    ).generate_json(
+        system_prompt="system",
+        user_prompt="return the result",
+        output_model=_CompatibilityOutput,
+    )
+
+    assert response.error is None
+    assert response.data == {"ok": True}
+    assert len(calls) == 3
+    second_config = calls[1]["config"].model_dump(exclude_none=True)
+    third_config = calls[2]["config"].model_dump(exclude_none=True)
+    assert second_config["response_json_schema"] == {
+        "type": "object",
+        "properties": {"ok": {"type": "boolean"}},
+        "required": ["ok"],
+    }
+    assert "thinking_config" in second_config
+    assert third_config["response_json_schema"] == {
+        "type": "object",
+        "properties": {"ok": {"type": "boolean"}},
+        "required": ["ok"],
+    }
+    assert "thinking_config" not in third_config

@@ -197,7 +197,7 @@ async def test_agentic_streams_use_expected_grounding_policy(monkeypatch):
         )
     ] == ["ok"]
 
-    assert [call["grounded"] for call in calls] == [False, True, False]
+    assert [call["grounded"] for call in calls] == [False, False, False]
     assert calls[2]["max_output_tokens"] == gemini.BLUEPRINT_MAX_OUTPUT_TOKENS
 
 
@@ -314,3 +314,38 @@ async def test_sync_interview_turn_count_uses_persisted_assistant_messages():
     await sessions_api._sync_interview_turn_count(session, FakeDb())
 
     assert session.interview_turn_count == 1
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('partial', [False, True])
+async def test_tutor_recovers_outage_only_before_first_text(monkeypatch, partial):
+    from app.services.llm.openlux import OpenLuxStreamError
+    monkeypatch.setattr(gemini.settings, 'llm_provider', 'openlux')
+    monkeypatch.setattr(gemini.settings, 'gemini_api_key', 'test-only')
+    captured = []
+    class Gateway:
+        async def stream_text(self, *args, **kwargs):
+            if partial:
+                yield 'partial'
+            raise OpenLuxStreamError(TimeoutError())
+    def gateway(**kwargs):
+        assert kwargs['timeout'] == 20
+        return Gateway()
+    monkeypatch.setattr('app.services.llm.client.get_llm_client', gateway)
+    class Models:
+        def generate_content_stream(self, **kwargs):
+            captured.append(kwargs)
+            async def chunks():
+                yield SimpleNamespace(text='recovered')
+            return chunks()
+    monkeypatch.setattr(gemini, '_gemini_client', lambda: SimpleNamespace(
+        aio=SimpleNamespace(models=Models())))
+    stream = gemini.stream_learnlm(system_prompt='tutor', user_message='question')
+    if partial:
+        with pytest.raises(OpenLuxStreamError):
+            async for _ in stream:
+                pass
+        assert not captured
+    else:
+        assert [chunk async for chunk in stream] == ['recovered']
+        assert len(captured) == 1
+        assert captured[0]['config'].http_options.timeout == 35000

@@ -13,6 +13,7 @@ import 'book_reader_screen.dart';
 import 'material_reader_screen.dart';
 import 'material_video_screen.dart';
 import 'material_web_screen.dart';
+import 'lesson_practice_screen.dart';
 
 List<PlanMaterialDetail> matchLessonMaterials(
   List<String> resourceTitles,
@@ -39,7 +40,10 @@ class LessonSection {
   final String markdown;
 }
 
-List<LessonSection> splitLessonSections(String markdown) {
+List<LessonSection> splitLessonSections(
+  String markdown, {
+  bool compactTutorial = false,
+}) {
   final sections = <LessonSection>[];
   final buffer = StringBuffer();
   var title = 'Lesson overview';
@@ -62,6 +66,38 @@ List<LessonSection> splitLessonSections(String markdown) {
   }
   flush();
 
+  // The versioned tutorial payload keeps the seven established section keys.
+  // Group their short text into four useful reader pages without discarding
+  // headings, diagrams, checks, or references. Unknown layouts stay untouched.
+  const tutorialHeadings = [
+    'Why This Matters',
+    'Core Framework',
+    'Worked Example',
+    'Failure Modes',
+    'Guided Practice',
+    'Check Your Understanding',
+    'References',
+  ];
+  if (compactTutorial &&
+      sections.length == tutorialHeadings.length &&
+      List.generate(
+        sections.length,
+        (index) => sections[index].title == tutorialHeadings[index],
+      ).every((matches) => matches)) {
+    LessonSection group(String heading, int start, int end) => LessonSection(
+      title: heading,
+      markdown: sections
+          .sublist(start, end)
+          .map((section) => '### ${section.title}\n\n${section.markdown}')
+          .join('\n\n'),
+    );
+    return [
+      group('The idea', 0, 2),
+      group('Worked example', 2, 4),
+      group('Try it', 4, 5),
+      group('Check your understanding', 5, 7),
+    ];
+  }
   return sections.isEmpty
       ? [LessonSection(title: 'Lesson', markdown: markdown)]
       : sections;
@@ -77,6 +113,7 @@ class LessonReaderScreen extends ConsumerStatefulWidget {
     required this.totalSteps,
     required this.materials,
     required this.completed,
+    this.artifactJobId,
   });
 
   final String itemId;
@@ -86,6 +123,7 @@ class LessonReaderScreen extends ConsumerStatefulWidget {
   final int totalSteps;
   final List<PlanMaterialDetail> materials;
   final bool completed;
+  final String? artifactJobId;
 
   @override
   ConsumerState<LessonReaderScreen> createState() => _LessonReaderScreenState();
@@ -99,6 +137,8 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
   int _theme = 0;
   double _fontSize = 18;
   bool _completing = false;
+  bool _practicePassed = false;
+  late String? _artifactJobId = widget.artifactJobId;
   final Map<String, String> _resolvedBookGuideIds = {};
   final Set<String> _preparingBookGuideKeys = {};
 
@@ -116,12 +156,16 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
 
   int get _totalPages => _sections.length + (_references.isEmpty ? 0 : 1);
   bool get _onReferences => _page >= _sections.length;
+  String get _unit => widget.step.isTutorial ? 'Tutorial' : 'Lesson';
 
   @override
   void initState() {
     super.initState();
     _pageController = PageController();
-    _sections = splitLessonSections(widget.step.lessonContent ?? '');
+    _sections = splitLessonSections(
+      widget.step.lessonContent ?? '',
+      compactTutorial: widget.step.isTutorial,
+    );
     _references = matchLessonMaterials(widget.step.resources, widget.materials);
   }
 
@@ -137,23 +181,57 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
       Navigator.of(context).pop(false);
       return;
     }
+    if (!_practicePassed) {
+      await _openPractice();
+      return;
+    }
     setState(() => _completing = true);
     try {
       final result = await ref
           .read(planRepositoryProvider)
-          .toggleStepComplete(widget.itemId, widget.step.id);
+          .toggleStepComplete(
+            widget.itemId,
+            widget.step.id,
+            artifactJobId: _artifactJobId,
+          );
       if (!mounted) return;
       Navigator.of(context).pop(result.completed);
     } catch (_) {
       if (!mounted) return;
       setState(() => _completing = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Couldn’t complete this lesson. Try again.'),
+        SnackBar(
+          content: Text(
+            'Couldn’t complete this ${_unit.toLowerCase()}. Try again.',
+          ),
           behavior: SnackBarBehavior.floating,
         ),
       );
     }
+  }
+
+  Future<void> _openPractice() async {
+    final passed = await Navigator.of(context, rootNavigator: true).push<bool>(
+      CmpysPageRoute<bool>(
+        builder: (_) => LessonPracticeScreen(
+          itemId: widget.itemId,
+          stepId: widget.step.id,
+          artifactJobId: _artifactJobId,
+          onArtifactRefreshed: (artifact) {
+            if (mounted) setState(() => _artifactJobId = artifact);
+          },
+          lessonTitle: widget.step.title,
+          lessonContent: widget.step.lessonContent ?? '',
+          dark: _theme == 2,
+          isTutorial: widget.step.isTutorial,
+        ),
+      ),
+    );
+    if (!mounted) return;
+    setState(() => _practicePassed = passed == true);
+    // A true result only comes from the explicit "Finish lesson" action.
+    // Honor it from the toolbar as well as the reader's final page.
+    if (_practicePassed) await _finish();
   }
 
   Future<void> _next() async {
@@ -230,7 +308,7 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  'Lesson ${widget.stepNumber} of ${widget.totalSteps} · ${_onReferences ? 'References' : _sections[_page].title}',
+                  '$_unit ${widget.stepNumber} of ${widget.totalSteps} · ${_onReferences ? 'References' : _sections[_page].title}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: AppTypography.caption.copyWith(
@@ -240,6 +318,11 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
                 ),
               ],
             ),
+          ),
+          IconButton(
+            tooltip: 'Open practice',
+            onPressed: _completing ? null : () => _openPractice(),
+            icon: Icon(Icons.edit_note_rounded, color: _muted),
           ),
           IconButton(
             tooltip: 'Contents',
@@ -269,7 +352,7 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'LESSON ${widget.stepNumber} · PART ${index + 1} OF ${_sections.length}',
+                  '${_unit.toUpperCase()} ${widget.stepNumber} · PART ${index + 1} OF ${_sections.length}',
                   style: AppTypography.kicker.copyWith(
                     color: AppColors.green,
                     fontSize: 10,
@@ -291,13 +374,22 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
                     spacing: 8,
                     runSpacing: 8,
                     children: [
+                      if (widget.step.isTutorial &&
+                          widget.step.totalMinutes != null)
+                        _timeChip(
+                          PhosphorIconsRegular.clock,
+                          '${widget.step.totalMinutes} min total',
+                        ),
                       _timeChip(
                         PhosphorIconsRegular.bookOpenText,
                         '${widget.step.readingMinutes ?? _estimatedReadingMinutes} min read',
                       ),
                       _timeChip(
                         PhosphorIconsRegular.timer,
-                        '${widget.step.practiceMinutes ?? _estimatedPracticeMinutes} min practice',
+                        widget.step.isTutorial &&
+                                widget.step.effectivePracticeMinutes != null
+                            ? '${widget.step.effectivePracticeMinutes} min practice'
+                            : 'Practice in app',
                       ),
                     ],
                   ),
@@ -323,12 +415,6 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
         .length;
     return (words / 200).ceil().clamp(1, 60);
   }
-
-  int get _estimatedPracticeMinutes =>
-      ((widget.step.estimateMinutes ?? 45) - _estimatedReadingMinutes).clamp(
-        20,
-        55,
-      );
 
   Widget _timeChip(IconData icon, String label) {
     return Container(
@@ -377,7 +463,7 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
         ),
         const SizedBox(height: 9),
         Text(
-          'These resources support this lesson. Use them when the lesson calls for more context—not as a detour from the practice.',
+          'These resources support this ${_unit.toLowerCase()}. Use them when the ${_unit.toLowerCase()} calls for more context—not as a detour from the practice.',
           style: AppTypography.body.copyWith(
             color: _muted,
             fontSize: 14,
@@ -442,7 +528,7 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
                 Text(
                   material.reason ??
                       material.authorOrCreator ??
-                      'Lesson reference',
+                      '$_unit reference',
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: AppTypography.caption.copyWith(
@@ -450,10 +536,12 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
                     fontSize: 12,
                   ),
                 ),
-                if (material.exactLinkUnavailable && action == null) ...[
+                if (action == null) ...[
                   const SizedBox(height: 3),
                   Text(
-                    'Exact source link unavailable',
+                    material.exactLinkUnavailable
+                        ? 'Exact source link unavailable'
+                        : 'Reference is still being prepared',
                     style: AppTypography.caption.copyWith(
                       color: _muted,
                       fontSize: 11.5,
@@ -488,8 +576,11 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
     if (material.type == 'book' && _bookResourceId(material) != null) {
       return 'Read book';
     }
+    if (material.type == 'book' && material.directUrl != null) {
+      return 'Open source';
+    }
     if (material.type == 'book' && (material.canonicalKey ?? '').isNotEmpty) {
-      return _isPreparingBookGuide(material) ? 'Preparing…' : 'Open guide';
+      return _isPreparingBookGuide(material) ? 'Preparing…' : 'Check access';
     }
     if (material.youtubeVideoId != null) return 'Watch';
     if (material.prefersExternalLink) return 'Open';
@@ -502,15 +593,28 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
     final videoId = material.youtubeVideoId;
     final canonicalKey = (material.canonicalKey ?? '').trim();
     var bookResourceId = _bookResourceId(material);
+    BookReadingSource? readingSource;
     if (material.type == 'book' &&
         bookResourceId == null &&
+        material.directUrl == null &&
         canonicalKey.isNotEmpty) {
       if (_preparingBookGuideKeys.contains(canonicalKey)) return;
       setState(() => _preparingBookGuideKeys.add(canonicalKey));
       try {
-        bookResourceId = await ref
-            .read(planRepositoryProvider)
-            .waitForContentResourceId(canonicalKey);
+        final repository = ref.read(planRepositoryProvider);
+        final access = await repository.resolveBookReadingAccess(
+          canonicalKey,
+          material.title,
+          material.authorOrCreator,
+        );
+        bookResourceId = access.resourceId;
+        readingSource = access.source;
+        if (bookResourceId == null && readingSource == null) {
+          if (access.unavailable != null) throw access.unavailable!;
+          bookResourceId = await repository.waitForContentResourceId(
+            canonicalKey,
+          );
+        }
       } on BookGuideUnavailableException catch (error) {
         if (!mounted) return;
         setState(() => _preparingBookGuideKeys.remove(canonicalKey));
@@ -539,7 +643,7 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
           _resolvedBookGuideIds[canonicalKey] = bookResourceId;
         }
       });
-      if (bookResourceId == null) {
+      if (bookResourceId == null && readingSource == null) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
@@ -556,7 +660,15 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
       screen = BookReaderScreen(
         resourceId: bookResourceId,
         fallbackTitle: material.title,
+        fallbackSourceUrl: material.directUrl,
         shellBranchIndex: 1,
+      );
+    } else if (readingSource != null) {
+      screen = MaterialWebScreen(
+        title: material.title,
+        url: readingSource.url,
+        sourceDescription: readingSource.description,
+        initialSectionTitle: readingSource.sectionTitle,
       );
     } else if (videoId != null) {
       screen = MaterialVideoScreen(material: material, videoId: videoId);
@@ -632,8 +744,10 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
             label: Text(
               last
                   ? widget.completed
-                        ? 'Close lesson'
-                        : 'Complete lesson'
+                        ? 'Close ${_unit.toLowerCase()}'
+                        : _practicePassed
+                        ? 'Complete ${_unit.toLowerCase()}'
+                        : 'Practice & finish'
                   : 'Next',
             ),
             style: FilledButton.styleFrom(
@@ -661,7 +775,7 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
           padding: const EdgeInsets.fromLTRB(18, 16, 18, 22),
           children: [
             Text(
-              'Lesson contents',
+              '$_unit contents',
               style: AppTypography.h2.copyWith(color: _ink, fontSize: 23),
             ),
             const SizedBox(height: 10),
@@ -797,7 +911,8 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
     StateSetter setSheetState,
   ) {
     return Expanded(
-      child: GestureDetector(
+      child: CmpysPressable(
+        selected: _theme == value,
         onTap: () {
           setState(() => _theme = value);
           setSheetState(() {});

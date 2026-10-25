@@ -47,9 +47,11 @@ interview (LLM, SSE) > analysis (streams verdict) > plan generation > app.
 
 ## Design
 
-Vibrant Deepstash/Wiser-style: off-white paper (`#F2F3F5`), white cards, green
-accent, Bricolage Grotesque display + Plus Jakarta Sans body, big rounded corners,
-floating pill tab bar.
+Cool off-white paper (`#F2F3F5`), white cards, Bricolage Grotesque display and
+Plus Jakarta Sans body. Deep green actions provide readable contrast, while
+brighter green marks progress. The floating navigation keeps every tab labeled
+and adapts to larger text. Buttons and sheets grow with their content, and wide
+screens use a comfortable reading width.
 
 ## Tests
 

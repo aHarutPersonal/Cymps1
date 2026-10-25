@@ -96,8 +96,17 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
   bool _autoGenerateTried = false;
   Timer? _poll;
   String? _pollingJobId;
+  String? _failedJobId;
+  String? _readyJobId;
+  int _pollFailures = 0;
+  int _missingPlanChecks = 0;
+  int _refreshRevision = 0;
+  int _pollRevision = 0;
 
-  static const _pollInterval = Duration(seconds: 3);
+  int _unchangedPolls = 0;
+  Duration get _pollInterval => Duration(
+    seconds: state.jobProgress >= 85 ? 1 : (1 + _unchangedPolls).clamp(1, 5),
+  );
 
   @override
   void dispose() {
@@ -106,6 +115,7 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
   }
 
   void _cancelPolling() {
+    _pollRevision++;
     _poll?.cancel();
     _poll = null;
     _pollingJobId = null;
@@ -113,6 +123,7 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
 
   /// Re-fetch the plan; falls back to job polling while it's generating.
   Future<void> refresh() async {
+    final revision = ++_refreshRevision;
     _cancelPolling();
     try {
       final jobId = _readJobId();
@@ -135,7 +146,7 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
           onError: (Object e) => planError = e,
         ),
       ]);
-      if (!mounted) return;
+      if (!mounted || revision != _refreshRevision) return;
 
       // Check the stored job FIRST. A running job means a newer plan is being
       // generated — we must not show the stale old plan during that window.
@@ -180,6 +191,9 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
           wantIdol.isEmpty ||
           (planIdol != null && planIdol.isNotEmpty && planIdol == wantIdol);
       if (fetched != null && fetched.items.isNotEmpty && matchesActiveIdol) {
+        _failedJobId = null;
+        _readyJobId = jobId;
+        _missingPlanChecks = 0;
         state = CurrentPlanState(
           status: CurrentPlanStatus.ready,
           plan: fetched,
@@ -187,15 +201,51 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
         return;
       }
       if (jobId != null && jobId.isNotEmpty) {
+        if (job?.isFailed == true) {
+          _failedJobId = jobId;
+          state = CurrentPlanState(
+            status: CurrentPlanStatus.failed,
+            error: job?.errorMessage ?? 'Your plan paused. Retry to continue.',
+          );
+          return;
+        }
+        if (job?.isCompleted == true && ++_missingPlanChecks >= 3) {
+          _failedJobId = jobId;
+          state = const CurrentPlanState(
+            status: CurrentPlanStatus.failed,
+            error: 'Your plan could not be loaded. Retry to reconnect it.',
+          );
+          return;
+        }
         // Job completed but plan not yet visible — keep polling briefly.
         state = const CurrentPlanState(status: CurrentPlanStatus.generating);
-        _startPolling(jobId);
+        _startPolling(jobId, checkImmediately: job?.isCompleted != true);
       } else {
-        await _tryAutoGenerate();
+        await _tryAutoGenerate(revision);
       }
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || revision != _refreshRevision) return;
       debugPrint('📋 Plan fetch failed: $e');
+      final previousPlan = state.plan;
+      final activeIdol = _readIdolName?.call()?.toLowerCase().trim();
+      final sameMentor =
+          activeIdol == null ||
+          activeIdol.isEmpty ||
+          previousPlan?.idolName?.toLowerCase().trim() == activeIdol;
+      final transient =
+          e is NetworkError ||
+          e is TimeoutError ||
+          (e is ApiError && (e.statusCode ?? 0) >= 500);
+      if (transient &&
+          state.status == CurrentPlanStatus.ready &&
+          previousPlan != null &&
+          sameMentor &&
+          _readJobId() == _readyJobId) {
+        // A temporary read failure must not take a usable saved plan away.
+        // New generation jobs and mentor changes clear the ready state first;
+        // authorization failures must still reach the normal error boundary.
+        return;
+      }
       state = CurrentPlanState(
         status: CurrentPlanStatus.failed,
         error: e.toString(),
@@ -206,7 +256,7 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
   /// No plan and no job id: if a completed onboarding session exists, enqueue
   /// generation ourselves so the user still ends up with an AI plan. Tried at
   /// most once per controller lifetime.
-  Future<void> _tryAutoGenerate() async {
+  Future<void> _tryAutoGenerate(int revision) async {
     if (_autoGenerateTried || _requestGeneration == null) {
       if (state.status != CurrentPlanStatus.generating) {
         state = const CurrentPlanState(status: CurrentPlanStatus.empty);
@@ -216,7 +266,7 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
     _autoGenerateTried = true;
     try {
       final jobId = await _requestGeneration();
-      if (!mounted) return;
+      if (!mounted || revision != _refreshRevision) return;
       if (jobId != null && jobId.isNotEmpty) {
         debugPrint('📋 Auto-enqueued plan generation: $jobId');
         state = const CurrentPlanState(status: CurrentPlanStatus.generating);
@@ -226,7 +276,7 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
     } catch (e) {
       debugPrint('📋 Plan auto-generation failed: $e');
     }
-    if (mounted) {
+    if (mounted && revision == _refreshRevision) {
       state = const CurrentPlanState(status: CurrentPlanStatus.empty);
     }
   }
@@ -236,8 +286,31 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
   /// retry must be allowed to enqueue again after a transient API/broker
   /// failure.
   Future<void> retry() async {
+    if (state.status == CurrentPlanStatus.loading) return;
     _autoGenerateTried = false;
+    _missingPlanChecks = 0;
+    _pollFailures = 0;
     state = const CurrentPlanState(status: CurrentPlanStatus.loading);
+    if (_failedJobId != null && _requestGeneration != null) {
+      _cancelPolling();
+      try {
+        final jobId = await _requestGeneration();
+        if (!mounted) return;
+        if (jobId != null && jobId.isNotEmpty) {
+          _failedJobId = null;
+          state = const CurrentPlanState(status: CurrentPlanStatus.generating);
+          _startPolling(jobId);
+          return;
+        }
+      } catch (_) {
+        if (!mounted) return;
+        state = const CurrentPlanState(
+          status: CurrentPlanStatus.failed,
+          error: 'Couldn’t restart your plan. Please try again.',
+        );
+        return;
+      }
+    }
     await refresh();
   }
 
@@ -251,6 +324,9 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
       return;
     }
     state = const CurrentPlanState(status: CurrentPlanStatus.generating);
+    _refreshRevision++;
+    _failedJobId = null;
+    _missingPlanChecks = 0;
     _startPolling(jobId);
   }
 
@@ -262,28 +338,40 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
     if (idolName == null || idolName.isEmpty) return;
     if (idolName == _lastIdol) return;
     _lastIdol = idolName;
+    _autoGenerateTried = false;
+    state = const CurrentPlanState(status: CurrentPlanStatus.loading);
     refresh();
   }
 
-  void _startPolling(String jobId) {
+  void _startPolling(String jobId, {bool checkImmediately = true}) {
+    if (_pollingJobId != jobId) _pollFailures = 0;
     _poll?.cancel();
+    final revision = ++_pollRevision;
     _pollingJobId = jobId;
-    _poll = Timer.periodic(_pollInterval, (_) => _checkJob(jobId));
-    _checkJob(jobId);
+    _unchangedPolls = 0;
+    if (checkImmediately) {
+      _checkJob(jobId, revision);
+    } else {
+      _poll = Timer(_pollInterval, () => _checkJob(jobId, revision));
+    }
   }
 
-  bool _checking = false;
+  int? _checkingRevision;
 
-  Future<void> _checkJob(String jobId) async {
-    if (_checking) return;
-    _checking = true;
+  Future<void> _checkJob(String jobId, int revision) async {
+    if (_checkingRevision == revision) return;
+    _checkingRevision = revision;
     try {
       final job = await _repo.getJobStatus(jobId);
-      if (!mounted) return;
+      if (!mounted || _pollRevision != revision || _pollingJobId != jobId) {
+        return;
+      }
+      _pollFailures = 0;
       if (job.isCompleted) {
         _cancelPolling();
         await refresh();
       } else if (job.isFailed) {
+        _failedJobId = jobId;
         _cancelPolling();
         state = CurrentPlanState(
           status: CurrentPlanStatus.failed,
@@ -297,19 +385,36 @@ class CurrentPlanController extends StateNotifier<CurrentPlanState> {
         );
         // Skip the assignment when nothing the UI reads changed, so watchers
         // don't rebuild on every 3s tick.
-        if (next != state) state = next;
+        if (next != state) {
+          _unchangedPolls = 0;
+          state = next;
+        } else {
+          _unchangedPolls++;
+        }
       }
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || _pollRevision != revision || _pollingJobId != jobId) {
+        return;
+      }
       debugPrint('📋 Plan job poll failed: $e');
       // A stale job id (backend reset) 404s forever — stop and show "no
       // plan". Transient network errors just wait for the next tick.
       if (e is ApiError && e.statusCode == 404) {
         _cancelPolling();
+        _failedJobId = jobId;
         state = const CurrentPlanState(status: CurrentPlanStatus.empty);
+      } else if (++_pollFailures >= 3) {
+        _cancelPolling();
+        state = const CurrentPlanState(
+          status: CurrentPlanStatus.failed,
+          error: 'We can’t check your plan. Check your connection and retry.',
+        );
       }
     } finally {
-      _checking = false;
+      if (_checkingRevision == revision) _checkingRevision = null;
+      if (mounted && _pollRevision == revision && _pollingJobId == jobId) {
+        _poll = Timer(_pollInterval, () => _checkJob(jobId, revision));
+      }
     }
   }
 }

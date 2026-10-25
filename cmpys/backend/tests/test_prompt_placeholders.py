@@ -190,6 +190,40 @@ class TestPromptPlaceholderRegistry:
 class TestRenderPromptJsonHandling:
     """Tests for JSON handling in render_prompt."""
 
+    def test_injected_braced_content_is_opaque_not_a_new_placeholder(self):
+        result = render_prompt(
+            "Synthesis: {grounded_synthesis}",
+            {
+                "grounded_synthesis": (
+                    "The equation is {Assets} = {Liabilities} + {Equity}."
+                )
+            },
+            strict=True,
+        )
+
+        assert result == (
+            "Synthesis: The equation is {Assets} = {Liabilities} + {Equity}."
+        )
+
+    def test_rendering_is_single_pass_for_untrusted_variable_values(self):
+        result = render_prompt(
+            "First: {first}; second: {second}",
+            {"first": "untrusted {second}", "second": "server-owned"},
+            strict=True,
+        )
+
+        assert result == "First: untrusted {second}; second: server-owned"
+
+    def test_strict_render_still_rejects_unresolved_template_placeholder(self):
+        with pytest.raises(PromptRenderError) as exc_info:
+            render_prompt(
+                "Provided: {provided}; missing: {missing}",
+                {"provided": "yes"},
+                strict=True,
+            )
+
+        assert exc_info.value.missing_keys == ["missing"]
+
     def test_dict_values_are_json_serialized(self):
         """Dict values should be JSON-serialized automatically."""
         template = "Profile: {profile_json}"

@@ -3,6 +3,17 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:cmpys/app/design_tokens.dart';
 import 'package:cmpys/core/ui/motion/entrance.dart';
 
+void expectSettledReveal(WidgetTester tester, Finder scope) {
+  final fade = tester.widget<FadeTransition>(
+    find.descendant(of: scope, matching: find.byType(FadeTransition)),
+  );
+  final transform = tester.widget<Transform>(
+    find.descendant(of: scope, matching: find.byType(Transform)),
+  );
+  expect(fade.opacity.value, 1);
+  expect(transform.transform.getTranslation().y, 0);
+}
+
 void main() {
   testWidgets('Entrance renders its child and settles', (tester) async {
     await tester.pumpWidget(
@@ -40,35 +51,35 @@ void main() {
     expect((wrapped[1] as Entrance).index, 1);
   });
 
-  test('EntranceGroup.wrap skips bare spacers without consuming a stagger index',
-      () {
-    final wrapped = EntranceGroup.wrap([
-      const Text('a'),
-      const SizedBox(height: 18), // bare spacer — no child
-      const Text('b'),
-      const SizedBox(height: 12), // bare spacer — no child
-      const SizedBox(width: 8, child: Text('not a spacer')),
-    ]);
+  test(
+    'EntranceGroup.wrap skips bare spacers without consuming a stagger index',
+    () {
+      final wrapped = EntranceGroup.wrap([
+        const Text('a'),
+        const SizedBox(height: 18), // bare spacer — no child
+        const Text('b'),
+        const SizedBox(height: 12), // bare spacer — no child
+        const SizedBox(width: 8, child: Text('not a spacer')),
+      ]);
 
-    expect(wrapped.length, 5);
-    // Spacers pass through unwrapped...
-    expect(wrapped[1], isA<SizedBox>());
-    expect(wrapped[1], isNot(isA<Entrance>()));
-    expect(wrapped[3], isA<SizedBox>());
-    expect(wrapped[3], isNot(isA<Entrance>()));
-    // ...and non-spacer children (including a SizedBox that has a child)
-    // keep contiguous stagger indices, unaffected by the spacers between them.
-    expect((wrapped[0] as Entrance).index, 0);
-    expect((wrapped[2] as Entrance).index, 1);
-    expect((wrapped[4] as Entrance).index, 2);
-  });
+      expect(wrapped.length, 5);
+      // Spacers pass through unwrapped...
+      expect(wrapped[1], isA<SizedBox>());
+      expect(wrapped[1], isNot(isA<Entrance>()));
+      expect(wrapped[3], isA<SizedBox>());
+      expect(wrapped[3], isNot(isA<Entrance>()));
+      // ...and non-spacer children (including a SizedBox that has a child)
+      // keep contiguous stagger indices, unaffected by the spacers between them.
+      expect((wrapped[0] as Entrance).index, 0);
+      expect((wrapped[2] as Entrance).index, 1);
+      expect((wrapped[4] as Entrance).index, 2);
+    },
+  );
 
-  // flutter_animate's FadeEffect renders a FadeTransition and its MoveEffect
-  // renders a Transform.translate, so the tests below observe the effect
-  // chain through plain Flutter widgets without importing flutter_animate
-  // (which is only allowed inside lib/core/ui/motion/).
-  testWidgets('Entrance plays once and does not re-trigger on parent rebuild',
-      (tester) async {
+  // Completed reveals retain inert wrappers so stateful children stay mounted.
+  testWidgets('Entrance plays once and does not re-trigger on parent rebuild', (
+    tester,
+  ) async {
     late StateSetter rebuild;
     await tester.pumpWidget(
       MaterialApp(
@@ -93,64 +104,75 @@ void main() {
 
     await tester.pumpAndSettle();
 
-    // Animation completed: _played flipped, the bare child renders with no
-    // effect wrappers left in the subtree.
-    expect(fadeInEntrance, findsNothing);
+    expectSettledReveal(tester, find.byType(Entrance));
     expect(find.text('once'), findsOneWidget);
 
     // A parent rebuild must not re-trigger the entrance.
     rebuild(() {});
     await tester.pump();
-    expect(fadeInEntrance, findsNothing);
+    expectSettledReveal(tester, find.byType(Entrance));
     expect(find.text('once'), findsOneWidget);
   });
 
   testWidgets(
-      'slide runs with motion enabled and is dropped under reduced motion',
-      (tester) async {
-    // Motion enabled: fade + slide (Transform.translate from the move effect).
-    await tester.pumpWidget(
-      const MaterialApp(home: Entrance(child: Text('moving'))),
-    );
-    expect(
-      find.descendant(
-        of: find.byType(Entrance),
-        matching: find.byType(Transform),
-      ),
-      findsOneWidget,
-    );
-    await tester.pumpAndSettle();
-
-    // Reduced motion: the fade still runs, but no Transform is in the subtree.
-    await tester.pumpWidget(
-      MaterialApp(
-        home: MediaQuery(
-          data: const MediaQueryData(disableAnimations: true),
-          child: const Entrance(child: Text('calmly')),
+    'slide runs with motion enabled and is stationary under reduced motion',
+    (tester) async {
+      // Motion enabled: fade + slide (Transform.translate from the move effect).
+      await tester.pumpWidget(
+        const MaterialApp(home: Entrance(child: Text('moving'))),
+      );
+      expect(
+        find.descendant(
+          of: find.byType(Entrance),
+          matching: find.byType(Transform),
         ),
-      ),
-    );
-    expect(
-      find.descendant(
-        of: find.byType(Entrance),
-        matching: find.byType(FadeTransition),
-      ),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(
-        of: find.byType(Entrance),
-        matching: find.byType(Transform),
-      ),
-      findsNothing,
-    );
-    await tester.pumpAndSettle();
-    expect(find.text('calmly'), findsOneWidget);
-  });
+        findsOneWidget,
+      );
+      await tester.pumpAndSettle();
 
-  testWidgets(
-      'EntranceScope: a child mounted after the visit window skips the '
-      'entrance entirely (no FadeTransition/Transform)', (tester) async {
+      // Reduced motion keeps the wrapper at zero translation while fading.
+      await tester.pumpWidget(
+        MaterialApp(
+          home: MediaQuery(
+            data: const MediaQueryData(disableAnimations: true),
+            child: const Entrance(child: Text('calmly')),
+          ),
+        ),
+      );
+      expect(
+        find.descendant(
+          of: find.byType(Entrance),
+          matching: find.byType(FadeTransition),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byType(Entrance),
+          matching: find.byType(Transform),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<Transform>(
+              find.descendant(
+                of: find.byType(Entrance),
+                matching: find.byType(Transform),
+              ),
+            )
+            .transform
+            .getTranslation()
+            .y,
+        0,
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('calmly'), findsOneWidget);
+    },
+  );
+
+  testWidgets('EntranceScope: a child mounted after the visit window skips the '
+      'animation entirely', (tester) async {
     // Duration.zero means the scope's visit window has already "elapsed" by
     // the time any later-mounted Entrance checks it, without needing to
     // fake the clock.
@@ -190,62 +212,56 @@ void main() {
       matching: find.byType(Entrance),
     );
     expect(secondEntrance, findsOneWidget);
-    expect(
-      find.descendant(of: secondEntrance, matching: find.byType(FadeTransition)),
-      findsNothing,
-    );
-    expect(
-      find.descendant(of: secondEntrance, matching: find.byType(Transform)),
-      findsNothing,
-    );
+    expectSettledReveal(tester, secondEntrance);
   });
 
   testWidgets(
-      'EntranceScope: within the visit window an Entrance still animates',
-      (tester) async {
-    await tester.pumpWidget(
-      MaterialApp(
-        home: EntranceScope(
-          child: const Entrance(child: Text('within window')),
+    'EntranceScope: within the visit window an Entrance still animates',
+    (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: EntranceScope(
+            child: const Entrance(child: Text('within window')),
+          ),
         ),
-      ),
-    );
+      );
 
-    // Still animating: the fade effect wraps the child.
-    expect(
-      find.descendant(
-        of: find.byType(Entrance),
-        matching: find.byType(FadeTransition),
-      ),
-      findsOneWidget,
-    );
-    await tester.pumpAndSettle();
-    expect(find.text('within window'), findsOneWidget);
-  });
+      // Still animating: the fade effect wraps the child.
+      expect(
+        find.descendant(
+          of: find.byType(Entrance),
+          matching: find.byType(FadeTransition),
+        ),
+        findsOneWidget,
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('within window'), findsOneWidget);
+    },
+  );
 
-  testWidgets('Entrance with no ancestor EntranceScope still animates as before',
-      (tester) async {
-    await tester.pumpWidget(
-      const MaterialApp(home: Entrance(child: Text('no scope'))),
-    );
-    expect(
-      find.descendant(
-        of: find.byType(Entrance),
-        matching: find.byType(FadeTransition),
-      ),
-      findsOneWidget,
-    );
-    await tester.pumpAndSettle();
-    expect(find.text('no scope'), findsOneWidget);
-  });
+  testWidgets(
+    'Entrance with no ancestor EntranceScope still animates as before',
+    (tester) async {
+      await tester.pumpWidget(
+        const MaterialApp(home: Entrance(child: Text('no scope'))),
+      );
+      expect(
+        find.descendant(
+          of: find.byType(Entrance),
+          matching: find.byType(FadeTransition),
+        ),
+        findsOneWidget,
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('no scope'), findsOneWidget);
+    },
+  );
 
   testWidgets('FeedbackReveal animates late interaction content once', (
     tester,
   ) async {
     await tester.pumpWidget(
-      const MaterialApp(
-        home: FeedbackReveal(child: Text('new message')),
-      ),
+      const MaterialApp(home: FeedbackReveal(child: Text('new message'))),
     );
 
     final reveal = find.byType(FeedbackReveal);
@@ -260,14 +276,7 @@ void main() {
 
     await tester.pumpAndSettle();
     expect(find.text('new message'), findsOneWidget);
-    expect(
-      find.descendant(of: reveal, matching: find.byType(FadeTransition)),
-      findsNothing,
-    );
-    expect(
-      find.descendant(of: reveal, matching: find.byType(Transform)),
-      findsNothing,
-    );
+    expectSettledReveal(tester, reveal);
   });
 
   testWidgets('FeedbackReveal is static under reduced motion', (tester) async {
@@ -282,39 +291,34 @@ void main() {
 
     expect(find.text('immediate message'), findsOneWidget);
     final reveal = find.byType(FeedbackReveal);
-    expect(
-      find.descendant(of: reveal, matching: find.byType(FadeTransition)),
-      findsNothing,
-    );
-    expect(
-      find.descendant(of: reveal, matching: find.byType(Transform)),
-      findsNothing,
-    );
+    expectSettledReveal(tester, reveal);
   });
 
-  testWidgets('reduced motion applies zero stagger delay (no wait before fade)',
-      (tester) async {
-    await tester.pumpWidget(
-      MaterialApp(
-        home: MediaQuery(
-          data: const MediaQueryData(disableAnimations: true),
-          child: const Entrance(index: 6, child: Text('instant')),
+  testWidgets(
+    'reduced motion applies zero stagger delay (no wait before fade)',
+    (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: MediaQuery(
+            data: const MediaQueryData(disableAnimations: true),
+            child: const Entrance(index: 6, child: Text('instant')),
+          ),
         ),
-      ),
-    );
+      );
 
-    // With reduced motion, delay must be zero regardless of index — a single
-    // pump (no time advance) is enough for the fade effect to be mounted and
-    // already progressing (no stagger wait gating it).
-    await tester.pump();
-    expect(
-      find.descendant(
-        of: find.byType(Entrance),
-        matching: find.byType(FadeTransition),
-      ),
-      findsOneWidget,
-    );
-    await tester.pumpAndSettle();
-    expect(find.text('instant'), findsOneWidget);
-  });
+      // With reduced motion, delay must be zero regardless of index — a single
+      // pump (no time advance) is enough for the fade effect to be mounted and
+      // already progressing (no stagger wait gating it).
+      await tester.pump();
+      expect(
+        find.descendant(
+          of: find.byType(Entrance),
+          matching: find.byType(FadeTransition),
+        ),
+        findsOneWidget,
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('instant'), findsOneWidget);
+    },
+  );
 }

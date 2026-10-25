@@ -1,7 +1,11 @@
+from tests.section_client_fixture import section_client
 import asyncio
 import copy
+import json
 import re
 from types import SimpleNamespace
+from app.services.planning.lesson_package import LessonPackage
+from tests.lesson_package_fixtures import package_payload
 
 import pytest
 
@@ -48,14 +52,14 @@ def _valid_payload(
     heading_text = "\n\n".join(f"{heading}\n" for heading in headings)
     lesson = heading_text + ("deliberate practice evidence mechanism example " * 520)
     substep = (
-        "Set a twenty minute timer, apply the supplied framework to one real "
+        "Budget about twenty minutes and apply the supplied framework to one real "
         "artifact, record the output, and verify it against the stated success criterion."
     )
     return {
         "steps": [
             {
                 "id": f"step_{index}",
-                "title": f"Learn technique {index}",
+                "title": "Learn the technique",
                 "description": "A focused skill-building lesson.",
                 "estimate_minutes": 80,
                 "reading_minutes": 13,
@@ -259,7 +263,7 @@ def test_targeted_repair_prompt_includes_draft_materials_and_safe_target() -> No
     )
 
     assert "PREVIOUS STEP DRAFT TO IMPROVE" in prompt
-    assert "Learn technique 1" in prompt
+    assert "Learn the technique" in prompt
     assert "Resource 1" in prompt
     assert "2,400-2,800" in prompt
     assert "targeting 20-60 words" in prompt
@@ -383,7 +387,7 @@ def test_substep_only_repair_preserves_the_entire_valid_lesson() -> None:
     assert all(" substep " in issue for issue in issues_by_step["step_1"])
 
     repaired_substep = (
-        "Set a twenty minute timer, apply the supplied framework to one real "
+        "Budget about twenty minutes and apply the supplied framework to one real "
         "artifact, save the output, and verify it against the stated success "
         "criterion before proceeding."
     )
@@ -454,7 +458,7 @@ def test_substep_only_repair_contract_is_small_and_actionable() -> None:
     assert "no fixed item count" in " ".join(prompt.split())
 
     valid_substep = (
-        "Set a twenty minute timer, apply the framework to one real artifact, "
+        "Budget about twenty minutes and apply the framework to one real artifact, "
         "save the output, and verify it against every stated success criterion."
     )
     result = PlanDetailSubstepsRepairOutput.model_validate(
@@ -513,7 +517,7 @@ def _lesson_sections_payload() -> dict:
         "core_framework": "substance " * 700,
         "worked_example": "substance " * 460,
         "failure_modes": "substance " * 330,
-        "guided_practice": "substance " * 500,
+        "guided_practice": "[[practice:guided.argument]] [[practice:transfer.argument]] " + "substance " * 500,
         "check_your_understanding": "substance " * 250,
         "references": "substance " * 100,
         "substeps": _valid_payload()["steps"][0]["substeps"],
@@ -547,10 +551,17 @@ def test_parallel_outline_rejects_unapproved_resource_names() -> None:
     assert "resources" in response.error
 
 
-def test_writing_uses_tiered_modern_thinking_levels() -> None:
+def test_writing_uses_tiered_modern_thinking_levels(monkeypatch) -> None:
+    monkeypatch.setattr("app.tasks.plans.settings.llm_provider", "dummy")
     assert _writing_thinking_level("fast") == "minimal"
     assert _writing_thinking_level("balanced") == "minimal"
     assert _writing_thinking_level("quality") == "high"
+
+
+@pytest.mark.parametrize("tier", ["fast", "balanced", "quality"])
+def test_zai_writing_keeps_corrections_within_the_generation_budget(monkeypatch, tier):
+    monkeypatch.setattr("app.tasks.plans.settings.llm_provider", "zai")
+    assert _writing_thinking_level(tier) == "low"
 
 
 @pytest.mark.asyncio
@@ -561,7 +572,13 @@ async def test_parallel_generation_uses_a_model_selected_five_lesson_outline() -
     class FakeClient:
         model = "fake-model"
 
+        @section_client
         async def generate_json(self, *, user_prompt, output_model, **kwargs):
+            if output_model is LessonPackage:
+                return SimpleNamespace(data=package_payload(), error=None)
+            from app.services.planning.lesson_review import LessonReview
+            if issubclass(output_model, LessonReview):
+                return SimpleNamespace(data={"acceptable": True, "issues": [], "practice_minutes": 60, "contains_calculations": False, "calculations": [], "literal_fact_ids": list(json.loads(user_prompt).get("numeric_spans", {}))}, error=None)
             if output_model is PlanItemDetailsOutlineOutput:
                 return SimpleNamespace(data=copy.deepcopy(outline), error=None)
             assert any(
@@ -590,11 +607,11 @@ async def test_parallel_generation_uses_a_model_selected_five_lesson_outline() -
     assert error is None
     assert result is not None
     assert len(result["steps"]) == 5
-    assert len([stage for stage, *_ in calls if "parallel_lesson" in stage]) == 5
+    assert len([stage for stage, *_ in calls if "_draft_" in stage]) == 20
 
 
 @pytest.mark.asyncio
-async def test_all_missing_lessons_start_concurrently_and_checkpoint_independently(
+async def test_missing_lessons_overlap_within_capacity_and_checkpoint_independently(
     monkeypatch,
 ) -> None:
     payload = _valid_payload()
@@ -602,22 +619,33 @@ async def test_all_missing_lessons_start_concurrently_and_checkpoint_independent
     started: set[str] = set()
     all_started = asyncio.Event()
     client_options: list[dict] = []
+    writing_options: list[dict] = []
     checkpoints: list[tuple[str, list[str]]] = []
 
     class FakeClient:
         model = "fake-model"
 
+        def __init__(self, options):
+            self.options = options
+
+        @section_client
         async def generate_json(self, *, user_prompt, output_model, **kwargs):
+            if output_model is LessonPackage:
+                return SimpleNamespace(data=package_payload(), error=None)
+            from app.services.planning.lesson_review import LessonReview
+            if issubclass(output_model, LessonReview):
+                return SimpleNamespace(data={"acceptable": True, "issues": [], "practice_minutes": 60, "contains_calculations": False, "calculations": [], "literal_fact_ids": list(json.loads(user_prompt).get("numeric_spans", {}))}, error=None)
             if output_model is PlanItemDetailsOutlineOutput:
                 return SimpleNamespace(data=copy.deepcopy(outline), error=None)
 
+            writing_options.append(self.options)
             step = next(
                 candidate
                 for candidate in payload["steps"]
                 if f'"id":"{candidate["id"]}"' in user_prompt
             )
             started.add(step["id"])
-            if {"step_1", "step_2", "step_3"}.issubset(started):
+            if len(started) >= 2:
                 all_started.set()
             await asyncio.wait_for(all_started.wait(), timeout=1)
             return SimpleNamespace(
@@ -627,7 +655,7 @@ async def test_all_missing_lessons_start_concurrently_and_checkpoint_independent
 
     def client_factory(**kwargs):
         client_options.append(kwargs)
-        return FakeClient()
+        return FakeClient(kwargs)
 
     monkeypatch.setattr(
         "app.services.llm.client.get_llm_client",
@@ -635,6 +663,9 @@ async def test_all_missing_lessons_start_concurrently_and_checkpoint_independent
     )
 
     async def checkpoint(payload, stage):
+        if stage == "outline_ready":
+            # Reference lookup must overlap writing, not postpone it.
+            await asyncio.wait_for(all_started.wait(), timeout=1)
         checkpoints.append(
             (
                 stage,
@@ -665,19 +696,19 @@ async def test_all_missing_lessons_start_concurrently_and_checkpoint_independent
     )
     assert all("## References" in step["lesson_content"] for step in result["steps"])
     assert calls[0][0] == "parallel_outline_attempt_1"
-    assert {stage for stage, *_ in calls[1:]} == {
-        "parallel_lesson_step_1_attempt_1",
-        "parallel_lesson_step_2_attempt_1",
-        "parallel_lesson_step_3_attempt_1",
+    assert {stage for stage, *_ in calls if "_draft_" in stage} == {
+        f"parallel_lesson_step_{step}_draft_1_{group}_1"
+        for step in range(1, 4) for group in ("framing", "mechanism", "worked", "practice")
     }
     assert checkpoints[0] == ("outline_ready", [])
     assert set(checkpoints[-1][1]) == {"step_1", "step_2", "step_3"}
     assert client_options[0]["tier"] == "balanced"
     assert client_options[0]["thinking_level"] == "medium"
     assert all(options["tier"] == "balanced" for options in client_options[1:])
-    assert all(options["thinking_level"] == "minimal" for options in client_options[1:])
-    assert all(options["max_tokens"] == 16000 for options in client_options[1:])
-    assert all(options["timeout"] == 120 for options in client_options[1:])
+    assert writing_options
+    assert all(options["thinking_level"] == "low" for options in writing_options)
+    assert all(options["max_tokens"] == 6500 for options in writing_options)
+    assert all(0 < options["timeout"] <= 90 for options in writing_options)
     assert all(options["allow_fallback"] is False for options in client_options[1:])
 
 
@@ -861,7 +892,13 @@ async def test_parallel_generation_retries_only_the_failed_lesson() -> None:
     class FakeClient:
         model = "fake-model"
 
+        @section_client
         async def generate_json(self, *, user_prompt, output_model, **kwargs):
+            if output_model is LessonPackage:
+                return SimpleNamespace(data=package_payload(), error=None)
+            from app.services.planning.lesson_review import LessonReview
+            if issubclass(output_model, LessonReview):
+                return SimpleNamespace(data={"acceptable": True, "issues": [], "practice_minutes": 60, "contains_calculations": False, "calculations": [], "literal_fact_ids": list(json.loads(user_prompt).get("numeric_spans", {}))}, error=None)
             if output_model is PlanItemDetailsOutlineOutput:
                 return SimpleNamespace(data=copy.deepcopy(outline), error=None)
 
@@ -898,26 +935,181 @@ async def test_parallel_generation_retries_only_the_failed_lesson() -> None:
 
     assert error is None
     assert result is not None
-    assert attempts_by_step == {"step_1": 2, "step_2": 1, "step_3": 1}
-    assert "PREVIOUS ATTEMPT ERROR" in prompts_by_step["step_1"][1]
-    assert "references" in prompts_by_step["step_1"][1]
+    assert attempts_by_step == {"step_1": 5, "step_2": 4, "step_3": 4}
+    repair_prompt = next(p for p in prompts_by_step["step_1"] if "CORRECT THIS GROUP" in p)
+    assert "references" in repair_prompt
     stages = [stage for stage, *_ in calls]
     assert stages.count("parallel_outline_attempt_1") == 1
-    assert stages.count("parallel_lesson_step_1_attempt_1") == 1
-    assert stages.count("parallel_lesson_step_1_attempt_2") == 1
-    assert {
-        stage
-        for stage in stages
-        if stage.startswith("parallel_lesson_step_") and stage.endswith("attempt_1")
-    } == {
-        "parallel_lesson_step_1_attempt_1",
-        "parallel_lesson_step_2_attempt_1",
-        "parallel_lesson_step_3_attempt_1",
-    }
+    assert stages.count("parallel_lesson_step_1_draft_1_framing_1") == 1
+    assert stages.count("parallel_lesson_step_1_draft_1_framing_2") == 1
+    assert not any("_draft_2_" in stage for stage in stages)
+
 
 
 @pytest.mark.asyncio
-async def test_thin_section_is_expanded_without_a_full_lesson_rewrite() -> None:
+@pytest.mark.parametrize("provider_error,recovers", [
+    ("zai request failed (TimeoutError; finish=missing)", True),
+    ("zai request failed (JSONDecodeError; finish=stop)", False),
+])
+async def test_group_retry_does_not_change_provider_or_repeat_other_groups(monkeypatch, provider_error, recovers):
+    from app.services.llm import recovery
+    from app.services.llm.client import LLMResponse
+    from app.services.planning.lesson_review import LessonReview
+
+    monkeypatch.setattr(recovery.settings, "gemini_api_key", "test-only")
+    attempts = {}
+    recovered = []
+
+    class RecoveryClient:
+        model = "recovery-test"
+        def __init__(self, **kwargs):
+            assert kwargs["thinking_level"] == "low"
+        @section_client
+        async def generate_json(self, **kwargs):
+            recovered.append(kwargs)
+            return LLMResponse(data=_lesson_sections_payload(), provider="gemini")
+
+    monkeypatch.setattr(recovery, "CompleteRecoveryClient", RecoveryClient)
+
+    class Client:
+        model = "zai-test"
+        @section_client
+        async def generate_json(self, *, output_model, user_prompt, **kwargs):
+            if output_model is LessonPackage:
+                return SimpleNamespace(data=package_payload(), error=None)
+            if output_model is PlanItemDetailsOutlineOutput:
+                return LLMResponse(data=_outline_payload())
+            if issubclass(output_model, LessonReview):
+                return LLMResponse(data={"acceptable": True, "issues": [], "practice_minutes": 60,
+                                         "contains_calculations": False, "calculations": [], "literal_fact_ids": list(json.loads(user_prompt).get("numeric_spans", {}))})
+            step = next(s["id"] for s in _outline_payload()["steps"] if f'"id":"{s["id"]}"' in user_prompt)
+            attempts[step] = attempts.get(step, 0) + 1
+            if step == "step_1" and attempts[step] == 1:
+                return LLMResponse(data={}, error=provider_error, provider="zai")
+            return LLMResponse(data=_lesson_sections_payload(), provider="zai")
+
+    result, calls, error = await _generate_plan_item_details_parallel(
+        system_prompt="planner", task_title="Build a validated experiment",
+        mission_hours=5, user_goal="learn product experimentation",
+        learning_preferences="reading and practice", idol_name="Mentor",
+        idol_domain="technology", idol_evidence={}, session_context="",
+        active_tier="balanced", routing_reason="test", client_factory=lambda **kwargs: Client(),
+    )
+    assert error is None and result
+    assert not recovered  # No implicit provider switch for a section retry.
+    assert attempts == {"step_1": 5, "step_2": 4, "step_3": 4}
+    assert not any(reason == "parallel_lesson_provider_recovery" for _, _, _, reason, _ in calls)
+
+
+@pytest.mark.asyncio
+async def test_outline_publication_failure_cancels_every_started_writer():
+    started = 0
+    cancelled = 0
+    all_started = asyncio.Event()
+
+    class FakeClient:
+        model = "fake-model"
+
+        @section_client
+        async def generate_json(self, *, output_model, **kwargs):
+            if output_model is LessonPackage:
+                return SimpleNamespace(data=package_payload(), error=None)
+            nonlocal started, cancelled
+            if output_model is PlanItemDetailsOutlineOutput:
+                return SimpleNamespace(data=_outline_payload(), error=None)
+            started += 1
+            if started == 4:
+                all_started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled += 1
+
+    async def checkpoint(payload, stage):
+        assert stage == "outline_ready"
+        await asyncio.wait_for(all_started.wait(), timeout=1)
+        raise RuntimeError("publication failed")
+
+    result, calls, error = await _generate_plan_item_details_parallel(
+        system_prompt="planner", task_title="Build a validated experiment",
+        mission_hours=5, user_goal="learn product experimentation",
+        learning_preferences="reading and practice", idol_name="Mentor",
+        idol_domain="technology", idol_evidence={}, session_context="",
+        active_tier="balanced", routing_reason="test",
+        client_factory=lambda **kwargs: FakeClient(), on_checkpoint=checkpoint,
+    )
+    assert error == "Outline checkpoint failed: RuntimeError"
+    assert started == cancelled == 4  # Every active call under the shared cap is cancelled.
+    assert not any(s.get("lesson_content") for s in result["steps"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("repaired_minutes", [45, 20])
+async def test_workload_mismatch_cannot_be_hidden_by_prose_only_expansion(repaired_minutes):
+    from app.services.planning.lesson_review import LessonReview, ReviewEvidencePatch
+
+    outline = _outline_payload()
+    drafts = []
+    reviews = []
+    repairs = []
+
+    class FakeClient:
+        model = "fake-model"
+
+        @section_client
+        async def generate_json(self, *, user_prompt, output_model, **kwargs):
+            if output_model is LessonPackage:
+                return SimpleNamespace(data=package_payload(), error=None)
+            if output_model is PlanItemDetailsOutlineOutput:
+                return SimpleNamespace(data=copy.deepcopy(outline), error=None)
+            if issubclass(output_model, ReviewEvidencePatch):
+                lesson = json.loads(user_prompt)["lesson_for_workload_audit"]
+                reviews.append(copy.deepcopy(lesson))
+                return SimpleNamespace(data={"practice_minutes": 20}, error=None)
+            if issubclass(output_model, LessonReview):
+                lesson = json.loads(user_prompt)["lesson"]
+                reviews.append(copy.deepcopy(lesson))
+                minutes = 60
+                if lesson["id"] == "step_1":
+                    minutes = repaired_minutes if "transfer case" in lesson["lesson_content"] else 20
+                return SimpleNamespace(data={
+                    "acceptable": True, "issues": [], "practice_minutes": minutes,
+                    "contains_calculations": False, "calculations": [], "literal_fact_ids": list(json.loads(user_prompt).get("numeric_spans", {})),
+                }, error=None)
+            if output_model is PlanDetailSectionsRepairOutput:
+                repairs.append(user_prompt)
+                return SimpleNamespace(data={"sections": [
+                    {"field_name": "guided_practice", "content": "transfer case " * 250},
+                    {"field_name": "check_your_understanding", "content": "answer rubric " * 125},
+                ]}, error=None)
+            step_id = next(step["id"] for step in outline["steps"]
+                           if f'"id":"{step["id"]}"' in user_prompt)
+            drafts.append(step_id)
+            return SimpleNamespace(data=copy.deepcopy(_lesson_sections_payload()), error=None)
+
+    result, calls, error = await _generate_plan_item_details_parallel(
+        system_prompt="planner", task_title="Build a validated experiment",
+        mission_hours=5, user_goal="learn product experimentation",
+        learning_preferences="reading and practice", idol_name="Mentor",
+        idol_domain="technology", idol_evidence={}, session_context="",
+        active_tier="balanced", routing_reason="test",
+        client_factory=lambda **kwargs: FakeClient(),
+    )
+    assert "Lesson review workload validation failed" in error
+    step_reviews = [review for review in reviews if review["id"] == "step_1"]
+    assert len(step_reviews) == 2
+    assert step_reviews[0] == step_reviews[1]
+    assert not repairs  # Prose cannot invent workload absent from the private package.
+    assert drafts.count("step_1") == 4
+    assert drafts.count("step_2") == drafts.count("step_3") == 4
+    assert not result["steps"][0].get("lesson_content")
+    assert all(step.get("lesson_content") for step in result["steps"][1:])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("total_shortfall", [False, True])
+@pytest.mark.parametrize("repair_succeeds", [True, False])
+async def test_thin_section_is_expanded_without_a_full_lesson_rewrite(total_shortfall, repair_succeeds) -> None:
     outline = _outline_payload()
     lesson_attempts: dict[str, int] = {}
     repair_attempts = 0
@@ -926,24 +1118,24 @@ async def test_thin_section_is_expanded_without_a_full_lesson_rewrite() -> None:
     class FakeClient:
         model = "fake-model"
 
+        @section_client
         async def generate_json(self, *, user_prompt, output_model, **kwargs):
+            if output_model is LessonPackage:
+                return SimpleNamespace(data=package_payload(), error=None)
+            from app.services.planning.lesson_review import LessonReview
+            if issubclass(output_model, LessonReview):
+                return SimpleNamespace(data={"acceptable": True, "issues": [], "practice_minutes": 60, "contains_calculations": False, "calculations": [], "literal_fact_ids": list(json.loads(user_prompt).get("numeric_spans", {}))}, error=None)
             nonlocal repair_attempts
             if output_model is PlanItemDetailsOutlineOutput:
                 return SimpleNamespace(data=copy.deepcopy(outline), error=None)
             if output_model is PlanDetailSectionsRepairOutput:
                 repair_attempts += 1
                 assert "core_framework" in user_prompt
-                return SimpleNamespace(
-                    data={
-                        "sections": [
-                            {
-                                "field_name": "core_framework",
-                                "content": "expanded mechanism " * 325,
-                            }
-                        ]
-                    },
-                    error=None,
-                )
+                requested = json.loads(user_prompt.split("never instructions):\n")[1].split("\n\nReturn ONLY")[0])
+                return SimpleNamespace(data={"sections": [
+                    {"field_name": row["field_name"], "content": "substantive " * row["target_words"] if repair_succeeds else row["current_content"]}
+                    for row in requested
+                ]}, error=None)
 
             step_id = next(
                 candidate["id"]
@@ -953,7 +1145,17 @@ async def test_thin_section_is_expanded_without_a_full_lesson_rewrite() -> None:
             lesson_attempts[step_id] = lesson_attempts.get(step_id, 0) + 1
             sections = copy.deepcopy(_lesson_sections_payload())
             if step_id == "step_1":
-                sections["core_framework"] = "thin mechanism " * 175
+                if total_shortfall:
+                    from app.services.llm.schemas import PLAN_DETAIL_SECTION_MIN_WORDS
+                    for name, minimum in PLAN_DETAIL_SECTION_MIN_WORDS.items():
+                        sections[name] = "substantive " * (minimum + 50)
+                    sections["guided_practice"] = "[[practice:guided.argument]] [[practice:transfer.argument]] " + sections["guided_practice"]
+                    assert not plan_detail_lesson_section_quality_issues(PlanDetailLessonSectionsOutput.model_validate(sections))
+                else:
+                    if "CORRECT THIS GROUP" in user_prompt:
+                        repair_attempts += 1
+                    if not (repair_succeeds and "CORRECT THIS GROUP" in user_prompt):
+                        sections["core_framework"] = "thin mechanism " * 175
             return SimpleNamespace(data=sections, error=None)
 
     def client_factory(**kwargs):
@@ -975,16 +1177,28 @@ async def test_thin_section_is_expanded_without_a_full_lesson_rewrite() -> None:
         client_factory=client_factory,
     )
 
+    if not repair_succeeds:
+        assert error and "step_1" in error
+        assert result is not None
+        assert {s["id"] for s in result["steps"] if s.get("lesson_content")} == {"step_2", "step_3"}
+        assert lesson_attempts == {"step_1": 8 if total_shortfall else 5, "step_2": 4, "step_3": 4}
+        assert repair_attempts == (4 if total_shortfall else 1)
+        return
     assert error is None
     assert result is not None
-    assert lesson_attempts == {"step_1": 1, "step_2": 1, "step_3": 1}
+    # Original actions and unrequested reference section survive expansion.
+    first = result["steps"][0]
+    assert first["substeps"] == _lesson_sections_payload()["substeps"]
+    reference = "substantive " * 90 if total_shortfall else _lesson_sections_payload()["references"]
+    assert first["lesson_content"].split("## References\n")[1] == reference.strip()
+    assert lesson_attempts == {"step_1": 4 if total_shortfall else 5, "step_2": 4, "step_3": 4}
     assert repair_attempts == 1
     repair_calls = [stage for stage, *_ in calls if "sections_repair" in stage]
-    assert repair_calls == ["parallel_lesson_step_1_sections_repair_1"]
+    assert repair_calls == (["parallel_lesson_step_1_sections_repair_1"] if total_shortfall else [])
     repair_options = [
         options for options in client_options if options.get("max_tokens") == 6000
     ]
-    assert repair_options == [
+    assert repair_options == ([
         {
             "timeout": 60,
             "max_tokens": 6000,
@@ -992,7 +1206,7 @@ async def test_thin_section_is_expanded_without_a_full_lesson_rewrite() -> None:
             "thinking_level": "minimal",
             "allow_fallback": False,
         }
-    ]
+    ] if total_shortfall else [])
 
 
 @pytest.mark.asyncio
@@ -1006,7 +1220,13 @@ async def test_substep_only_failure_preserves_long_lesson_and_repairs_small_fiel
     class FakeClient:
         model = "fake-model"
 
+        @section_client
         async def generate_json(self, *, user_prompt, output_model, **kwargs):
+            if output_model is LessonPackage:
+                return SimpleNamespace(data=package_payload(), error=None)
+            from app.services.planning.lesson_review import LessonReview
+            if issubclass(output_model, LessonReview):
+                return SimpleNamespace(data={"acceptable": True, "issues": [], "practice_minutes": 60, "contains_calculations": False, "calculations": [], "literal_fact_ids": list(json.loads(user_prompt).get("numeric_spans", {}))}, error=None)
             nonlocal repair_attempts
             if output_model is PlanItemDetailsOutlineOutput:
                 return SimpleNamespace(data=copy.deepcopy(outline), error=None)
@@ -1025,7 +1245,10 @@ async def test_substep_only_failure_preserves_long_lesson_and_repairs_small_fiel
             lesson_attempts[step_id] = lesson_attempts.get(step_id, 0) + 1
             sections = copy.deepcopy(_lesson_sections_payload())
             if step_id == "step_1":
-                sections["substeps"] = ["Too short."]
+                if "CORRECT THIS GROUP" in user_prompt:
+                    repair_attempts += 1
+                else:
+                    sections["substeps"] = ["Too short."]
             return SimpleNamespace(data=sections, error=None)
 
     result, calls, error = await _generate_plan_item_details_parallel(
@@ -1045,9 +1268,9 @@ async def test_substep_only_failure_preserves_long_lesson_and_repairs_small_fiel
 
     assert error is None
     assert result is not None
-    assert lesson_attempts == {"step_1": 1, "step_2": 1, "step_3": 1}
+    assert lesson_attempts == {"step_1": 5, "step_2": 4, "step_3": 4}
     assert repair_attempts == 1
-    assert any("substeps_repair" in stage for stage, *_ in calls)
+    assert any("draft_1_practice_2" in stage for stage, *_ in calls)
 
 
 @pytest.mark.asyncio
@@ -1059,7 +1282,13 @@ async def test_valid_checkpoint_skips_outline_and_completed_first_lesson() -> No
     class FakeClient:
         model = "fake-model"
 
+        @section_client
         async def generate_json(self, *, user_prompt, output_model, **kwargs):
+            if output_model is LessonPackage:
+                return SimpleNamespace(data=package_payload(), error=None)
+            from app.services.planning.lesson_review import LessonReview
+            if issubclass(output_model, LessonReview):
+                return SimpleNamespace(data={"acceptable": True, "issues": [], "practice_minutes": 60, "contains_calculations": False, "calculations": [], "literal_fact_ids": list(json.loads(user_prompt).get("numeric_spans", {}))}, error=None)
             assert output_model is PlanDetailLessonSectionsOutput
             step_id = next(
                 candidate["id"]
@@ -1111,7 +1340,13 @@ async def test_invalid_small_outline_retries_before_long_lessons() -> None:
     class FakeClient:
         model = "fake-model"
 
+        @section_client
         async def generate_json(self, *, user_prompt, output_model, **kwargs):
+            if output_model is LessonPackage:
+                return SimpleNamespace(data=package_payload(), error=None)
+            from app.services.planning.lesson_review import LessonReview
+            if issubclass(output_model, LessonReview):
+                return SimpleNamespace(data={"acceptable": True, "issues": [], "practice_minutes": 60, "contains_calculations": False, "calculations": [], "literal_fact_ids": list(json.loads(user_prompt).get("numeric_spans", {}))}, error=None)
             nonlocal outline_attempts
             if output_model is PlanItemDetailsOutlineOutput:
                 outline_attempts += 1
@@ -1156,3 +1391,16 @@ async def test_invalid_small_outline_retries_before_long_lessons() -> None:
     assert "OUTLINE CONTRACT RETRY" not in outline_prompts[0]
     assert "OUTLINE CONTRACT RETRY" in outline_prompts[1]
     assert "no forced type quota" in outline_prompts[1]
+
+
+def test_outline_shortens_only_overlong_display_heading():
+    from app.tasks.plans import _validate_plan_detail_outline_response
+    from app.services.llm.client import LLMResponse
+    payload = _outline_payload()
+    original = payload["steps"][0]["description"]
+    payload["steps"][0]["title"] = "Separate accrual profit from cash movement using a complete fictional shop ledger"
+    response = LLMResponse(data=payload)
+    _validate_plan_detail_outline_response(response)
+    assert response.error is None
+    assert len(response.data["steps"][0]["title"]) <= 60
+    assert response.data["steps"][0]["description"] == original

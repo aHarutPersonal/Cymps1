@@ -89,6 +89,8 @@ def _thread_awaiting_final_plan_input() -> ChatThread:
     keys = [
         "achievement_inventory",
         "current_capability",
+        "foundation_check",
+        "application_check",
         "weekly_hours",
         "target_outcome",
         "constraints_resources",
@@ -97,6 +99,8 @@ def _thread_awaiting_final_plan_input() -> ChatThread:
     answers = [
         "I shipped a prototype used by five people.",
         "I can build and test a small app without a tutorial.",
+        "I do not know yet",
+        "I do not know yet",
         "8 hours per week",
         "A published product with ten active users.",
         "A laptop and test users help; weekday time is the constraint.",
@@ -643,7 +647,7 @@ async def test_abandon_during_final_generation_cannot_restore_comparison(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_interview_provider_failure_is_safe_and_retryable(monkeypatch):
+async def test_interview_provider_failure_uses_same_coverage_question(monkeypatch):
     thread = _thread([_message(1, MessageRole.ASSISTANT, "Opening question")])
     session = _session(turn=1)
     db = _Database(thread)
@@ -671,11 +675,14 @@ async def test_interview_provider_failure_is_safe_and_retryable(monkeypatch):
     )
     body = await _body(response)
 
-    assert '"type": "error"' in body
-    assert '"type": "done"' not in body
+    assert '"type": "error"' not in body
+    assert '"type": "done"' in body
     assert "private provider diagnostics" not in body
-    assert [message.role for message in db.added] == [MessageRole.USER]
-    assert db.added[0].generation_status == "failed"
+    assert [message.role for message in db.added] == [MessageRole.USER, MessageRole.ASSISTANT]
+    assert db.added[0].generation_status == "completed"
+    assert db.added[1].response_ui_json["answer_key"] == "achievement_inventory"
+    assert db.added[1].content == sessions.INTERVIEW_QUESTION_FALLBACKS["achievement_inventory"]
+    assert session.phase == SessionPhase.INTERVIEW
     assert db.commits == 2
 
 
@@ -732,3 +739,98 @@ async def test_stream_cancellation_shields_claim_cleanup(monkeypatch):
     assert db.added[0].generation_status == "failed"
     assert thread.interview_claim_token is None
     assert db.commits == 2
+
+
+@pytest.mark.asyncio
+async def test_opening_question_needs_neither_provider_nor_biography(monkeypatch):
+    thread = _thread([])
+    session = _session(turn=0)
+    session.idol_facts_json = None
+    db = _Database(thread)
+    _patch_session(monkeypatch, session)
+
+    async def forbidden_grounding(**_kwargs):
+        raise AssertionError("Biography research cannot block intake")
+
+    async def forbidden_stream(**_kwargs):
+        raise AssertionError("Opening question must be immediate")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(sessions, "generate_with_grounding", forbidden_grounding)
+    monkeypatch.setattr(sessions, "interview_stream", forbidden_stream)
+    response = await sessions.interview(
+        session_id=session.id,
+        data=InterviewMessageRequest(content="Begin", is_kickoff=True),
+        db=db,
+        current_user=User(id="user-1", email="learner@example.com", password_hash="hash"),
+    )
+    chunks = []
+    async for chunk in response.body_iterator:
+        chunks.append(chunk)
+        if '"type": "chunk"' in chunk:
+            assert db.commits == 2, "A visible question must already be durable"
+    body = "".join(chunks)
+    assert '"type": "done"' in body
+    assert '"answer_key": "achievement_inventory"' in body
+    assert [message.role for message in db.added] == [MessageRole.ASSISTANT]
+    assert session.idol_facts_json is None
+
+
+@pytest.mark.asyncio
+async def test_whitespace_answer_is_rejected_before_any_db_work(monkeypatch):
+    db = _Database(_thread([]))
+    with pytest.raises(HTTPException) as error:
+        await sessions.interview(
+            session_id="session-1",
+            data=InterviewMessageRequest(content=" \n\t "),
+            db=db,
+            current_user=User(id="user-1", email="learner@example.com", password_hash="hash"),
+        )
+    assert error.value.detail["code"] == "invalid_interview_answer"
+    assert db.statements == []
+    assert db.added == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["timeout", "partial", "long", "multiple", "early_close", "empty", "partial_marker"])
+async def test_invalid_generated_questions_never_escape_to_learner(monkeypatch, failure):
+    async def stream(**_kwargs):
+        if failure == "timeout":
+            await anyio.sleep_forever()
+        elif failure == "partial":
+            yield "Private unfinished provider output"
+            raise RuntimeError("provider connection lost")
+        elif failure == "long":
+            yield "Long biography. " * 50 + "What can you do?"
+        elif failure == "multiple":
+            yield "What did you study? What can you do? What are your tools?"
+        elif failure == "early_close":
+            yield "The interview is over. [INTERVIEW_COMPLETE]"
+        elif failure == "partial_marker":
+            yield "What can you already do? <CMPYS_RESP"
+        else:
+            yield ""
+
+    monkeypatch.setattr(sessions, "interview_stream", stream)
+    monkeypatch.setattr(sessions, "INTERVIEW_QUESTION_TIMEOUT_SECONDS", 0.01)
+    text, response_ui = await sessions._generate_concise_interview_question(
+        system_prompt="system", user_prompt="question", answer_key="current_capability"
+    )
+    assert text == sessions.INTERVIEW_QUESTION_FALLBACKS["current_capability"]
+    assert response_ui.kind == "text"
+    assert "Private" not in text
+
+
+@pytest.mark.asyncio
+async def test_concise_adaptive_question_keeps_valid_control_metadata(monkeypatch):
+    async def stream(**_kwargs):
+        yield "What helps you practice consistently?"
+        yield '<CMPYS_RESPONSE_UI>{"kind":"single_choice","options":["A routine","A partner","Still learning"]}</CMPYS_RESPONSE_UI>'
+
+    monkeypatch.setattr(sessions, "interview_stream", stream)
+    text, response_ui = await sessions._generate_concise_interview_question(
+        system_prompt="system", user_prompt="question", answer_key="learning_habits_support"
+    )
+    assert text == "What helps you practice consistently?"
+    assert response_ui.kind == "single_choice"
+    assert response_ui.options == ["A routine", "A partner", "Still learning"]

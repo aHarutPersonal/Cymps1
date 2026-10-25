@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -35,7 +36,7 @@ class PlanGenerateRequest(BaseModel):
     # required daily rhythm needs one more. Anything lower would mislabel the
     # actual workload.
     weeklyHours: int = Field(default=10, ge=3, le=168)
-    focus: str | None = Field(default=None, max_length=200)
+    focus: str | None = Field(default=None, max_length=10000)
     # Optional: the agentic session this plan continues. When provided, the
     # interview transcript / comparison / blueprint from that exact session are
     # threaded into generation; when omitted, the task falls back to the user's
@@ -44,11 +45,15 @@ class PlanGenerateRequest(BaseModel):
 
 
 class PlanItemUpdate(BaseModel):
-    """Update a plan item."""
+    """Update user-authored plan-item notes.
 
-    status: PlanItemStatus | None = None
-    progressPercent: int | None = Field(None, ge=0, le=100)
+    Mission status/progress are derived from exact artifact completion records
+    and can only be changed through the completion endpoints.
+    """
+
     notes: str | None = Field(None, max_length=5000)
+
+    model_config = {"extra": "forbid"}
 
 
 class PlanItemCreate(BaseModel):
@@ -76,6 +81,7 @@ class PlanItemResponse(BaseModel):
     weekEnd: int
     successMetric: str
     estimatedHours: int
+    estimatedMinutes: int | None = Field(default=None, ge=0)
     status: PlanItemStatus
     progressPercent: int
     notes: str | None = None
@@ -123,6 +129,7 @@ class StepDetail(BaseModel):
 
     id: str
     title: str
+    lesson_format: Literal["tutorial_v1"] | None = None
     description: str | None = None
     # Additional fields from LLM prompt schema
     expected_output: str | None = None  # Artifact/deliverable for this step
@@ -168,6 +175,7 @@ class ItemDetails(BaseModel):
     """Detailed steps and materials for a plan item."""
 
     steps: list[StepDetail] = []
+    lesson_format: Literal["tutorial_v1"] | None = None
     materials: list[MaterialDetail] = []
     generated_from_prompt_version: str | None = None
     generated_at: str | None = None
@@ -202,6 +210,9 @@ class PlanItemDetailedResponse(BaseModel):
     # Details generation status
     details_status: DetailsStatus = DetailsStatus.AVAILABLE
     job_id: str | None = None
+    # Optimistic-concurrency token for mutations of the rendered artifact.
+    # Clients must echo it as artifactJobId on step/item completion requests.
+    artifact_job_id: str | None = None
     details_error: str | None = None
     details_progress: int = 0
     details_step: str | None = None
@@ -209,6 +220,7 @@ class PlanItemDetailedResponse(BaseModel):
     # plan items. These fields let the same detail route render them instantly
     # without sending a habit/practice through long-form lesson generation.
     daily_instructions: str | None = None
+    daily_reflection: str = ""
     completed_today: bool | None = None
 
 

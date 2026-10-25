@@ -68,7 +68,7 @@ class _CmpysRecordScreenState extends ConsumerState<CmpysRecordScreen> {
                   _circleBack(),
                   const Spacer(),
                   if (pending > 0)
-                    GestureDetector(
+                    CmpysPressable(
                       onTap: _openReassess,
                       child: Container(
                         padding: const EdgeInsets.symmetric(
@@ -131,9 +131,9 @@ class _CmpysRecordScreenState extends ConsumerState<CmpysRecordScreen> {
 
   Widget _circleBack() => Material(
         color: Colors.transparent,
-        child: InkWell(
+        child: CmpysPressable(
+          semanticLabel: 'Back',
           onTap: () => Navigator.of(context).maybePop(),
-          borderRadius: BorderRadius.circular(999),
           child: Container(
             width: 44,
             height: 44,
@@ -150,8 +150,9 @@ class _CmpysRecordScreenState extends ConsumerState<CmpysRecordScreen> {
 
   Widget _logWinFab() {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 90),
-      child: GestureDetector(
+      padding: EdgeInsets.only(bottom: AppShell.isWithinShell(context)
+          ? AppShell.bottomNavClearance(context) : 12),
+      child: CmpysPressable(
         onTap: _openAddWin,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
@@ -168,8 +169,9 @@ class _CmpysRecordScreenState extends ConsumerState<CmpysRecordScreen> {
             children: [
               const Icon(Icons.add_rounded, size: 20, color: Colors.white),
               const SizedBox(width: 6),
-              Text('Log a win',
-                  style: AppTypography.button.copyWith(fontSize: 15)),
+              Flexible(child: Text('Log a win',
+                  textAlign: TextAlign.center,
+                  style: AppTypography.button.copyWith(fontSize: 15))),
             ],
           ),
         ),
@@ -178,7 +180,7 @@ class _CmpysRecordScreenState extends ConsumerState<CmpysRecordScreen> {
   }
 
   Widget _pendingBanner(CmpysIdol idol, int pending) {
-    return GestureDetector(
+    return CmpysPressable(
       onTap: _openReassess,
       child: Container(
         margin: const EdgeInsets.only(bottom: 14),
@@ -210,7 +212,7 @@ class _CmpysRecordScreenState extends ConsumerState<CmpysRecordScreen> {
 
   Widget _filterChips() {
     return SizedBox(
-      height: 44,
+      height: MediaQuery.textScalerOf(context).scale(14) * 1.5 + 22,
       child: ListView(
         scrollDirection: Axis.horizontal,
         children: [
@@ -228,7 +230,8 @@ class _CmpysRecordScreenState extends ConsumerState<CmpysRecordScreen> {
 
   Widget _chip(String label, bool active, Color color, Color tint,
       VoidCallback onTap) {
-    return GestureDetector(
+    return CmpysPressable(
+      selected: active,
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 9),
@@ -566,7 +569,7 @@ class _WinCardState extends ConsumerState<_WinCard> {
             ],
             if (w.source == 'manual' || w.source == 'milestone' || w.source == 'chat') ...[
               const SizedBox(height: 10),
-              GestureDetector(
+              CmpysPressable(
                 onTap: () {
                   ref.read(cmpysStoreProvider.notifier).deleteWin(w.id);
                   showCmpysToast(context, 'Entry removed',
@@ -693,6 +696,8 @@ class _AddWinSheetState extends ConsumerState<AddWinSheet> {
   Widget build(BuildContext context) {
     final maxAge = ref.read(cmpysStoreProvider).user.age;
     return SingleChildScrollView(
+      keyboardDismissBehavior:
+          ScrollViewKeyboardDismissBehavior.onDrag,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -705,7 +710,8 @@ class _AddWinSheetState extends ConsumerState<AddWinSheet> {
             runSpacing: 9,
             children: cmpysDims.map((d) {
               final on = _dim == d.id;
-              return GestureDetector(
+              return CmpysPressable(
+                selected: on,
                 onTap: () => setState(() => _dim = d.id),
                 child: Container(
                   padding:
@@ -737,7 +743,8 @@ class _AddWinSheetState extends ConsumerState<AddWinSheet> {
               return Expanded(
                 child: Padding(
                   padding: EdgeInsets.only(right: im.v == 3 ? 0 : 8),
-                  child: GestureDetector(
+                  child: CmpysPressable(
+                    selected: on,
                     onTap: () => setState(() => _impact = im.v),
                     child: Container(
                       padding: const EdgeInsets.symmetric(vertical: 12),
@@ -835,6 +842,8 @@ class _AddWinSheetState extends ConsumerState<AddWinSheet> {
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
       child: TextField(
         controller: c,
+        keyboardType: TextInputType.multiline,
+        onTapOutside: (_) => FocusManager.instance.primaryFocus?.unfocus(),
         minLines: 2,
         maxLines: 4,
         onChanged: (_) => setState(() {}),
@@ -919,7 +928,7 @@ class _EvidenceField extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (!on) {
-      return GestureDetector(
+      return CmpysPressable(
         onTap: () => onToggle(true),
         child: Container(
           width: double.infinity,
@@ -956,7 +965,8 @@ class _EvidenceField extends StatelessWidget {
         Positioned(
           top: 8,
           right: 8,
-          child: GestureDetector(
+          child: CmpysPressable(
+            semanticLabel: 'Remove evidence photo',
             onTap: () => onToggle(false),
             child: Container(
               width: 28,
@@ -1010,6 +1020,8 @@ class _ClaimSheetState extends ConsumerState<ClaimSheet> {
     final maxAge = ref.read(cmpysStoreProvider).user.age;
     final idolShort = ref.read(cmpysStoreProvider).idol.short;
     return SingleChildScrollView(
+      keyboardDismissBehavior:
+          ScrollViewKeyboardDismissBehavior.onDrag,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1059,6 +1071,8 @@ class _ClaimSheetState extends ConsumerState<ClaimSheet> {
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
             child: TextField(
               controller: _note,
+              keyboardType: TextInputType.multiline,
+              onTapOutside: (_) => FocusManager.instance.primaryFocus?.unfocus(),
               minLines: 2,
               maxLines: 4,
               onChanged: (_) => setState(() {}),

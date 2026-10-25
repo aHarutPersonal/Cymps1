@@ -5,6 +5,8 @@ import 'package:go_router/go_router.dart';
 import '../../../../app/design_tokens.dart';
 import '../../../../app/router.dart';
 import '../../../auth/controllers/session_controller.dart';
+import '../../../session/data/session_repository.dart';
+import '../../../session/models/session_models.dart';
 import '../../data/cmpys_seed.dart';
 import '../../state/cmpys_store.dart';
 import '../../state/cmpys_backend_sync.dart';
@@ -36,6 +38,65 @@ class _CmpysOnboardingFlowState extends ConsumerState<CmpysOnboardingFlow> {
   final CmpysOnboardingDraft _draft = CmpysOnboardingDraft();
   CmpysIdol? _previewIdol;
   CmpysIdol? _selectedIdol;
+  bool _restoring = true;
+  bool _restoreFailed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _restore();
+  }
+
+  Future<void> _restore() async {
+    setState(() {
+      _restoring = true;
+      _restoreFailed = false;
+    });
+    try {
+      final session = await ref
+          .read(sessionRepositoryProvider)
+          .getLatestSession();
+      if (!mounted) return;
+      _draft.name = ref.read(currentUserProvider)?.fullName ?? '';
+      final canResume =
+          session != null &&
+          (session.phase != SessionPhase.completed ||
+              (session.comparisonOutput?.trim().isNotEmpty == true &&
+                  session.blueprintOutput?.trim().isNotEmpty == true));
+      if (canResume) {
+        _draft.sessionId = session.id;
+        _draft.age = session.userAge > 0 ? session.userAge : _draft.age;
+        _draft.interests = session.userInterests.toSet();
+        _draft.comparisonMd = session.comparisonOutput;
+        _draft.blueprintMd = session.blueprintOutput;
+        final selected = session.selectedIdol;
+        if (selected != null) {
+          _draft.backendIdolId = selected.id;
+          _selectedIdol = cmpysIdolFromSuggestion(
+            name: selected.name,
+            era: selected.era ?? '',
+            summary: '',
+            domains: const [],
+          );
+          _route = switch (session.phase) {
+            SessionPhase.comparison ||
+            SessionPhase.blueprint ||
+            SessionPhase.guidedLearning ||
+            SessionPhase.completed => _OnboardingRoute.mentorLab,
+            _ => _OnboardingRoute.intake,
+          };
+        } else {
+          _route = _OnboardingRoute.discovery;
+        }
+      }
+    } catch (_) {
+      // A network failure must not create a replacement session or discard
+      // saved answers. Keep recovery explicit until the backend can be read.
+      if (mounted) _restoreFailed = true;
+    } finally {
+      if (mounted) setState(() => _restoring = false);
+    }
+  }
 
   Future<void> _finish() async {
     // Seed the CMPYS store with the user's onboarding answers, chosen idol,
@@ -99,6 +160,20 @@ class _CmpysOnboardingFlowState extends ConsumerState<CmpysOnboardingFlow> {
   }
 
   Widget _buildRoute() {
+    if (_restoring) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_restoreFailed) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Could not restore your saved onboarding.'),
+            TextButton(onPressed: _restore, child: const Text('Retry')),
+          ],
+        ),
+      );
+    }
     switch (_route) {
       case _OnboardingRoute.personalize:
         return CmpysPersonalizeStep(

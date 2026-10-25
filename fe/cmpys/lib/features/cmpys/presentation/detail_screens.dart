@@ -73,9 +73,9 @@ class _DetailScaffold extends StatelessWidget {
 
 Widget _backBtn(BuildContext context) => Material(
       color: Colors.transparent,
-      child: InkWell(
+      child: CmpysPressable(
+        semanticLabel: 'Back',
         onTap: () => Navigator.of(context).maybePop(),
-        borderRadius: BorderRadius.circular(999),
         child: Container(
           width: 44,
           height: 44,
@@ -107,7 +107,7 @@ class _EmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Center(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -123,7 +123,8 @@ class _EmptyState extends StatelessWidget {
               child: Icon(icon, size: 28, color: AppColors.ink3),
             ),
             const SizedBox(height: 16),
-            Text(title, style: AppTypography.h3.copyWith(fontSize: 21)),
+            Text(title, textAlign: TextAlign.center,
+                style: AppTypography.h3.copyWith(fontSize: 21)),
             const SizedBox(height: 8),
             ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 260),
@@ -351,9 +352,8 @@ class CmpysSavedScreen extends ConsumerWidget {
                       ),
                       const SizedBox(width: 13),
                       Expanded(
-                        child: GestureDetector(
+                        child: CmpysPressable(
                           onTap: () => _open(context, s.kind, s.id),
-                          behavior: HitTestBehavior.opaque,
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
@@ -533,8 +533,11 @@ class CmpysSettingsScreen extends ConsumerWidget {
   Widget _toggleRow(IconData icon, String label, String? sub, bool on,
       VoidCallback onTap,
       {bool last = false}) {
-    return _rowFrame(icon, label, sub, _Toggle(on: on, onTap: onTap),
-        last: last);
+    return MergeSemantics(
+      child: _rowFrame(icon, label, sub,
+          Switch(value: on, onChanged: (_) => onTap(),
+              activeTrackColor: AppColors.green2), last: last),
+    );
   }
 
   Widget _staticRow(IconData icon, String label, String value) {
@@ -550,47 +553,11 @@ class CmpysSettingsScreen extends ConsumerWidget {
   Widget _navRow(BuildContext context, IconData icon, String label, String? sub,
       VoidCallback onTap,
       {bool last = false}) {
-    return GestureDetector(
+    return CmpysPressable(
       onTap: onTap,
-      behavior: HitTestBehavior.opaque,
       child: _rowFrame(icon, label, sub,
           const Icon(Icons.chevron_right_rounded, color: AppColors.ink3, size: 22),
           last: last),
-    );
-  }
-}
-
-class _Toggle extends StatelessWidget {
-  const _Toggle({required this.on, required this.onTap});
-  final bool on;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 220),
-        width: 50,
-        height: 30,
-        padding: const EdgeInsets.all(3),
-        alignment: on ? Alignment.centerRight : Alignment.centerLeft,
-        decoration: BoxDecoration(
-          color: on ? AppColors.green : AppColors.hair2,
-          borderRadius: BorderRadius.circular(999),
-        ),
-        child: Container(
-          width: 24,
-          height: 24,
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(color: Color(0x22000000), blurRadius: 4, offset: Offset(0, 1)),
-            ],
-          ),
-        ),
-      ),
     );
   }
 }
@@ -699,7 +666,7 @@ class _CmpysEditProfileScreenState
   @override
   Widget build(BuildContext context) {
     return PopScope(
-      canPop: false,
+      canPop: !_dirty,
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop) _tryBack();
       },
@@ -716,9 +683,9 @@ class _CmpysEditProfileScreenState
                   children: [
                     Material(
                       color: Colors.transparent,
-                      child: InkWell(
+                      child: CmpysPressable(
+                        semanticLabel: 'Back',
                         onTap: _tryBack,
-                        borderRadius: BorderRadius.circular(999),
                         child: Container(
                           width: 44,
                           height: 44,
@@ -748,6 +715,8 @@ class _CmpysEditProfileScreenState
               ),
               Expanded(
                 child: ListView(
+                  keyboardDismissBehavior:
+                      ScrollViewKeyboardDismissBehavior.onDrag,
                   padding: EdgeInsets.fromLTRB(22, 4, 22, AppShell.bottomNavClearance(context)),
                   children: [
                     Center(
@@ -773,9 +742,9 @@ class _CmpysEditProfileScreenState
                             ),
                           ),
                           const SizedBox(height: 8),
-                          Text('Change photo',
+                          Text('Profile initials',
                               style: AppTypography.captionMedium.copyWith(
-                                  color: AppColors.green,
+                                  color: AppColors.ink3,
                                   fontWeight: FontWeight.w600)),
                         ],
                       ),
@@ -961,7 +930,8 @@ class CmpysMentorPickerScreen extends ConsumerWidget {
 
   Widget _idolRow(
       BuildContext context, WidgetRef ref, CmpysIdol idol, bool isActive) {
-    return GestureDetector(
+    return CmpysPressable(
+      selected: isActive,
       onTap: isActive ? null : () => _confirm(context, ref, idol),
       child: Container(
         padding: const EdgeInsets.all(14),

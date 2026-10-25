@@ -130,3 +130,31 @@ def test_background_budget_preserves_headroom_and_never_blocks_free_jobs(monkeyp
         "soft_limit"
     )
     assert job_budget_reserve_usd(IngestKind.QUOTE) == 0.0
+
+
+def test_unknown_failed_usage_is_not_reported_as_free():
+    from app.services.llm.telemetry import UsageRecord, _event
+    event = _event(UsageRecord(operation='book_module_generation', model='test',
+                               provider='openlux', success=False))
+    assert event.estimated_cost_usd is None
+    assert event.metadata_json['usage_unknown'] is True
+    event = _event(UsageRecord(operation='book_module_generation', model='test',
+        provider='openlux', success=False, estimated_cost_usd=0))
+    assert event.estimated_cost_usd == 0
+    assert event.metadata_json['usage_unknown'] is False
+
+
+@pytest.mark.asyncio
+async def test_unreconciled_charge_blocks_autonomous_work_across_days(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+    from app.services.llm.budget import get_daily_background_budget_status
+    spent, running, unknown = MagicMock(), MagicMock(), MagicMock()
+    spent.scalar_one.return_value = 0
+    running.scalars.return_value.all.return_value = []
+    unknown.scalar_one_or_none.return_value = 'failed-call'
+    db = MagicMock(execute=AsyncMock(side_effect=[spent, running, unknown]))
+    status = await get_daily_background_budget_status(db)
+    assert status.state == 'usage_unknown'
+    assert not budget_allows_job(kind=IngestKind.BOOK, status=status, projected_spend_usd=0)
+    query = str(db.execute.call_args.args[0])
+    assert 'created_at' not in query

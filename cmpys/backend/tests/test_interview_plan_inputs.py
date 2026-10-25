@@ -38,6 +38,13 @@ def _message(
     ("answer", "expected"),
     [
         ("8 hours per week", 8),
+        ("3 hours per week, in three 60-minute sessions.", 3),
+        ("3 hours per week split into 3 60 minute sessions", 3),
+        ("6 hours per week, across four 90-minute sessions.", 6),
+        ("3 hours per week, in two 60-minute sessions.", None),
+        ("3 hours per week, in three 30-60-minute sessions.", None),
+        ("3 hours per week, in three 60-minute sessions or maybe four.", None),
+        ("2 hours per week, in two 60-minute sessions.", None),
         ("8", 8),
         ("eight", 8),
         ("twenty-five", 25),
@@ -154,6 +161,8 @@ def test_full_plan_ready_profile_distinguishes_explicit_none_from_missing():
     values = {
         "achievement_inventory": "None yet",
         "current_capability": "I understand the basics but need guided practice.",
+        "foundation_check": "I do not know",
+        "application_check": "I do not know",
         "weekly_hours": "6 hours per week",
         "target_outcome": "Publish one working portfolio project.",
         "constraints_resources": "A laptop; limited weekday evenings.",

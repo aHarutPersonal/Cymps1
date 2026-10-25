@@ -1,0 +1,14 @@
+{
+  "question_count": 1,
+  "assistant_saved": true,
+  "reserved_usd": 1.7728699999999997,
+  "reply_chars": 848,
+  "chat_usage": [
+    {
+      "provider": "openlux",
+      "success": true,
+      "duration_ms": 17945.577709004283,
+      "cost": 0.03284
+    }
+  ]
+}

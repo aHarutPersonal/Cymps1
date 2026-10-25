@@ -1,3 +1,4 @@
+import 'support/design_capture.dart';
 import 'package:cmpys/core/ui/app_shell.dart';
 import 'package:cmpys/features/cmpys/state/cmpys_backend_sync.dart';
 import 'package:flutter/material.dart';
@@ -46,6 +47,7 @@ Widget _shellApp(GoRouter router, {bool disableAnimations = false}) {
 }
 
 void main() {
+  setUpAll(prepareDesignCapture);
   test('app shell uses the canonical five-tab IA', () {
     expect(
       appShellDestinations.map((destination) => destination.label).toList(),
@@ -53,11 +55,47 @@ void main() {
     );
   });
 
-  test('floating navigation collapses before it can overflow', () {
-    expect(AppShell.useIconOnlyNavigation(320, 14), isTrue);
-    expect(AppShell.useIconOnlyNavigation(390, 18.2), isTrue);
-    expect(AppShell.useIconOnlyNavigation(390, 14), isFalse);
-  });
+  for (final textScale in [1.0, 2.0]) {
+    testWidgets(
+      'all five navigation labels remain visible at $textScale scale',
+      (tester) async {
+        tester.view.physicalSize = const Size(320, 568);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        final router = _buildShellRouter();
+        addTearDown(router.dispose);
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [cmpysBackendSyncProvider.overrideWith((ref) async {})],
+            child: MaterialApp.router(
+              routerConfig: router,
+              builder: (context, child) => MediaQuery(
+                data: MediaQuery.of(
+                  context,
+                ).copyWith(textScaler: TextScaler.linear(textScale)),
+                child: RepaintBoundary(key: designCaptureKey, child: child!),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await captureDesign(tester, 'navigation-$textScale');
+        for (var i = 0; i < appShellDestinations.length; i++) {
+          final label = find.text(appShellDestinations[i].label);
+          expect(label.hitTestable(), findsOneWidget);
+          final target = find.byKey(ValueKey('floating-nav-item-$i'));
+          expect(tester.getSize(target).width, greaterThanOrEqualTo(48));
+          expect(tester.getSize(target).height, greaterThanOrEqualTo(48));
+          await tester.tap(target);
+          await tester.pumpAndSettle();
+          expect(find.text(_shellPaths[i]), findsOneWidget);
+          expect(tester.takeException(), isNull);
+        }
+      },
+    );
+  }
 
   testWidgets('branch content drops nav clearance while keyboard is open', (
     tester,
@@ -78,6 +116,24 @@ void main() {
     );
 
     expect(clearance, 14);
+  });
+
+  testWidgets('navigation hides for the keyboard and returns after dismissal', (
+    tester,
+  ) async {
+    final router = _buildShellRouter();
+    addTearDown(router.dispose);
+    addTearDown(tester.view.resetViewInsets);
+    await tester.pumpWidget(_shellApp(router));
+    await tester.pumpAndSettle();
+    expect(find.text('Today'), findsOneWidget);
+    tester.view.viewInsets = const FakeViewPadding(bottom: 300);
+    await tester.pumpAndSettle();
+    expect(find.text('Today'), findsNothing);
+    tester.view.resetViewInsets();
+    await tester.pumpAndSettle();
+    expect(find.text('Today'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('shell leaves keyboard resizing to its active branch', (

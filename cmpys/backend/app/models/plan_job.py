@@ -1,5 +1,5 @@
 from sqlalchemy import ForeignKey, Integer, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, UUIDMixin, TimestampUpdateMixin
@@ -39,7 +39,11 @@ class PlanGenerationJob(Base, UUIDMixin, TimestampUpdateMixin):
     previous_plan_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False), nullable=True
     )
-    focus: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # Intake outcomes may contain a complete 10,000-character answer. Keep the
+    # user's success criteria intact when staging the personalized plan.
+    focus: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    generation_checkpoint_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     # Resulting plan ID (populated when done)
     plan_id: Mapped[str | None] = mapped_column(

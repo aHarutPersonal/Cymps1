@@ -10,6 +10,7 @@ celery_app = Celery(
         "app.tasks.comparison",
         "app.tasks.catalog",
         "app.tasks.content_resources",
+        "app.tasks.curriculum",
         "app.tasks.ingestion",
         "app.tasks.plans",
     ],
@@ -31,6 +32,14 @@ celery_app.conf.update(
         "app.tasks.catalog.catalog_discovery_tick": {"queue": "catalog_control"},
         "app.tasks.catalog.enqueue_catalog_book": {"queue": "catalog_control"},
         "app.tasks.catalog.process_catalog_job": {"queue": "catalog"},
+        "app.tasks.curriculum.curriculum_control_tick": {
+            "queue": "curriculum_control"
+        },
+        "app.tasks.curriculum.process_curriculum_job": {"queue": "curriculum"},
+        "app.tasks.curriculum.curate_mentor_evidence": {"queue": "curriculum"},
+        "app.tasks.curriculum.revoke_canonical_module_version": {
+            "queue": "curriculum_control"
+        },
     },
     beat_schedule={
         "catalog-tick": {
@@ -44,6 +53,12 @@ celery_app.conf.update(
             # speculative-discovery loop.
             "schedule": max(settings.catalog_idle_discovery_interval_seconds, 60),
             "options": {"queue": "catalog_control"},
+        },
+        "curriculum-control-tick": {
+            "task": "app.tasks.curriculum.curriculum_control_tick",
+            # Never let an invalid environment value create a tight Beat loop.
+            "schedule": max(settings.curriculum_control_interval_seconds, 60),
+            "options": {"queue": "curriculum_control"},
         },
     },
 )

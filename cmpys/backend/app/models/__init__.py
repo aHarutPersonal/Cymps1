@@ -1,4 +1,5 @@
 from app.models.base import Base
+from app.models.lesson_practice import LessonPractice
 from app.models.user import User
 from app.models.user_profile import UserProfile
 from app.models.idol import Idol
@@ -47,6 +48,32 @@ from app.models.content_resource import (
 from app.models.ingest_job import IngestJob, IngestKind, IngestState
 from app.models.llm_usage_event import LLMUsageEvent
 from app.models.verified_quote import QuoteType, QuoteVerificationState, VerifiedQuote
+from app.models.curriculum import (
+    AssignmentStatus,
+    CanonicalModule,
+    CanonicalModuleVersion,
+    CurriculumGenerationJob,
+    CurriculumSkill,
+    CurriculumSkillStatus,
+    EvidenceLevel,
+    EvidenceVerificationStatus,
+    GenerationStage,
+    GenerationState,
+    LearnerMasteryStatus,
+    LearnerSkillState,
+    LearningTechniqueVersion,
+    MentorClaimType,
+    MentorEvidenceClaim,
+    ModuleQualityReport,
+    ModuleSession,
+    PersonalizedLessonStatus,
+    PersonalizedLessonVersion,
+    PlanLessonAssignment,
+    QualityReviewType,
+    QualityVerdict,
+    SkillLevel,
+    VersionStatus,
+)
 
 __all__ = [
     "Base",
@@ -105,4 +132,28 @@ __all__ = [
     "QuoteVerificationState",
     "VerifiedQuote",
     "LLMUsageEvent",
+    "AssignmentStatus",
+    "CanonicalModule",
+    "CanonicalModuleVersion",
+    "CurriculumGenerationJob",
+    "CurriculumSkill",
+    "CurriculumSkillStatus",
+    "EvidenceLevel",
+    "EvidenceVerificationStatus",
+    "GenerationStage",
+    "GenerationState",
+    "LearnerMasteryStatus",
+    "LearnerSkillState",
+    "LearningTechniqueVersion",
+    "MentorClaimType",
+    "MentorEvidenceClaim",
+    "ModuleQualityReport",
+    "ModuleSession",
+    "PersonalizedLessonStatus",
+    "PersonalizedLessonVersion",
+    "PlanLessonAssignment",
+    "QualityReviewType",
+    "QualityVerdict",
+    "SkillLevel",
+    "VersionStatus",
 ]

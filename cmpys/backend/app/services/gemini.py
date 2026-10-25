@@ -241,6 +241,33 @@ async def _stream_generate(
     time, and yields natural token chunks instead of artificial 8-char slices
     (~10x fewer SSE events downstream).
     """
+    provider_timeout_ms = GEMINI_REQUEST_TIMEOUT_MS
+    if settings.llm_provider in {"openlux", "zai"} and not grounded:
+        from app.services.llm.client import get_llm_client
+        from app.services.llm.openlux import OpenLuxStreamError
+
+        # Recover interactive tutoring/onboarding only before any text arrives;
+        # switching mid-answer would splice two different replies.
+        recover_interview = settings.llm_provider == "openlux" and operation in {"interview_stream", "guided_learning_stream"} and bool(settings.gemini_api_key)
+        client = get_llm_client(
+            tier="fast" if settings.llm_provider == "zai" and operation in {"interview_stream", "guided_learning_stream"} else tier, timeout=20 if recover_interview else GEMINI_REQUEST_TIMEOUT_MS / 1000,
+            max_tokens=max_output_tokens, thinking_level=thinking_level,
+            temperature=temperature, allow_fallback=False,
+        )
+        received_text = False
+        try:
+            async for text in client.stream_text(system_prompt, contents, operation=operation):
+                received_text = received_text or bool(text)
+                yield text
+            return
+        except OpenLuxStreamError as exc:
+            if not recover_interview or received_text or not exc.retryable:
+                raise
+            provider_timeout_ms = 35_000
+            logger.warning(
+                "[LLM] Interactive OpenLux route temporarily unavailable before text; "
+                "recovering once with direct Gemini (35s deadline)"
+            )
     client = _gemini_client()
     model = _model_for_tier(tier)
     resolved_level, resolved_budget = resolve_thinking_config(
@@ -267,7 +294,7 @@ async def _stream_generate(
                 tools=tools,
                 max_output_tokens=max_output_tokens,
                 http_options=types.HttpOptions(
-                    timeout=GEMINI_REQUEST_TIMEOUT_MS,
+                    timeout=provider_timeout_ms,
                 ),
                 **generation_config_kwargs(
                     model=model,
@@ -428,18 +455,17 @@ async def comparison_stream(
     user_message: str,
 ) -> AsyncGenerator[str, None]:
     """
-    Stream a Gemini response for the brutal reality comparison.
+    Stream a comparison using the supplied, previously retrieved idol facts.
 
-    Uses Google Search to verify idol achievements at the user's age.
-    The system_prompt maintains the idol persona. The user_message is
-    the rendered comparison_generate.txt with full interview context.
+    The comparison prompt explicitly forbids adding new historical claims.
+    Missing facts remain unknown rather than triggering another search here.
     """
-    logger.info("[GEMINI] Starting comparison stream (Google Search enabled)")
+    logger.info("Starting comparison stream (cached evidence, no live search)")
     async for text in _stream_generate(
         system_prompt=system_prompt,
         contents=user_message,
         label="Comparison",
-        grounded=True,
+        grounded=False,
         max_output_tokens=1_400,
         tier="balanced",
         thinking_level="low",

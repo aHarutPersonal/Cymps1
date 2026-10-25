@@ -1,3 +1,4 @@
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,6 +21,24 @@ class Settings(BaseSettings):
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"
+    # Opt in only after provider quota/load measurement. Keys are provider:model.
+    llm_admission_limits: dict[str, int] = {}
+    llm_admission_foreground_reserve: int = Field(default=1, ge=1)
+    llm_admission_per_user: int = Field(default=2, ge=1)
+    llm_admission_wait_seconds: float = Field(default=30, gt=0, le=120)
+    curriculum_parallel_reviews: bool = False
+    google_books_api_key: str | None = Field(default=None, repr=False, exclude=True)
+    google_books_secret_id: str | None = None
+    google_books_secret_region: str = "us-east-1"
+    # Shell/Compose worker settings also belong to the accepted dotenv schema.
+    # Modeling them keeps typo detection (`extra=forbid`) without making the
+    # checked-in .env.example impossible to load through BaseSettings.
+    celery_default_pool: str = "solo"
+    celery_default_concurrency: int = 1
+    celery_high_pool: str = "solo"
+    celery_high_concurrency: int = 1
+    celery_low_pool: str = "solo"
+    celery_low_concurrency: int = 1
 
     # JWT
     jwt_secret_key: str = "change-me-in-production-use-openssl-rand-hex-32"
@@ -27,22 +46,57 @@ class Settings(BaseSettings):
     jwt_access_token_expire_minutes: int = 30
     jwt_refresh_token_expire_days: int = 7
 
+    # Password recovery stays disabled until a verified SMTP sender is connected.
+    recovery_smtp_host: str | None = None
+    recovery_smtp_port: int = Field(default=587, ge=1, le=65535)
+    recovery_smtp_username: str | None = Field(default=None, repr=False, exclude=True)
+    recovery_smtp_password: str | None = Field(default=None, repr=False, exclude=True)
+    recovery_smtp_tls: str = "starttls"
+    recovery_email_sender: str | None = None
+
     # Extraction
     extractor_mode: str = "deterministic"  # "deterministic" or "llm"
 
     # LLM Configuration
-    llm_provider: str = "dummy"  # "dummy", "openai", "gemini", or "yunwu"
+    llm_provider: str = "dummy"  # dummy, openai, gemini, yunwu, openlux, openrouter
+    zai_api_key: str | None = Field(default=None, repr=False, exclude=True)
+    zai_secret_id: str | None = None
+    zai_secret_region: str = "us-east-1"
+    zai_base_url: str = "https://api.z.ai/api/paas/v4"
+    zai_fast_model: str = "glm-5.3-flash"
+    zai_model: str = "glm-5.3"
+    zai_quality_model: str = "glm-5.3"
+    # GLM's max_tokens includes hidden reasoning. Reserve it explicitly.
+    zai_reasoning_token_reserve: int = Field(default=2048, ge=0, le=8192)
+    # OpenLux is configured independently: old Yunwu credentials and pricing
+    # assumptions must not be silently carried into a different account route.
+    openlux_api_key: str | None = Field(default=None, repr=False, exclude=True)
+    openlux_keychain_service: str | None = None
+    openlux_secret_id: str | None = None
+    openlux_secret_region: str = "us-east-1"
+    openlux_base_url: str = "https://api.openlux.ai/v1"
+    openlux_fast_model: str = "gpt-5.6-terra"
+    openlux_model: str = "gpt-5.6-terra"
+    openlux_quality_model: str = "gpt-5.6-sol"
+    # Reserve for hidden reasoning separately from the requested visible text.
+    openlux_reasoning_token_reserve: int = Field(default=2048, ge=0, le=8192)
+    # Conservative budget estimates, NOT claimed account billing rates.
+    # Override after reconciling this token's actual provider invoice.
+    openlux_input_usd_per_million: float = Field(default=10.0, ge=0)
+    openlux_output_usd_per_million: float = Field(default=50.0, ge=0)
     openai_api_key: str | None = None
     openai_model: str = "gpt-4.1-mini"  # Balanced model for user-visible generation
     openai_fast_model: str = "gpt-4o-mini"  # Lightweight model for thinking/discovery
     openai_quality_model: str = "gpt-4.1"  # Selective fallback for failed quality gates
 
-    # Expressive in-reader narration. MiniMax returns audio and its own timed
-    # source ranges in one synthesis operation, avoiding a lossy ASR pass. The
-    # client groups complete sentences into larger playback chunks, while the
-    # backend content-addresses and persists each generated recording.
+    # Expressive in-reader narration. Recordings are content-addressed and
+    # persisted; exact highlighting is exposed only when the provider supplies it.
     book_narration_enabled: bool = True
-    book_narration_provider: str = "yunwu"
+    book_narration_provider: str = "gemini"
+    # Keep Gemini settings separate from legacy MiniMax environment overrides.
+    book_narration_gemini_model: str = "gemini-3.8-flash-tts"
+    book_narration_gemini_voice: str = "Sulafat"
+    book_narration_gemini_mentor_voice: str = "Gacrux"
     book_narration_api_base_url: str = "https://api.yunwu.ai/minimax/v1"
     book_narration_tts_model: str = "speech-2.8-hd"
     book_narration_voice_id: str = "English_expressive_narrator"
@@ -73,6 +127,21 @@ class Settings(BaseSettings):
     yunwu_quota_price_cny: float = 0.5
     yunwu_usd_exchange_rate: float = 7.3
 
+    # OpenRouter's OpenAI-compatible gateway. One model currently serves every
+    # tier: the stealth route is a single model id, so fast/balanced/quality all
+    # resolve to it until separate routes are worth configuring.
+    openrouter_api_key: str | None = None
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_fast_model: str = "stealth/ox-alpha"
+    openrouter_model: str = "stealth/ox-alpha"
+    openrouter_quality_model: str = "stealth/ox-alpha"
+    openrouter_fallback_enabled: bool = True
+    # The stealth route bills nothing today. Kept configurable so that if it ever
+    # starts charging, spend re-enters the budget guard by config rather than by
+    # someone remembering this file exists.
+    openrouter_input_usd_per_million: float = 0.0
+    openrouter_output_usd_per_million: float = 0.0
+
     # Tavily (real-time web search for material URL resolution)
     tavily_api_key: str | None = None
 
@@ -88,6 +157,9 @@ class Settings(BaseSettings):
 
     # Plan generation
     plan_generator_mode: str = "deterministic"  # "deterministic" or "llm"
+    # Safe runtime pilot. A catalog miss or failed personal composition falls
+    # through to the existing bespoke lesson generator.
+    lesson_catalog_first_enabled: bool = False
 
     # Local LLM (Spec 2 — inert until then)
     local_llm_base_url: str | None = None  # e.g. http://gpu-box:8000/v1 (Spec 2)
@@ -99,6 +171,9 @@ class Settings(BaseSettings):
     catalog_scheduler_enabled: bool = True
     catalog_tick_seconds: int = 60
     catalog_dispatch_per_tick: int = 1
+    catalog_worker_pool: str = "solo"
+    catalog_worker_concurrency: int = 1
+    catalog_control_pool: str = "solo"
     catalog_daily_job_limit: int = 50
     catalog_seed_per_tick: int = 25
     catalog_max_attempts: int = 3
@@ -108,6 +183,28 @@ class Settings(BaseSettings):
     catalog_quote_verification_enabled: bool = True
     catalog_quote_verification_batch_size: int = 4
     catalog_quote_verification_daily_limit: int = 2
+
+    # Evidence-based curriculum factory. It is intentionally off until the
+    # deterministic pilot taxonomy has been reviewed and seeded. Curriculum
+    # spend is accounted separately from the general background catalog.
+    curriculum_enabled: bool = False
+    curriculum_control_interval_seconds: int = 60
+    curriculum_max_dispatch_per_tick: int = 1
+    curriculum_max_running_jobs: int = 2
+    curriculum_lease_seconds: int = 20 * 60
+    curriculum_max_repairs: int = 2
+    curriculum_daily_budget_usd: float = 0.20
+    curriculum_job_budget_usd: float = 0.60
+    curriculum_daily_job_limit: int = 8
+    curriculum_durable_spacing_scheduler_enabled: bool = False
+    curriculum_research_model_tier: str = "fast"
+    curriculum_writing_model_tier: str = "balanced"
+    curriculum_review_model_tier: str = "quality"
+    # Deployment-only worker knobs are still modeled because Settings rejects
+    # unknown keys when developers copy the complete .env.example locally.
+    curriculum_worker_pool: str = "prefork"
+    curriculum_worker_concurrency: int = 1
+    curriculum_control_pool: str = "solo"
 
     # When every user-facing generation queue and tracked catalog job is idle,
     # discover at most one new book or idol candidate on this slower cadence.
@@ -148,13 +245,64 @@ class Settings(BaseSettings):
     adaptive_routing_min_success_rate: float = 0.90
     adaptive_routing_min_quality_score: float = 0.90
 
+    @model_validator(mode="after")
+    def load_openlux_credential(self):
+        if self.llm_provider == "zai" and not self.zai_api_key and self.zai_secret_id:
+            from app.core.credentials import read_aws_secret
+
+            self.zai_api_key = read_aws_secret(
+                self.zai_secret_id, self.zai_secret_region, "ZAI_API_KEY"
+            )
+        if not self.google_books_api_key and self.google_books_secret_id:
+            from app.core.credentials import read_aws_secret
+
+            self.google_books_api_key = read_aws_secret(
+                self.google_books_secret_id,
+                self.google_books_secret_region,
+                "GOOGLE_BOOKS_API_KEY",
+            )
+        needs_openlux_credential = self.llm_provider == "openlux" or (
+            self.book_narration_enabled
+            and self.book_narration_provider.casefold() == "openlux"
+        )
+        if (
+            needs_openlux_credential
+            and not self.openlux_api_key
+            and self.openlux_secret_id
+        ):
+            from app.core.credentials import read_aws_secret
+
+            self.openlux_api_key = read_aws_secret(
+                self.openlux_secret_id, self.openlux_secret_region
+            )
+        if (
+            needs_openlux_credential
+            and not self.openlux_api_key
+            and self.openlux_keychain_service
+        ):
+            from app.core.credentials import read_keychain_secret
+
+            self.openlux_api_key = read_keychain_secret(self.openlux_keychain_service)
+        return self
+
     @property
     def llm_configured(self) -> bool:
         """Check if LLM is properly configured."""
+        if self.llm_provider == "zai":
+            return bool(self.zai_api_key)
         if self.llm_provider == "openai":
             return bool(self.openai_api_key)
         if self.llm_provider == "gemini":
             return bool(self.gemini_api_key)
+        if self.llm_provider == "openlux":
+            # Optional native search credentials must not disable ordinary
+            # OpenLux generation. Search routes check their own prerequisites.
+            return bool(self.openlux_api_key)
+        if self.llm_provider == "openrouter":
+            # Grounded source discovery is a native Gemini capability that no
+            # OpenAI-compatible gateway can serve, so Gemini stays required here
+            # exactly as it does for the Yunwu gateway below.
+            return bool(self.openrouter_api_key and self.gemini_api_key)
         if self.llm_provider == "yunwu":
             # Several grounded and streaming product paths remain native
             # Gemini capabilities, and Gemini is also the gateway fallback.

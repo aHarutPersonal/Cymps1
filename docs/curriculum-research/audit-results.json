@@ -1,0 +1,279 @@
+{
+  "kind": "offline_adversarial_audit",
+  "live_provider_calls": 0,
+  "database_queries": 0,
+  "probes": [
+    {
+      "id": "duration_sum_not_enforced_by_details_schema",
+      "reproduced": true,
+      "declared_minutes": 120,
+      "component_minutes": 33,
+      "scope": "Details schema only; generated output was not sampled."
+    },
+    {
+      "id": "repeated_filler_passes_details_schema",
+      "reproduced": true,
+      "words": 2622,
+      "scope": "Existing synthetic test fixture passes word/heading gates; not a full publication claim."
+    },
+    {
+      "id": "normalizer_invents_practice_minutes",
+      "reproduced": true,
+      "original_practice_minutes": 4,
+      "normalized_practice_minutes": 117,
+      "normalized_total_minutes": 120,
+      "scope": "Normalizer in isolation; a short lesson may fail a separate depth gate."
+    },
+    {
+      "id": "canonical_structure_accepts_thin_content",
+      "reproduced": true,
+      "declared_minutes": 50,
+      "body_words": 115,
+      "scope": "Deterministic structure gate only; independent semantic reviews still apply."
+    },
+    {
+      "id": "matcher_does_not_inspect_method_compatibility",
+      "reproduced": true,
+      "verdict": "exact",
+      "scope": "Adversarial candidate with unchanged skill metadata; no claim about a published lesson."
+    }
+  ],
+  "prompt_count": 47,
+  "prompt_inventory": [
+    {
+      "name": "achievements_extract.txt",
+      "words": 963,
+      "sha256": "35381d8ad3b4733a4e1d58e693567d7ea502e8ed3374882eea55e9bd0bc6ab2a"
+    },
+    {
+      "name": "blueprint_generate.txt",
+      "words": 430,
+      "sha256": "82486bdf5e8904ae83aa099c8da1a43149203ccc12a9145674e79c4585d3ef83"
+    },
+    {
+      "name": "book_module_generate.txt",
+      "words": 673,
+      "sha256": "3e3f1b3afca7d14f93fe921c0417e75489cb25d4555c1f76b837668da88e068e"
+    },
+    {
+      "name": "book_writer_system.txt",
+      "words": 204,
+      "sha256": "b786eb21eee33900c992cbdfe8d2fdf78a06a94347c660e39f4c99601c77c362"
+    },
+    {
+      "name": "comparison_analyze.txt",
+      "words": 380,
+      "sha256": "f8fa707ada9e0b5a5da2fee6fe629e5354e33692f4665d4fdb95e447b19aa7ee"
+    },
+    {
+      "name": "comparison_generate.txt",
+      "words": 619,
+      "sha256": "3966ac9e7027df2b4e5da44b829e577db75a6a48dc37f437ad3509ef08dd65e6"
+    },
+    {
+      "name": "comparison_scores.txt",
+      "words": 728,
+      "sha256": "0044c0545b6d411533f0af40058cf201046532b05acc40ee09bafb5cee733bb2"
+    },
+    {
+      "name": "curriculum_mentor_claim_verify.txt",
+      "words": 85,
+      "sha256": "3c8ad75c90cfea58f25795ee93558c2654ba7176e2a6f71bd7c2a66961744453"
+    },
+    {
+      "name": "curriculum_mentor_claims.txt",
+      "words": 89,
+      "sha256": "4b017d86db011c66eb06552d81513590cb79764cc99d0a0fb690b2ababae6a2c"
+    },
+    {
+      "name": "curriculum_module_repair.txt",
+      "words": 192,
+      "sha256": "dc4da4435df9e6e23fd15a59dddcd9eaf85f9bc954cef24718cacae34757f0d6"
+    },
+    {
+      "name": "curriculum_module_write.txt",
+      "words": 271,
+      "sha256": "0bb722c60883a3219c46dac42fe0a8826e48e1b627b8f1737dc8c26ac3ba12ba"
+    },
+    {
+      "name": "curriculum_outline.txt",
+      "words": 253,
+      "sha256": "a34abb3eeae577e6acc5cae5347a44acf0b906a5d5a7fa5a1b40a28d074e9dc4"
+    },
+    {
+      "name": "curriculum_research_curate.txt",
+      "words": 294,
+      "sha256": "7f6726800734689c91da10d49dab810cedcc0668b5dd4bf0f13614d3af2231f0"
+    },
+    {
+      "name": "curriculum_research_discovery.txt",
+      "words": 372,
+      "sha256": "d7b634bda60b89b355f6ea727b6f73468e16e541e8b79a7f208d366648c803ab"
+    },
+    {
+      "name": "curriculum_research_system.txt",
+      "words": 128,
+      "sha256": "c7dfb0616547ed409a31b8d6116b5357bb7c0a2e459c3dea5d6db628445694d6"
+    },
+    {
+      "name": "curriculum_research_verify.txt",
+      "words": 78,
+      "sha256": "c39befb6d8cac02d42bf0238f8f25b29aad53c07110eeacc7e14e7021602f252"
+    },
+    {
+      "name": "curriculum_review_factual.txt",
+      "words": 90,
+      "sha256": "a0b0e8af78ef82a8f570c46b37228723a816908b77bd5b186b4f045f86a70721"
+    },
+    {
+      "name": "curriculum_review_originality.txt",
+      "words": 69,
+      "sha256": "5a7f71c7ef281bffc90bca309f5e7f6e6b73685cb845034eefffd931f0cf56cd"
+    },
+    {
+      "name": "curriculum_review_pedagogy.txt",
+      "words": 72,
+      "sha256": "d1c9c997ff8d723844b2060ea1563807fc764b428519870a55b41ecd799ccd72"
+    },
+    {
+      "name": "curriculum_review_structure.txt",
+      "words": 64,
+      "sha256": "5bc57f3a74a43841ccc3ce8da67de202923e91a115b760fb597bd1b8036aac52"
+    },
+    {
+      "name": "curriculum_technique_plan.txt",
+      "words": 166,
+      "sha256": "8a2a6ab64396da1a7c1623249730b1b7cf8975da1c33089a739d44c50a7ec734"
+    },
+    {
+      "name": "curriculum_writer_system.txt",
+      "words": 166,
+      "sha256": "aad38303fe63ceb19db2145f4d5433c1cd02c2e99185458e7dd0e9935685084f"
+    },
+    {
+      "name": "daily_feed_generate.txt",
+      "words": 310,
+      "sha256": "15b2516fe698db2eda09b14e0702728e4b476b7c44058ce73eceeb4658a5e2cd"
+    },
+    {
+      "name": "discover_feed.txt",
+      "words": 588,
+      "sha256": "a80581449bb96367d9ad0480cdff40c4b62bf2fe8f1ebe4a8e709d3572e987bc"
+    },
+    {
+      "name": "extractor_system.txt",
+      "words": 680,
+      "sha256": "a2f1271cfe5bc4771ca3f568b17d2c55ca61825637d18b16cc7967f3cd6c07c7"
+    },
+    {
+      "name": "guided_learning_system.txt",
+      "words": 443,
+      "sha256": "7a45ec52ff0e283ab644e194de89f70e213c7415d432d0f296c97ed4e13267ba"
+    },
+    {
+      "name": "idol_suggest.txt",
+      "words": 526,
+      "sha256": "e3e1bc3f2c8aee6be1844a044dd82a6c655a6646dad2243cdac57abd94bfaaa9"
+    },
+    {
+      "name": "idol_suggest_system.txt",
+      "words": 60,
+      "sha256": "5a235d13a72144e28cb1ef94c1effcdb6fa8a91f3756e7fbfa44c464049ab853"
+    },
+    {
+      "name": "image_generate.txt",
+      "words": 198,
+      "sha256": "f27c462c9fc33839d56afa6f75658fdd2378d30923eea90edfca7339425397c4"
+    },
+    {
+      "name": "interview_question.txt",
+      "words": 350,
+      "sha256": "47adf0151337a812260698eb37cd4df464f49cfde9979fbd890cee06b8ddc469"
+    },
+    {
+      "name": "interview_system.xml",
+      "words": 1032,
+      "sha256": "4b7cf8a38ed00982a68441a8bc90365ac6723349456c6615308feb3d2721aa41"
+    },
+    {
+      "name": "learning_materials_generate.txt",
+      "words": 110,
+      "sha256": "0a48caae6da19707758d75579722ed9eefd6e46c34a546f31ad6744f301accf7"
+    },
+    {
+      "name": "learning_materials_system.txt",
+      "words": 60,
+      "sha256": "d535210ee108f8321a16cbe5059922406020af49dd22cdbb17198a5c2178fe54"
+    },
+    {
+      "name": "milestones_by_age.txt",
+      "words": 516,
+      "sha256": "8fe0f984ec7b317aa8de315f5830c33cd63ca1e27cb8967f7fae581396edf61b"
+    },
+    {
+      "name": "persona_pack.txt",
+      "words": 600,
+      "sha256": "3dbb177f8105e3c98b6bed84a21568328615955dda85ec110dba0933ea68b379"
+    },
+    {
+      "name": "persona_system.txt",
+      "words": 351,
+      "sha256": "0ef6b3fee21ccda8dbca0448b3b178d0b4f3645b61e86c347e5addb0d49c2d48"
+    },
+    {
+      "name": "plan_backbone_generate.txt",
+      "words": 439,
+      "sha256": "ab8bcda5821177f0af731f444864b5cca8ba46875943516508c4a00581c35354"
+    },
+    {
+      "name": "plan_generate.txt",
+      "words": 2210,
+      "sha256": "2caafcd19c8c563340dd53555aa39eeed8546869e161876ee7a2b556f4881a3d"
+    },
+    {
+      "name": "plan_item_detail_lesson.txt",
+      "words": 531,
+      "sha256": "2be20d81debf339e87603949898cd49904db5b1cd29218ef9fc2c7f188507f50"
+    },
+    {
+      "name": "plan_item_details.txt",
+      "words": 1488,
+      "sha256": "c4741e32a979a4a9013330f578cdc484c95d5c5f29b7078f855314b63ed63336"
+    },
+    {
+      "name": "plan_item_details_outline.txt",
+      "words": 489,
+      "sha256": "0abc3fd315e7ee7f5c31819a1ad621bf5682723fd8b945c872d530a02dc3607c"
+    },
+    {
+      "name": "plan_week_generate.txt",
+      "words": 350,
+      "sha256": "2eb059d2430b8ec55fc14addc8cdd466eec737f23f8165bed923e0461f36c9a5"
+    },
+    {
+      "name": "planner_system.txt",
+      "words": 283,
+      "sha256": "fc77d1e3646f5c1d441477fb8cfb8cfb678b75989fca7f681112f41e90b8a337"
+    },
+    {
+      "name": "profile_extract.txt",
+      "words": 386,
+      "sha256": "ae2be0d746a04773eec30c02515dc0516d1f4e3713df2afff0da31f2a0228b88"
+    },
+    {
+      "name": "thinking_plan.txt",
+      "words": 126,
+      "sha256": "e98eebfb6b8318e9ece3b014363a8d959378eda37e85113ac0e6f0654f1b6800"
+    },
+    {
+      "name": "thinking_task.txt",
+      "words": 111,
+      "sha256": "4af73239340a51bb7c6a3d8d8ca2e502b16ace8f96e34dba5ee0b82947c44f35"
+    },
+    {
+      "name": "timeline_normalize.txt",
+      "words": 817,
+      "sha256": "25c1c786d952d6afb1c875a182ad13ca6b7edbb39d7510b65a2238e49b5c5d00"
+    }
+  ]
+}
