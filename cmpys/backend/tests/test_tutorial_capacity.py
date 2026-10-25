@@ -74,6 +74,7 @@ async def test_shortening_requires_complete_scoped_prose_and_independent_review(
     package = short_package(); original_package = package.model_dump(mode="json")
     base = render_public_package_results(sections(), package.writer_context())
     requests = []
+    client_options = []
     class Client:
         model = "offline"
         async def generate_json(self, **kwargs):
@@ -89,10 +90,15 @@ async def test_shortening_requires_complete_scoped_prose_and_independent_review(
         "Missing reasoning"] if failure == "semantic" else [],
         LLMResponse(data={"practice_minutes": 5 if failure == "out_of_range" else 4 if failure == "retimed" else 3}), SimpleNamespace(model="review")))
     monkeypatch.setattr("app.services.planning.lesson_review.review_lesson", review)
+    def factory(**kwargs):
+        client_options.append(kwargs)
+        return Client()
     calls = []
     changed, error = await shorten_tutorial_reading(step, package, {"goal": "Explain motives"},
-        client_factory=lambda **kwargs: Client(), call_records=calls)
+        client_factory=factory, call_records=calls)
     assert step == before and package.model_dump(mode="json") == original_package
+    assert client_options == [{"tier": "balanced", "timeout": 60, "max_tokens": 2600,
+                               "thinking_level": "medium", "allow_fallback": False}]
     assert len(requests) == (2 if failure in {"too_long", "length_recovered"} else 1)
     if failure and failure not in {"retimed", "length_recovered", "title_echo"}:
         assert changed is None and error
@@ -107,6 +113,9 @@ async def test_shortening_requires_complete_scoped_prose_and_independent_review(
         assert review.await_args.args[0] == changed and len(calls) == (3 if failure == "length_recovered" else 2)
         if failure == "length_recovered":
             assert "actual_whole_words" in requests[1]["user_prompt"] and calls[0][1].error
+            assert "minimum_words_to_remove" in requests[1]["user_prompt"]
+            assert "assigned_sections" not in requests[1]["user_prompt"]
+            assert "target_section_words" in requests[1]["user_prompt"]
         assert review.await_args.kwargs["context"]["lesson_package"] == package.review_context()
 
 
