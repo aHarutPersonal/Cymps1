@@ -144,3 +144,47 @@ def test_model_and_criterion_references_keep_ambiguous_or_real_quantities(text):
     review = LessonReview(acceptable=True, issues=[], practice_minutes=1,
                          contains_calculations=False, calculations=[], literal_fact_ids=ids)
     assert ids and grounded_failures(review, lesson, {})
+
+
+@pytest.mark.parametrize("text", [
+    "Common misconception: an action inside a sentence does not make it shown — one motive-naming clause (sentences 1 and 4) is enough to make the sentence told.",
+    "Compare sentences 1, 2, and 4 before revising.",
+    "Check criteria 1 or 3 against the draft.",
+    "Revisit sentences 2, 4, 7 for the contrast.",
+])
+def test_plural_references_keep_inventory_and_require_independent_coverage(text):
+    from app.services.planning.package_review import _metadata_candidate_ids
+    lesson = {"lesson_content": text}
+    ids = list(numeric_spans(lesson))
+    missing = LessonReview(acceptable=True, issues=[], practice_minutes=1,
+                           contains_calculations=False, calculations=[])
+    assert ids and grounded_failures(missing, lesson, {})
+    assert _metadata_candidate_ids({}, lesson=lesson) == ids
+    assert not grounded_failures(missing.model_copy(update={"literal_fact_ids": ids}), lesson, {})
+
+
+@pytest.mark.parametrize("text", [
+    'A witness said "sentences 1 and 4 explain the motive."',
+    "Unclosed quote: 'sentences 1 and 4 are claims.",
+    "Sentences 1 and 4 years are the penalties.",
+    "Criteria 1 and 4 kg are quantities.",
+    "Sentences 1 and 4.5 are not ordinal labels.",
+    "Sentences 1 and 4kg are quantities.",
+    "Sentences 1 and 4 / 2 form a quotient.",
+    "Sentences 1 and 4 + 3 form a sum.",
+    "Sentences 1 and 4, 7.5 contain an ambiguous final item.",
+    "Sentences 1-4 are an unsupported range.",
+])
+def test_plural_reference_does_not_hide_quoted_or_quantitative_values(text):
+    assert reviewed_sentence_reference_intervals(text) == []
+
+
+def test_plural_reference_preserves_surrounding_quantities_and_custom_units():
+    text = "Sentences 1 and 4 say the fee is 200 dollars."
+    assert [text[a:b] for a, b in reviewed_sentence_reference_intervals(text)] == ["1", "4"]
+    lesson = {"lesson_content": text}
+    review = LessonReview(acceptable=True, issues=[], practice_minutes=1,
+                          contains_calculations=False, calculations=[],
+                          literal_fact_ids=list(numeric_spans(lesson)))
+    assert grounded_failures(review, lesson, {})
+    assert reviewed_sentence_reference_intervals("Criteria 1 and 4 widgets.", ["widgets"]) == []

@@ -48,6 +48,7 @@ _COMPATIBLE_READ_IDENTITIES = frozenset({
 # Exact tutorial-era approval from deployed recovery 9–11. Only read access is
 # compatible: fresh generation/checkpoint reuse still requires today's gates.
 _COMPATIBLE_TUTORIAL_READ_IDENTITIES = frozenset({
+    "78e1bf5dcdde101118b8b5b4c3aaa1d78335fe7d242d181ee7210de2a1690b8f",  # plural ordinal-reference recovery
     'e2f4a032d926dcf219ff36eaddf1e82dd2c0c847f13fa1232bf8fb6cb47dd6ac',  # recovery 30
     "6d783624fcfce876b23422ab01ae8c3a723400c1245c8442d4915f49f4e0ee2e",  # recovery 29
     "a69080328fd9892402c26ac1435f53277a85ef49496466e855268523ed7b78de",  # recovery 28
@@ -545,19 +546,21 @@ def provenance(step: dict, package: LessonPackage) -> dict:
             "package_hash": digest(package.model_dump(mode="json"))}
 
 
-# Recovery 30 changes only capacity-edit allocation/normalization, not the
-# review of already published tutorials. Reuse only this exact predecessor,
+# Capacity and ordinal-reference fixes preserve previously approved content.
+# Plural references add metadata recognition only after independent coverage.
+# Reuse only the exact pinned predecessors,
 # unchanged prose/package hashes, unchanged schemas/prompts/capabilities, and
 # byte-identical writer/reviewer dependencies. Private drafts are not promoted.
-_CAPACITY_REVIEW_PREDECESSORS = frozenset({"6d783624fcfce876b23422ab01ae8c3a723400c1245c8442d4915f49f4e0ee2e", 'e2f4a032d926dcf219ff36eaddf1e82dd2c0c847f13fa1232bf8fb6cb47dd6ac'})
-_CAPACITY_REVIEW_DEPENDENCIES = {'lesson_writer.py': '8b7155135de9b22b0e788ba13a9941535273f4f997a2b24d80e029ae56e7b489', 'package_review.py': '76e01518d197a1e8477a8a23b5e58f84a0c74e434b4f23bf35d09c9efa8a271d', 'lesson_review.py': '3d6c0aba05b44804b350ade5301e410c6574becdbd4912cbb854ba6b390bb563', 'workload_contract.py': 'be015f4964cf5c959a1c3eeeda16def7b5261e77f52deb96aa69d443ef7d81d4', 'package_builder.py': 'fc51c7c6c23515fe198b8752f421f8c0272cb4edb6d96e93d8d3d8e84d45ef3a', 'activity_draft.py': 'fec171bffa4859ba9fb5a24db21093322d9ed18fefc7b506ad1d024dc7e8688e', 'numeric_metadata.py': '5dbd11b1e035b8c7a69956d3281470dbe4758d9e37432de6575e4da8563c5500', 'package_preflight.py': '188370f0c0260ca559ba92a63659c850533da139b64e6c68acd437e81790efe4', 'private_checkpoint.py': '493b16310a453242f27a25fd9890d76a6cbf33b6d4409f93cf804cefb67bb265', '../practice/solution_compiler.py': '9a13b387bd7045304435ccac15d6a9f7c7f18618e29931064d0427f162e244bc', 'tutorial_visuals.py': '6f78068a206566580f74ac4d7e34fd7207bf68ff059663fe68c7b49aab202e24', '../content_quality.py': '1cbe9087e2d38c901fd5d98ba1b5ad90f927745a250ee4f8c24c2cd122160304'}
+_CAPACITY_REVIEW_PREDECESSORS = frozenset({"78e1bf5dcdde101118b8b5b4c3aaa1d78335fe7d242d181ee7210de2a1690b8f", "6d783624fcfce876b23422ab01ae8c3a723400c1245c8442d4915f49f4e0ee2e", 'e2f4a032d926dcf219ff36eaddf1e82dd2c0c847f13fa1232bf8fb6cb47dd6ac'})
+_CAPACITY_REVIEW_DEPENDENCIES = {'lesson_writer.py': '8b7155135de9b22b0e788ba13a9941535273f4f997a2b24d80e029ae56e7b489', 'package_review.py': '76e01518d197a1e8477a8a23b5e58f84a0c74e434b4f23bf35d09c9efa8a271d', 'lesson_review.py': '3d6c0aba05b44804b350ade5301e410c6574becdbd4912cbb854ba6b390bb563', 'workload_contract.py': 'be015f4964cf5c959a1c3eeeda16def7b5261e77f52deb96aa69d443ef7d81d4', 'package_builder.py': 'fc51c7c6c23515fe198b8752f421f8c0272cb4edb6d96e93d8d3d8e84d45ef3a', 'activity_draft.py': 'fec171bffa4859ba9fb5a24db21093322d9ed18fefc7b506ad1d024dc7e8688e', 'numeric_metadata.py': 'cb48a8723674cec364827dd09500662d480d84df4cf2daa2392a8391f2b1a526', 'package_preflight.py': '188370f0c0260ca559ba92a63659c850533da139b64e6c68acd437e81790efe4', 'private_checkpoint.py': '493b16310a453242f27a25fd9890d76a6cbf33b6d4409f93cf804cefb67bb265', '../practice/solution_compiler.py': '9a13b387bd7045304435ccac15d6a9f7c7f18618e29931064d0427f162e244bc', 'tutorial_visuals.py': '6f78068a206566580f74ac4d7e34fd7207bf68ff059663fe68c7b49aab202e24', '../content_quality.py': '1cbe9087e2d38c901fd5d98ba1b5ad90f927745a250ee4f8c24c2cd122160304'}
 
 
 def compatible_prepared_identity(recorded: dict, current: dict) -> bool:
     """Exact reviewed release pins, never a blanket old-version migration.
 
-    Recovery 30 adjusts capacity allocation; 31 normalizes an exact activity ID
-    echo. Their unchanged drafts can be revalidated under the current contract.
+    Pinned predecessors differ only in capacity allocation, activity-ID echoes,
+    or independently reviewed ordinal-reference recognition. Their unchanged drafts
+    can be revalidated under the current contract.
     Owner, input, step, package and section identities remain checked by callers.
     """
     if recorded == current:

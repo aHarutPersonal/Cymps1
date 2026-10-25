@@ -178,16 +178,28 @@ def reviewed_sentence_reference_intervals(source: str, units=()) -> list[tuple[i
     intact. This never removes claims from the reviewer's original inventory.
     """
     ranges = []
-    for match in re.finditer(r"\b(?:sentence|criterion)[ \t]+([1-9]\d?)(?!\w|\.\d|[ \t]*[-−+*/×÷=%])", source, re.I):
+    number = r"[1-9]\d?"
+    separator = r"(?:,[ \t]*(?:(?:and|or)[ \t]+)?|[ \t]+(?:and|or)[ \t]+)"
+    pattern = (r"\b(?:(?:sentence|criterion)[ \t]+(?P<single>" + number + r")|"
+               r"(?:sentences|criteria)[ \t]+(?P<plural>" + number
+               + r"(?:" + separator + number + r"){1,19}))"
+               r"(?!\w|\.\d|[ \t]*[-−+*/×÷=%])")
+    for match in re.finditer(pattern, source, re.I):
         if quoted_or_unclosed_prefix(source, match.start()):
             continue
         suffix = source[match.end():].lstrip()
+        # A malformed or overlong list cannot license just its valid prefix.
+        if re.match(r"(?:,[ \t]*(?:(?:and|or)[ \t]+)?|(?:and|or)[ \t]+)\d", suffix, re.I):
+            continue
         word = re.match(r"[^\W\d_]+", suffix)
         if word and word[0].casefold() in _QUANTITY_STARTS | {"day", "days", "month", "months", "year", "years"}:
             continue
         if any(re.match(re.escape(unit) + r"(?!\w)", suffix, re.I) for unit in units if unit):
             continue
-        ranges.append(match.span(1))
+        group = "plural" if match["plural"] is not None else "single"
+        offset = match.start(group)
+        ranges.extend((offset + digit.start(), offset + digit.end())
+                      for digit in re.finditer(number, match[group]))
     return ranges
 
 
