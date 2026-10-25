@@ -155,7 +155,7 @@ async def shorten_tutorial_reading(step: dict, package: Any, context: dict, *,
     except ValueError as exc:
         return None, str(exc)
     client = client_factory(tier="balanced", timeout=60, max_tokens=2600,
-                            thinking_level="medium", allow_fallback=False)
+                            thinking_level="low", allow_fallback=False)
     request_prompt = prompt
     for attempt in range(2):
         response = _response(await client.generate_json(

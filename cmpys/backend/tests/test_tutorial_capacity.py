@@ -98,7 +98,7 @@ async def test_shortening_requires_complete_scoped_prose_and_independent_review(
         client_factory=factory, call_records=calls)
     assert step == before and package.model_dump(mode="json") == original_package
     assert client_options == [{"tier": "balanced", "timeout": 60, "max_tokens": 2600,
-                               "thinking_level": "medium", "allow_fallback": False}]
+                               "thinking_level": "low", "allow_fallback": False}]
     assert len(requests) == (2 if failure in {"too_long", "length_recovered"} else 1)
     if failure and failure not in {"retimed", "length_recovered", "title_echo"}:
         assert changed is None and error
