@@ -636,6 +636,19 @@ def _duration_budget(content: str, match, *, structural_heading: bool) -> bool:
             before, re.I) and re.match(r"\s*\)\s*:", after)
             and not quoted_or_unclosed_prefix(content, match.start())):
         return True
+    # Direct learner instructions may introduce an approved named activity
+    # with its duration. The title is a complete quote and the duration is
+    # outside it; reported case timings and every other quantity stay checked.
+    named_activity = (
+        r"\s*(?:(?:first|next|then)[ \t]*,[ \t]*)?"
+        r"(?:complete[ \t]+the[ \t]+(?:practice|transfer)(?:[ \t]+activity)?|"
+        r"in[ \t]+the[ \t]+(?:practice|transfer)[ \t]+activity)[ \t]+"
+        r"(?:\"[^\"\n]+\"|‘[^’\n]+’|“[^”\n]+”|'[^'\n]+')[ \t]*\([ \t]*"
+    )
+    if (parenthetical and re.fullmatch(named_activity, before, re.I)
+            and re.match(r"\s*\)\s*[:,]", after)
+            and not quoted_or_unclosed_prefix(content, match.start())):
+        return True
     if (parenthetical and re.fullmatch(
             r"\s*phase\s+(?:one|two|three|four|five|six|[1-9]\d?)\s*,\s*"
             r"(?:'[^'\n]+'|\"[^\"\n]+\"|‘[^’\n]+’|“[^”\n]+”|"
