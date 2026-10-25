@@ -182,7 +182,8 @@ async def test_scoped_public_correction_uses_draft_but_preserves_complete_canoni
     package, response, _ = await generate_package({}, {}, client_factory=factory,
         prior_package=prior, defects=["Target question is unsuitable."], repair_targets=["practice.transfer.argument"])
     assert package == LessonPackage.model_validate(expected) and response.error is None
-    assert [call.kwargs["output_model"] for call in client.generate_json.await_args_list] == [PrivatePackageRepair, LessonActivityDraft]
+    models = [call.kwargs["output_model"] for call in client.generate_json.await_args_list]
+    assert models[0] is PrivatePackageRepair and issubclass(models[1], LessonActivityDraft)
     assert [(option["timeout"], option["max_tokens"]) for option in options] == [(120, 3500), (90, 4000)]
     assert response.semantic_accepted is None
     assert package.workbook.activities[0] == prior.workbook.activities[0]

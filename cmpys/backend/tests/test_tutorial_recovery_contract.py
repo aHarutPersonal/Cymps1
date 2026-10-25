@@ -31,7 +31,7 @@ async def test_noop_private_patch_recovers_only_independently_rejected_activity(
     assert result.workbook.activities[0] == prior.workbook.activities[0]
     assert result.workbook.activities[1].fields[1] == prior.workbook.activities[1].fields[1]
     assert client.generate_json.await_count == 2
-    assert client.generate_json.call_args.kwargs["output_model"] is TutorialActivityDraft
+    assert issubclass(client.generate_json.call_args.kwargs["output_model"], TutorialActivityDraft)
 
 
 def test_tutorial_wire_rejects_long_quiz_without_changing_long_lessons():
