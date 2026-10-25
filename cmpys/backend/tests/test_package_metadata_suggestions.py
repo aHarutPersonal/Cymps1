@@ -153,3 +153,38 @@ def test_phase_time_hints_do_not_license_quotes_reported_durations_or_other_quan
     review = LessonReview(acceptable=True, issues=[], practice_minutes=3,
                           contains_calculations=False, calculations=[], literal_fact_ids=ids)
     assert grounded_failures(review, lesson, {})
+
+
+@pytest.mark.parametrize("text", [
+    "When drafting your 80-to-150-word passages, start with the protagonist.",
+    "Draft an 80‐to‐150‐word passage.",
+    "Revise your 80‑to‑150‑word passage.",
+])
+def test_hyphenated_to_word_ranges_require_reviewed_workload_coverage(text):
+    from app.services.planning.lesson_review import LessonReview, grounded_failures, numeric_spans
+    lesson = {"lesson_content": text}
+    ids = list(numeric_spans(lesson, {}))
+    review = LessonReview(acceptable=True, issues=[], practice_minutes=3,
+                          contains_calculations=False, calculations=[])
+    assert ids and _metadata_candidate_ids({}, lesson=lesson) == ids
+    assert grounded_failures(review, lesson, {})
+    assert not grounded_failures(review.model_copy(update={"literal_fact_ids": ids}), lesson, {})
+
+
+@pytest.mark.parametrize("text", [
+    "Draft a 150-to-80-word passage.",
+    "Draft a 0-to-150-word passage.",
+    "Draft a 80-to-5001-word passage.",
+    "Draft a 80-to-150.5-word passage.",
+    "Draft a -80-to-150-word passage.",
+    "A 80-to-150-word passage plus 200 words equals 500 words.",
+    "Draft a 80-to-150-word passage and pay 200 dollars.",
+    "The task consumes 80-to-150-kg of material.",
+])
+def test_hyphenated_to_word_range_never_licenses_other_quantities(text):
+    from app.services.planning.lesson_review import LessonReview, grounded_failures, numeric_spans
+    lesson = {"lesson_content": text}
+    ids = list(numeric_spans(lesson, {}))
+    review = LessonReview(acceptable=True, issues=[], practice_minutes=3,
+                          contains_calculations=False, calculations=[], literal_fact_ids=ids)
+    assert ids and grounded_failures(review, lesson, {})

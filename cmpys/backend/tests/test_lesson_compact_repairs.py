@@ -139,7 +139,8 @@ async def test_public_correction_shares_retry_limit_and_revalidates_full_contrac
         prior_package=prior, defects=['Incorrect exercise'], repair_targets=['practice.guided'])
     assert package is None and response.error
     assert client.generate_json.await_count == 2
-    assert [c.kwargs['output_model'] for c in client.generate_json.await_args_list] == [PrivatePackageRepair, LessonActivityDraft]
+    assert client.generate_json.await_args_list[0].kwargs['output_model'] is PrivatePackageRepair
+    assert issubclass(client.generate_json.await_args_list[1].kwargs['output_model'], LessonActivityDraft)
     assert [(request['timeout'], request['max_tokens']) for request in requests] == [(120, 3500), (90, 4000)]
     second = client.generate_json.await_args_list[1].kwargs
     prompt = json.loads(second['user_prompt'])

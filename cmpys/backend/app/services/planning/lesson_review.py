@@ -668,7 +668,8 @@ def _workload_remainder(span: str, *, units=()) -> str:
         (r"sentences?|նախադասությամբ|նախադասություն(?:ներ(?:ով|ը)?|ով)?", 20),
         (r"minutes?|mins?|hours?|hrs?|seconds?|րոպե(?:ի|ում|ով)?|ժամ(?:վա|ում|ով)?|վայրկյան(?:ի|ում|ով)?", 180),
     ):
-        pattern = (r"(?<![-+−\w.])(" + _INTEGER_LITERAL + r")(?:\s*[-–]\s*("
+        separator = r"(?:\s*[-–]\s*|[-‐‑]to[-‐‑])" if maximum == 5000 else r"\s*[-–]\s*"
+        pattern = (r"(?<![-+−\w.])(" + _INTEGER_LITERAL + r")(?:(?:" + separator + r")("
                    + _INTEGER_LITERAL + r"))?(?:\s+|[-‐‑])(?:" + units + r")\b")
         def consume(match):
             lower = int(_canonical_numeric_spelling(match[1]))
