@@ -223,3 +223,39 @@ def test_parenthesized_reference_preserves_surrounding_quantity():
                           literal_fact_ids=list(numeric_spans(lesson)))
     assert grounded_failures(review, lesson, {})
     assert reviewed_sentence_reference_intervals("Criteria (1) and (4) widgets.", ["widgets"]) == []
+
+
+@pytest.mark.parametrize("prefix", ["", "Original: \"She closed the ledger.\" ", "Original: “She closed the ledger.” "])
+def test_revision_pass_labels_require_complete_sequence_and_review(prefix):
+    text = prefix + "Pass 1: delete the explaining sentence. Pass 2: sharpen the action beats. Pass 3: adjust dialogue."
+    test_plural_references_keep_inventory_and_require_independent_coverage(text)
+
+
+@pytest.mark.parametrize("text", [
+    "Pass 1: delete a sentence.",
+    "Pass 1: delete a sentence. Pass 3: adjust dialogue.",
+    "Pass 1: delete a sentence. Pass 2: adjust dialogue. Pass 2: repeated.",
+    '\"Pass 1: delete a sentence. Pass 2: adjust dialogue.\"',
+    "Unclosed quote: 'Pass 1: delete a sentence. Pass 2: adjust dialogue.",
+    "They pass 1: competitor. They pass 2: competitors.",
+    "Pass 1 kg: weight. Pass 2 kg: weight.",
+    "Pass 1: dollars. Pass 2: dollars.",
+    "Pass 1.5: fractional. Pass 2: a label.",
+    "Pass 1 + 2: a sum. Pass 2: a label.",
+    "`Pass 1: delete a sentence. Pass 2: adjust dialogue.`",
+])
+def test_ambiguous_revision_passes_preserve_numeric_checks(text):
+    from app.services.planning.numeric_metadata import _reviewed_revision_pass_intervals
+    assert _reviewed_revision_pass_intervals(text) == []
+
+
+def test_revision_pass_labels_preserve_real_quantities_and_field_ownership():
+    for activity in [
+        {"instructions": "Pass 1: pay 200 dollars. Pass 2: record the cost."},
+        {"instructions": "Pass 1: delete a sentence.", "hint": "Pass 2: adjust dialogue."},
+    ]:
+        package = {"private_workbook": {"activities": [{"id": "guided", "data": [], **activity}]}}
+        ids = list(numeric_spans({}, package))
+        review = LessonReview(acceptable=True, issues=[], practice_minutes=1,
+                              contains_calculations=False, calculations=[], literal_fact_ids=ids)
+        assert ids and grounded_failures(review, {}, package)
