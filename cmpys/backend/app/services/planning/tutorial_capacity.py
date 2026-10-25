@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 from typing import Any
 
 from pydantic import ConfigDict, create_model
@@ -84,11 +85,24 @@ def _render(title: str, sections: dict[str, str]) -> str:
         f"{heading}\n{sections[name]}" for name, heading in PLAN_DETAIL_SECTION_ROWS]])
 
 
+
+def _retain_native_visuals(original: str, replacement: str) -> str:
+    """Capacity edits own prose, never the already approved native visual."""
+    fence = re.compile(r"^```(?P<kind>comparison|diagram)[ \t]*\n[\s\S]*?^```[ \t]*(?=\n|$)", re.M)
+    before, after = list(fence.finditer(original)), list(fence.finditer(replacement))
+    if len(before) != len(after) or any(a["kind"] != b["kind"] for a, b in zip(before, after)):
+        raise ValueError("Capacity correction must retain every native visual")
+    # Restore exact reviewed blocks before counting, validating or reviewing
+    # the new prose. Missing/extra blocks are errors, never silently appended.
+    for old, new in reversed(list(zip(before, after))):
+        replacement = replacement[:new.start()] + old[0] + replacement[new.end():]
+    return replacement
+
 def _request(step: dict):
     sections = _sections(step)
     # Leave room for the model's counting variance and for a meaningful visual.
     # A narrow single-section edit repeatedly overshot the hard 600-word ceiling.
-    remaining = len(step["lesson_content"].split()) - 520
+    remaining = len(step["lesson_content"].split()) - 500
     # Exercise directions, references and executable actions remain byte exact.
     candidates = [name for name in sections if name not in {"guided_practice", "references"}]
     # Distribute the reduction across editable prose. Concentrating it in the
@@ -125,6 +139,7 @@ def _request(step: dict):
         "Shorten only the assigned prose sections of this existing tutorial. Return strict JSON "
         "with exactly the assigned keys. Preserve the learning objective, complete worked reasoning, "
         "every case fact and numerical result, learner language and meaningful native visual. "
+        "Copy native visual fences exactly; the server retains the original blocks byte-for-byte. "
         "Remove repetition and verbose background, never truncate a sentence or omit necessary "
         "reasoning. Keep comparison fences on their own lines with two headings and 2-4 bullets "
         "per side. No braces, semicolons, HTML or => inside the visual. Do not introduce facts, "
@@ -145,7 +160,7 @@ def _request(step: dict):
 
 async def shorten_tutorial_reading(step: dict, package: Any, context: dict, *,
                                   client_factory, call_records: list):
-    """At most two prose calls plus independent review; never modify the input."""
+    """Two prose calls, plus one bounded near-limit correction; independent review remains required."""
     from app.services.planning.lesson_review import review_lesson
     from app.services.planning.lesson_writer import _response
     from app.tasks.plans import _plan_detail_step_payload_and_issues
@@ -155,9 +170,10 @@ async def shorten_tutorial_reading(step: dict, package: Any, context: dict, *,
     except ValueError as exc:
         return None, str(exc)
     client = client_factory(tier="balanced", timeout=60, max_tokens=2600,
-                            thinking_level="medium", allow_fallback=False)
+                            thinking_level="low", allow_fallback=False)
     request_prompt = prompt
-    for attempt in range(2):
+    valid_sections = {}
+    for attempt in range(3):
         response = _response(await client.generate_json(
             system_prompt=("Recompose the assigned teaching sections within their explicit word budgets. "
                 "Treat the draft as reference material, not a sentence-by-sentence template. "
@@ -176,18 +192,28 @@ async def shorten_tutorial_reading(step: dict, package: Any, context: dict, *,
             # Changed titles and all other unassigned keys still fail closed.
             if isinstance(data, dict) and data.get("title") == step["title"]:
                 data = {key: value for key, value in data.items() if key != "title"}
-            replacement = {name: value.strip() for name, value in
+            replacement = {name: _retain_native_visuals(sections[name], value.strip()) for name, value in
                            model.model_validate(data).model_dump(mode="json").items()}
         except (ValueError, TypeError):
             response.error = "Capacity prose correction changed its assigned scope"
             return None, response.error
+        # A retry may accidentally shorten a previously valid section below
+        # its teaching minimum. Keep that exact earlier draft section; the
+        # assembled candidate still needs all structural and semantic checks.
+        for name, value in replacement.items():
+            if len(value.split()) < TUTORIAL_SECTION_MIN_WORDS[name] and name in valid_sections:
+                replacement[name] = valid_sections[name]
+        valid_sections.update({name: value for name, value in replacement.items()
+                               if len(value.split()) >= TUTORIAL_SECTION_MIN_WORDS[name]})
         content = _render(step["title"], {**sections, **replacement})
         counts = {name: len(value.split()) for name, value in replacement.items()}
         if (450 <= len(content.split()) <= 600
                 and all(counts[name] >= TUTORIAL_SECTION_MIN_WORDS[name] for name in counts)):
             break
-        response.error = f"Capacity prose has {len(content.split())} words or an undersized section; expected 450-600"
-        if attempt == 1:
+        undersized = {name: count for name, count in counts.items() if count < TUTORIAL_SECTION_MIN_WORDS[name]}
+        response.error = f"Capacity prose has {len(content.split())} words; expected 450-600; undersized sections: {undersized}"
+        near_limit = 600 < len(content.split()) <= 650 and not undersized
+        if attempt == 2 or (attempt == 1 and not near_limit):
             return None, response.error
         retained = len(content.split()) - sum(counts.values())
         request_prompt = (

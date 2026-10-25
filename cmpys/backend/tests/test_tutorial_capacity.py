@@ -68,7 +68,7 @@ def test_only_prose_sections_can_be_assigned_for_capacity_correction():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", [None, "transport", "truncated", "unowned", "too_long", "visual", "semantic", "retimed", "out_of_range", "length_recovered", "title_echo", "changed_title"])
+@pytest.mark.parametrize("failure", [None, "transport", "truncated", "unowned", "too_long", "visual", "semantic", "retimed", "out_of_range", "length_recovered", "section_regressed", "undersized_both", "title_echo", "changed_title"])
 async def test_shortening_requires_complete_scoped_prose_and_independent_review(monkeypatch, failure):
     step = long_tutorial(); before = copy.deepcopy(step)
     package = short_package(); original_package = package.model_dump(mode="json")
@@ -83,8 +83,10 @@ async def test_shortening_requires_complete_scoped_prose_and_independent_review(
             data = {name: base[name] for name in kwargs["output_model"].model_fields}
             if failure in {"title_echo", "changed_title"}: data["title"] = step["title"] if failure == "title_echo" else "Changed title"
             elif failure == "unowned": data["guided_practice"] = "An unauthorized exercise rewrite"
-            elif failure == "too_long" or (failure == "length_recovered" and len(requests) == 1): data = {name: _sections(step)[name] for name in data}
+            elif failure == "too_long" or (failure in {"length_recovered", "section_regressed"} and len(requests) == 1): data = {name: _sections(step)[name] for name in data}
             elif failure == "visual": data["core_framework"] = "explanation " * 180
+            if failure == "undersized_both" or (failure == "section_regressed" and len(requests) == 2):
+                data["why_this_matters"] = "Too short."
             return LLMResponse(data=data, finish_reason="length" if failure == "truncated" else "stop")
     review = AsyncMock(return_value=([
         "Missing reasoning"] if failure == "semantic" else [],
@@ -98,9 +100,9 @@ async def test_shortening_requires_complete_scoped_prose_and_independent_review(
         client_factory=factory, call_records=calls)
     assert step == before and package.model_dump(mode="json") == original_package
     assert client_options == [{"tier": "balanced", "timeout": 60, "max_tokens": 2600,
-                               "thinking_level": "medium", "allow_fallback": False}]
-    assert len(requests) == (2 if failure in {"too_long", "length_recovered"} else 1)
-    if failure and failure not in {"retimed", "length_recovered", "title_echo"}:
+                               "thinking_level": "low", "allow_fallback": False}]
+    assert len(requests) == (2 if failure in {"too_long", "length_recovered", "section_regressed", "undersized_both"} else 1)
+    if failure and failure not in {"retimed", "length_recovered", "section_regressed", "title_echo"}:
         assert changed is None and error
         assert review.await_count == (1 if failure in {"semantic", "out_of_range"} else 0)
     else:
@@ -110,8 +112,10 @@ async def test_shortening_requires_complete_scoped_prose_and_independent_review(
         assert _sections(changed)["guided_practice"] == _sections(step)["guided_practice"]
         assert _sections(changed)["references"] == _sections(step)["references"]
         assert 450 <= len(changed["lesson_content"].split()) <= 600
-        assert review.await_args.args[0] == changed and len(calls) == (3 if failure == "length_recovered" else 2)
-        if failure == "length_recovered":
+        assert review.await_args.args[0] == changed and len(calls) == (3 if failure in {"length_recovered", "section_regressed"} else 2)
+        if failure == "section_regressed":
+            assert _sections(changed)["why_this_matters"] == _sections(step)["why_this_matters"]
+        if failure in {"length_recovered", "section_regressed"}:
             assert "actual_whole_words" in requests[1]["user_prompt"] and calls[0][1].error
             assert "minimum_words_to_remove" in requests[1]["user_prompt"]
             assert "assigned_sections" not in requests[1]["user_prompt"]
@@ -285,11 +289,11 @@ async def test_reviewed_partial_is_checkpointed_before_a_failed_capacity_edit(mo
     assert events == ['capacity_pending']
 
 
-def test_capacity_request_leaves_eighty_words_of_counting_margin():
+def test_capacity_request_leaves_one_hundred_words_of_counting_margin():
     step = long_tutorial()
     source, targets, _, _ = _request(step)
     retained = len(step["lesson_content"].split()) - sum(len(source[key].split()) for key in targets)
-    assert retained + sum(targets.values()) == 520
+    assert retained + sum(targets.values()) == 500
 
 
 
@@ -307,5 +311,45 @@ def test_capacity_distributes_cuts_across_editable_prose_without_changing_practi
     for name, target in targets.items():
         assert TUTORIAL_SECTION_MIN_WORDS[name] <= target < len(source[name].split())
     retained = len(step["lesson_content"].split()) - sum(len(source[k].split()) for k in targets)
-    assert retained + sum(targets.values()) == 520
+    assert retained + sum(targets.values()) == 500
     assert _request(step)[1] == targets and step == original
+
+
+
+def test_capacity_keeps_reviewed_visual_bytes_before_counting_or_review():
+    from app.services.planning.tutorial_capacity import _retain_native_visuals
+    visual = "```comparison\nTold motive\n- Names fear\n- Explains a reason\nvs\nShown motive\n- Hands hide paper\n- Eyes follow the door\n```"
+    original = "Long original explanation.\n\n" + visual
+    rewritten = "Shorter explanation.\n\n" + visual.replace("Hands hide paper", "Hands hide paper; eyes watch")
+    assert _retain_native_visuals(original, rewritten) == "Shorter explanation.\n\n" + visual
+    for invalid in ["Missing visual", rewritten + "\n" + visual, rewritten.replace("```comparison", "```diagram")]:
+        with pytest.raises(ValueError, match="retain every native visual"):
+            _retain_native_visuals(original, invalid)
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("recovers", [True, False])
+async def test_one_extra_correction_only_for_valid_near_limit_drafts(monkeypatch, recovers):
+    step = long_tutorial(); original = copy.deepcopy(step); package = short_package()
+    base = render_public_package_results(sections(), package.writer_context())
+    source = _sections(step); requests = []
+    class Client:
+        model = "offline"
+        async def generate_json(self, **kwargs):
+            requests.append(kwargs)
+            data = {name: base[name].strip() for name in kwargs["output_model"].model_fields}
+            if len(requests) < 3 or not recovers:
+                whole = _render(step["title"], {**source, **data})
+                data["core_framework"] += "\n\n" + "substantive " * (610 - len(whole.split()))
+            return LLMResponse(data=data, finish_reason="stop")
+    review = AsyncMock(return_value=([], LLMResponse(data={"practice_minutes": 3}), SimpleNamespace(model="review")))
+    monkeypatch.setattr("app.services.planning.lesson_review.review_lesson", review)
+    records = []
+    result, error = await shorten_tutorial_reading(step, package, {}, client_factory=lambda **kw: Client(), call_records=records)
+    assert len(requests) == 3 and step == original
+    assert review.await_count == int(recovers)
+    if recovers:
+        assert result and not error and 450 <= len(result["lesson_content"].split()) <= 600
+    else:
+        assert result is None and error
