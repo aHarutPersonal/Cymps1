@@ -204,6 +204,29 @@ def reviewed_sentence_reference_intervals(source: str, units=()) -> list[tuple[i
     return ranges
 
 
+def _reviewed_revision_pass_intervals(source: str) -> list[tuple[int, int]]:
+    """Recognize a complete Pass 1..N instruction sequence, never its contents."""
+    pattern = re.compile(r"\bPass[ \t]+(?P<index>[1-9]\d?)[ \t]*[:—–](?=[ \t]+\S)", re.I)
+    matches = list(pattern.finditer(source))
+    if (len(matches) < 2 or [int(m["index"]) for m in matches] != list(range(1, len(matches) + 1))):
+        return []
+    quotes = list(_NATURAL_QUOTED.finditer(source))
+    for i, match in enumerate(matches):
+        # A worked passage can end just before its first revision label.
+        # Require the complete owning quotation and terminal punctuation;
+        # an unmatched quote, inline code or a quoted label stays unmasked.
+        boundary = _at_list_boundary(source, match.start()) or any(
+            quote.end() <= match.start() and not source[quote.end():match.start()].strip()
+            and quote[0][-2:-1] in {".", "!", "?", "։", "․"}
+            for quote in quotes)
+        if (not boundary or quoted_or_unclosed_prefix(source, match.start())
+                or not _meaningful_item_start(source, match.end(),
+                    matches[i + 1].start() if i + 1 < len(matches) else len(source),
+                    (), reviewed_articles=True)):
+            return []
+    return [match.span("index") for match in matches]
+
+
 def reviewed_labeled_ordinal_intervals(source: str) -> list[tuple[int, int]]:
     """Complete same-field instructional labels, only after independent review.
 
@@ -214,7 +237,7 @@ def reviewed_labeled_ordinal_intervals(source: str) -> list[tuple[int, int]]:
     # labels. Require the explicit model introduction, balanced owning quote,
     # noun/verb syntax and a complete sequence. Ordinary quoted case numbers
     # and all quantities within the model remain untouched.
-    model_ranges = []
+    model_ranges = _reviewed_revision_pass_intervals(source)
     for introduction in re.finditer(r"\bModel:\s*", source, re.I):
         if (not _at_list_boundary(source, introduction.start())
                 or quoted_or_unclosed_prefix(source, introduction.start())):
