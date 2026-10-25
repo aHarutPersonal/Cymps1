@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 from typing import Any
 
 from pydantic import ConfigDict, create_model
@@ -84,6 +85,19 @@ def _render(title: str, sections: dict[str, str]) -> str:
         f"{heading}\n{sections[name]}" for name, heading in PLAN_DETAIL_SECTION_ROWS]])
 
 
+
+def _retain_native_visuals(original: str, replacement: str) -> str:
+    """Capacity edits own prose, never the already approved native visual."""
+    fence = re.compile(r"^```(?P<kind>comparison|diagram)[ \t]*\n[\s\S]*?^```[ \t]*(?=\n|$)", re.M)
+    before, after = list(fence.finditer(original)), list(fence.finditer(replacement))
+    if len(before) != len(after) or any(a["kind"] != b["kind"] for a, b in zip(before, after)):
+        raise ValueError("Capacity correction must retain every native visual")
+    # Restore exact reviewed blocks before counting, validating or reviewing
+    # the new prose. Missing/extra blocks are errors, never silently appended.
+    for old, new in reversed(list(zip(before, after))):
+        replacement = replacement[:new.start()] + old[0] + replacement[new.end():]
+    return replacement
+
 def _request(step: dict):
     sections = _sections(step)
     # Leave room for the model's counting variance and for a meaningful visual.
@@ -125,6 +139,7 @@ def _request(step: dict):
         "Shorten only the assigned prose sections of this existing tutorial. Return strict JSON "
         "with exactly the assigned keys. Preserve the learning objective, complete worked reasoning, "
         "every case fact and numerical result, learner language and meaningful native visual. "
+        "Copy native visual fences exactly; the server retains the original blocks byte-for-byte. "
         "Remove repetition and verbose background, never truncate a sentence or omit necessary "
         "reasoning. Keep comparison fences on their own lines with two headings and 2-4 bullets "
         "per side. No braces, semicolons, HTML or => inside the visual. Do not introduce facts, "
@@ -176,7 +191,7 @@ async def shorten_tutorial_reading(step: dict, package: Any, context: dict, *,
             # Changed titles and all other unassigned keys still fail closed.
             if isinstance(data, dict) and data.get("title") == step["title"]:
                 data = {key: value for key, value in data.items() if key != "title"}
-            replacement = {name: value.strip() for name, value in
+            replacement = {name: _retain_native_visuals(sections[name], value.strip()) for name, value in
                            model.model_validate(data).model_dump(mode="json").items()}
         except (ValueError, TypeError):
             response.error = "Capacity prose correction changed its assigned scope"

@@ -309,3 +309,15 @@ def test_capacity_distributes_cuts_across_editable_prose_without_changing_practi
     retained = len(step["lesson_content"].split()) - sum(len(source[k].split()) for k in targets)
     assert retained + sum(targets.values()) == 520
     assert _request(step)[1] == targets and step == original
+
+
+
+def test_capacity_keeps_reviewed_visual_bytes_before_counting_or_review():
+    from app.services.planning.tutorial_capacity import _retain_native_visuals
+    visual = "```comparison\nTold motive\n- Names fear\n- Explains a reason\nvs\nShown motive\n- Hands hide paper\n- Eyes follow the door\n```"
+    original = "Long original explanation.\n\n" + visual
+    rewritten = "Shorter explanation.\n\n" + visual.replace("Hands hide paper", "Hands hide paper; eyes watch")
+    assert _retain_native_visuals(original, rewritten) == "Shorter explanation.\n\n" + visual
+    for invalid in ["Missing visual", rewritten + "\n" + visual, rewritten.replace("```comparison", "```diagram")]:
+        with pytest.raises(ValueError, match="retain every native visual"):
+            _retain_native_visuals(original, invalid)
