@@ -281,3 +281,22 @@ def test_capacity_request_leaves_eighty_words_of_counting_margin():
     source, targets, _, _ = _request(step)
     retained = len(step["lesson_content"].split()) - sum(len(source[key].split()) for key in targets)
     assert retained + sum(targets.values()) == 520
+
+
+
+def test_capacity_distributes_cuts_across_editable_prose_without_changing_practice():
+    step = long_tutorial()
+    body = _sections(step)
+    for name in ("why_this_matters", "failure_modes", "check_your_understanding"):
+        body[name] += " removable framing" * 15
+    step = {**step, "lesson_content": _render(step["title"], body)}
+    original = copy.deepcopy(step)
+    source, targets, _, _ = _request(step)
+    assert set(targets) == {"why_this_matters", "core_framework", "worked_example",
+                            "failure_modes", "check_your_understanding"}
+    from app.services.llm.schemas import TUTORIAL_SECTION_MIN_WORDS
+    for name, target in targets.items():
+        assert TUTORIAL_SECTION_MIN_WORDS[name] <= target < len(source[name].split())
+    retained = len(step["lesson_content"].split()) - sum(len(source[k].split()) for k in targets)
+    assert retained + sum(targets.values()) == 520
+    assert _request(step)[1] == targets and step == original
