@@ -121,7 +121,12 @@ async def test_public_defect_uses_only_one_activity_in_existing_second_slot(monk
     assert package is not None and not response.error
     assert client.generate_json.await_count == 2 and telemetry.await_count == 1
     calls = client.generate_json.await_args_list
-    assert [call.kwargs["output_model"] for call in calls] == [PrivatePackageRepair, LessonActivityDraft]
+    assert calls[0].kwargs["output_model"] is PrivatePackageRepair
+    repair_model = calls[1].kwargs["output_model"]
+    assert issubclass(repair_model, LessonActivityDraft)
+    schema = repair_model.model_json_schema()
+    assert schema["properties"]["id"]["const"] == "transfer"
+    assert schema["properties"]["kind"]["const"] == "transfer"
     body = json.loads(calls[1].kwargs["user_prompt"])
     assert "previous_package" not in body and body["previous_activity"]["id"] == "transfer"
     assert "worked_solution" not in body["previous_activity"]
@@ -210,3 +215,19 @@ async def test_qualified_activity_target_echo_is_normalized_only_for_the_owned_a
         assert result.workbook.activities[0]==original.workbook.activities[0]
         assert response.semantic_accepted is None
     else: assert response.error
+
+
+@pytest.mark.parametrize("tutorial", [False, True])
+def test_scoped_repair_wire_schema_cannot_confuse_lesson_and_activity_identity(tutorial):
+    from app.services.planning.activity_draft import TutorialActivityDraft
+    from app.services.planning.lesson_package import _activity_repair_model
+    base = TutorialActivityDraft if tutorial else LessonActivityDraft
+    before = copy.deepcopy(base.model_json_schema())
+    package = structured_package()
+    for activity in package.workbook.activities:
+        schema = _activity_repair_model(base, activity).model_json_schema()
+        assert schema["title"] == base.__name__
+        assert schema["properties"]["id"]["const"] == activity.id
+        assert schema["properties"]["kind"]["const"] == activity.kind
+        assert schema["properties"]["fields"]["maxItems"] == (2 if tutorial else 10)
+    assert base.model_json_schema() == before
