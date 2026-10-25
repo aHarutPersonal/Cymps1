@@ -259,3 +259,31 @@ def test_revision_pass_labels_preserve_real_quantities_and_field_ownership():
         review = LessonReview(acceptable=True, issues=[], practice_minutes=1,
                               contains_calculations=False, calculations=[], literal_fact_ids=ids)
         assert ids and grounded_failures(review, {}, package)
+
+
+@pytest.mark.parametrize("text", [
+    'First, complete the practice "Spot the Fault" (1-2 minutes): read the excerpt and choose the strongest fault.',
+    'Then, in the transfer activity "Diagnose Your Scene" (2-3 minutes), re-open your saved scene and write a revision map.',
+    'Next, complete the transfer activity “Fresh Example” (3 minutes): explain the decision.',
+    "Complete the practice 'Spot the Fault' (1-2 minutes): read the excerpt.",
+])
+def test_named_activity_duration_requires_independent_coverage(text):
+    test_plural_references_keep_inventory_and_require_independent_coverage(text)
+
+
+@pytest.mark.parametrize("text", [
+    'The worker said to complete the practice "Spot the Fault" (1-2 minutes): then leave.',
+    'Complete the practice "The pump takes 20 minutes" (1-2 minutes): explain it.',
+    'First, complete the practice "Spot the Fault" (1-2 minutes): the fee is 200 dollars.',
+    'Then, in the transfer activity "Diagnose Your Scene" (3-2 minutes), write a revision map.',
+    'First, complete the practice "Spot the Fault" (181 minutes): read the excerpt.',
+    'First, complete the practice "Spot the Fault (1-2 minutes): an unclosed title.',
+    '"First, complete the practice ‘Spot the Fault’ (1-2 minutes): read the excerpt."',
+    'In the transfer activity "Test" (1-2 minutes) the pump filled a tank.',
+])
+def test_named_activity_duration_cannot_hide_case_facts_or_ambiguous_text(text):
+    lesson = {"lesson_content": text}
+    ids = list(numeric_spans(lesson))
+    review = LessonReview(acceptable=True, issues=[], practice_minutes=1,
+                          contains_calculations=False, calculations=[], literal_fact_ids=ids)
+    assert ids and grounded_failures(review, lesson, {})
