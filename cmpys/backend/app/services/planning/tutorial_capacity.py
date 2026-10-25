@@ -91,18 +91,24 @@ def _request(step: dict):
     remaining = len(step["lesson_content"].split()) - 520
     # Exercise directions, references and executable actions remain byte exact.
     candidates = [name for name in sections if name not in {"guided_practice", "references"}]
-    candidates.sort(key=lambda name: len(sections[name].split()) - TUTORIAL_SECTION_MIN_WORDS[name], reverse=True)
-    targets = {}
-    for name in candidates:
-        count = len(sections[name].split())
-        reduction = min(max(0, count - TUTORIAL_SECTION_MIN_WORDS[name]), remaining)
-        if reduction:
-            targets[name] = count - reduction
-            remaining -= reduction
-        if remaining <= 0:
-            break
-    if remaining > 0 or not targets:
+    # Distribute the reduction across editable prose. Concentrating it in the
+    # framework and worked example can demand an unrealistic cut while leaving
+    # removable introductions and repeated checks outside the repair scope.
+    counts = {name: len(sections[name].split()) for name in candidates}
+    slack = {name: max(0, count - TUTORIAL_SECTION_MIN_WORDS[name])
+             for name, count in counts.items()}
+    available = sum(slack.values())
+    if remaining <= 0 or remaining > available:
         raise ValueError("Tutorial cannot fit the shorter reading budget without removing required teaching")
+    reductions = {name: remaining * room // available for name, room in slack.items()}
+    residual = remaining - sum(reductions.values())
+    # Largest remainders keep the exact whole-reading target, deterministically.
+    order = sorted(candidates, key=lambda name: (-(remaining * slack[name] % available), name))
+    for name in order:
+        if residual and reductions[name] < slack[name]:
+            reductions[name] += 1
+            residual -= 1
+    targets = {name: counts[name] - cut for name, cut in reductions.items() if cut}
     fields = PlanTutorialLessonSectionsOutput.model_fields
     descriptions = {}
     for name, target in targets.items():
@@ -165,7 +171,8 @@ async def shorten_tutorial_reading(step: dict, package: Any, context: dict, *,
             # Changed titles and all other unassigned keys still fail closed.
             if isinstance(data, dict) and data.get("title") == step["title"]:
                 data = {key: value for key, value in data.items() if key != "title"}
-            replacement = model.model_validate(data).model_dump(mode="json")
+            replacement = {name: value.strip() for name, value in
+                           model.model_validate(data).model_dump(mode="json").items()}
         except (ValueError, TypeError):
             response.error = "Capacity prose correction changed its assigned scope"
             return None, response.error
