@@ -353,3 +353,49 @@ async def test_one_extra_correction_only_for_valid_near_limit_drafts(monkeypatch
         assert result and not error and 450 <= len(result["lesson_content"].split()) <= 600
     else:
         assert result is None and error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [None, "still_rejected", "unowned", "private", "unavailable", "unchanged", "extra", "too_long", "undersized", "truncated"])
+async def test_capacity_editorial_repair_is_scoped_changed_and_reviewed_once(monkeypatch, failure):
+    step = long_tutorial(); original = copy.deepcopy(step); package = short_package()
+    base = render_public_package_results(sections(), package.writer_context())
+    requests = []
+    class Client:
+        model = "offline"
+        async def generate_json(self, **kwargs):
+            requests.append(kwargs)
+            data = {name: base[name].strip() for name in kwargs["output_model"].model_fields}
+            if len(requests) == 2:
+                if failure != "unchanged":
+                    data["failure_modes"] = ("Explain the general mistake without repeating the independent case. "
+                        "Check observable evidence, remove the unwanted label, and let the learner apply the method.")
+                if failure == "extra": data["guided_practice"] = "Unauthorized change"
+                if failure == "too_long": data["failure_modes"] += " substantive" * 400
+                if failure == "undersized": data["failure_modes"] = "Too short."
+            return LLMResponse(data=data, finish_reason="length" if failure == "truncated" and len(requests) == 2 else "stop")
+    rejection = (["Leaked transfer answer"], LLMResponse(data={
+        "acceptable": False, "issues": ["Leaked transfer answer"],
+        "package_issues": ["Private answer is wrong"] if failure == "private" else [],
+        "affected_sections": ["guided_practice"] if failure == "unowned" else ["failure_modes"],
+        "practice_minutes": 3}, error="Review unavailable" if failure == "unavailable" else None), SimpleNamespace(model="review"))
+    acceptance = ([], LLMResponse(data={"practice_minutes": 3}), SimpleNamespace(model="review"))
+    review = AsyncMock(side_effect=[rejection, rejection if failure == "still_rejected" else acceptance])
+    monkeypatch.setattr("app.services.planning.lesson_review.review_lesson", review)
+    records = []
+    result, error = await shorten_tutorial_reading(step, package, {}, client_factory=lambda **kw: Client(), call_records=records)
+    assert step == original
+    eligible = failure not in {"unowned", "private", "unavailable"}
+    assert len(requests) == 1 + int(eligible)
+    if eligible:
+        assert set(requests[1]["output_model"].model_fields) == {"failure_modes"}
+        assert "private_workbook" not in requests[1]["user_prompt"]
+    assert review.await_count == (2 if failure in {None, "still_rejected"} else 1)
+    if failure is None:
+        assert result and not error and result["substeps"] == original["substeps"]
+        before, after = _sections(original), _sections(result)
+        assert before["guided_practice"] == after["guided_practice"]
+        assert before["references"] == after["references"]
+        assert 450 <= len(result["lesson_content"].split()) <= 600
+    else:
+        assert result is None and error
