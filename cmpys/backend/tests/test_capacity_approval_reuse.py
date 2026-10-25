@@ -6,10 +6,11 @@ from tests.test_short_tutorial_pipeline import short_package
 
 PREVIOUS = {'review_version': 23, 'package_version': 1, 'capability_hash': '1815a97ad0c7246f737c493fbec7b9217c6a5dd6a7d96cacd93c0c34b3afe48f', 'prompt_hash': 'fc899f550b96b760a700da1f5bac50b0118b87b2e615c8106a6b0e4d47ef69eb', 'generation_contract_hash': '4c8e291d46f1d4e58fb1ebc4a09bba28bc0de261d41e400d7ce6ef36c662823d', 'schema_hash': '6c9911659a81cbd8598269be5181940c1bd27d828843305fabac7de560b91a01'}
 
+@pytest.mark.parametrize("previous", [PREVIOUS, {'review_version': 23, 'package_version': 1, 'capability_hash': '1815a97ad0c7246f737c493fbec7b9217c6a5dd6a7d96cacd93c0c34b3afe48f', 'prompt_hash': 'fc899f550b96b760a700da1f5bac50b0118b87b2e615c8106a6b0e4d47ef69eb', 'generation_contract_hash': '90612ce1e3b1ea98c5a841b0ac4aa1805fd4ce957e33e938e5ba79b9a1ad159a', 'schema_hash': '6c9911659a81cbd8598269be5181940c1bd27d828843305fabac7de560b91a01'}])
 @pytest.mark.parametrize("mutation", [None, "content", "package", "identity", "schema", "dependency", "extra"])
-def test_capacity_only_change_reuses_only_exact_approved_content(monkeypatch, mutation):
+def test_capacity_only_change_reuses_only_exact_approved_content(monkeypatch, mutation, previous):
     step = long_tutorial(); package = short_package()
-    approval = {**PREVIOUS, "content_hash": module.digest(step), "package_hash": module.digest(package.model_dump(mode="json"))}
+    approval = {**previous, "content_hash": module.digest(step), "package_hash": module.digest(package.model_dump(mode="json"))}
     if mutation == "content": step["description"] += " changed"
     if mutation == "package": approval["package_hash"] = "0" * 64
     if mutation == "identity": approval["generation_contract_hash"] = "0" * 64
