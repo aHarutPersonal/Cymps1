@@ -10,6 +10,7 @@ import '../../../app/design_tokens.dart';
 import '../../../app/router.dart';
 import '../../../core/ui/app_shell.dart';
 import '../../../core/ui/cmpys/cmpys_markdown.dart';
+import '../../../core/ui/motion/motion_config.dart';
 import '../../../core/ui/motion/page_transition.dart';
 import '../../../core/ui/v3/v3.dart';
 import '../data/cmpys_seed.dart';
@@ -343,6 +344,13 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
       ),
     );
 
+    final motion = MotionConfig.enabled(context);
+    const ageTop = (big - small) / 2;
+
+    // You fly in from the left and the mentor from the right (`flyL` /
+    // `flyR .9s var(--spring) .15s`); then the shared age pops (`pop .6s
+    // var(--spring) .85s`) and two ember rings ripple out of it once
+    // (`shock .9s .85s`, `shock 1.1s 1s`). Reduced motion: fades only.
     return ExcludeSemantics(
       child: SizedBox(
         width: width,
@@ -353,28 +361,29 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
             Positioned(
               left: 0,
               top: 0,
-              child: V3Pop(
-                duration: const Duration(milliseconds: 700),
-                delay: const Duration(milliseconds: 200),
+              child: V3Fly(
+                key: const Key('compare-fly-you'),
+                from: V3FlyFrom.left,
+                delay: const Duration(milliseconds: 150),
                 child: you,
               ),
             ),
             Positioned(
               right: 0,
               top: 0,
-              child: V3Pop(
-                duration: const Duration(milliseconds: 700),
-                delay: const Duration(milliseconds: 300),
+              child: V3Fly(
+                key: const Key('compare-fly-mentor'),
+                from: V3FlyFrom.right,
+                delay: const Duration(milliseconds: 150),
                 child: mentor,
               ),
             ),
-            if (age != null)
+            if (age != null) ...[
               Positioned(
                 left: big - overlap,
-                top: (big - small) / 2,
-                child: V3Pop(
-                  duration: const Duration(milliseconds: 600),
-                  delay: const Duration(milliseconds: 450),
+                top: ageTop,
+                child: _ageIn(
+                  motion: motion,
                   child: Container(
                     key: const Key('compare-age-disc'),
                     width: small,
@@ -393,9 +402,49 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
                   ),
                 ),
               ),
+              if (motion)
+                // The rings sit at inset −4 around the badge.
+                Positioned(
+                  left: big - overlap - 4,
+                  top: ageTop - 4,
+                  width: small + 8,
+                  height: small + 8,
+                  child: const Stack(
+                    key: Key('compare-age-rings'),
+                    fit: StackFit.expand,
+                    children: [
+                      V3Shock(delay: Duration(milliseconds: 850)),
+                      V3Shock(
+                        duration: Duration(milliseconds: 1100),
+                        delay: Duration(milliseconds: 1000),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
           ],
         ),
       ),
+    );
+  }
+
+  /// The age badge's entrance: `pop .6s var(--spring) .85s both`, or a
+  /// plain fade with reduced motion.
+  Widget _ageIn({required bool motion, required Widget child}) {
+    if (motion) {
+      return V3Pop(
+        duration: const Duration(milliseconds: 600),
+        delay: const Duration(milliseconds: 850),
+        child: child,
+      );
+    }
+    return TweenAnimationBuilder<double>(
+      key: const Key('compare-age-fade'),
+      tween: Tween(begin: 0, end: 1),
+      duration: const Duration(milliseconds: 600),
+      builder: (context, opacity, child) =>
+          Opacity(opacity: opacity, child: child),
+      child: child,
     );
   }
 

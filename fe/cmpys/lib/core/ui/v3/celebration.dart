@@ -4,13 +4,16 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../../app/assets.dart';
 import '../../../app/design_tokens.dart';
 import '../motion/motion_config.dart';
 import 'buttons.dart';
 import 'feedback.dart';
 import 'icons.dart';
+import 'keyframes.dart';
 import 'motion.dart';
 import 'progress.dart';
+import 'video.dart';
 
 // `Celebration` from `v3/app.jsx`: the full-screen night moment that follows
 // a finished tutorial or a finished day of habits.
@@ -113,8 +116,13 @@ class Celebration {
 /// choice. Closing it any other way (the system back gesture) counts as
 /// [CelebrationResult.continued].
 ///
-/// With reduced motion there is no confetti, no breathing glow and no halo,
-/// and the stat shows its final value.
+/// Behind the content a looping video plays for the kind (a finished
+/// tutorial or a finished day of habits), restarting from its first frame
+/// each time; until it plays, or if it can't, the celebration looks exactly
+/// as it does without one.
+///
+/// With reduced motion there is no video, no confetti, no breathing glow and
+/// no halo, and the stat shows its final value.
 Future<CelebrationResult> showCelebration(
   BuildContext context,
   Celebration celebration, {
@@ -165,6 +173,15 @@ class CelebrationOverlay extends StatefulWidget {
 
   /// Key on the pulsing halo ring (absent with reduced motion).
   static const haloKey = ValueKey<String>('celebration-halo');
+
+  /// Key on the vignette laid over the video (present only while it plays).
+  static const vignetteKey = ValueKey<String>('celebration-vignette');
+
+  /// The background video for [kind].
+  static String videoFor(CelebrationKind kind) => switch (kind) {
+    CelebrationKind.tutorial => AppAssets.videoCelebrateTutorial,
+    CelebrationKind.day => AppAssets.videoCelebrateHabits,
+  };
 
   final Celebration celebration;
 
@@ -223,10 +240,11 @@ class _CelebrationOverlayState extends State<CelebrationOverlay> {
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    _Glow(
+                    V3BreathingGlow(
                       key: CelebrationOverlay.glowKey,
                       color: tutorial ? _sageGlow : _emberGlow,
                     ),
+                    Positioned.fill(child: _CelebrationVideo(kind: c.kind)),
                     if (motion) const Positioned.fill(child: V3Confetti()),
                     CustomSingleChildLayout(
                       delegate: _ContentLayout(
@@ -410,84 +428,92 @@ class _Content extends StatelessWidget {
 const Color _sageGlow = Color(0x990B7643);
 const Color _emberGlow = Color(0x8CBA480D);
 
-/// The 520 pt radial glow behind the content, centred at 42% of the height.
-/// `breathe 5s ease-in-out infinite`: scale 1 → 1.08 and opacity .55 → .9
-/// and back. With reduced motion it holds still at the resting values.
-class _Glow extends StatefulWidget {
-  const _Glow({super.key, required this.color});
+/// The kind's looping video over the glow: `opacity .9` once it plays,
+/// zooming 1.12 → 1 (`transition: opacity 1.2s var(--out), transform 4s
+/// var(--out)`), with the vignette fading in over it. A new page each time,
+/// so the video starts from its first frame. Until it plays (or with reduced
+/// motion, or if it can't) nothing is drawn here.
+class _CelebrationVideo extends StatefulWidget {
+  const _CelebrationVideo({required this.kind});
 
-  final Color color;
+  final CelebrationKind kind;
 
   @override
-  State<_Glow> createState() => _GlowState();
+  State<_CelebrationVideo> createState() => _CelebrationVideoState();
 }
 
-class _GlowState extends State<_Glow> with SingleTickerProviderStateMixin {
-  static const double _size = 520;
-
-  late final AnimationController _controller = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 2500),
-  );
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    if (MotionConfig.enabled(context)) {
-      if (!_controller.isAnimating) _controller.repeat(reverse: true);
-    } else {
-      _controller
-        ..stop()
-        ..value = 0;
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
+class _CelebrationVideoState extends State<_CelebrationVideo> {
+  bool _playing = false;
 
   @override
   Widget build(BuildContext context) {
-    // `radial-gradient(circle, c, transparent 65%)` on a square: the circle
-    // reaches the farthest corner, so 65% of that is 0.65 · √2 / 2 of the box.
-    final disc = DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: RadialGradient(
-          radius: 0.65 * math.sqrt2 / 2,
-          colors: [widget.color, widget.color.withValues(alpha: 0)],
-        ),
-      ),
-    );
-    return LayoutBuilder(
-      builder: (context, constraints) => Stack(
+    return IgnorePointer(
+      child: Stack(
+        fit: StackFit.expand,
         children: [
-          Positioned(
-            left: constraints.maxWidth / 2 - _size / 2,
-            top: constraints.maxHeight * 0.42 - _size / 2,
-            width: _size,
-            height: _size,
-            child: IgnorePointer(
-              child: RepaintBoundary(
-                child: AnimatedBuilder(
-                  animation: _controller,
-                  child: SizedBox.expand(child: disc),
-                  builder: (context, child) {
-                    final t = Curves.easeInOut.transform(_controller.value);
-                    return Opacity(
-                      opacity: 0.55 + 0.35 * t,
-                      child: Transform.scale(scale: 1 + 0.08 * t, child: child),
-                    );
-                  },
-                ),
+          V3LoopVideo(
+            asset: CelebrationOverlay.videoFor(widget.kind),
+            // Today's celebration (the glow beneath) is the fallback.
+            fallback: const SizedBox.expand(),
+            opacity: 0.9,
+            scale: _playing ? 1 : 1.12,
+            scaleDuration: const Duration(seconds: 4),
+            scaleCurve: AppMotion.out,
+            onReady: (ok) {
+              if (mounted && ok != _playing) setState(() => _playing = ok);
+            },
+          ),
+          if (_playing)
+            // `transition: opacity 1.2s`.
+            TweenAnimationBuilder<double>(
+              tween: Tween(begin: 0, end: 1),
+              duration: const Duration(milliseconds: 1200),
+              curve: Curves.ease,
+              builder: (context, t, child) => Opacity(opacity: t, child: child),
+              child: const CustomPaint(
+                key: CelebrationOverlay.vignetteKey,
+                painter: _VignettePainter(),
               ),
             ),
-          ),
         ],
       ),
     );
   }
+}
+
+/// `radial-gradient(120% 80% at 50% 40%, rgba(14,12,20,.15) 0%,
+/// rgba(14,12,20,.55) 60%, rgba(14,12,20,.92) 100%)`: an ellipse 1.2× the
+/// width by .8× the height around (50%, 40%).
+class _VignettePainter extends CustomPainter {
+  const _VignettePainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.isEmpty) return;
+    final rx = size.width * 1.2;
+    final ry = size.height * 0.8;
+    canvas.save();
+    canvas.translate(size.width * 0.5, size.height * 0.4);
+    canvas.scale(1, ry / rx);
+    final circle = Rect.fromCircle(center: Offset.zero, radius: rx);
+    canvas.drawRect(
+      // Large enough to cover the box after the vertical squash.
+      Rect.fromCenter(
+        center: Offset.zero,
+        width: size.width * 2,
+        height: size.height * 2 * rx / ry,
+      ),
+      Paint()
+        ..shader = const RadialGradient(
+          colors: [Color(0x260E0C14), Color(0x8C0E0C14), Color(0xEB0E0C14)],
+          stops: [0, 0.6, 1],
+        ).createShader(circle),
+    );
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(_VignettePainter oldDelegate) => false;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -571,89 +597,17 @@ class _Mark extends StatelessWidget {
               ),
             ),
           ),
+          // `halo 1.6s --out .4s infinite`, counted from the page opening;
+          // the disc has already waited .1 s when this mounts, so .3 s.
           if (MotionConfig.enabled(context))
             const Positioned.fill(
-              child: _Halo(key: CelebrationOverlay.haloKey),
+              child: V3HaloRing(
+                key: CelebrationOverlay.haloKey,
+                delay: Duration(milliseconds: 300),
+              ),
             ),
         ],
       ),
     );
   }
-}
-
-/// `halo 1.6s --out .4s infinite`: a 2 pt white ring that grows from .7× to
-/// 2.2× and fades out, over and over. The design counts the .4 s from the
-/// page opening, and the disc has already waited .1 s by the time this
-/// mounts, so it waits .3 s.
-class _Halo extends StatefulWidget {
-  const _Halo({super.key});
-
-  @override
-  State<_Halo> createState() => _HaloState();
-}
-
-class _HaloState extends State<_Halo> with SingleTickerProviderStateMixin {
-  late final AnimationController _controller = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 1600),
-  );
-  Timer? _timer;
-  bool _started = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _timer = Timer(const Duration(milliseconds: 300), () {
-      if (!mounted) return;
-      _controller.repeat();
-      setState(() => _started = true);
-    });
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (!_started) return const SizedBox.shrink();
-    return IgnorePointer(
-      child: RepaintBoundary(
-        child: CustomPaint(painter: _HaloPainter(_controller)),
-      ),
-    );
-  }
-}
-
-class _HaloPainter extends CustomPainter {
-  _HaloPainter(this.progress) : super(repaint: progress);
-
-  /// Linear 0–1 driver; eased on `--out` when painting.
-  final Animation<double> progress;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final t = AppMotion.out.transform(progress.value);
-    final center = size.center(Offset.zero);
-    final scale = 0.7 + 1.5 * t;
-    canvas.save();
-    canvas.translate(center.dx, center.dy);
-    canvas.scale(scale);
-    // A 2 pt border sits inside the box: stroke centre at radius − 1.
-    canvas.drawCircle(
-      Offset.zero,
-      size.shortestSide / 2 - 1,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2
-        ..color = _white.withValues(alpha: 0.6 * (1 - t)),
-    );
-    canvas.restore();
-  }
-
-  @override
-  bool shouldRepaint(_HaloPainter old) => old.progress != progress;
 }

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../../app/assets.dart';
 import '../../../../app/design_tokens.dart';
 import '../../../../core/network/api_error.dart';
 import '../../../../core/ui/motion/motion_config.dart';
@@ -85,6 +86,20 @@ const Color _irisLight = Color(0xFFB7B5FC);
 const Color _emberLight = Color(0xFFFCAF91);
 const Color _haloColor = Color(0xFF9690F1);
 
+/// Over the lab video: `linear-gradient(180deg, rgba(14,12,20,.55) 0%,
+/// rgba(14,12,20,.25) 28%, rgba(14,12,20,.7) 55%, rgba(14,12,20,.92) 100%)`.
+const LinearGradient _labVideoShade = LinearGradient(
+  begin: Alignment.topCenter,
+  end: Alignment.bottomCenter,
+  colors: [
+    Color(0x8C0E0C14),
+    Color(0x400E0C14),
+    Color(0xB30E0C14),
+    Color(0xEB0E0C14),
+  ],
+  stops: [0, 0.28, 0.55, 1],
+);
+
 class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep>
     with WidgetsBindingObserver {
   Timer? _jobTimer;
@@ -118,6 +133,13 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep>
 
   /// Mission 1 has been peeked for a ready Tutorial 1 (once per visit).
   bool _tutorialPeeked = false;
+
+  /// The background video is playing (its shade and grain show).
+  bool _videoPlaying = false;
+
+  /// The background video gave up (error or timeout): the lab stays as it
+  /// was before the video, cards included.
+  bool _videoFailed = false;
 
   /// The footer's measured height: the scroll body leaves exactly that much
   /// room at its end so the last card can scroll clear of the buttons.
@@ -669,6 +691,7 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep>
           style: AppTypography.sans(16).copyWith(color: Colors.white),
           child: Stack(
             children: [
+              Positioned.fill(child: _background(failed: failed)),
               Positioned.fill(
                 child: SingleChildScrollView(
                   key: const Key('mentor-lab-content'),
@@ -752,6 +775,59 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep>
     );
   }
 
+  /// The lab video (`LAB_VIDEO`) behind everything: .6 while the lab runs,
+  /// .85 once the plan is ready (zooming 1.1 → 1 over 3 s), and desaturated
+  /// and dimmed while a stage has failed. Its shade and grain come in with
+  /// it. Until it plays, if it can't, or with reduced motion, the night
+  /// ground shows as before.
+  Widget _background({required bool failed}) {
+    final done = _planReady;
+    return IgnorePointer(
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          V3LoopVideo(
+            key: const Key('mentor-lab-video'),
+            asset: AppAssets.videoMentorLab,
+            fallback: const SizedBox.expand(),
+            opacity: done ? 0.85 : 0.6,
+            opacityDuration: const Duration(milliseconds: 1400),
+            saturation: failed ? 0.3 : 1,
+            brightness: failed ? 0.7 : 1,
+            scale: done ? 1.0 : 1.1,
+            scaleDuration: const Duration(seconds: 3),
+            onReady: (ok) {
+              if (!mounted) return;
+              setState(() {
+                _videoPlaying = ok;
+                if (!ok) _videoFailed = true;
+              });
+            },
+          ),
+          AnimatedOpacity(
+            key: const Key('mentor-lab-video-shade'),
+            opacity: _videoPlaying ? 1 : 0,
+            duration: const Duration(milliseconds: 1400),
+            curve: AppMotion.out,
+            child: const Stack(
+              fit: StackFit.expand,
+              children: [
+                DecoratedBox(
+                  decoration: BoxDecoration(gradient: _labVideoShade),
+                ),
+                V3Grain(),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Frosted cards over the video; without one (it failed, or reduced
+  /// motion) the cards are today's.
+  bool get _frosted => !_videoFailed && MotionConfig.enabled(context);
+
   Widget _header({required bool failed}) {
     final short = widget.idol.short;
     final done = _planReady;
@@ -810,17 +886,26 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep>
   }
 
   Widget _stagesCard() {
+    final rows = Column(
+      children: [for (var i = 0; i < _stageIds.length; i++) _stageRow(i)],
+    );
+    const margin = EdgeInsets.fromLTRB(18, 26, 18, 0);
+    if (_frosted) {
+      return Padding(
+        padding: margin,
+        child: V3Frosted.stage(key: const Key('lab-stage-card'), child: rows),
+      );
+    }
     return Container(
-      margin: const EdgeInsets.fromLTRB(18, 26, 18, 0),
+      key: const Key('lab-stage-card'),
+      margin: margin,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: 0.05),
         borderRadius: BorderRadius.circular(24),
         border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
       ),
-      child: Column(
-        children: [for (var i = 0; i < _stageIds.length; i++) _stageRow(i)],
-      ),
+      child: rows,
     );
   }
 
@@ -965,27 +1050,37 @@ class _CmpysMentorLabStepState extends ConsumerState<CmpysMentorLabStep>
     required Widget child,
     double spaceAfterKicker = 8,
   }) {
+    final content = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          kicker.toUpperCase(),
+          style: AppTypography.kick.copyWith(color: kickerColor),
+        ),
+        SizedBox(height: spaceAfterKicker),
+        child,
+      ],
+    );
+    final margin = EdgeInsets.fromLTRB(18, top, 18, 0);
     return V3Rise(
       key: key,
-      child: Container(
-        margin: EdgeInsets.fromLTRB(18, top, 18, 0),
-        padding: const EdgeInsets.all(18),
-        decoration: BoxDecoration(
-          color: AppColors.night2,
-          borderRadius: BorderRadius.circular(24),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              kicker.toUpperCase(),
-              style: AppTypography.kick.copyWith(color: kickerColor),
+      child: _frosted
+          ? Padding(
+              padding: margin,
+              child: SizedBox(
+                width: double.infinity,
+                child: V3Frosted.secondary(child: content),
+              ),
+            )
+          : Container(
+              margin: margin,
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                color: AppColors.night2,
+                borderRadius: BorderRadius.circular(24),
+              ),
+              child: content,
             ),
-            SizedBox(height: spaceAfterKicker),
-            child,
-          ],
-        ),
-      ),
     );
   }
 

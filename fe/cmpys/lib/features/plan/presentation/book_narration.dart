@@ -322,8 +322,28 @@ final class ExpressiveBookNarrator
   @override
   Future<void> initialize({required double speed}) async {
     await _configureAudioSession();
+    _sessionConfigured = true;
     _player ??= AudioPlayer();
     await setSpeed(speed);
+  }
+
+  /// Whether [initialize] has applied the narration audio session.
+  bool _sessionConfigured = false;
+
+  /// Applies the narration audio session again right before playback.
+  ///
+  /// The app's muted background videos (`V3LoopVideo`) ask video_player for
+  /// `mixWithOthers`, which on iOS adds "mix with others" to the app-wide
+  /// audio session and keeps it there. Narration re-asserts its own session
+  /// (playback, spoken audio, no mixing) every time it starts, so it pauses
+  /// other apps' audio exactly as it did before the videos existed. Only a
+  /// session [initialize] set up is re-applied; a failure never blocks play.
+  Future<void> _reassertAudioSession() async {
+    try {
+      await _configureAudioSession();
+    } catch (_) {
+      // Playback matters more than the category; keep going.
+    }
   }
 
   static Future<void> _configureSpeechSession() async {
@@ -631,11 +651,25 @@ final class ExpressiveBookNarrator
 
   void _playTrackPlayer(int run) {
     if (run != _trackRun || !_trackWantsPlayback) return;
+    if (_sessionConfigured) {
+      unawaited(_playTrackPlayerInSession(run));
+      return;
+    }
     unawaited(
       _player!.play().catchError((Object error, StackTrace _) {
         _failTrackPlayback(error, run: run);
       }),
     );
+  }
+
+  Future<void> _playTrackPlayerInSession(int run) async {
+    await _reassertAudioSession();
+    if (run != _trackRun || !_trackWantsPlayback) return;
+    try {
+      await _player!.play();
+    } catch (error) {
+      _failTrackPlayback(error, run: run);
+    }
   }
 
   void _failTrackPlayback(Object error, {required int run}) {
@@ -1093,6 +1127,10 @@ final class ExpressiveBookNarrator
         position: Duration.zero,
         alignment: audio.alignment,
       );
+      if (_sessionConfigured) {
+        await _reassertAudioSession();
+        if (run != _playRun) return;
+      }
       await player.play();
     } catch (error) {
       // An adaptive narrator suppresses this handler while it transparently
@@ -1626,16 +1664,23 @@ final class SystemBookNarrator implements BookNarrator {
       await _flutterTts.awaitSpeakCompletion(true);
       await _flutterTts.setVolume(1);
       await _flutterTts.setPitch(1);
-      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
-        await _flutterTts.setIosAudioCategory(
-          IosTextToSpeechAudioCategory.playback,
-          const [],
-          IosTextToSpeechAudioMode.spokenAudio,
-        );
-      }
+      await _applyIosAudioCategory();
       _initialized = true;
     }
     await setSpeed(speed);
+  }
+
+  /// The device voice's iOS session: playback, spoken audio, no mixing.
+  /// Applied again before every utterance because the app's muted background
+  /// videos add "mix with others" to the shared session (see
+  /// `ExpressiveBookNarrator._reassertAudioSession`).
+  Future<void> _applyIosAudioCategory() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return;
+    await _flutterTts.setIosAudioCategory(
+      IosTextToSpeechAudioCategory.playback,
+      const [],
+      IosTextToSpeechAudioMode.spokenAudio,
+    );
   }
 
   @override
@@ -1648,6 +1693,13 @@ final class SystemBookNarrator implements BookNarrator {
 
   @override
   Future<void> speak(String text) async {
+    if (_initialized) {
+      try {
+        await _applyIosAudioCategory();
+      } catch (_) {
+        // Speaking matters more than the category; keep going.
+      }
+    }
     await _flutterTts.speak(text, focus: true);
   }
 

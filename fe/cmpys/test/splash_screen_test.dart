@@ -13,9 +13,11 @@ import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 // CMPYS v3 splash (`v3/onboard.jsx` Splash): a night screen with five grey
-// mentor portraits orbiting the wordmark, a tagline that reveals after 1.5 s
+// mentor portraits orbiting the wordmark (the fallback for the library
+// video, which no test platform plays), a tagline that reveals after 1.7 s
 // and, for a signed-out visitor, the two entry buttons. Signed-in sessions
-// keep their automatic routing and never see the buttons.
+// keep their automatic routing and never see the buttons. The video itself
+// is covered in splash_video_test.dart.
 
 /// Session stand-in whose `initialize()` lands on [result] once [gate] opens.
 class _FakeSession extends StateNotifier<SessionState>
@@ -101,6 +103,15 @@ Future<GoRouter> _mount(
   return router;
 }
 
+/// The wordmark ("cmpys", one glyph per letter).
+final _wordmark = find.byKey(SplashScreen.wordmarkKey);
+
+/// The tagline line [text] (a `V3BlurWords`).
+Finder _tagline(String text) => find.byWidgetPredicate(
+  (w) => w is V3BlurWords && w.text == text,
+  description: 'tagline "$text"',
+);
+
 /// Opacity of the reveal wrapped around [key] (1 once revealed).
 double _opacity(WidgetTester tester, Key key) => tester
     .widget<Opacity>(
@@ -126,27 +137,24 @@ void main() {
   testWidgets('copy_appears_after_delay', (tester) async {
     await _mount(tester);
 
-    // Before 1.5 s only the wordmark scene shows: the tagline, the line under
+    // Before 1.7 s only the wordmark scene shows: the tagline, the line under
     // it and the buttons are hidden and cannot be tapped.
-    await _elapse(tester, const Duration(milliseconds: 1400));
-    expect(find.text('cmpys'), findsOneWidget);
+    await _elapse(tester, const Duration(milliseconds: 1600));
+    expect(_wordmark, findsOneWidget);
     expect(find.text('COMPARE YOUR SUCCESS'), findsOneWidget);
     expect(_opacity(tester, SplashScreen.taglineKey), 0);
     expect(_opacity(tester, SplashScreen.introKey), 0);
     expect(_opacity(tester, SplashScreen.buttonsKey), 0);
     expect(find.text('Get started').hitTestable(), findsNothing);
 
-    // Past 1.5 s each reveals (0.8 s on --out, the copy 0.15 s and the
-    // buttons 0.25 s behind the tagline).
+    // Past 1.7 s each reveals (0.8 s on --out, the copy 0.2 s and the
+    // buttons 0.3 s behind the tagline).
     await _elapse(tester, const Duration(milliseconds: 2000));
     expect(_opacity(tester, SplashScreen.taglineKey), 1);
     expect(_opacity(tester, SplashScreen.introKey), 1);
     expect(_opacity(tester, SplashScreen.buttonsKey), 1);
-    expect(
-      find.textContaining('Learn from someone you admire.'),
-      findsOneWidget,
-    );
-    expect(find.textContaining('Measure yourself honestly.'), findsOneWidget);
+    expect(_tagline('Learn from someone you admire.'), findsOneWidget);
+    expect(_tagline('Measure yourself honestly.'), findsOneWidget);
     expect(
       find.text(
         'A personal plan of short tutorials and real practice, shaped by a '
@@ -222,7 +230,7 @@ void main() {
     (tester) async {
       await _mount(tester);
       await _elapse(tester, const Duration(seconds: 6));
-      expect(find.text('cmpys'), findsOneWidget);
+      expect(_wordmark, findsOneWidget);
       expect(find.textContaining('auth:'), findsNothing);
     },
   );
@@ -272,7 +280,7 @@ void main() {
     tester,
   ) async {
     await _mount(tester, reducedMotion: true);
-    await _elapse(tester, const Duration(milliseconds: 1600));
+    await _elapse(tester, const Duration(milliseconds: 1800));
     expect(find.text('Get started').hitTestable(), findsOneWidget);
     final rotations = tester
         .widgetList<RotationTransition>(
@@ -355,6 +363,6 @@ void main() {
     expect(tester.takeException(), isNull);
     expect(find.text('Get started'), findsOneWidget);
     // The copy scrolls rather than squeezing the scene out.
-    expect(find.text('cmpys').hitTestable(), findsOneWidget);
+    expect(_wordmark.hitTestable(), findsOneWidget);
   });
 }

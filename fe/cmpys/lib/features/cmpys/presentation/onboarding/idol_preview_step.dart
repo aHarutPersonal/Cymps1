@@ -9,6 +9,7 @@ import '../../../../core/ui/v3/v3.dart';
 import '../../data/cmpys_seed.dart';
 import '../idol_timeline.dart';
 import 'mentor_image.dart';
+import 'mentor_video.dart';
 
 /// Mentor preview (`v3/onboard2.jsx` MentorPreview): the night page that opens
 /// out of the tapped discovery card (see `V3ExpandRoute`).
@@ -157,8 +158,11 @@ class _CmpysIdolPreviewStepState extends ConsumerState<CmpysIdolPreviewStep> {
   }
 
   Widget _hero(double gutter) {
-    return V3Portrait(
+    // Buffett's lamp-lit study plays behind the hero (ringed medallion over
+    // it); every other mentor keeps the duotone portrait.
+    return V3VideoPortrait(
       image: cmpysIdolImage(_idol),
+      video: cmpysIdolVideo(_idol),
       height: 470,
       child: Positioned(
         left: gutter,

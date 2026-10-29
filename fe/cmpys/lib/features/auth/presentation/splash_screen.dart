@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -8,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../../app/assets.dart';
 import '../../../app/design_tokens.dart';
 import '../../../app/router.dart';
 import '../../../core/ui/motion/motion_config.dart';
@@ -86,9 +88,14 @@ String splashRouteForReadySession({
   );
 }
 
-/// CMPYS splash (`v3/onboard.jsx` Splash): a night scene with five grey
-/// mentor portraits orbiting the wordmark, the tagline and the entry buttons
-/// revealing at 1.5 s.
+/// CMPYS splash (`v3/onboard.jsx` Splash): the library video behind the
+/// wordmark, the tagline and the entry buttons revealing at 1.7 s.
+///
+/// While the video plays (`SPLASH_VIDEO`: faded in from a blur over 1.6 s,
+/// Ken Burns 1.08 → 1 over 14 s) the wordmark sits at the top, a shade and
+/// grain cover the video and a row of mentor avatars introduces the copy.
+/// Until it plays, if it can't (6 s), or with reduced motion, the splash is
+/// the night scene with five grey mentor portraits orbiting the wordmark.
 ///
 /// The session still resolves in the background while this plays. A restored
 /// session routes on as before (home, onboarding or a narration restore) once
@@ -111,6 +118,19 @@ class SplashScreen extends ConsumerStatefulWidget {
   @visibleForTesting
   static const orbitKey = ValueKey<String>('splash-orbit');
 
+  /// The "cmpys" wordmark (one letter per glyph, labelled "cmpys").
+  @visibleForTesting
+  static const wordmarkKey = ValueKey<String>('splash-wordmark');
+
+  /// The background video.
+  @visibleForTesting
+  static const videoKey = ValueKey<String>('splash-video');
+
+  /// The "Learn with history’s builders" avatar row (only while the video
+  /// plays).
+  @visibleForTesting
+  static const avatarRowKey = ValueKey<String>('splash-avatar-row');
+
   @override
   ConsumerState<SplashScreen> createState() => _SplashScreenState();
 }
@@ -125,16 +145,45 @@ const _mentors = <({String slug, String initials, Color tint})>[
 ];
 
 // The design's literal oklch values, converted to sRGB once: the glow's
-// `oklch(0.45 0.14 285 / .55)` and `oklch(0.4 0.12 42 / .18)`, and the tagline
-// accent `oklch(0.8 0.1 42)`.
+// `oklch(0.45 0.14 285 / .55)` and `oklch(0.4 0.12 42 / .18)`, the tagline
+// accent `oklch(0.82 0.1 42)` and the wordmark sheen `oklch(0.88 0.1 60)`.
 const _glowIris = Color(0x8C50459E);
 const _glowEmber = Color(0x2E7A2A01);
-const _taglineAccent = Color(0xFFF5A88B);
+const _taglineAccent = Color(0xFFFCAF91);
+const _sheenGold = Color(0xFFFFC894);
+
+/// Over the playing video: `linear-gradient(180deg, rgba(14,12,20,.55) 0%,
+/// rgba(14,12,20,.05) 22%, rgba(14,12,20,0) 42%, rgba(14,12,20,.55) 62%,
+/// rgba(14,12,20,.96) 84%, var(--night) 100%)`.
+const _videoShade = LinearGradient(
+  begin: Alignment.topCenter,
+  end: Alignment.bottomCenter,
+  colors: [
+    Color(0x8C0E0C14),
+    Color(0x0D0E0C14),
+    Color(0x000E0C14),
+    Color(0x8C0E0C14),
+    Color(0xF50E0C14),
+    AppColors.night,
+  ],
+  stops: [0, 0.22, 0.42, 0.62, 0.84, 1],
+);
+
+/// Where the wordmark sits while the video plays (the design's `top: 112`).
+const double _wordmarkTopWithVideo = 112;
+
+/// About how tall the wordmark block is (the 62 pt word, the gap and the
+/// 11 pt line under it), so a short phone can lift it clear of the copy.
+const double _wordmarkBlockHeight = 100;
 
 class _SplashScreenState extends ConsumerState<SplashScreen>
     with TickerProviderStateMixin {
-  /// When the tagline and the buttons reveal.
-  static const _revealAfter = Duration(milliseconds: 1500);
+  /// When the tagline and the buttons reveal (the design's `ready`).
+  static const _revealAfter = Duration(milliseconds: 1700);
+
+  /// When the wordmark's sheen starts sweeping (letter 0; each next letter
+  /// 60 ms later).
+  static const _sheenAfter = Duration(milliseconds: 1200);
 
   late final AnimationController _orbit = AnimationController(
     vsync: this,
@@ -145,6 +194,19 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
     vsync: this,
     duration: const Duration(milliseconds: 3500),
   );
+
+  /// `logoSheen 4.5s ease-in-out infinite`, one cycle for every letter
+  /// (each offset by 60 ms).
+  late final AnimationController _sheen = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 4500),
+  );
+  Timer? _sheenTimer;
+  bool _sheenDue = false;
+
+  /// The background video is playing: the orbit scene gives way to it.
+  bool _videoPlaying = false;
+  Timer? _orbitStopTimer;
 
   late Future<void> _initFuture;
   bool _startupFailed = false;
@@ -161,6 +223,10 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
     _revealTimer = Timer(_revealAfter, () {
       if (mounted) setState(() => _revealed = true);
     });
+    _sheenTimer = Timer(_sheenAfter, () {
+      _sheenDue = true;
+      if (mounted) _syncLoops();
+    });
 
     // Resolve the session in the background while the splash plays.
     _initFuture = ref.read(sessionControllerProvider.notifier).initialize();
@@ -170,23 +236,55 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    // Reduced motion holds the scene still: the orbit stays at its start and
-    // the glow at rest.
-    if (MotionConfig.enabled(context)) {
+    _syncLoops();
+  }
+
+  /// Reduced motion holds the scene still: the orbit stays at its start, the
+  /// glow at rest and the wordmark plain white. Once the video has taken
+  /// over, the hidden orbit and glow stop too.
+  void _syncLoops() {
+    final motion = MotionConfig.enabled(context);
+    if (motion && !_videoPlaying) {
+      _orbitStopTimer?.cancel();
+      _orbitStopTimer = null;
       if (!_orbit.isAnimating) _orbit.repeat();
       if (!_breathe.isAnimating) _breathe.repeat(reverse: true);
-    } else {
+    } else if (!motion) {
       _orbit.value = 0;
       _breathe.value = 0;
+    }
+    if (motion && _sheenDue) {
+      if (!_sheen.isAnimating) _sheen.repeat();
+    } else {
+      _sheen.value = 0;
+    }
+  }
+
+  void _onVideoReady(bool playing) {
+    if (!mounted || playing == _videoPlaying) return;
+    setState(() => _videoPlaying = playing);
+    if (playing) {
+      // The orbit fades out over 1.2 s; stop its loops once it is gone.
+      _orbitStopTimer?.cancel();
+      _orbitStopTimer = Timer(const Duration(milliseconds: 1300), () {
+        if (!mounted || !_videoPlaying) return;
+        _orbit.stop();
+        _breathe.stop();
+      });
+    } else {
+      _syncLoops();
     }
   }
 
   @override
   void dispose() {
     _revealTimer?.cancel();
+    _sheenTimer?.cancel();
+    _orbitStopTimer?.cancel();
     _visitClock.stop();
     _orbit.dispose();
     _breathe.dispose();
+    _sheen.dispose();
     super.dispose();
   }
 
@@ -296,29 +394,11 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
             style: AppTypography.sans(16).copyWith(color: Colors.white),
             child: LayoutBuilder(
               builder: (context, screen) => ClipRect(
-                child: Column(
+                child: Stack(
                   children: [
-                    Expanded(
-                      child: LayoutBuilder(
-                        builder: (context, zone) => _buildScene(zone, safe.top),
-                      ),
-                    ),
-                    // The copy takes its natural height, but never more than
-                    // 70% of the screen: at large text sizes or on a very short
-                    // phone it scrolls instead of pushing the scene away.
-                    ConstrainedBox(
-                      constraints: BoxConstraints(
-                        maxHeight: screen.maxHeight * 0.7,
-                      ),
-                      child: SingleChildScrollView(
-                        padding: EdgeInsets.fromLTRB(
-                          24,
-                          0,
-                          24,
-                          math.max(46, safe.bottom + 12),
-                        ),
-                        child: _buildCopyAndButtons(buttonsReady: signedOut),
-                      ),
+                    Positioned.fill(child: _buildVideo()),
+                    Positioned.fill(
+                      child: _buildContent(screen, safe, signedOut),
                     ),
                   ],
                 ),
@@ -330,9 +410,80 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
     );
   }
 
+  /// The library video (`SPLASH_VIDEO`, `vidIn 1.6s` + `kb 14s`) with its
+  /// shade and grain, which show only while it plays. Before that, and if it
+  /// can't play, this is just the night ground.
+  Widget _buildVideo() {
+    final playing = _videoPlaying;
+    return IgnorePointer(
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          V3LoopVideo(
+            key: SplashScreen.videoKey,
+            asset: AppAssets.videoSplash,
+            fallback: const SizedBox.expand(),
+            // vidIn: from opacity 0, blur(8px) brightness(.6) to clear.
+            opacityDuration: const Duration(milliseconds: 1600),
+            opacityCurve: AppMotion.out,
+            blur: playing ? 0 : 8,
+            brightness: playing ? 1 : 0.6,
+            filterDuration: const Duration(milliseconds: 1600),
+            filterCurve: AppMotion.out,
+            // kb: scale 1.08 → 1 over 14 s, ease-out.
+            initialScale: 1.08,
+            scale: 1,
+            scaleDuration: const Duration(seconds: 14),
+            scaleCurve: Curves.easeOut,
+            onReady: _onVideoReady,
+          ),
+          AnimatedOpacity(
+            opacity: playing ? 1 : 0,
+            duration: const Duration(milliseconds: 1200),
+            child: const Stack(
+              fit: StackFit.expand,
+              children: [
+                DecoratedBox(decoration: BoxDecoration(gradient: _videoShade)),
+                V3Grain(),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildContent(BoxConstraints screen, EdgeInsets safe, bool signedOut) {
+    return Column(
+      children: [
+        Expanded(
+          child: LayoutBuilder(
+            builder: (context, zone) => _buildScene(zone, safe.top),
+          ),
+        ),
+        // The copy takes its natural height, but never more than
+        // 70% of the screen: at large text sizes or on a very short
+        // phone it scrolls instead of pushing the scene away.
+        ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: screen.maxHeight * 0.7),
+          child: SingleChildScrollView(
+            padding: EdgeInsets.fromLTRB(
+              24,
+              0,
+              24,
+              math.max(46, safe.bottom + 12),
+            ),
+            child: _buildCopyAndButtons(buttonsReady: signedOut),
+          ),
+        ),
+      ],
+    );
+  }
+
   /// Glow, rings, orbit and wordmark, centred at the design's 330/506 of the
   /// space above the copy (so it matches the 844 pt frame and shrinks on
-  /// shorter phones).
+  /// shorter phones). While the video plays the glow, rings and orbit fade
+  /// away and the wordmark moves up to the top (`top 1.2s var(--io)`).
   Widget _buildScene(BoxConstraints zone, double topInset) {
     final cx = zone.maxWidth / 2;
     final cy = zone.maxHeight * 0.652;
@@ -343,10 +494,17 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
     final k = radius / 132;
     final glow = 520.0 * math.max(k, 0.7);
     final outer = (radius + 60.0 * k) * 2;
+    final motion = MotionConfig.enabled(context);
+    // The design's top 112 over the video; on a short phone, as high as it
+    // takes to stay clear of the copy below (but under the status bar).
+    final videoTop = math.min(
+      _wordmarkTopWithVideo,
+      math.max(topInset + 8, zone.maxHeight - _wordmarkBlockHeight),
+    );
 
     // Not clipped here: the glow and rings run on under the copy, as on the
     // design's full-screen canvas (the screen clips them).
-    return Stack(
+    final orbitScene = Stack(
       clipBehavior: Clip.none,
       children: [
         Positioned(
@@ -395,23 +553,31 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
             ),
           ),
         ),
-        Positioned(
+      ],
+    );
+
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Positioned.fill(
+          child: IgnorePointer(
+            ignoring: _videoPlaying,
+            child: AnimatedOpacity(
+              opacity: _videoPlaying ? 0 : 1,
+              duration: const Duration(milliseconds: 1200),
+              child: orbitScene,
+            ),
+          ),
+        ),
+        AnimatedPositioned(
           left: 0,
           right: 0,
-          top: cy - 34,
+          top: _videoPlaying ? videoTop : cy - 34,
+          duration: motion ? const Duration(milliseconds: 1200) : Duration.zero,
+          curve: AppMotion.io,
           child: Column(
             children: [
-              V3Rise(
-                delay: const Duration(milliseconds: 150),
-                duration: const Duration(seconds: 1),
-                child: Text(
-                  'cmpys',
-                  textAlign: TextAlign.center,
-                  style: AppTypography.display(
-                    62,
-                  ).copyWith(color: Colors.white, letterSpacing: 62 * 0.02),
-                ),
-              ),
+              _Wordmark(key: SplashScreen.wordmarkKey, sheen: _sheen),
               const SizedBox(height: 4),
               V3Rise(
                 delay: const Duration(milliseconds: 600),
@@ -420,9 +586,10 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
                 child: Text(
                   'COMPARE YOUR SUCCESS',
                   textAlign: TextAlign.center,
-                  style: AppTypography.sans(
-                    11,
-                  ).copyWith(color: AppColors.nink3, letterSpacing: 11 * 0.3),
+                  style: AppTypography.sans(11).copyWith(
+                    color: const Color(0xBFFFFFFF),
+                    letterSpacing: 11 * 0.3,
+                  ),
                 ),
               ),
             ],
@@ -433,39 +600,70 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
   }
 
   Widget _buildCopyAndButtons({required bool buttonsReady}) {
-    final tagline = AppTypography.display(
-      34,
-    ).copyWith(color: Colors.white, height: 1.08);
+    final tagline = AppTypography.display(34).copyWith(
+      color: Colors.white,
+      height: 1.08,
+      shadows: const [
+        Shadow(color: Color(0x99000000), offset: Offset(0, 2), blurRadius: 20),
+      ],
+    );
+    final glass = V3Button(
+      full: true,
+      kind: V3ButtonKind.glass,
+      onPressed: () => _openAuth(AppRoutes.authSignIn),
+      child: const Text('I already have an account'),
+    );
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _Reveal(
+        if (_videoPlaying)
+          _Reveal(
+            key: SplashScreen.avatarRowKey,
+            show: _revealed,
+            offset: 10,
+            child: const Padding(
+              padding: EdgeInsets.only(bottom: 18),
+              child: _BuildersRow(),
+            ),
+          ),
+        // `BlurWords`: each word resolves from a blur once the copy is
+        // ready; the second line in italic ember 380 ms behind.
+        KeyedSubtree(
           key: SplashScreen.taglineKey,
-          show: _revealed,
-          child: Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: Text.rich(
-              TextSpan(
-                style: tagline,
+          child: ExcludeSemantics(
+            excluding: !_revealed,
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const TextSpan(text: 'Learn from someone you admire.\n'),
-                  TextSpan(
+                  V3BlurWords(
+                    text: 'Learn from someone you admire.',
+                    show: _revealed,
+                    style: tagline,
+                    textAlign: TextAlign.center,
+                  ),
+                  V3BlurWords(
                     text: 'Measure yourself honestly.',
-                    style: AppTypography.displayItalic(
-                      34,
-                    ).copyWith(color: _taglineAccent, height: 1.08),
+                    show: _revealed,
+                    delay: const Duration(milliseconds: 380),
+                    style: AppTypography.displayItalic(34).copyWith(
+                      color: _taglineAccent,
+                      height: 1.08,
+                      shadows: tagline.shadows,
+                    ),
+                    textAlign: TextAlign.center,
                   ),
                 ],
               ),
-              textAlign: TextAlign.center,
             ),
           ),
         ),
         _Reveal(
           key: SplashScreen.introKey,
           show: _revealed,
-          delay: const Duration(milliseconds: 150),
+          delay: const Duration(milliseconds: 200),
           offset: 0,
           child: Padding(
             padding: const EdgeInsets.fromLTRB(10, 0, 10, 26),
@@ -482,7 +680,7 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
         _Reveal(
           key: SplashScreen.buttonsKey,
           show: _revealed && buttonsReady,
-          delay: const Duration(milliseconds: 250),
+          delay: const Duration(milliseconds: 300),
           offset: 20,
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -495,12 +693,18 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
                 child: const Text('Get started'),
               ),
               const SizedBox(height: 10),
-              V3Button(
-                full: true,
-                kind: V3ButtonKind.glass,
-                onPressed: () => _openAuth(AppRoutes.authSignIn),
-                child: const Text('I already have an account'),
-              ),
+              // Over the video the glass button frosts what is behind it
+              // (`backdrop-filter: blur(12px)`).
+              if (_videoPlaying)
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(999),
+                  child: BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                    child: glass,
+                  ),
+                )
+              else
+                glass,
             ],
           ),
         ),
@@ -774,6 +978,262 @@ class _PopInState extends State<_PopIn> {
     return V3Pop(
       duration: const Duration(milliseconds: 800),
       child: widget.child,
+    );
+  }
+}
+
+/// "cmpys" in display 62, one glyph per letter so each can rise and catch
+/// the sheen on its own. Screen readers hear the word once.
+///
+/// Each letter rises (`rise .9s var(--spring)`, from 150 ms, 70 ms apart),
+/// then a warm sheen sweeps across it on [sheen] (`logoSheen 4.5s
+/// ease-in-out infinite`, 60 ms apart). With reduced motion the word is
+/// plain white and still.
+class _Wordmark extends StatelessWidget {
+  const _Wordmark({super.key, required this.sheen});
+
+  static const _word = 'cmpys';
+
+  final Animation<double> sheen;
+
+  @override
+  Widget build(BuildContext context) {
+    final motion = MotionConfig.enabled(context);
+    final style = AppTypography.display(
+      62,
+    ).copyWith(color: Colors.white, letterSpacing: 62 * 0.02);
+    return Semantics(
+      label: _word,
+      excludeSemantics: true,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.baseline,
+        textBaseline: TextBaseline.alphabetic,
+        children: [
+          for (var i = 0; i < _word.length; i++)
+            _LetterRise(
+              delay: Duration(milliseconds: 150 + i * 70),
+              child: _SheenLetter(
+                letter: _word[i],
+                style: style,
+                // 60 ms per letter, as a share of the 4.5 s cycle.
+                lag: i * 60 / 4500,
+                sheen: motion ? sheen : null,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One wordmark letter with its soft shadow (`0 4px 30px rgba(0,0,0,.45)`)
+/// and, when [sheen] runs, the sweep: CSS paints the letter with
+/// `linear-gradient(100deg, #fff 40%, oklch(0.88 0.1 60) 50%, #fff 60%)`
+/// sized 300% of the letter and slides it from `background-position 150%`
+/// to `-50%`, so the warm band crosses the letter once per cycle.
+class _SheenLetter extends StatelessWidget {
+  const _SheenLetter({
+    required this.letter,
+    required this.style,
+    required this.lag,
+    required this.sheen,
+  });
+
+  final String letter;
+  final TextStyle style;
+  final double lag;
+  final Animation<double>? sheen;
+
+  static const _shadow = Shadow(
+    color: Color(0x73000000),
+    offset: Offset(0, 4),
+    blurRadius: 30,
+  );
+
+  // CSS 100deg: towards the right and slightly down.
+  static final double _dirX = math.sin(100 * math.pi / 180);
+  static final double _dirY = -math.cos(100 * math.pi / 180);
+
+  /// The sweep's shader for a letter of [bounds] at cycle [phase] (0–1).
+  static Shader _shader(Rect bounds, double phase) {
+    final w = bounds.width;
+    final h = bounds.height;
+    final eased = Curves.easeInOut.transform(phase);
+    final position = 1.5 - 2 * eased; // background-position 150% → -50%
+    // The 300%-wide gradient box sits at (letter − box) × position.
+    final box = Rect.fromLTWH(
+      bounds.left - 2 * w * position,
+      bounds.top,
+      3 * w,
+      h,
+    );
+    final length = (box.width * _dirX).abs() + (box.height * _dirY).abs();
+    final ax = _dirX * length / box.width;
+    final ay = h == 0 ? 0.0 : _dirY * length / box.height;
+    return LinearGradient(
+      begin: Alignment(-ax, -ay),
+      end: Alignment(ax, ay),
+      colors: const [
+        Colors.white,
+        Colors.white,
+        _sheenGold,
+        Colors.white,
+        Colors.white,
+      ],
+      stops: const [0, 0.4, 0.5, 0.6, 1],
+    ).createShader(box);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final glyph = Text(letter, style: style);
+    final sheen = this.sheen;
+    return Stack(
+      children: [
+        // The shadow alone, under the (shaded) letter.
+        Text(
+          letter,
+          style: style.copyWith(
+            color: const Color(0x00FFFFFF),
+            shadows: const [_shadow],
+          ),
+        ),
+        if (sheen == null)
+          glyph
+        else
+          AnimatedBuilder(
+            animation: sheen,
+            child: glyph,
+            builder: (context, child) {
+              final phase = (sheen.value - lag) % 1.0;
+              return ShaderMask(
+                blendMode: BlendMode.srcIn,
+                shaderCallback: (bounds) => _shader(bounds, phase),
+                child: child,
+              );
+            },
+          ),
+      ],
+    );
+  }
+}
+
+/// `rise .9s var(--spring)` after [delay] (fill `both`: hidden until then).
+/// The spring overshoots, so the letter lifts a touch past its place and
+/// settles. With reduced motion the letter is simply there.
+class _LetterRise extends StatefulWidget {
+  const _LetterRise({required this.delay, required this.child});
+
+  final Duration delay;
+  final Widget child;
+
+  @override
+  State<_LetterRise> createState() => _LetterRiseState();
+}
+
+class _LetterRiseState extends State<_LetterRise>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 900),
+  );
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer(widget.delay, _controller.forward);
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!MotionConfig.enabled(context)) return widget.child;
+    return AnimatedBuilder(
+      animation: _controller,
+      child: widget.child,
+      builder: (context, child) {
+        final t = AppMotion.spring.transform(_controller.value);
+        return Opacity(
+          opacity: t.clamp(0.0, 1.0),
+          child: Transform.translate(
+            offset: Offset(0, 14 * (1 - t)),
+            child: child,
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// "Learn with history’s builders" beside the five mentors' grey 34 pt
+/// avatars, overlapping by 10 pt with a night ring, each popping in 80 ms
+/// after the one before (`pop .6s var(--spring)`). Shown only over the
+/// video.
+class _BuildersRow extends StatelessWidget {
+  const _BuildersRow();
+
+  static const double _size = 34;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        ExcludeSemantics(
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (var i = 0; i < _mentors.length; i++)
+                // Each avatar after the first overlaps the one before by
+                // 10 pt (`margin-left: -10px`) and sits on top of it.
+                Align(
+                  widthFactor: i == _mentors.length - 1
+                      ? 1
+                      : (_size - 10) / _size,
+                  alignment: Alignment.centerLeft,
+                  child: V3Pop(
+                    duration: const Duration(milliseconds: 600),
+                    delay: Duration(milliseconds: i * 80),
+                    child: DecoratedBox(
+                      position: DecorationPosition.foreground,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(color: AppColors.night, width: 2),
+                      ),
+                      child: V3Avatar(
+                        image: AssetImage(
+                          'assets/images/mentors/${_mentors[i].slug}.png',
+                        ),
+                        initials: _mentors[i].initials,
+                        tint: _mentors[i].tint,
+                        size: _size,
+                        gray: true,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 10),
+        Flexible(
+          child: Text(
+            'Learn with history’s builders',
+            style: AppTypography.sans(
+              12.5,
+              FontWeight.w500,
+            ).copyWith(color: AppColors.nink2),
+          ),
+        ),
+      ],
     );
   }
 }

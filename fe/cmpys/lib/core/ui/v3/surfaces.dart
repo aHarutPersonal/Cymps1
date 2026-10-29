@@ -588,6 +588,94 @@ BoxDecoration v3Card({
   );
 }
 
+/// Frosted glass over whatever is behind it (a video, say): the backdrop is
+/// blurred by [blur] (and saturated by [saturation], CSS `saturate()`), then
+/// tinted with [tint], inside a [radius] rounded box with a 1 pt
+/// [borderColor] hairline. [child] is padded by [padding].
+///
+/// The mentor lab's two looks are [V3Frosted.stage] (`rgba(20,18,28,.55)`,
+/// `blur(18px) saturate(1.3)`, white border at .1) and [V3Frosted.secondary]
+/// (`rgba(25,22,34,.72)`, `blur(18px)`, white border at .08).
+class V3Frosted extends StatelessWidget {
+  const V3Frosted({
+    super.key,
+    required this.child,
+    required this.tint,
+    this.blur = 18,
+    this.saturation = 1,
+    this.radius = 24,
+    this.borderColor = const Color(0x1AFFFFFF),
+    this.padding = EdgeInsets.zero,
+  });
+
+  /// The lab's stage list card.
+  const V3Frosted.stage({
+    super.key,
+    required this.child,
+    this.padding = const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+  }) : tint = const Color(0x8C14121C),
+       blur = 18,
+       saturation = 1.3,
+       radius = 24,
+       borderColor = const Color(0x1AFFFFFF);
+
+  /// The lab's secondary cards ("From your comparison", "Blueprint
+  /// direction", "12-week roadmap").
+  const V3Frosted.secondary({
+    super.key,
+    required this.child,
+    this.padding = const EdgeInsets.all(18),
+  }) : tint = const Color(0xB8191622),
+       blur = 18,
+       saturation = 1,
+       radius = 24,
+       borderColor = const Color(0x14FFFFFF);
+
+  final Widget child;
+  final Color tint;
+
+  /// Backdrop blur in logical pixels (CSS `blur()`).
+  final double blur;
+
+  /// Backdrop saturation (CSS `saturate()`); 1 is unchanged.
+  final double saturation;
+  final double radius;
+  final Color borderColor;
+  final EdgeInsetsGeometry padding;
+
+  @override
+  Widget build(BuildContext context) {
+    final shape = BorderRadius.circular(radius);
+    final ImageFilter blurFilter = ImageFilter.blur(sigmaX: blur, sigmaY: blur);
+    final s = saturation;
+    final filter = (s - 1).abs() < 0.001
+        ? blurFilter
+        : ImageFilter.compose(
+            outer: ColorFilter.matrix([
+              0.213 + 0.787 * s, 0.715 - 0.715 * s, 0.072 - 0.072 * s, 0, 0, //
+              0.213 - 0.213 * s, 0.715 + 0.285 * s, 0.072 - 0.072 * s, 0, 0,
+              0.213 - 0.213 * s, 0.715 - 0.715 * s, 0.072 + 0.928 * s, 0, 0,
+              0, 0, 0, 1, 0,
+            ]),
+            inner: blurFilter,
+          );
+    return ClipRRect(
+      borderRadius: shape,
+      child: BackdropFilter(
+        filter: filter,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: tint,
+            borderRadius: shape,
+            border: Border.all(color: borderColor),
+          ),
+          child: Padding(padding: padding, child: child),
+        ),
+      ),
+    );
+  }
+}
+
 /// `TopBar` from `v3/core.jsx`: a 52 pt bar below the status bar with an
 /// optional 40 pt back button, a 15.5 pt title and 12 pt subtitle, and a
 /// [right] slot. [solid] paints paper (night when [dark]) behind it.

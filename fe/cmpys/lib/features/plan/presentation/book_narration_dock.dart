@@ -8,6 +8,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../app/assets.dart';
 import '../../../app/design_tokens.dart';
 import '../../../core/ui/haptics.dart';
 import '../../../core/ui/motion/motion_config.dart';
@@ -395,6 +396,12 @@ class BookNarrationFullPlayer extends ConsumerStatefulWidget {
   /// Key on the seek bar's touch area.
   static const seekKey = Key('book-narration-seek');
 
+  /// Key on the background video (absent with reduced motion).
+  static const videoKey = Key('book-narration-video');
+
+  /// Key on the gradient laid over the video once it plays.
+  static const videoOverlayKey = Key('book-narration-video-overlay');
+
   final BookNarrationRemoteController? controller;
 
   /// The tab shell's App menu: switch tabs while the reader keeps narrating.
@@ -410,6 +417,37 @@ class _BookNarrationFullPlayerState
     extends ConsumerState<BookNarrationFullPlayer> {
   _PlayerView? _last;
   bool _closing = false;
+
+  /// Whether the background video has started showing (its gradient then
+  /// fades in over it; without it the player stays today's design).
+  bool _videoShown = false;
+
+  /// The player's route, watched so the video stops as soon as the player
+  /// starts closing (by any path: Back, a swipe, Stop, the session ending).
+  Animation<double>? _routeAnimation;
+  bool _leaving = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final animation = ModalRoute.of(context)?.animation;
+    if (identical(animation, _routeAnimation)) return;
+    _routeAnimation?.removeStatusListener(_onRouteStatus);
+    _routeAnimation = animation?..addStatusListener(_onRouteStatus);
+  }
+
+  void _onRouteStatus(AnimationStatus status) {
+    final leaving =
+        status == AnimationStatus.reverse ||
+        status == AnimationStatus.dismissed;
+    if (leaving != _leaving && mounted) setState(() => _leaving = leaving);
+  }
+
+  @override
+  void dispose() {
+    _routeAnimation?.removeStatusListener(_onRouteStatus);
+    super.dispose();
+  }
 
   BookNarrationRemoteController get _remote =>
       widget.controller ?? ref.watch(bookNarrationRemoteControllerProvider);
@@ -605,6 +643,60 @@ class _BookNarrationFullPlayerState
                 ),
               ),
             ),
+            // The ambient `listen` loop: only while this player is open and
+            // the narration plays (a closing or covered player is not the
+            // current route, so the video pauses). Paused, it dims,
+            // desaturates and drifts out. Reduced motion: no video.
+            if (motion) ...[
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: V3LoopVideo(
+                    key: BookNarrationFullPlayer.videoKey,
+                    asset: AppAssets.videoListening,
+                    fallback: const SizedBox.expand(),
+                    playing: view.playing && !_leaving,
+                    // `opacity 1s, filter 1s, transform 2s var(--out)`.
+                    opacity: view.playing ? .75 : .4,
+                    opacityDuration: const Duration(seconds: 1),
+                    opacityCurve: Curves.ease,
+                    saturation: view.playing ? 1 : .5,
+                    filterDuration: const Duration(seconds: 1),
+                    scale: view.playing ? 1 : 1.06,
+                    scaleDuration: const Duration(seconds: 2),
+                    onReady: (shown) {
+                      if (mounted && shown != _videoShown) {
+                        setState(() => _videoShown = shown);
+                      }
+                    },
+                  ),
+                ),
+              ),
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: AnimatedOpacity(
+                    key: BookNarrationFullPlayer.videoOverlayKey,
+                    opacity: _videoShown ? 1 : 0,
+                    duration: const Duration(milliseconds: 1200),
+                    curve: AppMotion.out,
+                    child: const DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            Color(0x990E0C14),
+                            Color(0x330E0C14),
+                            Color(0x8C0E0C14),
+                            Color(0xF20E0C14),
+                          ],
+                          stops: [0, .35, .65, 1],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
             const Positioned.fill(child: V3Grain()),
             Column(
               children: [
@@ -634,7 +726,8 @@ class _BookNarrationFullPlayerState
                             children: [
                               const SizedBox(height: 10),
                               AnimatedScale(
-                                scale: view.playing ? 1 : .92,
+                                // Reduced motion: a static cover.
+                                scale: !motion || view.playing ? 1 : .92,
                                 duration: motion
                                     ? const Duration(milliseconds: 600)
                                     : Duration.zero,

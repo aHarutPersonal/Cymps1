@@ -18,6 +18,7 @@ import '../state/habit_toggle.dart';
 import '../state/plan_data.dart';
 import '../state/plan_providers.dart';
 import '../state/today_data.dart';
+import 'week_unlock_trigger.dart';
 
 typedef _PlanStoreView = ({
   CmpysIdol idol,
@@ -54,6 +55,12 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen>
   int _view = 0; // 0 = Roadmap, 1 = Daily habits
 
   bool _onScreen = true;
+
+  /// The roadmap's "This week" section, which "Start week n" scrolls to.
+  final GlobalKey _thisWeekKey = GlobalKey();
+
+  /// A "Week unlocked" check is waiting for the next frame.
+  bool _weekUnlockQueued = false;
 
   DateTime get _now => widget.clock?.call() ?? DateTime.now();
 
@@ -168,6 +175,7 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen>
         ? planState.plan
         : null;
     _holdWeekReads(plan);
+    _queueWeekUnlock(plan);
 
     return Scaffold(
       backgroundColor: AppColors.paper,
@@ -199,6 +207,44 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen>
         ),
       ),
     );
+  }
+
+  // ── week unlocked ──
+
+  /// After this frame, shows "Week n unlocked" once if the plan has moved
+  /// to a new week this account hasn't seen ([maybeShowWeekUnlock]).
+  void _queueWeekUnlock(BackendPlan? plan) {
+    if (plan == null || _weekUnlockQueued) return;
+    final week = weekUnlockDueWeek(plan);
+    if (week == null ||
+        !ref
+            .read(cmpysStoreProvider.notifier)
+            .shouldShowWeekUnlock(plan.id, week)) {
+      return;
+    }
+    _weekUnlockQueued = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      _weekUnlockQueued = false;
+      if (!mounted) return;
+      final result = await maybeShowWeekUnlock(context, ref, plan);
+      if (result == WeekUnlockResult.start && mounted) _showThisWeek();
+    });
+  }
+
+  /// "Start week n": stay on Plan, on the roadmap, scrolled to the week.
+  void _showThisWeek() {
+    if (_view != 0) setState(() => _view = 0);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final target = _thisWeekKey.currentContext;
+      if (!mounted || target == null) return;
+      Scrollable.ensureVisible(
+        target,
+        duration: MotionConfig.enabled(context)
+            ? const Duration(milliseconds: 600)
+            : Duration.zero,
+        curve: AppMotion.out,
+      );
+    });
   }
 
   // ── header ──
@@ -252,10 +298,9 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen>
                     child: V3CountUp(
                       to: (progress * 100).round(),
                       format: (v) => '${v.round()}%',
-                      style: AppTypography.sans(
-                        15,
-                        FontWeight.w700,
-                      ).merge(AppTypography.tnum).copyWith(color: AppColors.ink),
+                      style: AppTypography.sans(15, FontWeight.w700)
+                          .merge(AppTypography.tnum)
+                          .copyWith(color: AppColors.ink),
                     ),
                   ),
                 ),
@@ -316,6 +361,7 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen>
           ),
           if (blueprint != null) blueprint,
           V3Rise(
+            key: _thisWeekKey,
             delay: const Duration(milliseconds: 300),
             child: V3Section(
               title: 'This week',
@@ -343,7 +389,10 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen>
           ),
         ];
       case CurrentPlanStatus.loading:
-        return [if (blueprint != null) blueprint, _statusPad(_skeletonBlocks())];
+        return [
+          if (blueprint != null) blueprint,
+          _statusPad(_skeletonBlocks()),
+        ];
       case CurrentPlanStatus.failed:
         return [
           if (blueprint != null) blueprint,
@@ -699,9 +748,7 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen>
       child: AnimatedContainer(
         duration: motion ? const Duration(milliseconds: 300) : Duration.zero,
         padding: const EdgeInsets.fromLTRB(9, 9, 16, 16),
-        decoration: v3Card(
-          borderColor: on ? AppColors.sage : AppColors.hair,
-        ),
+        decoration: v3Card(borderColor: on ? AppColors.sage : AppColors.hair),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -741,10 +788,9 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen>
                               : '${habitSessionMinutes(item)} min',
                           maxLines: 3,
                           overflow: TextOverflow.ellipsis,
-                          style: AppTypography.sans(13).copyWith(
-                            color: AppColors.ink2,
-                            height: 1.45,
-                          ),
+                          style: AppTypography.sans(
+                            13,
+                          ).copyWith(color: AppColors.ink2, height: 1.45),
                         ),
                       ],
                     ),
@@ -807,19 +853,17 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen>
           );
     return Column(
       children: [
-        V3Pop(
-          key: Key('plan-habit-$itemId-day-$k'),
-          child: cell,
-        ),
+        V3Pop(key: Key('plan-habit-$itemId-day-$k'), child: cell),
         const SizedBox(height: 4),
         Text(
           today ? 'Today' : _letters[k],
           maxLines: 1,
           softWrap: false,
           overflow: TextOverflow.clip,
-          style: AppTypography.sans(10, FontWeight.w600).copyWith(
-            color: today ? AppColors.ink : AppColors.ink3,
-          ),
+          style: AppTypography.sans(
+            10,
+            FontWeight.w600,
+          ).copyWith(color: today ? AppColors.ink : AppColors.ink3),
         ),
       ],
     );

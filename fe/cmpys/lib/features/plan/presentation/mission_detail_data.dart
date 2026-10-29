@@ -158,3 +158,12 @@ List<String> definitionOfDoneLines(String? text) {
   }
   return (title: null, body: trimmed);
 }
+
+/// Whether the mental model card shows the farm images (owner ruling,
+/// 2026-10-29): only when the model is about a farm, a case-insensitive
+/// "farm" in its [title] or [body]. The images were made for the
+/// prototype's "farm test"; every other model keeps the text-only card.
+bool mentalModelIsAboutFarm(({String? title, String body}) model) {
+  final farm = RegExp('farm', caseSensitive: false);
+  return farm.hasMatch(model.title ?? '') || farm.hasMatch(model.body);
+}

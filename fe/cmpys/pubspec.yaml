@@ -72,6 +72,9 @@ dev_dependencies:
   # Test fakes for the in-app web viewer (WebViewPlatform, UrlLauncherPlatform).
   url_launcher_platform_interface: ^2.3.2
   webview_flutter_platform_interface: ^2.15.1
+  # Test fake for the bundled loop videos (V3LoopVideo); pinned to the
+  # resolved transitive version.
+  video_player_platform_interface: 6.6.0
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is
@@ -97,6 +100,8 @@ flutter:
     - assets/images/
     - assets/images/mentors/
     - assets/images/voices/
+    - assets/images/generated/
+    - assets/videos/
 
   # Geist (SIL OFL 1.1, see THIRD_PARTY_ASSETS.md) is the v3 UI face. It is not
   # in google_fonts, so the four static weights are bundled.

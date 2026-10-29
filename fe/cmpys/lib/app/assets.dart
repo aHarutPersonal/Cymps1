@@ -77,20 +77,26 @@ class AppAssets {
   // IMAGES (PNG/JPG/WEBP)
   // ============================================
 
-  // Add image assets here as they are added to assets/images/
-  // Example:
-  // static const String imageLogo = 'assets/images/logo.png';
-  // static const String imageOnboarding1 = 'assets/images/onboarding_1.png';
+  /// Mission mental-model card, shown only for farm models (see
+  /// THIRD_PARTY_ASSETS.md).
+  static const String imageMentalModelFarmA =
+      'assets/images/generated/mental_model_farm_a.webp';
+  static const String imageMentalModelFarmB =
+      'assets/images/generated/mental_model_farm_b.webp';
 
   // ============================================
-  // VIDEOS
+  // VIDEOS (720×1280 H.264, no audio; see THIRD_PARTY_ASSETS.md)
   // ============================================
 
-  /// Videos folder path - add video files here
   static const String videosPath = 'assets/videos/';
 
-  // Add video assets here when available
-  // Note: Splash video will be added manually later
-  // Example:
-  // static const String videoSplash = 'assets/videos/splash.mp4';
+  static const String videoSplash = 'assets/videos/splash.mp4';
+  static const String videoMentorLab = 'assets/videos/mentor_lab.mp4';
+  static const String videoMentorBuffett = 'assets/videos/mentor_buffett.mp4';
+  static const String videoWeekUnlock = 'assets/videos/week_unlock.mp4';
+  static const String videoListening = 'assets/videos/listening.mp4';
+  static const String videoCelebrateTutorial =
+      'assets/videos/celebrate_tutorial.mp4';
+  static const String videoCelebrateHabits =
+      'assets/videos/celebrate_habits.mp4';
 }

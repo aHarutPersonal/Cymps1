@@ -12,6 +12,7 @@ import 'package:cmpys/features/plan/models/plan_models.dart';
 import 'package:cmpys/features/plan/presentation/book_narration_checkpoint.dart';
 import 'package:cmpys/features/plan/presentation/book_narration_dock.dart';
 import 'package:cmpys/features/plan/presentation/book_reader_screen.dart';
+import 'package:cmpys/features/plan/presentation/lesson_reader_screen.dart';
 import 'package:cmpys/features/plan/presentation/material_web_screen.dart';
 import 'package:cmpys/features/plan/presentation/plan_item_detail_screen.dart';
 import 'package:cmpys/features/plan/state/book_narration_remote_controller.dart';
@@ -354,11 +355,15 @@ void main() {
       await _pumpScreen(tester, harness.build());
 
       expect(find.text('SUNDAY · 25 OCTOBER'), findsOneWidget);
+      // The greeting resolves word by word (`BlurWords`), then the name.
+      Finder blurWords(String text) =>
+          find.byWidgetPredicate((w) => w is V3BlurWords && w.text == text);
+      expect(blurWords('Good afternoon,'), findsOneWidget);
+      expect(blurWords('Maya.'), findsOneWidget);
       expect(
-        find.textContaining('Good afternoon,', findRichText: true),
-        findsOneWidget,
+        tester.widget<V3BlurWords>(blurWords('Maya.')).delay,
+        const Duration(milliseconds: 160),
       );
-      expect(find.textContaining('Maya.', findRichText: true), findsOneWidget);
       expect(find.text('Day 16 of 84'), findsOneWidget);
       expect(find.text('Week 1 · Buffett'), findsOneWidget);
       // NextUp: the first unfinished tutorial of the current mission.
@@ -649,6 +654,202 @@ void main() {
     expect(overlay.celebration.stat, 4);
     expect(find.text('Done for today'), findsNothing);
     await _settleTimers(tester);
+  });
+
+  group('motion (SPEC §4)', () {
+    Widget reduced(Widget screen) => Builder(
+      builder: (context) => MediaQuery(
+        data: MediaQuery.of(context).copyWith(disableAnimations: true),
+        child: screen,
+      ),
+    );
+
+    /// The ink layer's painter (the reveal's growing circle), if any.
+    Finder ink() => find.byWidgetPredicate(
+      (w) =>
+          w is CustomPaint && w.painter.runtimeType.toString() == '_InkPainter',
+    );
+
+    double fill(WidgetTester tester) => tester
+        .widget<Transform>(find.byKey(todayStreakFillKey))
+        .transform
+        .entry(1, 1);
+
+    Finder dashed() => find.byWidgetPredicate(
+      (w) =>
+          w is CustomPaint &&
+          w.painter.runtimeType.toString() == '_DashedRRectPainter',
+    );
+
+    testWidgets('Continue: the ink in the reader colour opens the tutorial '
+        'once it covers', (tester) async {
+      final harness = _Harness(
+        repo: _FakePlanRepository([_Habit('h1', 'Read ten pages')]),
+        initial: _ready(),
+      );
+      harness.store.setReadTheme('sepia');
+      await _pumpScreen(tester, harness.build());
+
+      final play = find.byWidgetPredicate(
+        (w) => w is V3Pressable && w.semanticLabel == 'Continue tutorial',
+      );
+      final centre = tester.getCenter(play);
+      await tester.tap(play);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      // Growing from the button, in the sepia page colour; nothing opened.
+      expect(ink(), findsOneWidget);
+      final painter = tester.widget<CustomPaint>(ink()).painter! as dynamic;
+      expect(painter.color, const Color(0xFFF1E7D3));
+      expect(painter.at, centre);
+      expect(find.byType(LessonReaderScreen), findsNothing);
+
+      // 480 ms: covered, the tutorial opens underneath.
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump();
+      expect(find.byType(LessonReaderScreen), findsOneWidget);
+      expect(
+        tester
+            .widget<LessonReaderScreen>(find.byType(LessonReaderScreen))
+            .step
+            .id,
+        's2',
+      );
+      // Gone by 1.1 s.
+      await tester.pump(const Duration(milliseconds: 700));
+      expect(ink(), findsNothing);
+      Navigator.of(tester.element(find.byType(LessonReaderScreen))).pop();
+      await _settleTimers(tester);
+    });
+
+    testWidgets('the Up next card tilts under the finger and its buttons '
+        'still work', (tester) async {
+      final harness = _Harness(
+        repo: _FakePlanRepository([_Habit('h1', 'Read ten pages')]),
+        initial: _ready(),
+      );
+      await _pumpScreen(tester, harness.build());
+      final tilt = find.byKey(V3Tilt.transformKey);
+      expect(tilt, findsOneWidget);
+      final gesture = await tester.startGesture(
+        tester.getTopLeft(find.text('Owner earnings, step by step')) +
+            const Offset(4, 4),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 150));
+      expect(
+        tester.widget<Transform>(tilt).transform,
+        isNot(Matrix4.identity()),
+      );
+      await gesture.up();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 800));
+      expect(tester.widget<Transform>(tilt).transform, Matrix4.identity());
+
+      // "Up next" still opens the mission.
+      await tester.tap(find.text('Up next · Tutorial 2 of 3'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(find.byType(PlanItemDetailScreen), findsOneWidget);
+      await _settleTimers(tester);
+    });
+
+    testWidgets('the streak flame flickers beside the count', (tester) async {
+      final harness = _Harness(
+        repo: _FakePlanRepository([_Habit('h1', 'Read ten pages')]),
+        initial: _ready(),
+      );
+      await _pumpScreen(tester, harness.build());
+      final flame = tester.widget<V3Flame>(find.byType(V3Flame));
+      expect(flame.size, 22);
+      expect(find.byKey(V3Flame.embersKey), findsOneWidget);
+      await _settleTimers(tester);
+    });
+
+    testWidgets('today’s cell fills by habits done, with a crest while '
+        'partly full', (tester) async {
+      final repo = _FakePlanRepository([
+        _Habit('h1', 'Read ten pages', done: true),
+        _Habit('h2', 'One honest sentence'),
+        _Habit('h3', 'Walk'),
+      ]);
+      final harness = _Harness(repo: repo, initial: _ready());
+      await _pumpScreen(tester, harness.build());
+      await tester.pump(const Duration(milliseconds: 1000));
+      expect(fill(tester), closeTo(1 / 3, 1e-9));
+      expect(find.byKey(todayStreakCrestKey), findsOneWidget);
+      expect(dashed(), findsOneWidget);
+
+      // A second habit: the fill springs up over .9 s.
+      await tester.tap(
+        find.byWidgetPredicate((w) => w is V3CheckDot && !w.done).first,
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(fill(tester), inExclusiveRange(1 / 3, 2 / 3 + .1));
+      await tester.pump(const Duration(milliseconds: 900));
+      expect(fill(tester), closeTo(2 / 3, 1e-9));
+      expect(find.byKey(todayStreakCrestKey), findsOneWidget);
+      await _settleTimers(tester);
+    });
+
+    testWidgets('all habits done: a full cell, no dashes, no crest', (
+      tester,
+    ) async {
+      final repo = _FakePlanRepository([
+        _Habit('h1', 'Read ten pages', done: true),
+        _Habit('h2', 'One honest sentence', done: true),
+      ]);
+      final harness = _Harness(repo: repo, initial: _ready());
+      await _pumpScreen(tester, harness.build());
+      await tester.pump(const Duration(milliseconds: 1000));
+      expect(fill(tester), 1);
+      expect(find.byKey(todayStreakCrestKey), findsNothing);
+      expect(dashed(), findsNothing);
+      await _settleTimers(tester);
+    });
+
+    testWidgets('reduced motion: plain greeting, no tilt, static flame, the '
+        'fill jumps, no crest, and the reveal is a fade', (tester) async {
+      final repo = _FakePlanRepository([
+        _Habit('h1', 'Read ten pages', done: true),
+        _Habit('h2', 'One honest sentence'),
+      ]);
+      final harness = _Harness(repo: repo, initial: _ready());
+      await _pumpScreen(tester, harness.build(wrap: reduced));
+
+      // BlurWords fall back to one plain text each.
+      expect(find.text('Good afternoon,'), findsOneWidget);
+      expect(find.text('Maya.'), findsOneWidget);
+      expect(find.byKey(V3Flame.embersKey), findsNothing);
+      expect(fill(tester), .5);
+      expect(find.byKey(todayStreakCrestKey), findsNothing);
+
+      final tilt = find.byKey(V3Tilt.transformKey);
+      final gesture = await tester.startGesture(
+        tester.getTopLeft(find.text('Owner earnings, step by step')) +
+            const Offset(4, 4),
+      );
+      await tester.pump(const Duration(milliseconds: 150));
+      expect(tester.widget<Transform>(tilt).transform, Matrix4.identity());
+      await gesture.up();
+      await tester.pump();
+
+      await tester.tap(
+        find.byWidgetPredicate(
+          (w) => w is V3Pressable && w.semanticLabel == 'Continue tutorial',
+        ),
+      );
+      await tester.pump();
+      // No growing circle: a colour fade, covered at 200 ms.
+      expect(ink(), findsNothing);
+      await tester.pump(const Duration(milliseconds: 210));
+      await tester.pump();
+      expect(find.byType(LessonReaderScreen), findsOneWidget);
+      await tester.pump(const Duration(milliseconds: 400));
+      Navigator.of(tester.element(find.byType(LessonReaderScreen))).pop();
+      await _settleTimers(tester);
+    });
   });
 
   testWidgets('habit minutes are the server’s session minutes', (tester) async {

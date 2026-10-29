@@ -18,6 +18,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../session/models/session_models.dart';
 import '../data/cmpys_record_data.dart';
 import '../data/cmpys_seed.dart';
+import 'week_unlock_ledger.dart';
+
+export 'week_unlock_ledger.dart';
 
 /// The unkeyed store an older build wrote: migrated once, to its owner
 /// ([CmpysStore.openAccount]).
@@ -482,6 +485,7 @@ class CmpysState {
     this.reflections = const {},
     this.chatThread,
     this.chatThreads = const [],
+    this.weekUnlocks = const WeekUnlockLedger(),
   });
 
   final CmpysUser user;
@@ -523,6 +527,10 @@ class CmpysState {
   final CmpysChatThread? chatThread;
   final List<CmpysChatThread> chatThreads;
 
+  /// The "Week unlocked" moments already shown on this account, per plan
+  /// (see [CmpysStore.shouldShowWeekUnlock]).
+  final WeekUnlockLedger weekUnlocks;
+
   /// A truly empty start: no pre-logged achievements, no fake streak, nothing
   /// checked off. Every entry the user sees is either backend-generated or
   /// explicitly entered by them.
@@ -562,6 +570,7 @@ class CmpysState {
     Map<String, String>? reflections,
     CmpysChatThread? chatThread,
     List<CmpysChatThread>? chatThreads,
+    WeekUnlockLedger? weekUnlocks,
     bool clearComparisonMd = false,
     bool clearBlueprintMd = false,
   }) =>
@@ -587,6 +596,7 @@ class CmpysState {
         reflections: reflections ?? this.reflections,
         chatThread: chatThread ?? this.chatThread,
         chatThreads: chatThreads ?? this.chatThreads,
+        weekUnlocks: weekUnlocks ?? this.weekUnlocks,
       );
 
   Map<String, dynamic> toJson() => {
@@ -610,6 +620,7 @@ class CmpysState {
         'reflections': reflections,
         'chatThread': chatThread?.toJson(),
         'chatThreads': chatThreads.map((t) => t.toJson()).toList(),
+        'weekUnlocks': weekUnlocks.toJson(),
       };
 
   factory CmpysState.fromJson(Map<String, dynamic> j) => parseStored(j).state;
@@ -713,6 +724,11 @@ class CmpysState {
                 ?CmpysChatThread.tryParse(t),
             ].take(cmpysMaxChatThreads).toList()
           : base.chatThreads,
+      weekUnlocks: field(
+        'weekUnlocks',
+        base.weekUnlocks,
+        WeekUnlockLedger.parse,
+      ),
     );
     return (state: state, dropped: dropped);
   }
@@ -1265,6 +1281,27 @@ class CmpysStore extends StateNotifier<CmpysState> {
       goalId: state.user.goalId,
     );
     _set(state.copyWith(user: u));
+  }
+
+  // ── week unlocks ──
+
+  /// Whether the "Week unlocked" moment for [week] of [planId] should show
+  /// now: never for week 1, at most once per plan and week on this account,
+  /// and only once the account's stored data has loaded (so an early check
+  /// can't replay a moment already shown). False with no account open.
+  bool shouldShowWeekUnlock(String planId, int week) =>
+      _accountId != null &&
+      _hydrated &&
+      state.weekUnlocks.shouldShow(planId, week);
+
+  /// Records that [week] of [planId] has been shown on this account and
+  /// writes it at once (not debounced), so it shows only once even if the
+  /// app is closed right after.
+  Future<void> markWeekUnlockShown(String planId, int week) {
+    final next = state.weekUnlocks.marked(planId, week);
+    if (identical(next, state.weekUnlocks)) return Future<void>.value();
+    _set(state.copyWith(weekUnlocks: next));
+    return _flushPending();
   }
 
   /// Persist a plan-generation job id discovered outside onboarding (e.g.

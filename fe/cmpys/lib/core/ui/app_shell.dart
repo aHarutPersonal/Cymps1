@@ -188,6 +188,10 @@ class AppShell extends ConsumerStatefulWidget {
   static bool isWithinShell(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<_AppShellScope>() != null;
 
+  /// Key on the transform that moves the incoming tab in, for tests.
+  @visibleForTesting
+  static const tabTransitionKey = Key('app-shell-tab-transition');
+
   @override
   ConsumerState<AppShell> createState() => _AppShellState();
 }
@@ -662,9 +666,17 @@ class _PaperFade extends StatelessWidget {
   }
 }
 
-/// Fades the incoming branch in on tab switch (the IndexedStack swap is
-/// otherwise a hard cut). The outgoing branch disappears instantly —
-/// duplicating the shell tree for a cross-fade would break its GlobalKeys.
+/// The incoming tab's entrance (`v3/app.jsx`): the IndexedStack swap is
+/// otherwise a hard cut. Only the incoming branch animates; the outgoing one
+/// disappears at once (duplicating the shell tree for a cross-fade would
+/// break its GlobalKeys).
+///
+/// - To a tab further right in the bar (`TAB_ORDER` today, plan, mentor,
+///   compare, you): `tabR`, from 46 px right and transparent; further left:
+///   `tabL`, from 46 px left. Both `.5s var(--out)`.
+/// - The first show: `tabIn`, from 10 px down at 99% and transparent, also
+///   `.5s var(--out)`.
+/// - Reduced motion: a short fade (200 ms), no movement.
 class _TabFade extends StatefulWidget {
   const _TabFade({required this.index, required this.child});
 
@@ -677,17 +689,40 @@ class _TabFade extends StatefulWidget {
 
 class _TabFadeState extends State<_TabFade>
     with SingleTickerProviderStateMixin {
+  static const _duration = Duration(milliseconds: 500);
+  static const _reducedDuration = Duration(milliseconds: 200);
+
   late final AnimationController _controller = AnimationController(
     vsync: this,
-    duration: AppDurations.fast,
-    value: 1,
+    duration: _duration,
   );
+
+  /// +1 entering from the right, −1 from the left, 0 the first show.
+  int _direction = 0;
+  bool _motion = true;
+  bool _shown = false;
+
+  void _enter(int direction) {
+    _direction = direction;
+    _motion = MotionConfig.enabled(context);
+    _controller
+      ..duration = _motion ? _duration : _reducedDuration
+      ..forward(from: 0);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_shown) return;
+    _shown = true;
+    _enter(0);
+  }
 
   @override
   void didUpdateWidget(_TabFade oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.index != widget.index && MotionConfig.enabled(context)) {
-      _controller.forward(from: 0);
+    if (oldWidget.index != widget.index) {
+      _enter(widget.index > oldWidget.index ? 1 : -1);
     }
   }
 
@@ -699,9 +734,38 @@ class _TabFadeState extends State<_TabFade>
 
   @override
   Widget build(BuildContext context) {
-    return FadeTransition(
-      opacity: CurvedAnimation(parent: _controller, curve: AppCurves.easeOut),
+    // One fixed structure, so the branches below never remount.
+    return AnimatedBuilder(
+      animation: _controller,
       child: widget.child,
+      builder: (context, child) {
+        final value = _controller.value;
+        final double opacity;
+        var transform = Matrix4.identity();
+        if (!_motion) {
+          opacity = AppCurves.easeOut.transform(value);
+        } else {
+          final t = AppMotion.out.transform(value);
+          final rest = 1 - t;
+          opacity = t;
+          if (_direction == 0) {
+            final scale = .99 + .01 * t;
+            transform = Matrix4.translationValues(0, 10 * rest, 0)
+              ..scaleByDouble(scale, scale, 1, 1);
+          } else {
+            transform = Matrix4.translationValues(_direction * 46 * rest, 0, 0);
+          }
+        }
+        return Opacity(
+          opacity: opacity.clamp(0.0, 1.0),
+          child: Transform(
+            key: AppShell.tabTransitionKey,
+            alignment: Alignment.center,
+            transform: transform,
+            child: child,
+          ),
+        );
+      },
     );
   }
 }

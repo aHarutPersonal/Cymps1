@@ -11,6 +11,7 @@ import '../data/cmpys_seed.dart';
 import '../state/cmpys_store.dart';
 import 'idol_timeline.dart';
 import 'onboarding/mentor_image.dart';
+import 'onboarding/mentor_video.dart';
 import 'reels_screen.dart' show IdeaProvenance, ideaProvenanceOf;
 
 /// Mentor context (`v3/you.jsx` MentorScreen): the night page with the
@@ -65,10 +66,9 @@ class CmpysIdolDetailScreen extends ConsumerWidget {
                               '${idol.short}’s documented writing, interviews '
                               'and biographies. They are not messages from '
                               '${idol.short}.',
-                              style: AppTypography.read(16.5).copyWith(
-                                height: 1.6,
-                                color: AppColors.nink2,
-                              ),
+                              style: AppTypography.read(
+                                16.5,
+                              ).copyWith(height: 1.6, color: AppColors.nink2),
                             ),
                             _kick('Timeline', top: 26),
                             CmpysIdolTimeline(
@@ -102,8 +102,11 @@ class CmpysIdolDetailScreen extends ConsumerWidget {
   }
 
   Widget _hero(String field) {
-    return V3Portrait(
+    // Buffett's lamp-lit study plays behind the hero (ringed medallion over
+    // it); every other mentor keeps the duotone portrait.
+    return V3VideoPortrait(
       image: cmpysIdolImage(idol),
+      video: cmpysIdolVideo(idol),
       height: 420,
       tone: idol.color,
       child: Positioned(

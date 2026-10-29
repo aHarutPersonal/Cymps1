@@ -29,8 +29,10 @@ import '../data/cmpys_seed.dart';
 import '../state/cmpys_backend_sync.dart';
 import '../state/cmpys_store.dart';
 import '../state/habit_toggle.dart';
+import '../state/reader_settings.dart';
 import '../state/today_data.dart';
 import 'onboarding/mentor_image.dart';
+import 'week_unlock_trigger.dart';
 
 /// The design's reflection prompt (`v3/today.jsx`). The plan has no per-day
 /// prompt, so this is always the one shown.
@@ -63,6 +65,13 @@ Color _shelfGround(PlanMaterialDetail material, int index) {
 }
 
 enum _ReflectionStatus { idle, typing, saving, saved }
+
+/// Key on the transform that fills today's streak cell (its y scale is
+/// habits done / habits total), for tests.
+const todayStreakFillKey = ValueKey<String>('today-streak-fill');
+
+/// Key on the liquid crest riding the top of a partly filled streak cell.
+const todayStreakCrestKey = ValueKey<String>('today-streak-crest');
 
 /// CMPYS Today tab (`TodayTab` in `v3/today.jsx`): the date and greeting, the
 /// next tutorial of the current mission, today's habits, the streak and
@@ -187,6 +196,53 @@ class _CmpysTodayScreenState extends ConsumerState<CmpysTodayScreen>
     detail.activeStepIndex,
     shellBranchIndex: ActiveBookNarrationResume.todayBranchIndex,
   );
+
+  /// A reveal is running (a second tap waits for it to finish).
+  bool _revealing = false;
+
+  bool _weekUnlockQueued = false;
+
+  /// After this frame, shows "Week n unlocked" once if the loaded plan has
+  /// moved to a new week this account hasn't seen (the rule is shared with
+  /// the Plan tab: [maybeShowWeekUnlock]). "Start week n" goes to Plan.
+  void _queueWeekUnlock(BackendPlan? plan) {
+    if (plan == null || _weekUnlockQueued) return;
+    final week = weekUnlockDueWeek(plan);
+    if (week == null ||
+        !ref
+            .read(cmpysStoreProvider.notifier)
+            .shouldShowWeekUnlock(plan.id, week)) {
+      return;
+    }
+    _weekUnlockQueued = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      _weekUnlockQueued = false;
+      if (!mounted) return;
+      final result = await maybeShowWeekUnlock(context, ref, plan);
+      if (result == WeekUnlockResult.start && mounted) {
+        context.go(AppRoutes.plan);
+      }
+    });
+  }
+
+  /// Continue: an ink circle in the reader's background colour (the user's
+  /// reading theme) grows from the play button [at]; the tutorial opens
+  /// under it once it covers the screen. Reduced motion: a colour fade.
+  void _continueTutorial(PlanItemDetailed detail, Offset at) {
+    if (_revealing) return;
+    _revealing = true;
+    final color = ref.read(readerSettingsProvider).theme.bg;
+    unawaited(
+      showInkReveal(
+        context,
+        at: at,
+        color: color,
+        onCovered: () {
+          if (mounted) unawaited(_openTutorial(detail));
+        },
+      ).whenComplete(() => _revealing = false),
+    );
+  }
 
   Future<void> _openBook(ContentResource book, {bool listen = false}) async {
     // Books open inside Today's shell branch, so the reader stays mounted,
@@ -355,6 +411,7 @@ class _CmpysTodayScreenState extends ConsumerState<CmpysTodayScreen>
     final plan = planState.plan;
     final planReady =
         planState.status == CurrentPlanStatus.ready && plan != null;
+    _queueWeekUnlock(planReady ? plan : null);
     final todayAsync = ref.watch(todayViewProvider);
     final todayView = todayAsync.valueOrNull;
     final todayFailed = planReady && todayAsync.hasError && todayView == null;
@@ -504,19 +561,15 @@ class _CmpysTodayScreenState extends ConsumerState<CmpysTodayScreen>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        V3Rise(
-          child: Text.rich(
-            TextSpan(
-              children: [
-                TextSpan(text: '${greetingForHour(now.hour)}\n'),
-                TextSpan(
-                  text: '$name.',
-                  style: AppTypography.displayItalic(44),
-                ),
-              ],
-            ),
-            style: AppTypography.display(44).copyWith(color: AppColors.ink),
-          ),
+        // `BlurWords`: the greeting, then the name in italics 160 ms later.
+        V3BlurWords(
+          text: greetingForHour(now.hour),
+          style: AppTypography.display(44).copyWith(color: AppColors.ink),
+        ),
+        V3BlurWords(
+          text: '$name.',
+          delay: const Duration(milliseconds: 160),
+          style: AppTypography.displayItalic(44).copyWith(color: AppColors.ink),
         ),
         if (day != null || week != null)
           Padding(
@@ -606,7 +659,7 @@ class _CmpysTodayScreenState extends ConsumerState<CmpysTodayScreen>
           slot = _NextUpCard(
             detail: detail,
             idol: idol,
-            onContinue: () => _openTutorial(detail),
+            onContinue: (at) => _continueTutorial(detail, at),
             onMission: () => _openPlanItem(detail.item.id),
           );
         } else if (detail.detailsFailed) {
@@ -847,13 +900,14 @@ class _CmpysTodayScreenState extends ConsumerState<CmpysTodayScreen>
     final summary = ref.watch(todayStreakProvider).valueOrNull;
     final current = summary?.current ?? view.streak;
     final best = math.max(summary?.longest ?? 0, current);
-    final allDone =
-        view.items.isNotEmpty && view.items.every((i) => isHabitDone(i));
+    final habitsTotal = view.items.length;
+    final habitsDone = view.items.where((i) => isHabitDone(i)).length;
     final streak = _StreakCard(
       current: current,
       best: best,
       week: streakWeek(summary, now),
-      todayDone: allDone,
+      habitsDone: habitsDone,
+      habitsTotal: habitsTotal,
     );
     final compare = _CompareCard(
       user: user,
@@ -1440,7 +1494,10 @@ class _NextUpCard extends StatefulWidget {
 
   final PlanItemDetailed detail;
   final CmpysIdol idol;
-  final VoidCallback onContinue;
+
+  /// Continue, with the play button's centre in global coordinates (where
+  /// the reveal starts).
+  final ValueChanged<Offset> onContinue;
   final VoidCallback onMission;
 
   @override
@@ -1466,6 +1523,7 @@ class _NextUpCardState extends State<_NextUpCard>
     vsync: this,
     duration: const Duration(milliseconds: 2200),
   );
+  final GlobalKey _playKey = GlobalKey();
   Timer? _breatheBDelay;
   bool? _motion;
 
@@ -1546,6 +1604,35 @@ class _NextUpCardState extends State<_NextUpCard>
       if (practice != null) '$practice min practice',
     ].join(' · ');
 
+    // `<Tilt max={6}>`: leans toward the finger (inert with reduced
+    // motion); taps on its buttons still land.
+    return V3Tilt(
+      max: 6,
+      child: _card(context, detail, steps, current, step, minutes),
+    );
+  }
+
+  /// The play button's centre on screen (where the reveal starts).
+  Offset _playCentre() {
+    final box = _playKey.currentContext?.findRenderObject();
+    if (box is RenderBox && box.hasSize) {
+      return box.localToGlobal(box.size.center(Offset.zero));
+    }
+    final card = context.findRenderObject();
+    if (card is RenderBox && card.hasSize) {
+      return card.localToGlobal(card.size.center(Offset.zero));
+    }
+    return Offset.zero;
+  }
+
+  Widget _card(
+    BuildContext context,
+    PlanItemDetailed detail,
+    List<PlanStepDetail> steps,
+    int current,
+    PlanStepDetail step,
+    String minutes,
+  ) {
     return DecoratedBox(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(30),
@@ -1636,8 +1723,9 @@ class _NextUpCardState extends State<_NextUpCard>
                     Row(
                       children: [
                         V3Pressable(
+                          key: _playKey,
                           semanticLabel: 'Continue tutorial',
-                          onTap: widget.onContinue,
+                          onTap: () => widget.onContinue(_playCentre()),
                           child: AnimatedBuilder(
                             animation: _pulse,
                             builder: (context, child) {
@@ -1756,7 +1844,8 @@ class _StreakCard extends StatelessWidget {
     required this.current,
     required this.best,
     required this.week,
-    required this.todayDone,
+    required this.habitsDone,
+    required this.habitsTotal,
   });
 
   final int current;
@@ -1764,7 +1853,12 @@ class _StreakCard extends StatelessWidget {
 
   /// Monday → Sunday from [streakWeek]; null is today.
   final List<bool?> week;
-  final bool todayDone;
+
+  /// Today's habits ticked, of [habitsTotal].
+  final int habitsDone;
+  final int habitsTotal;
+
+  bool get _todayDone => habitsTotal > 0 && habitsDone >= habitsTotal;
 
   static const _letters = 'MTWTFSS';
 
@@ -1778,12 +1872,9 @@ class _StreakCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              const V3Icon(
-                V3Icons.flame,
-                size: 18,
-                color: AppColors.ember,
-                fill: AppColors.emberSoft,
-              ),
+              // `<Flame s={22} />`: flickers while there is a streak to
+              // keep; static at 0 and with reduced motion.
+              V3Flame(size: 22, lit: current > 0),
               const SizedBox(width: 6),
               Flexible(
                 child: V3CountUp(
@@ -1816,13 +1907,10 @@ class _StreakCard extends StatelessWidget {
 
   Widget _day(int i) {
     final today = week[i] == null;
-    final on = today ? todayDone : week[i]!;
+    final on = today ? _todayDone : week[i]!;
     final Widget cell;
-    if (today && !on) {
-      cell = const CustomPaint(
-        painter: _DashedRRectPainter(color: AppColors.ember),
-        child: SizedBox(width: double.infinity, height: 18),
-      );
+    if (today) {
+      cell = _TodayStreakCell(done: habitsDone, total: habitsTotal);
     } else {
       cell = AnimatedContainer(
         duration: const Duration(milliseconds: 400),
@@ -1849,6 +1937,129 @@ class _StreakCard extends StatelessWidget {
           ).copyWith(color: AppColors.ink3),
         ),
       ],
+    );
+  }
+}
+
+/// Today's streak cell: an ember fill rising from the bottom by habits done
+/// of [total] (`scaleY(done/total)`, `.9s var(--spring)`), inside a
+/// `1.5px dashed` ember outline until every habit is done. While partly
+/// full, a liquid crest rides the fill's top: a 6 pt rounded ellipse
+/// (radius 45%) twice the cell's width, spinning every 2.4 s. The cell clips
+/// both to its radius 6.
+///
+/// Reduced motion: the fill jumps and there is no crest.
+class _TodayStreakCell extends StatefulWidget {
+  const _TodayStreakCell({required this.done, required this.total});
+
+  final int done;
+  final int total;
+
+  @override
+  State<_TodayStreakCell> createState() => _TodayStreakCellState();
+}
+
+class _TodayStreakCellState extends State<_TodayStreakCell>
+    with SingleTickerProviderStateMixin {
+  // `spin 2.4s linear infinite`.
+  late final AnimationController _spin = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 2400),
+  );
+
+  bool get _partial => widget.done > 0 && widget.done < widget.total;
+  bool _motion = true;
+
+  void _syncSpin() {
+    if (_motion && _partial) {
+      if (!_spin.isAnimating) _spin.repeat();
+    } else if (_spin.isAnimating) {
+      _spin.stop();
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _motion = MotionConfig.enabled(context);
+    _syncSpin();
+  }
+
+  @override
+  void didUpdateWidget(_TodayStreakCell oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _syncSpin();
+  }
+
+  @override
+  void dispose() {
+    _spin.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final motion = _motion;
+    final total = widget.total;
+    final fraction = total <= 0
+        ? 0.0
+        : (widget.done / total).clamp(0.0, 1.0).toDouble();
+    final allDone = total > 0 && widget.done >= total;
+    final crest = motion && _partial;
+    return SizedBox(
+      width: double.infinity,
+      height: 18,
+      child: CustomPaint(
+        painter: allDone
+            ? null
+            : const _DashedRRectPainter(color: AppColors.ember),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: TweenAnimationBuilder<double>(
+            tween: Tween(end: fraction),
+            duration: motion
+                ? const Duration(milliseconds: 900)
+                : Duration.zero,
+            curve: AppMotion.spring,
+            builder: (context, scale, _) => LayoutBuilder(
+              builder: (context, box) {
+                final width = box.maxWidth;
+                return Transform(
+                  key: todayStreakFillKey,
+                  alignment: Alignment.bottomCenter,
+                  transform: Matrix4.diagonal3Values(1, math.max(0, scale), 1),
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    fit: StackFit.expand,
+                    children: [
+                      const ColoredBox(color: AppColors.ember),
+                      if (crest)
+                        Positioned(
+                          key: todayStreakCrestKey,
+                          left: -width / 2,
+                          top: -3,
+                          width: width * 2,
+                          height: 6,
+                          child: RotationTransition(
+                            turns: _spin,
+                            child: DecoratedBox(
+                              decoration: BoxDecoration(
+                                color: AppColors.ember,
+                                borderRadius: BorderRadius.all(
+                                  Radius.elliptical(width * 2 * .45, 6 * .45),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:cmpys/app/app.dart';
 import 'package:cmpys/features/auth/controllers/session_controller.dart';
 import 'package:cmpys/features/auth/models/me_models.dart';
+import 'package:cmpys/features/auth/presentation/splash_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -65,7 +66,7 @@ void main() {
   ) async {
     await _launch(tester, _FakeSession(result: const SessionUnauthenticated()));
     await _elapse(tester, const Duration(seconds: 4));
-    expect(find.text('cmpys'), findsOneWidget);
+    expect(find.byKey(SplashScreen.wordmarkKey), findsOneWidget);
     expect(find.text('Get started').hitTestable(), findsOneWidget);
     expect(find.text('WELCOME BACK'), findsNothing);
     expect(find.text('CREATE ACCOUNT'), findsNothing);
@@ -82,7 +83,7 @@ void main() {
       ),
     );
     await _elapse(tester, const Duration(milliseconds: 500));
-    expect(find.text('cmpys'), findsOneWidget);
+    expect(find.byKey(SplashScreen.wordmarkKey), findsOneWidget);
 
     session.emit(const SessionUnauthenticated());
     await _elapse(tester, const Duration(seconds: 2));

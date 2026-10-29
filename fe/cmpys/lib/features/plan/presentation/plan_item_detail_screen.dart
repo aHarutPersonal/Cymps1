@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../app/assets.dart';
 import '../../../app/design_tokens.dart';
 import '../../../core/network/api_error.dart';
 import '../../../core/ui/app_shell.dart';
@@ -1000,6 +1002,13 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
   }
 
   Widget _mentalModelCard(({String? title, String body}) model) {
+    if (mentalModelIsAboutFarm(model)) return _MentalModelFarmCard(model);
+    return _mentalModelTextCard(model);
+  }
+
+  /// The text-only card: every mental model that isn't about a farm, and a
+  /// farm model whose images can't load.
+  Widget _mentalModelTextCard(({String? title, String body}) model) {
     return ClipRRect(
       key: const Key('mental-model-card'),
       borderRadius: AppRadii.brR,
@@ -1008,36 +1017,7 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
         child: Stack(
           children: [
             const Positioned.fill(child: V3Grain()),
-            Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    'MENTAL MODEL',
-                    style: AppTypography.kick.copyWith(color: _irisLight),
-                  ),
-                  if (model.title case final title?) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      title,
-                      style: AppTypography.display(
-                        28,
-                      ).copyWith(color: Colors.white),
-                    ),
-                  ],
-                  if (model.body.isNotEmpty) ...[
-                    SizedBox(height: model.title == null ? 8 : 6),
-                    Text(
-                      model.body,
-                      style: AppTypography.read(
-                        15,
-                      ).copyWith(color: AppColors.nink2, height: 1.55),
-                    ),
-                  ],
-                ],
-              ),
-            ),
+            _MentalModelText(model),
           ],
         ),
       ),
@@ -1835,4 +1815,395 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
         type: _accessType(m),
         onOpen: () => Navigator.of(sheetContext).pop(true),
       );
+}
+
+/// The mental model card with the farm images (`ModelCard` in
+/// `v3/plan.jsx`; owner ruling: farm models only).
+///
+/// - Once 30% of the card is on screen it is "seen" (once).
+/// - A 210 pt image area opens (`height .8s var(--out)`) as soon as one
+///   image has loaded; until then, and for good if neither loads, it is the
+///   text-only card.
+/// - Both images loaded: one shows at a time and they crossfade every 6 s
+///   (`opacity 1.6s var(--io)`). Before seen both sit at 1.15; after, the
+///   shown one settles to 1.0 and the hidden one to 1.08, over 7 s on
+///   `cubic-bezier(.2,.6,.3,1)`.
+/// - A gradient, a frosted "Mental model" tag, then the title (fades and
+///   rises 10 pt, `.8s var(--out) .2s`) and the description (`opacity .8s
+///   .35s`), revealed once seen.
+/// - Reduced motion: one static image, no crossfade or zoom, text shown.
+class _MentalModelFarmCard extends StatefulWidget {
+  const _MentalModelFarmCard(this.model);
+
+  final ({String? title, String body}) model;
+
+  /// Keys for tests.
+  static const imageAreaKey = Key('mental-model-images');
+  static const tagKey = Key('mental-model-tag');
+
+  @override
+  State<_MentalModelFarmCard> createState() => _MentalModelFarmCardState();
+}
+
+const _farmImages = [
+  AppAssets.imageMentalModelFarmA,
+  AppAssets.imageMentalModelFarmB,
+];
+
+/// `transform 7s cubic-bezier(.2,.6,.3,1)`.
+const Cubic _slowZoom = Cubic(0.2, 0.6, 0.3, 1);
+
+class _MentalModelFarmCardState extends State<_MentalModelFarmCard>
+    with SingleTickerProviderStateMixin {
+  // Title at .2 s and description at .35 s, each .8 s: 1.15 s in all.
+  late final AnimationController _reveal = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1150),
+  );
+  final List<bool> _loaded = [false, false];
+  final List<bool> _failed = [false, false];
+  bool _seen = false;
+  bool _motion = true;
+  int _active = 0;
+  Timer? _crossfade;
+  ScrollPosition? _scroll;
+
+  bool get _bothLoaded => _loaded[0] && _loaded[1];
+  bool get _anyLoaded => _loaded[0] || _loaded[1];
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _motion = MotionConfig.enabled(context);
+    final position = Scrollable.maybeOf(context)?.position;
+    if (!identical(position, _scroll)) {
+      _scroll?.removeListener(_onScroll);
+      _scroll = _seen ? null : position;
+      _scroll?.addListener(_onScroll);
+    }
+    if (!_motion) {
+      _reveal.value = 1;
+      _crossfade?.cancel();
+      _crossfade = null;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkSeen());
+  }
+
+  @override
+  void dispose() {
+    _scroll?.removeListener(_onScroll);
+    _crossfade?.cancel();
+    _reveal.dispose();
+    super.dispose();
+  }
+
+  bool _checkQueued = false;
+
+  /// A scroll moved the card: check once the frame has laid it out.
+  void _onScroll() {
+    if (_checkQueued || _seen) return;
+    _checkQueued = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkQueued = false;
+      _checkSeen();
+    });
+  }
+
+  /// `IntersectionObserver` at .3, once: at least 30% of the card's height
+  /// inside the screen and every enclosing scroll view.
+  void _checkSeen() {
+    if (_seen || !mounted) return;
+    final box = context.findRenderObject();
+    if (box is! RenderBox || !box.attached || !box.hasSize) return;
+    if (box.size.height <= 0) return;
+    final card = box.localToGlobal(Offset.zero) & box.size;
+    var visible = card.intersect(Offset.zero & MediaQuery.sizeOf(context));
+    for (
+      var scrollable = Scrollable.maybeOf(context);
+      scrollable != null;
+      scrollable = Scrollable.maybeOf(scrollable.context)
+    ) {
+      final viewport = scrollable.context.findRenderObject();
+      if (viewport is! RenderBox || !viewport.hasSize) continue;
+      visible = visible.intersect(
+        viewport.localToGlobal(Offset.zero) & viewport.size,
+      );
+    }
+    if (visible.width <= 0 || visible.height < card.height * .3) return;
+    setState(() => _seen = true);
+    _scroll?.removeListener(_onScroll);
+    _scroll = null;
+    if (_motion) _reveal.forward();
+    _syncCrossfade();
+  }
+
+  void _syncCrossfade() {
+    if (!_motion || !_bothLoaded) {
+      _crossfade?.cancel();
+      _crossfade = null;
+      return;
+    }
+    _crossfade ??= Timer.periodic(const Duration(seconds: 6), (_) {
+      if (mounted) setState(() => _active = 1 - _active);
+    });
+  }
+
+  void _onLoaded(int i) {
+    if (_loaded[i] || _failed[i]) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _loaded[i]) return;
+      setState(() => _loaded[i] = true);
+      _syncCrossfade();
+      // The card grew: it may be seen now.
+      WidgetsBinding.instance.addPostFrameCallback((_) => _checkSeen());
+    });
+  }
+
+  void _onFailed(int i) {
+    if (_failed[i]) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _failed[i]) return;
+      setState(() {
+        _failed[i] = true;
+        _loaded[i] = false;
+      });
+      _syncCrossfade();
+    });
+  }
+
+  /// Whether image [i] is the one showing.
+  bool _shows(int i) {
+    if (!_loaded[i]) return false;
+    if (!_motion) return i == (_loaded[0] ? 0 : 1);
+    return _bothLoaded ? i == _active : true;
+  }
+
+  double _scaleOf(int i) {
+    if (!_motion) return 1;
+    if (!_seen) return 1.15;
+    return _shows(i) ? 1 : 1.08;
+  }
+
+  Widget _image(int i) {
+    // Reduced motion keeps one image: the second is never built unless the
+    // first has failed.
+    return AnimatedOpacity(
+      key: ValueKey('mental-model-image-$i'),
+      opacity: _shows(i) ? 1 : 0,
+      duration: _motion ? const Duration(milliseconds: 1600) : Duration.zero,
+      curve: AppMotion.io,
+      child: AnimatedScale(
+        scale: _scaleOf(i),
+        duration: _motion ? const Duration(seconds: 7) : Duration.zero,
+        curve: _slowZoom,
+        child: Image.asset(
+          _farmImages[i],
+          fit: BoxFit.cover,
+          width: double.infinity,
+          height: double.infinity,
+          excludeFromSemantics: true,
+          frameBuilder: (context, child, frame, sync) {
+            if (frame != null || sync) _onLoaded(i);
+            return child;
+          },
+          errorBuilder: (context, error, stack) {
+            _onFailed(i);
+            return const SizedBox.shrink();
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _tag() {
+    return ClipRRect(
+      key: _MentalModelFarmCard.tagKey,
+      borderRadius: BorderRadius.circular(99),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+        child: Container(
+          height: 26,
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          // rgba(14,12,20,.55)
+          color: const Color(0x8C0E0C14),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const V3Icon(V3Icons.sparkle, size: 12, color: Colors.white),
+              const SizedBox(width: 6),
+              Text(
+                'Mental model',
+                style: AppTypography.sans(
+                  11.5,
+                  FontWeight.w600,
+                ).copyWith(color: Colors.white),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _imageArea(double height) {
+    const overlap = 26.0;
+    return SizedBox(
+      key: _MentalModelFarmCard.imageAreaKey,
+      // The text starts 26 pt above the images' bottom (`margin-top: -26`).
+      height: math.max(0, height - overlap),
+      child: OverflowBox(
+        alignment: Alignment.topCenter,
+        minHeight: 0,
+        maxHeight: height,
+        child: SizedBox(
+          height: height,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              for (var i = 0; i < _farmImages.length; i++)
+                if (_motion || i == 0 || _failed[0]) _image(i),
+              const IgnorePointer(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Color(0x590E0C14),
+                        Color(0x000E0C14),
+                        Color(0x990E0C14),
+                        AppColors.night,
+                      ],
+                      stops: [0, .35, .75, 1],
+                    ),
+                  ),
+                ),
+              ),
+              if (_anyLoaded) Positioned(left: 16, top: 14, child: _tag()),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final model = widget.model;
+    final shown = _anyLoaded;
+    final titleIn = CurvedAnimation(
+      parent: _reveal,
+      curve: const Interval(200 / 1150, 1000 / 1150, curve: AppMotion.out),
+    );
+    final bodyIn = CurvedAnimation(
+      parent: _reveal,
+      curve: const Interval(350 / 1150, 1, curve: Curves.ease),
+    );
+    final text = shown
+        ? Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (model.title case final title?)
+                  AnimatedBuilder(
+                    animation: titleIn,
+                    builder: (context, child) => Opacity(
+                      opacity: titleIn.value,
+                      child: Transform.translate(
+                        offset: Offset(0, 10 * (1 - titleIn.value)),
+                        child: child,
+                      ),
+                    ),
+                    child: Text(
+                      title,
+                      style: AppTypography.display(
+                        30,
+                      ).copyWith(color: Colors.white),
+                    ),
+                  ),
+                if (model.body.isNotEmpty) ...[
+                  SizedBox(height: model.title == null ? 0 : 8),
+                  FadeTransition(
+                    opacity: bodyIn,
+                    child: Text(
+                      model.body,
+                      style: AppTypography.read(
+                        15,
+                      ).copyWith(color: AppColors.nink2, height: 1.55),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          )
+        : null;
+
+    return ClipRRect(
+      key: const Key('mental-model-card'),
+      borderRadius: AppRadii.brR,
+      child: ColoredBox(
+        color: AppColors.night,
+        child: Stack(
+          children: [
+            const Positioned.fill(child: V3Grain()),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                TweenAnimationBuilder<double>(
+                  tween: Tween(end: shown ? 210 : 0),
+                  duration: _motion
+                      ? const Duration(milliseconds: 800)
+                      : Duration.zero,
+                  curve: AppMotion.out,
+                  builder: (context, height, _) => _imageArea(height),
+                ),
+                text ?? _MentalModelText(model),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The text-only card's content (kicker, title, body), shared by the text
+/// card and a farm card whose images haven't loaded.
+class _MentalModelText extends StatelessWidget {
+  const _MentalModelText(this.model);
+
+  final ({String? title, String body}) model;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'MENTAL MODEL',
+            style: AppTypography.kick.copyWith(color: _irisLight),
+          ),
+          if (model.title case final title?) ...[
+            const SizedBox(height: 8),
+            Text(
+              title,
+              style: AppTypography.display(28).copyWith(color: Colors.white),
+            ),
+          ],
+          if (model.body.isNotEmpty) ...[
+            SizedBox(height: model.title == null ? 8 : 6),
+            Text(
+              model.body,
+              style: AppTypography.read(
+                15,
+              ).copyWith(color: AppColors.nink2, height: 1.55),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
 }
