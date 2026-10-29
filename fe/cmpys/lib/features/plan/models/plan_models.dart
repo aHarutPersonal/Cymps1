@@ -839,6 +839,38 @@ List<BookChapter> splitBookChapters(String markdown) {
   return parts;
 }
 
+/// `generation_window` on `GET /plan-items/{id}/detailed`: the tutorials the
+/// backend keeps written (one ahead). [currentStepId] is the first step
+/// without a completion, [nextStepId] the one after it (null at the end).
+/// [waitingForLearner] is true when both are written, nothing is running and
+/// the remaining steps wait, by design, for the learner to move on.
+class GenerationWindow {
+  const GenerationWindow({
+    this.currentStepId,
+    this.nextStepId,
+    this.waitingForLearner = false,
+  });
+
+  final String? currentStepId;
+  final String? nextStepId;
+  final bool waitingForLearner;
+
+  /// Null when [raw] is not an object (an older backend sends none).
+  static GenerationWindow? tryParse(Object? raw) {
+    if (raw is! Map) return null;
+    String? id(Object? value) {
+      final text = value?.toString().trim();
+      return text == null || text.isEmpty ? null : text;
+    }
+
+    return GenerationWindow(
+      currentStepId: id(raw['current_step_id']),
+      nextStepId: id(raw['next_step_id']),
+      waitingForLearner: raw['waiting_for_learner'] == true,
+    );
+  }
+}
+
 /// GET /plan-items/{id}/detailed — item + lesson details + progress.
 /// While lessons are still being generated, `detailsStatus` is `pending` or
 /// `partial` and `jobId` points at the generation job to poll. A partial
@@ -865,6 +897,7 @@ class PlanItemDetailed {
     this.definitionOfDone,
     this.mentalModel,
     this.sessionMinutes,
+    this.generationWindow,
   });
 
   final BackendPlanItem item;
@@ -899,6 +932,11 @@ class PlanItemDetailed {
   /// [sessionMinutesOrWeekShare].
   final int? sessionMinutes;
 
+  /// The one-ahead window; null from servers that predate it, where
+  /// [windowCurrentIndex] and [windowNextIndex] fall back to the next
+  /// uncompleted step and the one after it.
+  final GenerationWindow? generationWindow;
+
   /// The habit's minutes for one session: [sessionMinutes] when the server
   /// sends it, else about a seventh of the week's allocation, at least one
   /// minute (what `habitSessionMinutes` does for Today's items).
@@ -924,11 +962,95 @@ class PlanItemDetailed {
   bool get detailsFailed =>
       detailsStatus == 'failed' ||
       (detailsPartial && detailsError != null) ||
-      (!detailsReady && !detailsPartial && !detailsLoading);
+      (!detailsReady && !detailsPartial && !detailsLoading) ||
+      generationStalled;
+
+  /// The learner's tutorial is not written, nothing is writing it and
+  /// generation is not parked: it stopped (a lost re-queue, say) and must
+  /// offer "Generate again" rather than wait quietly.
+  bool get generationStalled {
+    if (completed || detailsReady || !isTutorialSequence || steps.isEmpty) {
+      return false;
+    }
+    if (detailsLoading || generationParked) return false;
+    final step = steps[activeStepIndex];
+    return !step.hasContent && !isStepCompleted(step.id);
+  }
+
   bool get detailsLoading =>
       detailsStatus == 'pending' ||
       detailsStatus == 'generating' ||
-      (detailsPartial && detailsError == null && jobId != null);
+      (detailsPartial &&
+          detailsError == null &&
+          jobId != null &&
+          !generationParked);
+
+  /// Both window tutorials are written and generation waits for the learner
+  /// to move on: not loading, not failed, nothing to poll. The window's
+  /// `waiting_for_learner` is authoritative; `details_step` stands in only
+  /// for a server that sends no window.
+  bool get generationParked {
+    if (detailsError != null) return false;
+    final window = generationWindow;
+    if (window != null) return window.waitingForLearner;
+    return detailsStep == 'waiting_for_learner' && jobId == null;
+  }
+
+  /// The index of the step the learner is on, per the window.
+  int get windowCurrentIndex {
+    final index = _stepIndexOf(generationWindow?.currentStepId);
+    return index ?? activeStepIndex;
+  }
+
+  /// The index of the step after it, or null at the end.
+  int? get windowNextIndex {
+    final window = generationWindow;
+    if (window != null) {
+      if (window.nextStepId == null) return null;
+      final index = _stepIndexOf(window.nextStepId);
+      if (index != null) return index;
+    }
+    final next = windowCurrentIndex + 1;
+    return next < steps.length ? next : null;
+  }
+
+  int? _stepIndexOf(String? stepId) {
+    if (stepId == null) return null;
+    final index = steps.indexWhere((step) => step.id == stepId);
+    return index < 0 ? null : index;
+  }
+
+  /// The first unwritten, unfinished step inside the window: the one a
+  /// running job writes (one at a time). Null when both are written.
+  int? get unwrittenWindowStepIndex {
+    if (steps.isEmpty) return null;
+    for (final index in [windowCurrentIndex, ?windowNextIndex]) {
+      if (index < 0 || index >= steps.length) continue;
+      final step = steps[index];
+      if (!step.hasContent && !isStepCompleted(step.id)) return index;
+    }
+    return null;
+  }
+
+  /// The step being written right now, or null when no job is running.
+  int? get preparingStepIndex =>
+      detailsLoading ? unwrittenWindowStepIndex : null;
+
+  /// Tutorial 1 is being written: nothing is started and it has no lesson
+  /// yet (or there is no outline yet), and generation has not stopped.
+  bool get firstTutorialPreparing =>
+      !completed &&
+      !detailsFailed &&
+      completedStepIds.isEmpty &&
+      (steps.isEmpty || !steps.first.hasContent);
+
+  /// Tutorial 1 has its lesson and the learner has not finished it.
+  bool get firstTutorialReadable =>
+      !completed &&
+      isTutorialSequence &&
+      steps.isNotEmpty &&
+      steps.first.hasContent &&
+      !isStepCompleted(steps.first.id);
 
   bool isStepCompleted(String stepId) => completedStepIds.contains(stepId);
 
@@ -995,6 +1117,7 @@ class PlanItemDetailed {
       definitionOfDone: _optionalText(details?['definition_of_done']),
       mentalModel: _optionalText(details?['mental_model']),
       sessionMinutes: _sessionMinutes(j),
+      generationWindow: GenerationWindow.tryParse(j['generation_window']),
     );
   }
 

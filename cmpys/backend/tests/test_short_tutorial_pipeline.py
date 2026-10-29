@@ -180,9 +180,13 @@ async def test_first_tutorial_publishes_before_bounded_lookahead_and_resumes(mon
                 return LLMResponse(data=outline(), finish_reason="stop")
             assert issubclass(kwargs["output_model"], PlanTutorialLessonSectionsOutput)
             return LLMResponse(data=sections(), finish_reason="stop")
+    learner_done: set[str] = set()
     async def checkpoint(payload, stage):
         checkpoints.append((copy.deepcopy(payload), stage))
         order.append(stage)
+    async def keeps_pace():
+        # A learner who finishes each tutorial as soon as it is published.
+        return set(learner_done)
     monkeypatch.setattr("app.services.planning.package_builder.generate_initial_package", build)
     monkeypatch.setattr("app.services.planning.package_preflight.review_package", preflight)
     monkeypatch.setattr("app.services.planning.lesson_review.review_lesson", review)
@@ -193,23 +197,30 @@ async def test_first_tutorial_publishes_before_bounded_lookahead_and_resumes(mon
         prepared_packages=packages, validation_records=validations)
     first, calls, error = await _generate_plan_item_details_parallel(**common, lesson_format="tutorial_v1")
     assert error is None
-    assert first.pop("_tutorial_continuation") is True
+    # One-ahead: a fresh mission gets T1 then T2, one at a time, then parks.
+    assert first.pop("_tutorial_waiting_for_learner") is True
     assert len(first["steps"]) == 6
-    assert [step["id"] for step in first["steps"] if step.get("lesson_content")] == ["step_1", "step_2", "step_3"]
+    assert [step["id"] for step in first["steps"] if step.get("lesson_content")] == ["step_1", "step_2"]
     assert order.index("step_1_ready") < order.index("build:step_2")
-    assert order.index("step_1_ready") < order.index("build:step_3")
-    assert not any(event == "build:step_4" for event in order)
+    assert not any(event == "build:step_3" for event in order)
     assert [stage for _, stage in checkpoints][0] == "outline_ready"
-    assert len(validations) == 3
+    assert len(validations) == 2
     assert validations["step_1"] == provenance(first["steps"][0], package)
     saved = {**first, "_generation": {"outline": outline(), "outline_contract_version": 3,
                                     "lesson_validation": copy.deepcopy(validations)}}
-    second, _, error = await _generate_plan_item_details_parallel(**common, existing_checkpoint=saved)
+    original_checkpoint = common["on_checkpoint"]
+    async def advancing_checkpoint(payload, stage):
+        await original_checkpoint(payload, stage)
+        learner_done.update(step["id"] for step in payload["steps"] if step.get("lesson_content"))
+    learner_done.update({"step_1", "step_2"})
+    second, _, error = await _generate_plan_item_details_parallel(
+        **{**common, "on_checkpoint": advancing_checkpoint}, existing_checkpoint=saved,
+        learner_completed_step_ids=keeps_pace)
     assert error is None
-    assert "_tutorial_continuation" not in second
+    assert "_tutorial_waiting_for_learner" not in second
     assert len(second["steps"]) == 6 and all(step.get("lesson_content") for step in second["steps"])
     assert sum(event == "build:step_1" for event in order) == 1
-    assert second["steps"][:3] == first["steps"][:3]
+    assert second["steps"][:2] == first["steps"][:2]
     PlanTutorialDetailsOutput.model_validate(second)
     assert sum(step["estimate_minutes"] for step in second["steps"]) == 36
     normalized = normalize_lesson_durations(copy.deepcopy(second), mission_hours=mission_minutes / 60)

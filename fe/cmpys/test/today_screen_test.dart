@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cmpys/app/design_tokens.dart';
 import 'package:cmpys/app/theme.dart';
 import 'package:cmpys/core/ui/v3/v3.dart';
@@ -12,6 +14,7 @@ import 'package:cmpys/features/plan/models/plan_models.dart';
 import 'package:cmpys/features/plan/presentation/book_narration_checkpoint.dart';
 import 'package:cmpys/features/plan/presentation/book_narration_dock.dart';
 import 'package:cmpys/features/plan/presentation/book_reader_screen.dart';
+import 'package:cmpys/features/plan/presentation/first_tutorial_auto_open.dart';
 import 'package:cmpys/features/plan/presentation/lesson_reader_screen.dart';
 import 'package:cmpys/features/plan/presentation/material_web_screen.dart';
 import 'package:cmpys/features/plan/presentation/plan_item_detail_screen.dart';
@@ -1037,7 +1040,7 @@ void main() {
       expect(find.text(body), findsOneWidget);
       expect(find.text('We couldn’t load your plan'), findsNothing);
       expect(find.text('Try again'), findsNothing);
-      expect(find.text('Preparing this week’s tutorials'), findsNothing);
+      expect(find.text('Preparing your first tutorial'), findsNothing);
       // Habits stay usable below.
       expect(find.text('Read ten pages'), findsOneWidget);
 
@@ -1109,7 +1112,7 @@ void main() {
         ),
       ),
     );
-    expect(find.text('Preparing this week’s tutorials'), findsOneWidget);
+    expect(find.text('Preparing your first tutorial'), findsOneWidget);
     expect(repo.detailLoads, 1);
 
     Future<void> wait(int seconds) async {
@@ -1170,6 +1173,305 @@ void main() {
     await tester.pump();
     expect(repo.detailLoads, 6);
     await _settleTimers(tester);
+  });
+
+  group('one-ahead tutorials', () {
+    setUp(FirstTutorialAutoOpen.resetForTest);
+
+    PlanItemDetailed readableFirst() => PlanItemDetailed(
+      item: _mission(),
+      detailsStatus: 'partial',
+      lessonFormat: 'tutorial_v1',
+      jobId: 'job-1',
+      steps: const [
+        PlanStepDetail(
+          id: 's1',
+          title: 'One',
+          lessonContent: '# One',
+          lessonFormat: 'tutorial_v1',
+        ),
+        PlanStepDetail(id: 's2', title: 'Two', lessonFormat: 'tutorial_v1'),
+      ],
+    );
+
+    testWidgets('the learner on a tutorial still being written sees "next"', (
+      tester,
+    ) async {
+      final repo = _FakePlanRepository(
+        [_Habit('h1', 'Read ten pages')],
+        detail: () => PlanItemDetailed(
+          item: _mission(),
+          detailsStatus: 'partial',
+          lessonFormat: 'tutorial_v1',
+          jobId: 'job-1',
+          steps: const [
+            PlanStepDetail(
+              id: 's1',
+              title: 'One',
+              lessonContent: '# One',
+              lessonFormat: 'tutorial_v1',
+            ),
+            PlanStepDetail(id: 's2', title: 'Two', lessonFormat: 'tutorial_v1'),
+          ],
+          completedStepIds: const {'s1'},
+        ),
+      );
+      await _pumpScreen(
+        tester,
+        _Harness(repo: repo, initial: _ready()).build(),
+      );
+      expect(find.text('Preparing your next tutorial'), findsOneWidget);
+      expect(find.text('Preparing your first tutorial'), findsNothing);
+      // A job is writing it: Today polls.
+      await tester.pump(const Duration(seconds: 15));
+      await tester.pump();
+      expect(repo.detailLoads, 2);
+      await _settleTimers(tester);
+    });
+
+    testWidgets('a parked mission shows Up next and is not polled', (
+      tester,
+    ) async {
+      final repo = _FakePlanRepository(
+        [_Habit('h1', 'Read ten pages')],
+        detail: () => PlanItemDetailed(
+          item: _mission(),
+          detailsStatus: 'partial',
+          detailsStep: 'waiting_for_learner',
+          lessonFormat: 'tutorial_v1',
+          generationWindow: const GenerationWindow(
+            currentStepId: 's1',
+            nextStepId: 's2',
+            waitingForLearner: true,
+          ),
+          steps: const [
+            PlanStepDetail(
+              id: 's1',
+              title: 'One',
+              lessonContent: '# One',
+              lessonFormat: 'tutorial_v1',
+            ),
+            PlanStepDetail(
+              id: 's2',
+              title: 'Two',
+              lessonContent: '# Two',
+              lessonFormat: 'tutorial_v1',
+            ),
+            PlanStepDetail(
+              id: 's3',
+              title: 'Three',
+              lessonFormat: 'tutorial_v1',
+            ),
+          ],
+        ),
+      );
+      await _pumpScreen(
+        tester,
+        _Harness(repo: repo, initial: _ready()).build(),
+      );
+      expect(find.text('Up next · Tutorial 1 of 3'), findsOneWidget);
+      expect(find.textContaining('Preparing your'), findsNothing);
+      await tester.pump(const Duration(seconds: 60));
+      expect(repo.detailLoads, 1);
+      await _settleTimers(tester);
+    });
+
+    testWidgets('tutorial 1 opens by itself once when it becomes readable', (
+      tester,
+    ) async {
+      var ready = false;
+      final repo = _FakePlanRepository([
+        _Habit('h1', 'Read ten pages'),
+      ], detail: () => ready ? readableFirst() : _preparingDetail());
+      final navigator = GlobalKey<NavigatorState>();
+      await _pumpScreen(
+        tester,
+        _Harness(repo: repo, initial: _ready()).build(navigatorKey: navigator),
+      );
+      expect(find.text('Preparing your first tutorial'), findsOneWidget);
+      ready = true;
+      await tester.pump(const Duration(seconds: 15));
+      await tester.pump();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(find.byType(LessonReaderScreen), findsOneWidget);
+
+      // Back on Today it stays closed, even when the read repeats.
+      navigator.currentState!.pop(false);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(find.byType(LessonReaderScreen), findsNothing);
+      expect(find.text('Up next · Tutorial 1 of 2'), findsOneWidget);
+      await _settleTimers(tester);
+      expect(find.byType(LessonReaderScreen), findsNothing);
+    });
+
+    for (final overlay in ['sheet', 'dialog']) {
+      testWidgets('tutorial 1 waits for a root $overlay over the shell to '
+          'close', (tester) async {
+        var ready = false;
+        final repo = _FakePlanRepository([
+          _Habit('h1', 'Read ten pages'),
+        ], detail: () => ready ? readableFirst() : _preparingDetail());
+        final root = GlobalKey<NavigatorState>();
+        // Today inside a branch navigator, as in the shell: a root sheet or
+        // dialog leaves the branch route current.
+        await _pumpScreen(
+          tester,
+          _Harness(repo: repo, initial: _ready()).build(
+            navigatorKey: root,
+            wrap: (screen) => Navigator(
+              onGenerateRoute: (_) =>
+                  MaterialPageRoute<void>(builder: (_) => screen),
+            ),
+          ),
+        );
+        expect(find.text('Preparing your first tutorial'), findsOneWidget);
+        final rootContext = root.currentContext!;
+        if (overlay == 'sheet') {
+          unawaited(
+            showModalBottomSheet<void>(
+              context: rootContext,
+              builder: (_) => const SizedBox(height: 200, child: Text('Over')),
+            ),
+          );
+        } else {
+          unawaited(
+            showDialog<void>(
+              context: rootContext,
+              builder: (_) => const Dialog(child: Text('Over')),
+            ),
+          );
+        }
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 500));
+        ready = true;
+        await tester.pump(const Duration(seconds: 15));
+        await tester.pump();
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 2));
+        expect(find.text('Over'), findsOneWidget);
+        expect(find.byType(LessonReaderScreen), findsNothing);
+
+        root.currentState!.pop();
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 1));
+        await tester.pump(const Duration(milliseconds: 600));
+        expect(find.byType(LessonReaderScreen), findsOneWidget);
+        root.currentState!.pop(false);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 600));
+        await _settleTimers(tester);
+      });
+    }
+
+    testWidgets('tutorial 1 does not open by itself after the wait was broken '
+        'by a failure', (tester) async {
+      var state = 'preparing';
+      final repo = _FakePlanRepository(
+        [_Habit('h1', 'Read ten pages')],
+        detail: () => switch (state) {
+          'preparing' => _preparingDetail(),
+          'failed' => PlanItemDetailed(
+            item: _mission(),
+            detailsStatus: 'failed',
+            detailsError: 'This lesson could not be prepared.',
+            lessonFormat: 'tutorial_v1',
+            steps: const [
+              PlanStepDetail(
+                id: 's1',
+                title: 'One',
+                lessonFormat: 'tutorial_v1',
+              ),
+              PlanStepDetail(
+                id: 's2',
+                title: 'Two',
+                lessonFormat: 'tutorial_v1',
+              ),
+            ],
+          ),
+          _ => readableFirst(),
+        },
+      );
+      await _pumpScreen(
+        tester,
+        _Harness(repo: repo, initial: _ready()).build(),
+      );
+      expect(find.text('Preparing your first tutorial'), findsOneWidget);
+      state = 'failed';
+      await tester.pump(const Duration(seconds: 15));
+      await tester.pump();
+      await tester.pump();
+      expect(find.text('This lesson could not be prepared.'), findsOneWidget);
+
+      // Regenerated elsewhere; Today reads the mission again later.
+      state = 'ready';
+      await tester.tap(find.text('Open mission'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(find.byType(PlanItemDetailScreen), findsOneWidget);
+      Navigator.of(tester.element(find.byType(PlanItemDetailScreen))).pop();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(find.text('Up next · Tutorial 1 of 2'), findsOneWidget);
+      expect(find.byType(LessonReaderScreen), findsNothing);
+      await _settleTimers(tester);
+    });
+
+    testWidgets('tutorial 1 waits for Today to be visible, and never opens '
+        'by itself after the learner opened it', (tester) async {
+      var ready = false;
+      final repo = _FakePlanRepository([
+        _Habit('h1', 'Read ten pages'),
+      ], detail: () => ready ? readableFirst() : _preparingDetail());
+      final navigator = GlobalKey<NavigatorState>();
+      await _pumpScreen(
+        tester,
+        _Harness(repo: repo, initial: _ready()).build(navigatorKey: navigator),
+      );
+      // A page over Today: becoming readable meanwhile opens nothing.
+      navigator.currentState!.push(
+        MaterialPageRoute<void>(builder: (_) => const Scaffold()),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      ready = true;
+      await tester.pump(const Duration(seconds: 30));
+      await tester.pump();
+      expect(find.byType(LessonReaderScreen), findsNothing);
+      navigator.currentState!.pop();
+      // Back on Today the re-read finds it readable: Today showed it being
+      // prepared and is visible now, so it opens.
+      for (var i = 0; i < 4; i++) {
+        await tester.pump();
+      }
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(find.byType(LessonReaderScreen), findsOneWidget);
+      navigator.currentState!.pop(false);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+      await _settleTimers(tester);
+      await tester.pumpWidget(const SizedBox());
+
+      // Opened by the learner already: never by itself.
+      FirstTutorialAutoOpen.resetForTest();
+      FirstTutorialAutoOpen.markOpened(_mission().id);
+      ready = false;
+      await _pumpScreen(
+        tester,
+        _Harness(repo: repo, initial: _ready()).build(navigatorKey: navigator),
+      );
+      expect(find.text('Preparing your first tutorial'), findsOneWidget);
+      ready = true;
+      await tester.pump(const Duration(seconds: 15));
+      await tester.pump();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(find.byType(LessonReaderScreen), findsNothing);
+      await _settleTimers(tester);
+    });
   });
 
   group('today data helpers', () {

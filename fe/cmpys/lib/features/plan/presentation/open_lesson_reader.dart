@@ -13,6 +13,7 @@ import '../../cmpys/state/today_data.dart';
 import '../models/plan_models.dart';
 import '../state/current_plan_provider.dart';
 import 'book_narration_checkpoint.dart';
+import 'first_tutorial_auto_open.dart';
 import 'lesson_reader_screen.dart';
 
 /// Opens tutorial [index] of [detail] in [LessonReaderScreen] on the root
@@ -35,6 +36,9 @@ Future<bool> openLessonReader(
   final container = ProviderScope.containerOf(context, listen: false);
   final plan = ref.read(currentPlanProvider.notifier);
   final step = detail.steps[index];
+  // Opened by hand or by itself, tutorial 1 never opens by itself again.
+  if (index == 0) FirstTutorialAutoOpen.markOpened(detail.item.id);
+  final hasNext = index + 1 < detail.steps.length;
   final changed = await Navigator.of(context, rootNavigator: true).push<bool>(
     CmpysPageRoute<bool>(
       builder: (_) => LessonReaderScreen(
@@ -47,9 +51,8 @@ Future<bool> openLessonReader(
         materials: detail.materials,
         completed: detail.isStepCompleted(step.id),
         artifactJobId: detail.artifactJobId,
-        nextTitle: index + 1 < detail.steps.length
-            ? detail.steps[index + 1].title
-            : '',
+        nextTitle: hasNext ? detail.steps[index + 1].title : '',
+        nextReady: !hasNext || detail.steps[index + 1].hasContent,
         shellBranchIndex: shellBranchIndex,
       ),
     ),

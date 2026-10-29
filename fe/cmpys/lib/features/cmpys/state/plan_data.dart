@@ -163,17 +163,22 @@ enum TutorialRowState {
 
 /// The state of each of [detail]'s tutorials, in order.
 ///
-/// A step without a lesson is "preparing" while the lessons are being
-/// written, wherever it sits; the design shows the later ones that way too.
-/// When generation has stopped, the first unfinished step is "stopped"
-/// (the mission screen offers "Generate again") and later unwritten ones stay
-/// locked. With [missionLocked] every unfinished tutorial is locked, as the
-/// design shows the next mission.
+/// Generation is one ahead: the backend writes the current tutorial and the
+/// next one, one at a time. A step without a lesson is "preparing" only while
+/// a job is writing it inside that window
+/// ([PlanItemDetailed.preparingStepIndex]); every other unwritten step is
+/// upcoming, so locked. When generation has stopped, the first unfinished
+/// step is "stopped" (the mission screen offers "Generate again") and later
+/// unwritten ones stay locked. With [missionLocked] every unfinished tutorial
+/// is locked, as the design shows the next mission. Legacy lessons (not a
+/// tutorial sequence) are written together, so every unwritten one shows
+/// "preparing" until generation stops.
 List<TutorialRowState> tutorialRowStates(
   PlanItemDetailed detail, {
   bool missionLocked = false,
 }) {
   final active = detail.activeStepIndex;
+  final preparing = detail.preparingStepIndex;
   return [
     for (var i = 0; i < detail.steps.length; i++)
       () {
@@ -188,7 +193,9 @@ List<TutorialRowState> tutorialRowStates(
                 ? TutorialRowState.stopped
                 : TutorialRowState.locked;
           }
-          return TutorialRowState.preparing;
+          return i == preparing || !detail.isTutorialSequence
+              ? TutorialRowState.preparing
+              : TutorialRowState.locked;
         }
         return i == active
             ? TutorialRowState.current

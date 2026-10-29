@@ -54,18 +54,25 @@ class Celebration {
   /// [nextTitle] is the one that just opened. Once [completed] has reached
   /// [total] there is nothing left to open and the sub line says the
   /// mission's tutorials are done instead. A blank [nextTitle] with tutorials
-  /// still to come just drops the title from the sentence. [achievement] is
-  /// the suggested achievement text, which turns on "Add to your record".
+  /// still to come just drops the title from the sentence. With [nextReady]
+  /// false the next tutorial is still being written (one ahead), and the sub
+  /// line says it is being prepared. [achievement] is the suggested
+  /// achievement text, which turns on "Add to your record".
   factory Celebration.tutorial({
     required int completed,
     required int total,
     required String nextTitle,
+    bool nextReady = true,
     String? achievement,
   }) {
     final next = nextTitle.trim();
     final String sub;
     if (completed >= total) {
       sub = 'Both cases accepted. This mission’s tutorials are done.';
+    } else if (!nextReady) {
+      sub =
+          'Both cases accepted. Tutorial ${completed + 1} is being '
+          'prepared.';
     } else if (next.isEmpty) {
       sub = 'Both cases accepted. Tutorial ${completed + 1} is now open.';
     } else {

@@ -110,6 +110,10 @@ async def test_remaining_budget_reaches_package_writer_review_and_invalidates_ov
     async def reject_repair(*args, **kwargs):
         return None, LLMResponse(data={}, error="Offline scope correction unavailable"), SimpleNamespace(model="offline")
 
+    async def learner_on_step_19():
+        # One-ahead: step_20 is written only once it enters the learner's window.
+        return {f"step_{index}" for index in range(1, 19)}
+
     monkeypatch.setattr("app.services.planning.package_builder.generate_initial_package", build)
     monkeypatch.setattr("app.services.planning.package_preflight.review_package", preflight)
     monkeypatch.setattr("app.services.planning.lesson_writer.generate_lesson_sections", writer)
@@ -121,7 +125,7 @@ async def test_remaining_budget_reaches_package_writer_review_and_invalidates_ov
         idol_evidence={}, session_context="", active_tier="balanced", routing_reason="test",
         client_factory=lambda **kwargs: Client(), prepared_packages=packages,
         validation_records=validations, existing_checkpoint=checkpoint,
-        private_checkpoint_store=Store())
+        private_checkpoint_store=Store(), learner_completed_step_ids=learner_on_step_19)
     assert observed["build"] and observed["preflight"] and observed["writer"]
     assert observed["load"] == [("step_20", observed["load"][0][1])]
     assert observed["load"][0][1] != old_hash

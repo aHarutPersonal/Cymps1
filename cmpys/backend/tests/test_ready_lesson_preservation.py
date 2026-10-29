@@ -473,7 +473,8 @@ def test_tutorial_upgrade_revalidates_all_protected_steps_before_new_batches(mon
         {"step_1", "step_2", "step_3", "step_4", "step_5"}) if checkpoint is prior else frozenset())
     # Five old lessons must all pass the publication guard in one attempt.
     assert plans._detail_generation_batch(pending, prior, tutorial=True) == pending[:5]
-    # Once revalidated, missing lessons return to the ordinary bounded batch.
-    assert plans._detail_generation_batch(pending[5:], prior, tutorial=True) == pending[5:8]
-    assert plans._detail_generation_batch(pending, None, tutorial=True) == pending[:3]
+    # Once revalidated, new tutorials come only from the learner's one-ahead
+    # window (chosen by the generator), never from a batch.
+    assert plans._detail_generation_batch(pending[5:], prior, tutorial=True) == []
+    assert plans._detail_generation_batch(pending, None, tutorial=True) == []
     assert plans._detail_generation_batch(pending, prior, tutorial=False) == pending

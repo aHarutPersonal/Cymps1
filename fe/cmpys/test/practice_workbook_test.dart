@@ -871,13 +871,18 @@ void main() {
       List<bool?> results, {
       bool failFirst = false,
       _Store? store,
+      LessonReaderScreen reader = _reader,
+      bool? nextWritten,
     }) async {
-      final completion = _Completion(failFirst: failFirst);
+      final completion = _Completion(
+        failFirst: failFirst,
+        nextWritten: nextWritten,
+      );
       await _mount(
         tester,
         _finishedRepo(),
         reduced: true,
-        screen: _host(_reader, results),
+        screen: _host(reader, results),
         overrides: [
           planRepositoryProvider.overrideWithValue(completion),
           currentPlanProvider.overrideWith((_) => _Plan(completion)),
@@ -896,6 +901,53 @@ void main() {
       await tester.pumpAndSettle();
       return completion;
     }
+
+    testWidgets('a next tutorial still being written is "being prepared"', (
+      tester,
+    ) async {
+      const waiting = LessonReaderScreen(
+        itemId: 'item',
+        missionTitle: 'Owner earnings',
+        step: PlanStepDetail(
+          id: 's1',
+          title: 'Owner earnings',
+          lessonContent: '## Learn\nOwner earnings.',
+          lessonFormat: 'tutorial_v1',
+        ),
+        stepNumber: 4,
+        totalSteps: 8,
+        materials: [],
+        completed: false,
+        nextTitle: 'Maintenance versus growth capex',
+        nextReady: false,
+      );
+      for (final (written, sub) in [
+        (false, 'Both cases accepted. Tutorial 5 is being prepared.'),
+        (
+          true,
+          'Both cases accepted. Tutorial 5, Maintenance versus growth capex, '
+              'is now open.',
+        ),
+        // The re-read fails: keep what was known when the reader opened.
+        (null, 'Both cases accepted. Tutorial 5 is being prepared.'),
+      ]) {
+        final completion = await openReaderAndFinish(
+          tester,
+          <bool?>[],
+          reader: waiting,
+          nextWritten: written,
+        );
+        // The reader checked again before celebrating.
+        expect(completion.reads, 1);
+        final overlay = tester.widget<CelebrationOverlay>(
+          find.byType(CelebrationOverlay),
+        );
+        expect(overlay.celebration.sub, sub);
+        await tester.tap(find.text('Continue'));
+        await tester.pumpAndSettle();
+        await tester.pumpWidget(const SizedBox());
+      }
+    });
 
     testWidgets('finish_shows_celebration', (tester) async {
       final results = <bool?>[];
@@ -1117,9 +1169,45 @@ _Repo _finishedRepo() {
 }
 
 class _Completion extends Fake implements PlanRepository {
-  _Completion({this.failFirst = false});
+  _Completion({this.failFirst = false, this.nextWritten});
   final bool failFirst;
+
+  /// What a re-read of the mission says about step 5; null fails the read.
+  final bool? nextWritten;
   int calls = 0;
+  int reads = 0;
+
+  @override
+  Future<PlanItemDetailed> getPlanItemDetailed(String itemId) async {
+    reads++;
+    final written = nextWritten;
+    if (written == null) throw Exception('offline');
+    return PlanItemDetailed(
+      item: const BackendPlanItem(
+        id: 'item',
+        title: 'Owner earnings',
+        type: 'project',
+        description: '',
+        weekStart: 1,
+        weekEnd: 1,
+        successMetric: '',
+        estimatedHours: 2,
+        status: 'in_progress',
+        progressPercent: 50,
+      ),
+      detailsStatus: 'partial',
+      steps: [
+        for (var i = 1; i <= 8; i++)
+          PlanStepDetail(
+            id: 's$i',
+            title: 'Step $i',
+            lessonContent: i < 5 || (i == 5 && written) ? '# $i' : null,
+            lessonFormat: 'tutorial_v1',
+          ),
+      ],
+    );
+  }
+
   final saves = <Map<String, Object?>>[];
 
   /// The desired state each completion request carried.

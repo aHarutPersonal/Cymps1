@@ -15,6 +15,7 @@ import '../../../core/ui/v3/v3.dart';
 import '../../plan/models/plan_models.dart';
 import '../../plan/presentation/book_narration_checkpoint.dart';
 import '../../plan/presentation/book_reader_screen.dart';
+import '../../plan/presentation/first_tutorial_auto_open.dart';
 import '../../plan/presentation/material_reader_screen.dart';
 import '../../plan/presentation/material_web_screen.dart';
 import '../../plan/presentation/open_lesson_reader.dart';
@@ -115,6 +116,18 @@ class _CmpysTodayScreenState extends ConsumerState<CmpysTodayScreen>
 
   bool get _pollAllowed => _onScreen && _appForeground;
 
+  /// The mission whose "preparing your first tutorial" card the last build
+  /// showed: when its tutorial 1 becomes readable it opens by itself (once
+  /// per mission per app session, only while Today is on screen). Any other
+  /// state in between clears it, so only a continuous wait opens.
+  String? _awaitingFirstTutorial;
+
+  /// Tutorial 1 became readable while something covered Today (a page, a
+  /// sheet or a dialog on the root navigator): it opens once that is gone.
+  PlanItemDetailed? _pendingFirstTutorial;
+  Timer? _pendingFirstTutorialRetry;
+  static const _autoOpenRetryEvery = Duration(milliseconds: 500);
+
   DateTime get _now => widget.clock?.call() ?? DateTime.now();
 
   @override
@@ -157,6 +170,7 @@ class _CmpysTodayScreenState extends ConsumerState<CmpysTodayScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _preparingPoll?.cancel();
+    _pendingFirstTutorialRetry?.cancel();
     super.dispose();
   }
 
@@ -329,6 +343,44 @@ class _CmpysTodayScreenState extends ConsumerState<CmpysTodayScreen>
     // A guide still being prepared, or nothing readable: the mission screen
     // resolves availability and explains it.
     unawaited(_openPlanItem(missionId));
+  }
+
+  /// Build found [detail]'s current tutorial readable. When it is tutorial 1
+  /// and the previous build showed it being prepared ([awaiting]), open it
+  /// after the frame.
+  void _maybeOpenFirstTutorial(PlanItemDetailed detail, String? awaiting) {
+    if (awaiting != detail.item.id || !detail.firstTutorialReadable) return;
+    _pendingFirstTutorial = detail;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _openPendingFirst());
+  }
+
+  /// Opens the pending tutorial 1 when Today is the visible page with nothing
+  /// over it; while something covers it, tries again until that is gone. Off
+  /// the tab or in the background the chance has passed.
+  void _openPendingFirst() {
+    _pendingFirstTutorialRetry?.cancel();
+    final detail = _pendingFirstTutorial;
+    if (!mounted || detail == null) return;
+    if (!_appForeground) {
+      _pendingFirstTutorial = null;
+      return;
+    }
+    // Covered (an opaque page also turns tickers off below it): wait.
+    if (!routeIsOnTop(context)) {
+      _pendingFirstTutorialRetry = Timer(
+        _autoOpenRetryEvery,
+        _openPendingFirst,
+      );
+      return;
+    }
+    // On top but tickers off: another shell tab is showing.
+    if (!TickerMode.of(context)) {
+      _pendingFirstTutorial = null;
+      return;
+    }
+    _pendingFirstTutorial = null;
+    if (!FirstTutorialAutoOpen.claim(detail.item.id)) return;
+    unawaited(_openTutorial(detail));
   }
 
   /// Build reports which mission is "Preparing" (or null); the timer itself
@@ -624,6 +676,9 @@ class _CmpysTodayScreenState extends ConsumerState<CmpysTodayScreen>
   }) {
     String? preparing;
     Widget? slot;
+    // Set again below only while the "preparing" card shows.
+    final awaiting = _awaitingFirstTutorial;
+    _awaitingFirstTutorial = null;
     switch (planState.status) {
       case CurrentPlanStatus.loading:
         slot = const _NightCard(child: _NightSkeleton());
@@ -656,6 +711,7 @@ class _CmpysTodayScreenState extends ConsumerState<CmpysTodayScreen>
           break;
         }
         if (detail.currentStepReadable) {
+          _maybeOpenFirstTutorial(detail, awaiting);
           slot = _NextUpCard(
             detail: detail,
             idol: idol,
@@ -671,8 +727,15 @@ class _CmpysTodayScreenState extends ConsumerState<CmpysTodayScreen>
             onOpenMission: () => _openPlanItem(mission.id),
           );
         } else {
-          preparing = mission.id;
-          slot = _PreparingCard(onTap: () => _openPlanItem(mission.id));
+          final first = detail.firstTutorialPreparing;
+          _awaitingFirstTutorial = first ? mission.id : null;
+          // Poll only while a job is writing; an idle mission has nothing
+          // new to read.
+          if (detail.detailsLoading) preparing = mission.id;
+          slot = _PreparingCard(
+            first: first,
+            onTap: () => _openPlanItem(mission.id),
+          );
         }
     }
     _notePreparing(preparing);
@@ -1147,10 +1210,13 @@ class _NightSkeleton extends StatelessWidget {
   }
 }
 
-/// "Preparing this week’s tutorials" (the design's `preparing` state).
+/// "Preparing your first tutorial" (the design's `preparing` state), or
+/// the next one when the learner has reached a tutorial still being written.
 class _PreparingCard extends StatelessWidget {
-  const _PreparingCard({required this.onTap});
+  const _PreparingCard({required this.first, required this.onTap});
 
+  /// Tutorial 1 is the one being written.
+  final bool first;
   final VoidCallback onTap;
 
   @override
@@ -1170,7 +1236,9 @@ class _PreparingCard extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'Preparing this week’s tutorials',
+                  first
+                      ? 'Preparing your first tutorial'
+                      : 'Preparing your next tutorial',
                   style: AppTypography.sans(
                     13,
                   ).copyWith(color: AppColors.nink2),
@@ -1190,8 +1258,8 @@ class _PreparingCard extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           Text(
-            'Your first tutorial opens as soon as it passes review. Habits '
-            'below are ready now.',
+            'It opens here as soon as it passes review. Habits below are '
+            'ready now.',
             style: AppTypography.sans(
               13,
             ).copyWith(color: AppColors.nink3, height: 1.5),

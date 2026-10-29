@@ -23,6 +23,7 @@ import 'backend_plan_widgets.dart' show TutorialGlowDisc, TutorialShake;
 import 'book_narration_checkpoint.dart';
 import 'book_reader_screen.dart';
 import 'cycle_completion_screen.dart';
+import 'first_tutorial_auto_open.dart';
 import 'habit_detail_view.dart';
 import 'material_row.dart';
 import 'material_reader_screen.dart';
@@ -101,6 +102,16 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
   final Map<String, BookReadingAccess> _bookAccess = {};
   final Map<String, Future<BookReadingAccess>> _bookAccessFlights = {};
 
+  /// A load showed "preparing your first tutorial" and tutorial 1 has not
+  /// opened since: when it becomes readable it opens by itself.
+  bool _awaitingFirstTutorial = false;
+
+  /// Tutorial 1 became readable while something covered this screen (a
+  /// page, a sheet or a dialog): it opens once that is gone.
+  PlanItemDetailed? _pendingFirstTutorial;
+  Timer? _pendingFirstTutorialRetry;
+  static const _autoOpenRetryEvery = Duration(milliseconds: 500);
+
   /// Taps on each locked tutorial, which rock its lock.
   final Map<String, int> _shakes = {};
 
@@ -140,6 +151,7 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
     WidgetsBinding.instance.removeObserver(this);
     _pollRevision++;
     _poll?.cancel();
+    _pendingFirstTutorialRetry?.cancel();
     _accessRevision.dispose();
     super.dispose();
   }
@@ -178,6 +190,12 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
           _takingLong = false;
         }
         _error = null;
+        if (detailed.generationParked) {
+          // One ahead is written and generation waits for the learner: a
+          // finished job (or a retry's) has nothing more to report.
+          _activeDetailJobId = null;
+          _detailJob = null;
+        }
         if (detailed.detailsReady || detailed.completed) {
           _activeDetailJobId = null;
           _terminalDetailError = null;
@@ -203,6 +221,7 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
           );
         }
       }
+      _noteFirstTutorial(detailed);
       if (_shouldPollDetails(detailed)) {
         _pollStartedAt ??= DateTime.now();
         _scheduleDetailPoll();
@@ -233,6 +252,52 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
     }
   }
 
+  /// Opens tutorial 1 by itself the moment it becomes readable, when every
+  /// load since this screen showed it being prepared said so (a stop in
+  /// between ends the wait): once per mission per app session, only while
+  /// nothing covers this screen and the app is in front, and never after the
+  /// learner opened it.
+  void _noteFirstTutorial(PlanItemDetailed detailed) {
+    if (detailed.firstTutorialPreparing && !_preparationStopped(detailed)) {
+      _awaitingFirstTutorial = true;
+      return;
+    }
+    if (!_awaitingFirstTutorial) return;
+    _awaitingFirstTutorial = false;
+    if (!detailed.firstTutorialReadable) return;
+    _pendingFirstTutorial = detailed;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _openPendingFirst());
+  }
+
+  /// Opens the pending tutorial 1 when this screen is the visible page with
+  /// nothing over it; while something covers it, tries again until that is
+  /// gone. In the background the chance has passed.
+  void _openPendingFirst() {
+    _pendingFirstTutorialRetry?.cancel();
+    final detailed = _pendingFirstTutorial;
+    if (!mounted || detailed == null) return;
+    if (!_foreground) {
+      _pendingFirstTutorial = null;
+      return;
+    }
+    // Covered (an opaque page also turns tickers off below it): wait.
+    if (!routeIsOnTop(context)) {
+      _pendingFirstTutorialRetry = Timer(
+        _autoOpenRetryEvery,
+        _openPendingFirst,
+      );
+      return;
+    }
+    // On top but tickers off: another shell tab is showing.
+    if (!TickerMode.of(context)) {
+      _pendingFirstTutorial = null;
+      return;
+    }
+    _pendingFirstTutorial = null;
+    if (!FirstTutorialAutoOpen.claim(detailed.item.id)) return;
+    unawaited(_openLesson(detailed, detailed.steps.first, 0));
+  }
+
   String? get _pollingDetailJobId {
     final activeJobId = _activeDetailJobId?.trim();
     if (activeJobId != null && activeJobId.isNotEmpty) return activeJobId;
@@ -247,6 +312,8 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
     if (detailed == null ||
         detailed.completed ||
         detailed.detailsReady ||
+        // Parked one ahead: nothing runs until the learner moves on.
+        (detailed.generationParked && _activeDetailJobId == null) ||
         _terminalDetailError != null) {
       return false;
     }
@@ -649,10 +716,13 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
     final item = d.item;
     // A stopped job stays quiet while the current tutorial is readable; the
     // learner meets the retry when they reach the tutorial that is missing.
+    // Tutorials are written one ahead, so while the current one is readable
+    // the next one being written is no news either.
     final showPreparation =
         !d.completed &&
         !d.detailsReady &&
-        !(_preparationStopped(d) && d.currentStepReadable);
+        !(d.currentStepReadable &&
+            (d.isTutorialSequence || _preparationStopped(d)));
     // The syllabus shows as soon as the outline exists; unready tutorials
     // stay locked or preparing until they are published.
     final showTimeline =
@@ -1225,19 +1295,16 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
     );
   }
 
+  /// Shown only while the learner's own tutorial is not readable: tutorials
+  /// are written one ahead, as the learner reaches them.
   String _tutorialProgressCopy(PlanItemDetailed detailed) {
-    if (!detailed.hasReadyLesson) {
-      return 'Preparing your first short tutorial. The next ones will follow as you learn…';
+    if (detailed.firstTutorialPreparing) {
+      return 'Preparing your first tutorial…';
     }
     if (detailed.readyLessonCount == detailed.steps.length) {
       return 'All tutorials are ready. Finishing the learning materials…';
     }
-    final count =
-        '${detailed.readyLessonCount} of ${detailed.steps.length} tutorials ready.';
-    if (detailed.steps[detailed.activeStepIndex].hasContent) {
-      return '$count Start now while the next tutorials are prepared.';
-    }
-    return 'Preparing your next tutorial. $count Your progress is saved.';
+    return 'Preparing your next tutorial…';
   }
 
   String _detailProgressCopy(String? step) {
@@ -1273,12 +1340,16 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
     final base = tutorialRowStates(d);
     final stopped = _preparationStopped(d);
     if (stopped == d.detailsFailed) return base;
+    // A retry writes one ahead too: only the window's unwritten step.
+    final writing = d.unwrittenWindowStepIndex;
     return [
       for (var i = 0; i < base.length; i++)
         if (base[i] == TutorialRowState.done || d.steps[i].hasContent)
           base[i]
         else if (!stopped)
-          TutorialRowState.preparing
+          i == writing || !d.isTutorialSequence
+              ? TutorialRowState.preparing
+              : TutorialRowState.locked
         else if (i == d.activeStepIndex)
           TutorialRowState.stopped
         else
@@ -1572,12 +1643,17 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
     await _load(resetPolling: true);
     if (!mounted) return;
     if (changed) {
+      final next = index + 1 < detailed.steps.length
+          ? (_detailed ?? detailed).steps.elementAtOrNull(index + 1)
+          : null;
       showV3Toast(
         context,
         index == detailed.steps.length - 1
             ? 'Mission complete.'
             : step.isTutorial
-            ? 'Tutorial complete. Your next tutorial is unlocked.'
+            ? (next == null || next.hasContent
+                  ? 'Tutorial complete. Your next tutorial is unlocked.'
+                  : 'Tutorial complete. Your next one is being prepared.')
             : 'Lesson complete. The next lesson is unlocked.',
         icon: V3Icons.check,
         tone: V3ToastTone.success,

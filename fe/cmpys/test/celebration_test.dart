@@ -148,6 +148,26 @@ void main() {
       );
     });
 
+    test('a next tutorial still being written is "being prepared"', () {
+      final c = Celebration.tutorial(
+        completed: 2,
+        total: 8,
+        nextTitle: 'Cash and accrual on one page',
+        nextReady: false,
+      );
+      expect(c.sub, 'Both cases accepted. Tutorial 3 is being prepared.');
+      // The last one has no next tutorial to wait for.
+      expect(
+        Celebration.tutorial(
+          completed: 8,
+          total: 8,
+          nextTitle: '',
+          nextReady: false,
+        ).sub,
+        'Both cases accepted. This mission’s tutorials are done.',
+      );
+    });
+
     test('a blank achievement is no achievement', () {
       expect(_tutorial(achievement: '   ').achievement, isNull);
       expect(_tutorial(achievement: '   ').offersAchievement, isFalse);

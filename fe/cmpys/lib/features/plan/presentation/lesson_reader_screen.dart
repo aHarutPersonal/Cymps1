@@ -142,6 +142,7 @@ class LessonReaderScreen extends ConsumerStatefulWidget {
     this.week,
     this.artifactJobId,
     this.nextTitle = '',
+    this.nextReady = true,
     this.shellBranchIndex = ActiveBookNarrationResume.planBranchIndex,
   });
 
@@ -160,6 +161,11 @@ class LessonReaderScreen extends ConsumerStatefulWidget {
   /// The next step's title, for the finish celebration ("Tutorial n+1,
   /// ‹title›, is now open."); blank when unknown or this is the last step.
   final String nextTitle;
+
+  /// Whether the next step was written when the reader opened. Tutorials are
+  /// written one ahead, so when it was not the reader checks again before
+  /// celebrating: a still unwritten one is "being prepared".
+  final bool nextReady;
 
   /// The shell branch this reader was opened from (Today or Plan), handed to
   /// the book reader so its player and a cold-start resume name and restore
@@ -281,6 +287,24 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
     Navigator.of(context).pop(completed);
   }
 
+  /// Whether the next step is written now. Best effort and brief: an error or
+  /// a slow read keeps what was known when the reader opened.
+  Future<bool> _nextReady() async {
+    if (widget.nextReady || widget.stepNumber >= widget.totalSteps) {
+      return true;
+    }
+    try {
+      final detail = await ref
+          .read(planRepositoryProvider)
+          .getPlanItemDetailed(widget.itemId)
+          .timeout(const Duration(seconds: 2));
+      final next = detail.steps.elementAtOrNull(widget.stepNumber);
+      return next?.hasContent ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// The tutorial celebration (`v3/app.jsx`), after the step is complete.
   /// "Add to your record" opens the achievement sheet; a confirmed
   /// achievement is saved as the learner's own (`manual`, with this plan and
@@ -289,12 +313,15 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
   /// category's dimension (Practice when it has none), with the server id.
   Future<void> _celebrate() async {
     final achievement = LessonPracticeScreen.achievementFor(widget.step.title);
+    final nextReady = await _nextReady();
+    if (!mounted) return;
     final choice = await showCelebration(
       context,
       Celebration.tutorial(
         completed: widget.stepNumber,
         total: widget.totalSteps,
         nextTitle: widget.nextTitle,
+        nextReady: nextReady,
         achievement: achievement,
       ),
     );

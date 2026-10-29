@@ -188,7 +188,6 @@ async def test_generation_reconciles_before_publication_and_preserves_started_wo
     checkpoints = []
     async def checkpoint(payload, stage):
         checkpoints.append(copy.deepcopy(payload))
-        assert sum(s['estimate_minutes'] for s in payload['steps']) <= 132
     revisions = set()
     payload, calls, error = await _generate_plan_item_details_parallel(
         system_prompt='Teach', task_title='Sequence', mission_hours=2, user_goal='Reason',
@@ -198,16 +197,14 @@ async def test_generation_reconciles_before_publication_and_preserves_started_wo
         on_checkpoint=checkpoint, prepared_packages=packages, validation_records=validations,
         existing_checkpoint=saved, capacity_protected_steps=AsyncMock(side_effect=lambda: set(protected)),
         capacity_revised_step_ids=revisions)
-    assert payload['steps'][:5] == steps[:5]
-    assert saved['steps'] == steps
-    if started_during_edit:
-        assert 'started during' in error and not checkpoints and not revisions
-        assert payload['steps'] == steps and len(calls) == 1
-    else:
-        assert error is None and len(checkpoints) == 1 and len(calls) == 8
-        assert len(revisions) == 8 and revisions == set(changed_ids) and not revisions & protected
-        assert normalize_lesson_durations(copy.deepcopy(payload), mission_hours=2)['workload']['required_minutes'] == 132
-        assert all(validations[s['id']] == provenance(s, packages[s['id']]) for s in payload['steps'])
+    # One-ahead: capacity is corrected only on the tutorial being written.
+    # Already-ready tutorials are never rewritten, so a reused over-capacity
+    # artifact is passed to publication unchanged (whose mission-capacity guard
+    # rejects it) instead of being silently shortened.
+    assert not changed_ids and not revisions and not calls
+    assert payload['steps'] == steps and saved['steps'] == steps
+    assert error is None and len(checkpoints) == 1
+    assert all(validations[s['id']] == provenance(s, packages[s['id']]) for s in payload['steps'])
 
 
 @pytest.mark.asyncio
@@ -275,18 +272,20 @@ async def test_reviewed_partial_is_checkpointed_before_a_failed_capacity_edit(mo
         assert sum(s['estimate_minutes'] for s in payload['steps'] if s.get('lesson_content')) == 126
         assert all(validations[s['id']] == provenance(s, packages[s['id']]) for s in payload['steps'] if s.get('lesson_content'))
     async def fail_edit(*args, **kwargs):
-        assert events == ['capacity_pending']
-        return None, 'Offline synthetic edit rejection'
+        pytest.fail('One-ahead never rewrites an already-ready tutorial')
     monkeypatch.setattr('app.services.planning.tutorial_capacity.shorten_tutorial_reading', fail_edit)
-    _, calls, error = await _generate_plan_item_details_parallel(
+    payload, calls, error = await _generate_plan_item_details_parallel(
         system_prompt='Teach', task_title='Sequence', mission_hours=2, user_goal='Reason',
         learning_preferences='examples', idol_name='Mentor', idol_domain='writing', idol_evidence={},
         session_context='', active_tier='balanced', routing_reason='test',
         client_factory=lambda **kwargs: pytest.fail('Reviewed tutorials must be reused'),
         on_checkpoint=checkpoint, prepared_packages=packages, validation_records=validations,
         existing_checkpoint=saved, capacity_protected_steps=AsyncMock(return_value={'step_1'}))
-    assert 'Offline synthetic edit rejection' in error and not calls
-    assert events == ['capacity_pending']
+    # The reused reviewed partial is published as-is; the learner's window
+    # (T1, T2) is ready, so the job parks without any edit or new tutorial.
+    assert error is None and not calls
+    assert payload.pop('_tutorial_waiting_for_learner') is True
+    assert events == ['outline_ready']
 
 
 def test_capacity_request_leaves_one_hundred_words_of_counting_margin():

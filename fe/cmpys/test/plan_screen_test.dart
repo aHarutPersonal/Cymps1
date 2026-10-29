@@ -85,8 +85,11 @@ PlanStepDetail _step(
   lessonFormat: 'tutorial_v1',
 );
 
-/// Mission 1: two done, one current, one locked, two still being written.
-PlanItemDetailed _detailOne() => PlanItemDetailed(
+/// Mission 1: two done, one current, one locked (written one ahead) and two
+/// upcoming, not written yet.
+PlanItemDetailed _detailOne({
+  Set<String> completed = const {'s1', 's2'},
+}) => PlanItemDetailed(
   item: _item('m1', 'Find what the business really earns'),
   detailsStatus: 'partial',
   jobId: 'job-1',
@@ -99,8 +102,13 @@ PlanItemDetailed _detailOne() => PlanItemDetailed(
     _step('s5', 'Working-capital traps', content: false),
     _step('s6', 'Reading the cash-flow statement', content: false),
   ],
-  completedStepIds: const {'s1', 's2'},
+  completedStepIds: completed,
 );
+
+/// Mission 1 with the learner on tutorial 4: tutorial 5, the next one, is
+/// being written.
+PlanItemDetailed _detailOneOnFour() =>
+    _detailOne(completed: const {'s1', 's2', 's3'});
 
 /// Mission 2: three tutorials, none started.
 PlanItemDetailed _detailTwo() => PlanItemDetailed(
@@ -384,13 +392,23 @@ void main() {
     });
 
     test('tutorialRowStates maps done, current, locked and preparing', () {
+      // One ahead: 3 and 4 are written, so 5 and 6 are upcoming.
       expect(tutorialRowStates(_detailOne()), [
         TutorialRowState.done,
         TutorialRowState.done,
         TutorialRowState.current,
         TutorialRowState.locked,
+        TutorialRowState.locked,
+        TutorialRowState.locked,
+      ]);
+      // On 4, the job writes 5; 6 waits.
+      expect(tutorialRowStates(_detailOneOnFour()), [
+        TutorialRowState.done,
+        TutorialRowState.done,
+        TutorialRowState.done,
+        TutorialRowState.current,
         TutorialRowState.preparing,
-        TutorialRowState.preparing,
+        TutorialRowState.locked,
       ]);
       // A locked mission shows every unfinished tutorial locked.
       expect(
@@ -680,7 +698,7 @@ void main() {
     });
 
     testWidgets('preparing_row_shows_skeleton', (tester) async {
-      await _pumpScreen(tester, _Harness());
+      await _pumpScreen(tester, _Harness(readOne: _detailOneOnFour));
       await tester.tap(find.text('Show all 6 tutorials'));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 600));
@@ -742,7 +760,7 @@ void main() {
     testWidgets('coming back to the tab re-reads tutorials still preparing', (
       tester,
     ) async {
-      final harness = _Harness();
+      final harness = _Harness(readOne: _detailOneOnFour);
       final onScreen = ValueNotifier<bool>(true);
       addTearDown(onScreen.dispose);
       tester.view.physicalSize = const Size(430, 3200);
@@ -772,6 +790,37 @@ void main() {
       // Mission 1 still has tutorials being written, mission 2 has none.
       expect(harness.repo.normalReads, ['m1', 'm1']);
       expect(harness.repo.peekReads, ['m2']);
+      await _settleTimers(tester);
+    });
+
+    testWidgets('coming back does not re-read a mission written one ahead', (
+      tester,
+    ) async {
+      // Mission 1's window (3 and 4) is written: nothing is preparing.
+      final harness = _Harness();
+      final onScreen = ValueNotifier<bool>(true);
+      addTearDown(onScreen.dispose);
+      tester.view.physicalSize = const Size(430, 3200);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(
+        harness.build(
+          wrap: (screen) => ValueListenableBuilder<bool>(
+            valueListenable: onScreen,
+            builder: (_, visible, _) =>
+                TickerMode(enabled: visible, child: screen),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 1200));
+      onScreen.value = false;
+      await tester.pump();
+      onScreen.value = true;
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(harness.repo.normalReads, ['m1']);
       await _settleTimers(tester);
     });
 

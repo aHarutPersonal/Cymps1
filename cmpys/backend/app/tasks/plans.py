@@ -6,7 +6,7 @@ import logging
 import math
 import re
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -27,6 +27,9 @@ from app.models.user_achievement import UserAchievement
 from app.models.user import User
 from app.models.user_profile import UserProfile
 from app.services.planning.generator import generate_plan
+from app.services.planning.generation_window import (
+    PARKED_JOB_STATUS, WAITING_FOR_LEARNER_STEP, WINDOW_RETRY_LIMIT, generation_window,
+)
 from app.services.planning.tutorial_illustration import illustrate_step, reconcile_step_illustrations
 from app.services.planning.lesson_review import REVIEW_VERSION, review_response_quality
 from app.services.llm.routing import operation_thinking_level
@@ -92,6 +95,8 @@ WEEK_PREPARATION_STALE_AFTER = timedelta(minutes=10)
 PLAN_PIPELINE_TIMEOUT_SECONDS = 480
 PLAN_DETAIL_PIPELINE_TIMEOUT_SECONDS = 480
 PLAN_DETAIL_PUBLICATION_RESERVE_SECONDS = 10
+# A window tutorial is not started in the same run with less time than this.
+_WINDOW_STEP_MIN_REMAINING_SECONDS = 150
 # Provider request (60 s) plus attaching the result; the solo pool cannot enforce
 # Celery time limits, so the coroutine itself is bounded.
 ILLUSTRATION_TASK_TIMEOUT_SECONDS = 90
@@ -1086,6 +1091,7 @@ async def _generate_plan_item_details_parallel(
     lesson_format: str | None = None,
     capacity_protected_steps: Callable[[], Awaitable[set[str]]] | None = None,
     capacity_revised_step_ids: set[str] | None = None,
+    learner_completed_step_ids: Callable[[], Awaitable[Collection[str]]] | None = None,
 ) -> tuple[
     dict[str, Any] | None,
     list[tuple[str, Any, str, str, str | None]],
@@ -1093,9 +1099,11 @@ async def _generate_plan_item_details_parallel(
 ]:
     """Publish reviewed lessons incrementally, preserving exact saved approvals.
 
-    Tutorial batches prioritize the first pending tutorial, then prepare at most
-    two more concurrently. The caller durably queues a continuation for the same
-    artifact. Legacy outlines retain their original parallel generation path.
+    Tutorials follow the one-ahead rule: the learner's current tutorial (first
+    step without a completion) and the next one are written one at a time, then
+    the payload carries ``_tutorial_waiting_for_learner``. A failed window
+    tutorial returns ``_window_step_failed`` with its error. Legacy outlines
+    retain their original parallel generation path.
     """
     from app.services.llm.client import get_llm_client
     from app.services.llm.prompt_loader import load_and_render
@@ -1262,13 +1270,17 @@ async def _generate_plan_item_details_parallel(
             ],
         }
 
-    async def emit_checkpoint(stage: str) -> None:
-        if tutorial and ready_by_id:
+    async def emit_checkpoint(stage: str, *, editable_step_id: str | None = None) -> None:
+        # One-ahead: a capacity overrun is corrected only on the tutorial just
+        # written. Every other ready tutorial (the learner's current one
+        # included) is never rewritten; with no new tutorial nothing is edited.
+        if tutorial and ready_by_id and editable_step_id is not None:
             from app.services.planning.tutorial_capacity import (
                 TutorialCapacityError, reading_capacity_targets, shorten_tutorial_reading,
             )
             while True:
                 protected = await capacity_protected_steps() if capacity_protected_steps else set()
+                protected = set(protected) | (set(ready_by_id) - {editable_step_id})
                 try:
                     targets = reading_capacity_targets(list(ready_by_id.values()), mission_hours, protected,
                         pending_count=len(outline_steps) - len(ready_by_id))
@@ -2185,15 +2197,10 @@ async def _generate_plan_item_details_parallel(
     pending_steps = [
         step for step in outline_steps if str(step.get("id") or "") not in ready_by_id
     ]
-    # A small batch keeps provider work bounded and yields a durable continuation.
-    # The first tutorial has exclusive priority until its review is published.
+    # Tutorials follow the one-ahead rule: only the learner's current tutorial
+    # and the next one are written, strictly one at a time. A protected
+    # predecessor set (already readable prose) is first revalidated as one.
     selected_steps = _detail_generation_batch(pending_steps, existing_checkpoint, tutorial=tutorial)
-    # An ordinary lookahead tutorial that fails stays pending and becomes the
-    # next batch's priority. A protected predecessor set is revalidated as one.
-    defer_lookahead_failures = tutorial and not (
-        _approved_readable_step_ids(existing_checkpoint)
-        & {str(step.get("id") or "") for step in selected_steps}
-    )
     pending_tasks: list[asyncio.Task] = []
     if not tutorial:
         pending_tasks = [asyncio.create_task(write_tagged_lesson(step)) for step in selected_steps]
@@ -2219,14 +2226,54 @@ async def _generate_plan_item_details_parallel(
                     pending_task.cancel()
             await asyncio.gather(*pending_tasks, return_exceptions=True)
             return checkpoint_payload(), calls, f"Outline checkpoint failed: {type(exc).__name__}"
-        if tutorial and selected_steps:
-            step_id, lesson, step_calls, error = await write_tagged_lesson(selected_steps[0])
-            calls.extend(step_calls)
-            if lesson is None:
-                return checkpoint_payload(), calls, f"{step_id}: {error or 'Tutorial preparation failed'}"
-            ready_by_id[step_id] = lesson
-            await emit_checkpoint(f"{step_id}_ready")
-            pending_tasks = [asyncio.create_task(write_tagged_lesson(step)) for step in selected_steps[1:]]
+        if tutorial:
+            from app.services.planning.tutorial_capacity import TutorialCapacityError
+
+            async def write_and_publish(step: dict[str, Any]) -> tuple[str, str | None]:
+                """Write one tutorial and publish it; capacity failures are this step's."""
+                step_id = str(step.get("id") or "")
+                try:
+                    step_id, lesson, step_calls, error = await write_tagged_lesson(step)
+                except TutorialCapacityError as exc:
+                    return step_id, "Tutorial workload correction failed: " + str(exc)
+                calls.extend(step_calls)
+                if lesson is None:
+                    return step_id, error or "Tutorial preparation failed"
+                ready_by_id[step_id] = lesson
+                try:
+                    await emit_checkpoint(f"{step_id}_ready", editable_step_id=step_id)
+                except TutorialCapacityError as exc:
+                    ready_by_id.pop(step_id, None)
+                    return step_id, "Tutorial workload correction failed: " + str(exc)
+                return step_id, None
+
+            for step in selected_steps:
+                step_id, error = await write_and_publish(step)
+                if error is not None:
+                    return checkpoint_payload(), calls, f"{step_id}: {error}"
+            outline_ids = [str(step.get("id") or "") for step in outline_steps]
+            steps_by_id = {str(step.get("id") or ""): step for step in outline_steps}
+            # Re-read completions before every write: a learner who finishes a
+            # tutorial while this job runs moves the window forward. Each pass
+            # readies one step or returns, so the loop is bounded by the outline.
+            written_this_run = bool(selected_steps)
+            while True:
+                completed = set(await learner_completed_step_ids()) if learner_completed_step_ids else set()
+                missing = generation_window(outline_ids, completed).missing(ready_by_id)
+                if not missing:
+                    break
+                if (written_this_run and deadline - asyncio.get_running_loop().time()
+                        < _WINDOW_STEP_MIN_REMAINING_SECONDS):
+                    # Too little time for another tutorial: the caller re-queues
+                    # this same job for the rest of the window, never beyond it.
+                    return {**checkpoint_payload(), "_tutorial_window_continuation": True}, calls, None
+                written_this_run = True
+                step_id, error = await write_and_publish(steps_by_id[missing[0]])
+                if error is not None:
+                    # Every failure of a window tutorial, capacity included,
+                    # takes the window retry path.
+                    return ({**checkpoint_payload(), "_window_step_failed": step_id}, calls,
+                            f"{step_id}: {error}")
         for completed_task in asyncio.as_completed(pending_tasks):
             step_id, lesson, step_calls, error = await completed_task
             calls.extend(step_calls)
@@ -2248,20 +2295,16 @@ async def _generate_plan_item_details_parallel(
             return checkpoint_payload(), calls, "Tutorial workload correction failed: " + str(exc)
         raise
 
-    if errors and not defer_lookahead_failures:
+    if errors:
         return (
             checkpoint_payload(),
             calls,
             "Concurrent lesson generation failed: " + "; ".join(errors),
         )
-    if errors:
-        logger.warning(
-            "[PLAN_DETAILS] Deferred lookahead tutorials to the next batch: %s",
-            "; ".join(errors)[:2000],
-        )
 
     if tutorial and len(ready_by_id) < len(outline_steps):
-        return {**checkpoint_payload(), "_tutorial_continuation": True}, calls, None
+        # The window is ready; later tutorials wait for the learner.
+        return {**checkpoint_payload(), "_tutorial_waiting_for_learner": True}, calls, None
 
     payload = {
         **outline,
@@ -3210,7 +3253,7 @@ def regenerate_plan_item_details(self, job_id: str) -> dict:
     logger.info(f"[PLAN_DETAILS] Starting regeneration for job_id={job_id}")
     try:
         result = run_async(_regenerate_plan_item_details_with_deadline(job_id))
-        if result.get("status") in {"completed", "skipped", "continuing"}:
+        if result.get("status") in {"completed", "skipped", "continuing", "retrying", "waiting_for_learner"}:
             logger.info(
                 "[PLAN_DETAILS] Finished job_id=%s status=%s",
                 job_id,
@@ -3687,6 +3730,10 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
         async def _capacity_protected_steps() -> set[str]:
             from app.services.planning.tutorial_capacity import protected_tutorial_ids
             return await protected_tutorial_ids(db, user_id=str(user_id), item_id=str(item.id))
+
+        async def _learner_completed_step_ids() -> set[str]:
+            # ``item`` is rebound to the locked row at every publication.
+            return await _learner_completed_tutorial_ids(db, item=item, user_id=str(user_id))
         if existing_checkpoint:
             from app.models.lesson_practice import LessonPractice
             from app.services.practice.contracts import Workbook, lesson_version
@@ -3968,6 +4015,7 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                 ),
                 capacity_protected_steps=_capacity_protected_steps,
                 capacity_revised_step_ids=capacity_revised_step_ids,
+                learner_completed_step_ids=_learner_completed_step_ids,
             )
             detail_llm_calls.extend(parallel_calls)
             for stage, response, _, route_reason, _ in parallel_calls:
@@ -3981,6 +4029,28 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                     call_quality[id(response)] = 1.0
                 elif isinstance(response.data, dict):
                     call_quality[id(response)] = float(getattr(response, "semantic_accepted", False) is True)
+
+            failed_window_step = (
+                parallel_payload.pop("_window_step_failed", None) if parallel_payload is not None else None
+            )
+            window_retries = dict((job.result_json or {}).get("window_retries") or {})
+            if (parallel_error is not None and failed_window_step is not None
+                    and window_retries.get(failed_window_step, 0) < WINDOW_RETRY_LIMIT):
+                # One automatic background retry of the same job (same artifact,
+                # same private checkpoints). A second failure surfaces below.
+                await _persist_detail_usage("generation_failed", 0.0)
+                window_retries[failed_window_step] = window_retries.get(failed_window_step, 0) + 1
+                logger.warning(
+                    "[PLAN_DETAILS] Retrying window tutorial job_id=%s step=%s error=%s",
+                    job.id, failed_window_step, parallel_error[:500],
+                )
+                return await _requeue_running_detail_job(
+                    db, job_id=str(job.id),
+                    queue=_payload_window_queue(parallel_payload, await _learner_completed_step_ids()),
+                    result_json={**(job.result_json or {}), "window_retries": window_retries,
+                                 "last_window_error": parallel_error[:1000]},
+                    reason="retrying",
+                )
 
             if parallel_error is not None or parallel_payload is None:
                 logger.error(
@@ -4004,22 +4074,34 @@ async def _regenerate_plan_item_details_async(job_id: str) -> dict:
                     ),
                 }
 
-            if parallel_payload.pop("_tutorial_continuation", False):
+            if parallel_payload.pop("_tutorial_window_continuation", False):
                 await _persist_detail_usage("partial_ready", _score_detail_payload(parallel_payload))
-                # Keep the SAME artifact/job identity and private checkpoints so
-                # completion history and reviewed answers survive each batch.
-                result = await db.execute(update(PlanItemDetailJob).where(
+                # Same job, same artifact: finish the window in a fresh run.
+                return await _requeue_running_detail_job(
+                    db, job_id=str(job.id),
+                    queue=_payload_window_queue(parallel_payload, await _learner_completed_step_ids()),
+                    reason="continuing")
+
+            if parallel_payload.pop("_tutorial_waiting_for_learner", False):
+                await _persist_detail_usage("partial_ready", _score_detail_payload(parallel_payload))
+                # Park: the window is ready and later tutorials wait for the
+                # learner. A terminal status is never failed as a stale job.
+                parked = await db.execute(update(PlanItemDetailJob).where(
                     PlanItemDetailJob.id == job.id, PlanItemDetailJob.status == "running",
-                ).values(status="queued", step="preparing_next_tutorials").execution_options(synchronize_session=False))
+                ).values(
+                    status=PARKED_JOB_STATUS, step=WAITING_FOR_LEARNER_STEP, progress_percent=100,
+                    result_json={**(job.result_json or {}), "waiting_for_learner": True},
+                ).execution_options(synchronize_session=False))
                 await db.commit()
-                if result.rowcount != 1:
+                if parked.rowcount != 1:
                     return {"status": "skipped", "reason": "job_superseded"}
                 try:
-                    regenerate_plan_item_details.apply_async(args=[str(job.id)], queue="low_priority")
+                    # A completion may have committed after the last window read.
+                    await ensure_tutorial_window_generation(db, item_id=usage_item_id, user_id=str(user_id))
                 except Exception:
-                    await _mark_plan_detail_job_failed(str(job.id), "Could not schedule the next tutorials. Your ready tutorials are saved; please retry.")
-                    raise
-                return {"status": "continuing", "ready_step_ids": (job.result_json or {}).get("ready_step_ids", [])}
+                    logger.exception("[PLAN_DETAILS] Window recheck failed job_id=%s", job_id)
+                return {"status": WAITING_FOR_LEARNER_STEP,
+                        "ready_step_ids": (job.result_json or {}).get("ready_step_ids", [])}
 
             details = {**parallel_payload, "materials": resolved_checkpoint_materials or parallel_payload.get("materials", [])}
 
@@ -4298,17 +4380,127 @@ def _approved_readable_step_ids(details_json: Any) -> frozenset[str]:
 
 
 def _detail_generation_batch(pending_steps: list[dict], checkpoint: dict | None, *, tutorial: bool) -> list[dict]:
-    """Revalidate the protected predecessor as one set before new small batches.
+    """Steps written before the one-ahead window: the protected predecessor set.
 
-    Publication cannot replace five readable lessons with only three approvals.
-    A normal three-item continuation would otherwise repeat that first batch
-    forever after a contract upgrade, because the old artifact stays current.
+    Publication cannot replace five readable lessons with only some approvals,
+    so already readable prose is revalidated as one set (one writer at a time).
+    New tutorial work is chosen by the learner's generation window instead.
     """
     if not tutorial:
         return pending_steps
     protected = _approved_readable_step_ids(checkpoint)
-    revalidation = [step for step in pending_steps if str(step.get("id")) in protected]
-    return revalidation or pending_steps[:3]
+    return [step for step in pending_steps if str(step.get("id")) in protected]
+
+
+async def _learner_completed_tutorial_ids(db, *, item: PlanItem, user_id: str) -> set[str]:
+    """Completions of the item's current artifact: the learner's position."""
+    from app.models.plan import PlanItemStepCompletion
+    from app.services.planning.artifact_identity import current_step_completion_predicates
+
+    result = await db.execute(select(PlanItemStepCompletion.step_id).where(
+        *current_step_completion_predicates(item, user_id=str(user_id))))
+    return {str(step_id) for step_id in result.scalars().all()}
+
+
+def _payload_window_queue(payload: dict, completed_step_ids: Collection[str]) -> str:
+    """The learner's queue for a re-queue: foreground only if their current tutorial is missing."""
+    from app.services.planning.generation_window import window_queue
+
+    steps = [step for step in payload.get("steps", []) if isinstance(step, dict)]
+    window = generation_window([str(step.get("id")) for step in steps], completed_step_ids)
+    return window_queue(window, [str(step.get("id")) for step in steps if step.get("lesson_content")])
+
+
+def _window_requeue_step(queue: str) -> str:
+    # Low-priority work stays promotable by the detail route (prefetch step).
+    return "user_priority" if queue == "default" else "background_queued"
+
+
+async def _requeue_running_detail_job(
+    db, *, job_id: str, queue: str, result_json: dict | None = None, reason: str,
+) -> dict:
+    """Re-queue this same job (same artifact) for more work inside its window."""
+    from app.models.item_detail_job import PlanItemDetailJob
+
+    values: dict[str, Any] = {"status": "queued", "step": _window_requeue_step(queue)}
+    if result_json is not None:
+        values["result_json"] = result_json
+    result = await db.execute(update(PlanItemDetailJob).where(
+        PlanItemDetailJob.id == job_id, PlanItemDetailJob.status == "running",
+    ).values(**values).execution_options(synchronize_session=False))
+    await db.commit()
+    if result.rowcount != 1:
+        return {"status": "skipped", "reason": "job_superseded"}
+    try:
+        regenerate_plan_item_details.apply_async(args=[job_id], queue=queue)
+    except Exception:
+        await _mark_plan_detail_job_failed(
+            job_id, "Could not schedule the next tutorial. Your ready tutorials are saved; please retry.")
+        raise
+    logger.info("[PLAN_DETAILS] Re-queued job_id=%s queue=%s reason=%s", job_id, queue, reason)
+    return {"status": reason}
+
+
+async def ensure_tutorial_window_generation(db, *, item_id: str, user_id: str) -> str | None:
+    """Make sure the learner's current and next tutorials are (being) written.
+
+    Idempotent: an active job is reused; only the artifact's own parked job
+    (``completed`` / ``waiting_for_learner``) is re-queued, by compare-and-set,
+    so an item never has two active jobs and its artifact identity is kept.
+    Returns the job id that owns the window, or ``None`` when nothing is needed.
+    Never raises for a publishing failure: the job is parked again instead.
+    """
+    from app.models.item_detail_job import PlanItemDetailJob
+    from app.services.planning.artifact_identity import current_step_ids, progressive_ready_step_ids
+    from app.services.planning.generation_window import (
+        PARKED_JOB_STATUS, WAITING_FOR_LEARNER_STEP, details_are_tutorial, generation_window,
+        window_queue, window_requeue_decision,
+    )
+
+    item = (await db.execute(
+        select(PlanItem).where(PlanItem.id == item_id)
+        .execution_options(populate_existing=True).with_for_update(of=PlanItem)
+    )).scalar_one_or_none()
+    generation = (item.details_json or {}).get("_generation") if item is not None and isinstance(item.details_json, dict) else None
+    if (item is None or not details_are_tutorial(item.details_json) or not isinstance(generation, dict)
+            or generation.get("status") not in {"partial", "generating"}):
+        await db.commit()
+        return None
+    ready = progressive_ready_step_ids(item.details_json)
+    window = generation_window(current_step_ids(item),
+                               await _learner_completed_tutorial_ids(db, item=item, user_id=user_id))
+    latest = (await db.execute(
+        select(PlanItemDetailJob).where(
+            PlanItemDetailJob.plan_item_id == item_id, PlanItemDetailJob.user_id == user_id,
+        ).order_by(PlanItemDetailJob.artifact_epoch_at.desc(), PlanItemDetailJob.id.desc()).limit(1)
+    )).scalar_one_or_none()
+    decision = window_requeue_decision(window=window, ready_step_ids=ready, latest_job=latest,
+                                       artifact_job_id=_detail_artifact_job_id(item.details_json))
+    if decision != "requeue":
+        await db.commit()
+        return str(latest.id) if decision == "reuse" else None
+    queue = window_queue(window, ready)
+    step = _window_requeue_step(queue)
+    job_id = str(latest.id)
+    claimed = await db.execute(update(PlanItemDetailJob).where(
+        PlanItemDetailJob.id == job_id, PlanItemDetailJob.status == PARKED_JOB_STATUS,
+        PlanItemDetailJob.step == WAITING_FOR_LEARNER_STEP,
+    ).values(status="queued", step=step, error_message=None).execution_options(synchronize_session=False))
+    await db.commit()
+    if claimed.rowcount != 1:
+        return None
+    try:
+        regenerate_plan_item_details.apply_async(args=[job_id], queue=queue)
+    except Exception:
+        logger.exception("[PLAN_DETAILS] Could not re-queue window job_id=%s; parked again", job_id)
+        await db.execute(update(PlanItemDetailJob).where(
+            PlanItemDetailJob.id == job_id, PlanItemDetailJob.status == "queued", PlanItemDetailJob.step == step,
+        ).values(status=PARKED_JOB_STATUS, step=WAITING_FOR_LEARNER_STEP).execution_options(synchronize_session=False))
+        await db.commit()
+        return None
+    logger.info("[PLAN_DETAILS] Window tutorials %s queued job_id=%s queue=%s",
+                window.missing(ready), job_id, queue)
+    return job_id
 
 
 def _approved_candidate_step_ids(
@@ -4515,10 +4707,18 @@ async def _reconcile_plan_after_detail_artifact_publish(
         plan.completed_at = None
 
 
-def _details_ready_for_prefetch(details_json: dict | None) -> bool:
-    """Use the same substantive threshold as the user-facing detail route."""
+def _details_ready_for_prefetch(
+    details_json: dict | None, *, completed_step_ids: Collection[str] = (),
+) -> bool:
+    """Use the same substantive threshold as the user-facing detail route.
+
+    A tutorial whose one-ahead window (current + next) is ready is waiting for
+    the learner by design: it is ready, so prefetch never re-enqueues it.
+    """
     if not details_json:
         return False
+    if _tutorial_window_ready(details_json, completed_step_ids):
+        return True
     from app.services.planning.lesson_package import current_package_approval
     if not current_package_approval(details_json):
         return False
@@ -4538,13 +4738,37 @@ def _details_ready_for_prefetch(details_json: dict | None) -> bool:
     )
 
 
+def _tutorial_window_ready(details_json: Any, completed_step_ids: Collection[str]) -> bool:
+    from app.services.planning.artifact_identity import progressive_ready_step_ids
+    from app.services.planning.catalog_lessons import catalog_details_are_personalized_and_ready
+    from app.services.planning.generation_window import details_are_tutorial
+    from app.services.planning.lesson_package import current_package_approval
+
+    if (not details_are_tutorial(details_json)
+            or (details_json.get("_generation") or {}).get("status") != "partial"
+            or not current_package_approval(details_json)
+            or not catalog_details_are_personalized_and_ready(details_json)
+            or validated_lesson_materials(details_json) is None):
+        return False
+    steps = validated_lesson_steps(details_json)
+    if not steps:
+        return False
+    window = generation_window([str(step["id"]) for step in steps], completed_step_ids)
+    return bool(window.step_ids) and not window.missing(progressive_ready_step_ids(details_json))
+
+
 async def _details_ready_for_prefetch_in_database(
     db,
     *,
     item: PlanItem,
     user_id: str,
 ) -> bool:
-    if not _details_ready_for_prefetch(item.details_json):
+    from app.services.planning.generation_window import details_are_tutorial
+
+    completed: Collection[str] = ()
+    if details_are_tutorial(item.details_json) and _detail_artifact_job_id(item.details_json):
+        completed = await _learner_completed_tutorial_ids(db, item=item, user_id=str(user_id))
+    if not _details_ready_for_prefetch(item.details_json, completed_step_ids=completed):
         return False
     from app.services.planning.artifact_identity import (
         artifact_job_marker_is_invalid,
@@ -4657,8 +4881,14 @@ async def _enqueue_plan_week_details_generation_async(
     active_item_ids = {str(item_id) for item_id in active_result.scalars().all()}
 
     jobs: list[PlanItemDetailJob] = []
+    parked_items: list[PlanItem] = []
     for item in items:
         if str(item.id) in active_item_ids:
+            continue
+        if await _artifact_job_is_parked(db, item=item, user_id=str(user_id)):
+            # The artifact's own job owns its window; a new job would replace
+            # the artifact and its completion history.
+            parked_items.append(item)
             continue
         job = await new_plan_item_detail_job(
             db,
@@ -4671,9 +4901,19 @@ async def _enqueue_plan_week_details_generation_async(
         db.add(job)
         jobs.append(job)
 
+    requeued_ids: list[str] = []
+    if parked_items:
+        # Release this transaction's item locks first (new job rows, if any,
+        # are committed here too and published below).
+        await db.commit()
+        for item in parked_items:
+            job_id = await ensure_tutorial_window_generation(db, item_id=str(item.id), user_id=str(user_id))
+            if job_id:
+                requeued_ids.append(job_id)
+
     if not jobs:
         await db.commit()
-        return []
+        return requeued_ids
 
     # Commit every job before publishing. Otherwise a fast worker can consume
     # the message before the row is visible and incorrectly report Job not found.
@@ -4723,7 +4963,21 @@ async def _enqueue_plan_week_details_generation_async(
         published_queues,
         publish_failures,
     )
-    return published_ids
+    return requeued_ids + published_ids
+
+
+async def _artifact_job_is_parked(db, *, item: PlanItem, user_id: str) -> bool:
+    from app.models.item_detail_job import PlanItemDetailJob
+    from app.services.planning.generation_window import details_are_tutorial, job_is_parked
+
+    artifact_job_id = _detail_artifact_job_id(item.details_json)
+    if artifact_job_id is None or not details_are_tutorial(item.details_json):
+        return False
+    job = (await db.execute(select(PlanItemDetailJob).where(
+        PlanItemDetailJob.id == artifact_job_id, PlanItemDetailJob.plan_item_id == item.id,
+        PlanItemDetailJob.user_id == user_id,
+    ))).scalar_one_or_none()
+    return job_is_parked(job)
 
 
 async def _enqueue_all_details_generation_async(db, plan, user_id):

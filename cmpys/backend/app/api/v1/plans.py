@@ -84,7 +84,7 @@ from app.schemas.plan import (
     MaterialDetail,
     PlanGenerateRequest,
     PlanItemCreate,
-    PlanItemDetailedResponse,
+    PlanItemDetailedResponse as _PlanItemDetailedResponseBase,
     PlanItemResponse,
     PlanItemUpdate,
     PlanResponse,
@@ -96,8 +96,30 @@ from app.schemas.plan import (
     WeekSummaryResponse,
 )
 from app.schemas.idol import IdolImportResponse
+from app.services.planning.generation_window import (
+    WAITING_FOR_LEARNER_STEP,
+    details_are_tutorial,
+    generation_window,
+    job_is_parked,
+    window_response,
+)
 
 logger = logging.getLogger(__name__)
+
+
+class GenerationWindowResponse(BaseModel):
+    """One-ahead tutorial window: the learner's current and next tutorial."""
+
+    current_step_id: str | None = None
+    next_step_id: str | None = None
+    # Every window tutorial is ready, later ones wait for the learner by
+    # design, and no job is running.
+    waiting_for_learner: bool = False
+
+
+class PlanItemDetailedResponse(_PlanItemDetailedResponseBase):
+    # Present for tutorial missions whose steps are known; null otherwise.
+    generation_window: GenerationWindowResponse | None = None
 
 router = APIRouter(prefix="/plans", tags=["plans"])
 
@@ -1948,6 +1970,28 @@ async def _item_progress_snapshot(
     )
 
 
+def _attach_generation_window(response: PlanItemDetailedResponse) -> PlanItemDetailedResponse:
+    """Add the one-ahead window to a tutorial mission's detailed response."""
+    details = response.details
+    if details is None or not details.steps or not (
+        details.lesson_format == "tutorial_v1"
+        or any(step.lesson_format == "tutorial_v1" for step in details.steps)
+    ):
+        return response
+    job_active = (
+        response.job_id is not None
+        and response.details_error is None
+        and response.details_step not in {"error", WAITING_FOR_LEARNER_STEP}
+    )
+    response.generation_window = GenerationWindowResponse(**window_response(
+        step_ids=[step.id for step in details.steps],
+        ready_step_ids=[step.id for step in details.steps if step.lesson_content],
+        completed_step_ids=response.completed_step_ids,
+        job_active=job_active,
+    ))
+    return response
+
+
 @items_router.get("/{item_id}/detailed", response_model=PlanItemDetailedResponse)
 async def get_plan_item_detailed(
     item_id: str,
@@ -1971,10 +2015,24 @@ async def get_plan_item_detailed(
     If details don't exist yet, automatically enqueues a generation job.
     With ``peek=true`` it is a pure read: the same response, but it never
     promotes a prefetch job, enqueues a job, or marks a stale job failed.
+    Tutorial missions carry ``generation_window`` (current + next tutorial).
 
     LLM USAGE: INDIRECT (may enqueue Celery task if details missing; never
     with ``peek=true``)
     """
+    return _attach_generation_window(
+        await _plan_item_detailed_response(item_id, db, current_user, peek=peek)
+    )
+
+
+async def _plan_item_detailed_response(
+    item_id: str,
+    db: AsyncSession,
+    current_user: User,
+    *,
+    peek: bool = False,
+) -> PlanItemDetailedResponse:
+    """The detailed response before the generation window is attached."""
     item = await _get_item_for_user(db, item_id, current_user.id)
 
     # Habits and practices are lightweight daily rhythms. They reset every
@@ -2285,6 +2343,64 @@ async def get_plan_item_detailed(
             artifact_job_id=partial_artifact_job_id,
             details_progress=existing_job.progress_percent,
             details_step=existing_job.step,
+        )
+
+    if job_is_parked(existing_job) and partial_details is not None:
+        # One-ahead generation parked this job: the window is ready and later
+        # tutorials wait for the learner. That is not a failure. A normal read
+        # heals a missed trigger (window moved, tutorial missing); a peek never
+        # creates work.
+        if not peek:
+            from app.tasks.plans import ensure_tutorial_window_generation
+
+            owner_job_id = await ensure_tutorial_window_generation(
+                db, item_id=str(item.id), user_id=str(current_user.id),
+            )
+            if owner_job_id is not None:
+                await db.refresh(existing_job)
+                return PlanItemDetailedResponse(
+                    item=_detailed_item_response(item, completed=is_completed),
+                    details=partial_details,
+                    progress=progress,
+                    completed=is_completed,
+                    completed_step_ids=completed_step_ids,
+                    details_status=DetailsStatus.PARTIAL,
+                    job_id=owner_job_id,
+                    artifact_job_id=partial_artifact_job_id,
+                    details_progress=0,
+                    details_step=existing_job.step,
+                )
+        window_missing = generation_window(
+            _current_step_ids(item), completed_step_ids,
+        ).missing(_progressive_ready_step_ids(item.details_json))
+        if window_missing:
+            # Nothing could be queued for a missing window tutorial: offer the
+            # ordinary retry instead of an endless "waiting" state.
+            return PlanItemDetailedResponse(
+                item=_detailed_item_response(item, completed=is_completed),
+                details=partial_details,
+                progress=progress,
+                completed=is_completed,
+                completed_step_ids=completed_step_ids,
+                details_status=DetailsStatus.PARTIAL,
+                job_id=None,
+                artifact_job_id=partial_artifact_job_id,
+                details_progress=existing_job.progress_percent,
+                details_step="error",
+                details_error="This lesson could not be prepared. Generate it again to retry.",
+            )
+        return PlanItemDetailedResponse(
+            item=_detailed_item_response(item, completed=is_completed),
+            details=partial_details,
+            progress=progress,
+            completed=is_completed,
+            completed_step_ids=completed_step_ids,
+            details_status=DetailsStatus.PARTIAL,
+            job_id=None,
+            artifact_job_id=partial_artifact_job_id,
+            details_progress=existing_job.progress_percent,
+            details_step=WAITING_FOR_LEARNER_STEP,
+            details_error=None,
         )
 
     if existing_job and existing_job.status in {"failed", "completed"}:
@@ -2911,22 +3027,30 @@ async def toggle_step_complete(
     )
     await db.commit()
 
+    # Everything the rest of this handler needs, read while the objects are
+    # loaded: the window hook below must never affect this response.
+    window_hook_needed = (
+        new_step_completed
+        and not is_item_completed
+        and details_are_tutorial(item.details_json)
+    )
     # As soon as the user completes the first lesson of this week, prepare the
     # next week's missions at low priority. This gives the background workers
     # the rest of the current week to finish, while current user-facing work
     # always retains queue priority. The organizer is idempotent.
     operator_pilot = (getattr(plan, "roadmap_json", None) or {}).get("operator_catalog_pilot_job_id")
     if new_step_completed and step_index == 0 and not operator_pilot:
-        duration_weeks = await db.scalar(
-            select(Plan.duration_weeks).where(Plan.id == item.plan_id)
-        )
+        item_plan_id = str(item.plan_id)
         next_week = item.week_end + 1
+        duration_weeks = await db.scalar(
+            select(Plan.duration_weeks).where(Plan.id == item_plan_id)
+        )
         if duration_weeks is not None and next_week <= duration_weeks:
             try:
                 from app.tasks.plans import prefetch_plan_week_details
 
                 prefetch_plan_week_details.apply_async(
-                    args=[str(item.plan_id), str(current_user.id), next_week],
+                    args=[item_plan_id, str(current_user.id), next_week],
                     kwargs={"priority": "low"},
                     queue="low_priority",
                 )
@@ -2935,9 +3059,15 @@ async def toggle_step_complete(
                 # because speculative look-ahead publishing is unavailable.
                 logger.exception(
                     "[PLAN_ITEM] Could not schedule week look-ahead plan_id=%s week=%s",
-                    item.plan_id,
+                    item_plan_id,
                     next_week,
                 )
+
+    # One-ahead generation: the completion moved the learner's window, so
+    # make sure its current and next tutorials are (being) written. It runs in
+    # its own session after everything else, so its failure is only logged.
+    if window_hook_needed:
+        await _ensure_tutorial_window_quietly(item_id=str(item_id), user_id=str(current_user.id))
 
     return ToggleStepResponse(
         step_id=step_id,
@@ -2945,6 +3075,18 @@ async def toggle_step_complete(
         progress=progress,
         item_completed=is_item_completed,
     )
+
+
+async def _ensure_tutorial_window_quietly(*, item_id: str, user_id: str) -> None:
+    """Run the window trigger in its own session; a failure never reaches the caller."""
+    try:
+        from app.core.db import async_session_maker
+        from app.tasks.plans import ensure_tutorial_window_generation
+
+        async with async_session_maker() as hook_db:
+            await ensure_tutorial_window_generation(hook_db, item_id=item_id, user_id=user_id)
+    except Exception:
+        logger.exception("[PLAN_ITEM] Could not schedule the next tutorial item_id=%s", item_id)
 
 
 @items_router.post(
@@ -3007,6 +3149,18 @@ async def regenerate_item_details(
             )
     if active_job and not _detail_job_is_stale(active_job):
         return RegenerateDetailsResponse(job_id=active_job.id)
+
+    if active_job is None:
+        from app.tasks.plans import _artifact_job_is_parked, ensure_tutorial_window_generation
+
+        if await _artifact_job_is_parked(db, item=item, user_id=str(current_user.id)):
+            # One-ahead: the artifact's own parked job writes the learner's
+            # window; a new job would replace the artifact. Nothing missing
+            # means nothing to generate (Flutter refreshes on an empty id).
+            owner_job_id = await ensure_tutorial_window_generation(
+                db, item_id=item_id, user_id=str(current_user.id),
+            )
+            return RegenerateDetailsResponse(job_id=owner_job_id or "")
 
     broken_artifact_reference = await _artifact_job_reference_is_broken(
         db,

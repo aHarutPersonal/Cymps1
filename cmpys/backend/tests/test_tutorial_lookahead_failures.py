@@ -1,4 +1,4 @@
-"""A rejected lookahead tutorial waits for the next batch instead of failing the job."""
+"""A rejected window tutorial is reported with its step; ready tutorials stay readable."""
 import asyncio
 import copy
 from types import SimpleNamespace
@@ -57,30 +57,34 @@ def _saved(payload, validations):
 
 
 @pytest.mark.asyncio
-async def test_rejected_lookahead_tutorial_continues_and_is_retried_first(monkeypatch):
+async def test_rejected_next_tutorial_is_reported_and_retried_first(monkeypatch):
+    # One-ahead: the next tutorial is part of the window, so its failure is
+    # reported (the job retries it once in the background) and a retry writes
+    # it before anything else. T1 stays readable throughout.
     rejected = {"step_2"}
     built, common, validations = _pipeline(monkeypatch, rejected)
 
     first, _, error = await _generate_plan_item_details_parallel(**common, lesson_format="tutorial_v1")
 
-    assert error is None
-    assert first.pop("_tutorial_continuation") is True
-    assert _ready(first) == ["step_1", "step_3"]
+    assert error and error.startswith("step_2:")
+    assert first.pop("_window_step_failed") == "step_2"
+    assert _ready(first) == ["step_1"]
     rejected.clear()
     second, _, error = await _generate_plan_item_details_parallel(**common, existing_checkpoint=_saved(first, validations))
-    assert error is None
-    assert built[3] == "step_2"  # The deferred tutorial is the next batch's priority.
-    assert _ready(second)[:3] == ["step_1", "step_2", "step_3"]
+    assert error is None and second.pop("_tutorial_waiting_for_learner") is True
+    assert built == ["step_1", "step_2", "step_2"]  # Never T3 before the learner advances.
+    assert _ready(second) == ["step_1", "step_2"]
 
 
 @pytest.mark.asyncio
-async def test_a_tutorial_rejected_again_as_priority_still_stops_the_job(monkeypatch):
+async def test_a_tutorial_rejected_again_still_reports_its_error(monkeypatch):
     built, common, validations = _pipeline(monkeypatch, {"step_2"})
     first, _, error = await _generate_plan_item_details_parallel(**common, lesson_format="tutorial_v1")
-    assert error is None and first.pop("_tutorial_continuation") is True
+    assert error and first.pop("_window_step_failed") == "step_2"
 
     second, _, error = await _generate_plan_item_details_parallel(**common, existing_checkpoint=_saved(first, validations))
 
     assert error and error.startswith("step_2:")
-    assert built.count("step_2") == 2  # Bounded: one lookahead attempt, one priority attempt.
-    assert _ready(second) == ["step_1", "step_3"]  # Ready tutorials stay readable.
+    assert second.pop("_window_step_failed") == "step_2"
+    assert built.count("step_2") == 2  # Bounded: the job allows one retry.
+    assert _ready(second) == ["step_1"]  # Ready tutorials stay readable.

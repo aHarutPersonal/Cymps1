@@ -719,8 +719,12 @@ void main() {
     expect(find.byKey(const Key('lesson-1-completed')), findsOneWidget);
     expect(find.byKey(const Key('lesson-2-active')), findsOneWidget);
     expect(find.byKey(const Key('lesson-3-locked')), findsOneWidget);
+    // Tutorial 4 is beyond the one-ahead window (2 and 3 are written): it is
+    // upcoming, not preparing, and shows its outline minutes.
+    expect(find.byKey(const Key('lesson-4-locked')), findsOneWidget);
+    expect(find.textContaining('preparing and reviewing'), findsNothing);
     expect(find.text('Continue'), findsOneWidget);
-    expect(find.text('4 min read + 3 min practice'), findsNWidgets(3));
+    expect(find.text('4 min read + 3 min practice'), findsNWidgets(4));
     expect(find.byKey(const Key('tutorial-progress-line')), findsOneWidget);
     await _end(tester);
   });
@@ -741,7 +745,11 @@ void main() {
   testWidgets('a preparing row shows "preparing and reviewing"', (
     tester,
   ) async {
-    await _pump(tester, _app(_Repo(_mission())));
+    // On tutorial 3, so tutorial 4 is the next one, being written.
+    await _pump(
+      tester,
+      _app(_Repo(_mission(completed: const {'step_1', 'step_2'}))),
+    );
 
     expect(find.text('Tutorial 4 · preparing and reviewing'), findsOneWidget);
     // Screen readers hear the outline title too.
