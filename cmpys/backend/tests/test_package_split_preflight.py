@@ -60,6 +60,8 @@ class Harness:
         self.counts = defaultdict(int)
         self.active = self.max_active = 0
         self.gate, self.two_active = asyncio.Event(), asyncio.Event()
+        # Per-owner call events, for ordering concurrent stages without sleeps.
+        self.started, self.finished = defaultdict(asyncio.Event), defaultdict(asyncio.Event)
 
     def factory(self, **kwargs):
         self.factories.append(kwargs)
@@ -85,7 +87,13 @@ class Harness:
                 harness.max_active = max(harness.max_active, harness.active)
                 if harness.active == 2:
                     harness.two_active.set()
+                harness.started[owner].set()
                 try:
+                    if isinstance(outcome, tuple):
+                        # ("after_start"|"after_done", owners, outcome): wait, bounded, for other calls.
+                        kind, owners, outcome = outcome
+                        events = harness.started if kind == "after_start" else harness.finished
+                        await asyncio.wait_for(asyncio.gather(*(events[name].wait() for name in owners)), 1)
                     if outcome == "block":
                         await harness.gate.wait()
                     elif outcome == "negative":
@@ -123,6 +131,7 @@ class Harness:
                     return self.last_attempt
                 finally:
                     harness.active -= 1
+                    harness.finished[owner].set()
 
         return Client()
 
@@ -152,7 +161,7 @@ async def test_full_semantic_then_parallel_scopes_and_union_records_each_real_ca
     (failures, response, client), snapshots = await run(harness)
     assert not failures and not response.error and response.data["acceptable"] and client is None
     assert harness.counts == {"semantic": 1, "a0": 1, "a1": 1}
-    assert harness.max_active == 2 and isolate.await_count == 3
+    assert harness.max_active == 3 and isolate.await_count == 3  # Semantic overlaps both scopes.
     assert {call.kwargs["response"].attempt_id for call in isolate.await_args_list} == {"attempt-1", "attempt-2", "attempt-3"}
     assert all(call.kwargs["response"].total_tokens == 30 for call in isolate.await_args_list)
     assert snapshots[0]["semantic"]["acceptable"] and snapshots[0]["scopes"] == {}
@@ -240,8 +249,10 @@ async def test_transport_exhaustion_of_an_evidence_scope_stays_unavailable():
 async def test_known_negative_is_terminal_and_cached_without_favorable_retry(negative):
     harness = Harness(semantic=[negative])
     (failures, response, _), snapshots = await run(harness)
-    assert failures and not response.data["acceptable"] and harness.counts == {"semantic": 1}
-    assert snapshots[-1]["rejection"] is not None
+    # Overlapping evidence calls ran once each but never act on a rejected package.
+    assert failures and not response.data["acceptable"] and harness.counts == {"semantic": 1, "a0": 1, "a1": 1}
+    assert snapshots[-1]["rejection"] is not None and snapshots[-1]["scopes"] == {}
+    assert not snapshots[-1]["correction_used"]
     repeated = Harness()
     (again, _, _), _ = await run(repeated, existing=snapshots[-1])
     assert again == failures and repeated.requests == []
@@ -256,7 +267,7 @@ async def test_one_shared_correction_is_atomic_for_six_concurrent_activity_failu
     # The owner left without the shared correction becomes a scoped defect.
     assert failures and not response.error
     assert len(response.effective_parameters["validated_repair_targets"]) == 1
-    assert len(harness.requests) == 8 and harness.max_active == 2
+    assert len(harness.requests) == 8 and harness.max_active == 7
     assert sum(harness.counts[key] == 2 for key in ("a0", "a1")) == 1
     assert isolate.await_count == 8
     assert len(snapshots[-1]["scopes"]) == 5 and snapshots[-1]["correction_used"]
@@ -297,18 +308,20 @@ async def test_negative_cancels_blocked_sibling_and_records_unknown_attempt_once
 
 
 @pytest.mark.asyncio
-async def test_known_negative_stops_all_queued_scopes_before_usage_finalization(isolate):
+async def test_known_negative_stops_all_sibling_corrections_before_usage_finalization(isolate):
+    # All six scopes now start with the semantic call, so nothing is queued;
+    # the negative must still stop every later sibling correction request.
     async def delayed_record(**kwargs):
         if preflight._known_negative(kwargs["response"].data):
             await asyncio.sleep(.03)
         return True
 
     isolate.side_effect = delayed_record
-    harness = Harness({"a0": ["negative"], "a1": ["block"]})
+    harness = Harness({"a0": ["negative"], "a1": [("after_done", ["a0"], "bad_math"), "good"]})
     (failures, response, _), snapshots = await run(harness, package(6))
     assert failures and response.error is None and snapshots[-1]["rejection"]
-    assert harness.counts == {"semantic": 1, "a0": 1, "a1": 1}
-    assert isolate.await_count == 3
+    assert harness.counts == {"semantic": 1, **{f"a{index}": 1 for index in range(6)}}
+    assert isolate.await_count == 7
     assert not snapshots[-1]["correction_used"]
 
 
@@ -364,7 +377,8 @@ async def test_checkpoint_failure_propagates_without_paid_retry(isolate):
 
     with pytest.raises(ValueError, match="compare-and-swap"):
         await preflight.review_package(package(), {}, {}, client_factory=harness.factory, on_review=broken)
-    assert len(harness.requests) == isolate.await_count == 1
+    # The evidence calls overlap the semantic call; none is retried or used.
+    assert len(harness.requests) == isolate.await_count == 3 and harness.counts["semantic"] == 1
 
 
 @pytest.mark.asyncio
@@ -373,10 +387,10 @@ async def test_stage_deadline_cancels_only_started_calls_and_retains_fresh_unkno
     harness = Harness({f"a{i}": ["block"] for i in range(6)})
     (failures, response, _), snapshots = await run(harness, package(6))
     assert failures and "deadline" in response.error
-    assert len(harness.requests) == isolate.await_count == 3
+    assert len(harness.requests) == isolate.await_count == 7  # Semantic plus all six scopes started.
     records = [call.kwargs["response"] for call in isolate.await_args_list]
-    assert {value.attempt_id for value in records} == {"attempt-1", "attempt-2", "attempt-3"}
-    assert sorted(value.total_tokens or 0 for value in records) == [0, 0, 30]
+    assert {value.attempt_id for value in records} == {f"attempt-{index}" for index in range(1, 8)}
+    assert sorted(value.total_tokens or 0 for value in records) == [0] * 6 + [30]
     assert all(value.total_tokens != 999 for value in records)
     assert snapshots[-1]["semantic"]["acceptable"] and not snapshots[-1]["scopes"]
 
@@ -411,7 +425,8 @@ async def test_external_cancellation_preserves_received_negative_and_still_propa
 
     harness = (Harness(semantic=[{"acceptable": False, "issues": [{"target": "package",
         "description": "The supplied assumptions contradict the required independent learning objective."}]}])
-        if stage == "semantic" else Harness({"a0": ["negative"], "a1": ["block"]}))
+        # An evidence negative counts only after semantic approval, so it arrives after it.
+        if stage == "semantic" else Harness({"a0": [("after_done", ["semantic"], "negative")], "a1": ["block"]}))
     pending = asyncio.create_task(preflight.review_package(package(), {}, {},
         client_factory=harness.factory, on_review=save))
     await asyncio.wait_for(recording.wait(), 1)
@@ -421,7 +436,7 @@ async def test_external_cancellation_preserves_received_negative_and_still_propa
         await pending
     assert snapshots[-1]["rejection"]
     assert snapshots[-1]["semantic"]["acceptable"] is (stage == "evidence")
-    assert len(harness.requests) == isolate.await_count == (1 if stage == "semantic" else 3)
+    assert len(harness.requests) == isolate.await_count == 3
 
 
 @pytest.mark.asyncio
@@ -473,7 +488,8 @@ async def test_finalizer_timeout_never_hides_cancellation_or_starts_more_request
     pending.cancel()
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(pending, 1)
-    assert len(harness.requests) == isolate.await_count == 1
+    # Only the three calls started together; cancellation starts nothing more.
+    assert len(harness.requests) == isolate.await_count == 3 and harness.counts["semantic"] == 1
     if negative:
         assert snapshots[-1]["rejection"] and not snapshots[-1]["semantic"]["acceptable"]
     else:
@@ -485,7 +501,9 @@ async def test_pre_send_failure_has_no_usage_event(isolate):
     harness = Harness(semantic=["pre_send"])
     with pytest.raises(TimeoutError):
         await run(harness)
-    assert isolate.await_count == 0
+    # Only the overlapping evidence calls, which did start, are billed.
+    operations = [call.kwargs["operation"] for call in isolate.await_args_list]
+    assert "package_preflight_semantic" not in operations and len(operations) == 2
 
 
 @pytest.mark.asyncio
@@ -540,7 +558,7 @@ async def test_detailed_negative_remains_actionable_and_is_never_retried_favorab
     assert failures and response.error is None and not response.data["acceptable"]
     assert response.effective_parameters["validated_repair_targets"] == ["practice.a0"]
     assert snapshots[-1]["rejection"]["issues"][0]["description"] == description
-    assert harness.counts == {"semantic": 1}
+    assert harness.counts["semantic"] == 1 and snapshots[-1]["scopes"] == {}
     repeated = Harness()
     (again, _, _), _ = await run(repeated, existing=snapshots[-1])
     assert again == failures and not repeated.requests
@@ -574,3 +592,90 @@ async def test_literal_input_spans_are_bound_in_code_without_an_evidence_call(is
     # a1 still asks the reviewer, and only about its computed span.
     a1_body = json.loads(next(request for owner, request in harness.requests if owner == "a1")["user_prompt"])
     assert all("practice.a1" == owner for owner in a1_body["numeric_span_owners"].values())
+
+
+# Semantic and evidence stages run concurrently; the semantic verdict still
+# decides the result first. Ordering uses call events, never timing sleeps.
+_SEMANTIC_REJECTION = {"acceptable": False, "issues": [{"target": "practice.a0",
+    "description": "The chosen formula contradicts the supplied task assumptions."}]}
+_EVIDENCE_NEGATIVE = {"issues": ["The stated constraints contradict this independent task and require revision."]}
+
+
+@pytest.mark.asyncio
+async def test_evidence_calls_overlap_the_semantic_call(isolate):
+    # Semantic answers only once both evidence calls are in flight, and each
+    # evidence call answers only once semantic has started.
+    harness = Harness({"a0": [("after_start", ["semantic"], "good")], "a1": [("after_start", ["semantic"], "good")]},
+                      semantic=[("after_start", ["a0", "a1"], "good")])
+    (failures, response, _), snapshots = await asyncio.wait_for(run(harness), 2)
+    assert not failures and not response.error and response.data["acceptable"]
+    assert harness.counts == {"semantic": 1, "a0": 1, "a1": 1} and harness.max_active == 3
+    # Scopes are saved only after the semantic approval.
+    assert snapshots[0]["semantic"]["acceptable"] and snapshots[0]["scopes"] == {}
+    assert len(snapshots[-1]["scopes"]) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("evidence", [["good"], ["bad_math", "bad_math"], [_EVIDENCE_NEGATIVE]])
+async def test_semantic_rejection_wins_over_already_finished_evidence(isolate, evidence):
+    harness = Harness({"a0": list(evidence), "a1": ["good"]},
+                      semantic=[("after_done", ["a0", "a1"], _SEMANTIC_REJECTION)])
+    (failures, response, _), snapshots = await asyncio.wait_for(run(harness), 2)
+    # Exactly the result of a sequential semantic rejection.
+    assert failures == ["practice.a0: The chosen formula contradicts the supplied task assumptions."]
+    assert response.error is None and not response.data["acceptable"]
+    assert response.effective_parameters["validated_repair_targets"] == ["practice.a0"]
+    saved = snapshots[-1]
+    assert saved["rejection"]["issues"] == _SEMANTIC_REJECTION["issues"] and not saved["semantic"]["acceptable"]
+    assert saved["scopes"] == {} and saved["evidence_failures"] == {} and not saved["correction_used"]
+    assert harness.counts == {"semantic": 1, "a0": 1, "a1": 1}
+    statuses = [call.kwargs["result_status"] for call in isolate.await_args_list]
+    assert statuses.count("preflight_response") == 3
+    repeated = Harness()
+    (again, _, _), _ = await run(repeated, existing=saved)
+    assert again == failures and repeated.requests == []
+
+
+@pytest.mark.asyncio
+async def test_semantic_unavailable_cancels_in_flight_evidence_and_bills_it_as_cancelled(isolate):
+    harness = Harness({"a0": ["block"], "a1": ["block"]},
+                      semantic=[("after_start", ["a0", "a1"], "permanent")])
+    (failures, response, _), snapshots = await asyncio.wait_for(run(harness), 2)
+    assert response.error == preflight._UNAVAILABLE and failures == [preflight._UNAVAILABLE]
+    assert harness.counts == {"semantic": 1, "a0": 1, "a1": 1} and harness.active == 0
+    records = {call.kwargs["operation"]: call.kwargs["result_status"] for call in isolate.await_args_list}
+    assert records == {"package_preflight_semantic": "preflight_response",
+                       "package_preflight_evidence_a0": "preflight_cancelled",
+                       "package_preflight_evidence_a1": "preflight_cancelled"}
+    assert response.effective_parameters["usage_records_incomplete"] == 0
+    assert all(not snapshot["scopes"] and snapshot["semantic"] is None for snapshot in snapshots)
+
+
+@pytest.mark.asyncio
+async def test_pending_evidence_negative_stops_sibling_correction_once_semantic_approves(isolate):
+    # The negative arrives before the semantic approval; it must still stop a
+    # sibling from claiming the shared correction, as it did sequentially.
+    harness = Harness({"a0": [_EVIDENCE_NEGATIVE], "a1": ["bad_math", "good"]},
+                      semantic=[("after_done", ["a0", "a1"], "good")])
+    (failures, response, _), snapshots = await asyncio.wait_for(run(harness), 2)
+    assert failures and response.error is None
+    assert {issue["target"] for issue in snapshots[-1]["rejection"]["issues"]} == {"practice.a0"}
+    assert harness.counts == {"semantic": 1, "a0": 1, "a1": 1}
+    assert not snapshots[-1]["correction_used"]
+
+
+@pytest.mark.asyncio
+async def test_resume_with_saved_semantic_or_scopes_skips_saved_work(isolate):
+    first = Harness({"a0": ["permanent"], "a1": ["permanent"]})
+    (_, response, _), snapshots = await asyncio.wait_for(run(first), 2)
+    assert response.error == preflight._UNAVAILABLE
+    saved = snapshots[-1]
+    assert saved["semantic"]["acceptable"] and saved["scopes"] == {}
+    resumed = Harness({"a0": ["bad_math", "bad_math"]})
+    (failures, response, _), newer = await run(resumed, existing=saved)
+    assert resumed.counts == {"a0": 2, "a1": 1} and failures and not response.error
+    assert set(newer[-1]["scopes"]) == {"a1"}
+    final = Harness()
+    (failures, response, _), _ = await run(final, existing=newer[-1])
+    # Saved semantic and the saved a1 scope are both reused.
+    assert not failures and not response.error and final.counts == {"a0": 1}

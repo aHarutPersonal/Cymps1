@@ -16,7 +16,7 @@ from app.core.config import settings
 from app.services.llm.client import LLMResponse
 from app.services.planning.lesson_package import LessonPackage, digest, validation_identity
 from app.services.planning.lesson_review import (
-    ReviewEvidencePatch, _evidence_ids, grounded_failures,
+    ReviewEvidencePatch, _evidence_ids, grounded_failures, numeric_span_occurrences, numeric_span_owners, numeric_spans,
     compiled_solution_evidence, _private_solution_source,
     normalize_response_case_aliases, source_arithmetic_failures,
 )
@@ -25,6 +25,7 @@ from app.services.planning.package_review import (
     _merge_evidence_patch, _numeric_preflight_failures, _retryable_error, package_review_payload,
 )
 from app.services.planning.workload_contract import workload_feasibility_issues
+from app.services.practice.contracts import SolutionDocument
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +115,8 @@ _SEMANTIC_PROMPT = (
     "conflicts with shared activity instructions, data, hints or timing, target practice.<activity_id> "
     "so all dependent parts can be corrected together. A narrow field target cannot authorize "
     "changes to those shared properties. A cross-activity defect belongs to package. "
-    "An acceptable package has no issues. Do not return numerical proof arrays or copy answers. "
+    "An acceptable package has no issues. Review every activity and list all of its issues in this "
+    "one pass, not only the first defect found. Do not return numerical proof arrays or copy answers. "
     "The server's numerical_evidence states what each canonical expression computes; executable "
     "arithmetic does not prove the formula models the task or that the labels are true. "
     "Independently check every raw fact, label, unit, reporting period, assumption, field, formula, "
@@ -125,7 +127,8 @@ _SEMANTIC_PROMPT = (
     "A declared datum is not evidence of real-world truth: verify supplied evidence or fictional framing. "
     "Reject contradictions, missing assumptions or inputs, unsupported numeric comparisons, ambiguous "
     "answer fields, multiple defensible correct choices in a single-answer choice field (a multi_choice answer is an "
-    "exact set the case must fully determine), mismatched text criteria/solutions, or required "
+    "exact set the case must fully determine; a multi_choice option that contains another option's "
+    "action makes the set ambiguous), mismatched text criteria/solutions, or required "
     "tools unavailable in capabilities. Public labels and instructions must be understandable in the "
     "requested learner language. Transfer must apply the method to genuinely new conditions or decisions; "
     "reject public-answer recall, renamed worked examples, or leaked independent-transfer answers. "
@@ -408,14 +411,75 @@ def _evidence_diagnosis(requested_ids, *, exc: Exception | None = None, errors=(
             "paths": list(dict.fromkeys(paths))[:40]}
 
 
-def _evidence_defect_description(diagnosis: dict) -> str:
+def _evidence_defect_description(diagnosis: dict, facts: list[str] = ()) -> str:
     ids = diagnosis["claim_ids"]
     shown = ", ".join(ids[:20]) + (f" and {len(ids) - 20} more" if len(ids) > 20 else "")
     paths = "; paths: " + ", ".join(diagnosis["paths"][:8]) if diagnosis["paths"] else ""
-    return (f"Numeric evidence for spans {shown} could not be bound to this activity's declared "
+    text = (f"Numeric evidence for spans {shown} could not be bound to this activity's declared "
             f"data after the allowed correction (codes: {', '.join(diagnosis['codes'][:8])}{paths}). "
             "Declare every raw number shown as a datum with an id, keep derived results as expressions "
             "over those data, and make each quoted number match its datum.")
+    rows = []
+    for row in facts:  # Whole rows only, within the 2000-character issue contract.
+        if len(text) + len(" Server facts: ") + len("; ".join([*rows, row])) + 1 > 2000:
+            break
+        rows.append(row)
+    return text + (" Server facts: " + "; ".join(rows) + "." if rows else "")
+
+
+# A server arithmetic check over substituted numbers only ("n17: 3100.0 - 400.0 = 2700, not 400").
+# Anything else (letters, quotes, prose) is not forwarded.
+_SERVER_MISMATCH = re.compile(
+    r"(n[1-9][0-9]*(?:, n[1-9][0-9]*)*): ([0-9.()+\-*/ ]{1,300}) = (-?[0-9.]+(?:e[+-]?[0-9]+)?), "
+    r"not (-?[0-9.]+(?:e[+-]?[0-9]+)?)")
+
+
+def _plain_number(text: str) -> str:
+    return re.sub(r"(?<=\d)\.0+(?![\d.])", "", text)
+
+
+def _span_locations(package: LessonPackage) -> dict[str, str]:
+    """Server-owned field path of each package numeric span, e.g. practice.a.worked_solution.f."""
+    solutions = {activity.id: activity.worked_solution for activity in package.workbook.activities}
+    locations = {}
+    for record in numeric_span_occurrences({}, package.review_context()):
+        owner = record.owner if isinstance(record.owner, dict) else {}
+        if owner.get("id") not in solutions or len(record.path) < 5:
+            continue
+        parts = ["practice", owner["id"], str(record.path[4])]
+        if record.path[4] == "fields" and len(record.path) >= 7:
+            parts[2:] = [str(owner["fields"][record.path[5]].get("id")), "label"]
+        solution = solutions[owner["id"]]
+        if record.path[4] == "worked_solution" and isinstance(solution, SolutionDocument):
+            step = next((step for step in solution.steps if record.span in step.explanation), None)
+            parts += [step.field_id] if step is not None else []
+        locations[record.claim_id] = ".".join(parts)
+    return locations
+
+
+def _server_evidence_facts(claim_ids, spans: dict[str, str], locations: dict[str, str], errors=()) -> list[str]:
+    """Only the server's own facts: span id, field path and computed mismatches.
+
+    Defects name spans by id and path, never by source text (F18). A mismatch is
+    forwarded only from a server check over substituted numbers; the evidence
+    model's issues and other free-text messages are never included.
+    """
+    mismatches = {}
+    for error in errors:
+        match = _SERVER_MISMATCH.fullmatch(str(error))
+        if match:
+            for claim_id in match[1].split(", "):
+                mismatches.setdefault(claim_id, (
+                    f"the span states {_plain_number(match[4])}; the server evaluated the bound "
+                    f"calculation {_plain_number(match[2].strip())} = {_plain_number(match[3])}"))
+    ids = [key for key in claim_ids if key in mismatches] or list(claim_ids)
+    rows = []
+    for claim_id in ids[:6]:
+        if claim_id not in spans:
+            continue
+        row = f"{claim_id} at {locations.get(claim_id, 'an unlocated source field')}"
+        rows.append(row + (f" ({mismatches[claim_id]})" if claim_id in mismatches else ""))
+    return rows
 
 
 @dataclass(frozen=True)
@@ -427,6 +491,10 @@ class _EvidenceDefect:
 
 class _TerminalRejection(Exception):
     pass
+
+
+class _SemanticUnavailable(Exception):
+    """The semantic stage ended without a verdict; overlapping evidence is void."""
 
 
 class _RequestStopped(Exception):
@@ -445,6 +513,7 @@ async def review_package(package: LessonPackage, outline: dict, context: dict, *
     payload = package_review_payload(package, outline, context)
     compiled_evidence = compiled_solution_evidence({}, package.review_context())
     compiled_ids = {key for check in compiled_evidence.calculations for key in check.claim_ids}
+    span_locations = None  # Built only when an evidence defect needs the server's span facts.
     # The semantic reviewer sees the same complete rendered private solution
     # as the learner; canonical formulas/data remain alongside it. Raw typed
     # documents are retained privately for recompilation, not duplicated here.
@@ -468,7 +537,8 @@ async def review_package(package: LessonPackage, outline: dict, context: dict, *
                          settings.openlux_reasoning_token_reserve if settings.llm_provider == "openlux" else 0)
     state = _PreflightState(**_identity(package, outline, context),
         activity_timing_changes=context.get("activity_timing_changes") or None).model_dump(mode="json")
-    semaphore, state_lock = asyncio.Semaphore(2), asyncio.Lock()
+    # Semantic and every evidence owner run at once (3 calls for a 2-activity tutorial).
+    semaphore, state_lock = asyncio.Semaphore(max(2, 1 + len(remaining_groups))), asyncio.Lock()
     request_count = requested_tokens = usage_incomplete = 0
     tasks: list[asyncio.Task] = []
     stage_timer = asyncio.timeout(None)
@@ -479,15 +549,35 @@ async def review_package(package: LessonPackage, outline: dict, context: dict, *
     stopped = False
     terminal_draining = False
     deferred_cancellation: set[asyncio.Task] = set()
+    # Evidence calls overlap the semantic call, but act on their responses
+    # (save, reject, correct) only after the semantic approval, so the semantic
+    # verdict keeps its sequential precedence. An evidence negative received
+    # before that stops sibling evidence calls at once (evidence_stopped), never
+    # the semantic stage; it becomes the global stop only on approval.
+    semantic_known, semantic_approved, evidence_stopped = asyncio.Event(), False, False
+
+    def decide_semantic(approved: bool) -> None:
+        nonlocal semantic_approved, stopped
+        if semantic_known.is_set():
+            return
+        semantic_approved = approved
+        if approved and evidence_stopped:
+            stopped = True
+        semantic_known.set()
+
+    async def after_semantic() -> None:
+        await semantic_known.wait()
+        if not semantic_approved:
+            raise asyncio.CancelledError  # Evidence never outranks a non-approval.
 
     def remaining_active_budget() -> float:
         return max(0.0, active_remaining - (loop.time() - active_started if active_started is not None else 0.0))
 
-    def request_activity(active: bool) -> None:
+    def request_activity(active: bool, gated: bool = False) -> None:
         """Charge overlapping provider calls once, excluding the shared queue."""
         nonlocal active_count, active_started, active_remaining
         if active:
-            if stopped:
+            if stopped or (gated and evidence_stopped):
                 raise _RequestStopped
             if active_count == 0:
                 active_started = loop.time()
@@ -531,6 +621,7 @@ async def review_package(package: LessonPackage, outline: dict, context: dict, *
         return failures or ([error] if error else []), response, None
 
     async def drain_tasks():
+        decide_semantic(False)  # No-op once approved; releases gated evidence.
         for task in tasks:
             if not task.done():
                 task.cancel()
@@ -618,18 +709,19 @@ async def review_package(package: LessonPackage, outline: dict, context: dict, *
         except TimeoutError:
             usage_incomplete += 1
 
-    async def call(operation: str, request: dict, tokens: int) -> LLMResponse:
-        nonlocal request_count, requested_tokens, stopped
+    async def call(operation: str, request: dict, tokens: int, *, gated: bool = False) -> LLMResponse:
+        nonlocal request_count, requested_tokens, stopped, evidence_stopped
         async with semaphore:
             remaining = remaining_active_budget()
-            if stopped or remaining <= 0 or request_count >= max_requests or requested_tokens + tokens > output_budget:
+            if (stopped or (gated and evidence_stopped) or remaining <= 0 or request_count >= max_requests
+                    or requested_tokens + tokens > output_budget):
                 return LLMResponse(data={}, error="Package preflight request budget exhausted", retryable=False)
             timeout = min(REQUEST_SECONDS, remaining)
             client = client_factory(tier="balanced", timeout=timeout, max_tokens=tokens,
                                     thinking_level="low", allow_fallback=False)
             activity_callbacks = getattr(client, "enforces_activity_callbacks", False) is True
             if activity_callbacks:
-                client.set_generation_activity_callback(request_activity)
+                client.set_generation_activity_callback(lambda active: request_activity(active, gated))
             request_count += 1
             requested_tokens += tokens
             previous = getattr(client, "last_attempt", None)
@@ -637,7 +729,7 @@ async def review_package(package: LessonPackage, outline: dict, context: dict, *
             try:
                 timer = nullcontext() if getattr(client, "enforces_shared_deadline", False) is True else asyncio.timeout(timeout)
                 if not activity_callbacks:
-                    request_activity(True)
+                    request_activity(True, gated)
                 try:
                     async with timer:
                         response = await client.generate_json(**request)
@@ -647,6 +739,9 @@ async def review_package(package: LessonPackage, outline: dict, context: dict, *
             except _RequestStopped:
                 return LLMResponse(data={}, error="Package preflight stopped after a terminal verdict", retryable=False)
             except asyncio.CancelledError:
+                # The stage is ending: a sibling queued for this freed provider
+                # slot must not start a request before it is drained.
+                stopped = True
                 if getattr(client, "request_started", True) is not False:
                     await record(operation, _last_response(client, previous, previous_id,
                         "Package preflight cancelled; usage may be unknown"), client, "preflight_cancelled")
@@ -659,10 +754,14 @@ async def review_package(package: LessonPackage, outline: dict, context: dict, *
                 response.retryable = True
             if not isinstance(response, LLMResponse):
                 raise TypeError("Preflight client must return LLMResponse")
+            waiting = gated and not semantic_known.is_set()
             if _known_negative(response.data):
                 # Stop queued scopes before usage/checkpoint I/O yields; the
                 # received verdict still receives full strict classification.
-                stopped = True
+                if waiting:
+                    evidence_stopped = True  # Siblings only; global stop on approval.
+                else:
+                    stopped = True
             if getattr(client, "request_started", True) is not False:
                 try:
                     await record(operation, response, client, "preflight_response")
@@ -673,6 +772,8 @@ async def review_package(package: LessonPackage, outline: dict, context: dict, *
                         raise
                     if not terminal_draining:
                         deferred_cancellation.add(asyncio.current_task())
+            if gated:
+                await after_semantic()  # Usage is recorded first, even if never used.
             return response
 
     def retryable(response):
@@ -732,6 +833,7 @@ async def review_package(package: LessonPackage, outline: dict, context: dict, *
         requested_ids = remaining_groups.get(owner, [])
         owner_facts = resolved_facts.get(owner, [])
         if not requested_ids:
+            await after_semantic()
             complete = ReviewEvidencePatch(calculations=seed, literal_facts=owner_facts)
             if _scope_failures(complete, set(ids), package):
                 return False
@@ -743,6 +845,13 @@ async def review_package(package: LessonPackage, outline: dict, context: dict, *
         prior = PackageReview(acceptable=True, issues=[])
         errors = []
         diagnosis = None  # Set while the latest complete response failed validation.
+        checked = []  # Latest deterministic server check results for this scope (never model text).
+
+        def server_facts(claim_ids) -> list[str]:
+            nonlocal span_locations
+            if span_locations is None:
+                span_locations = _span_locations(package)
+            return _server_evidence_facts(claim_ids, payload["numeric_spans"], span_locations, checked)
 
         async def scoped_defect():
             """Corrections are exhausted for a well-formed but unverifiable scope:
@@ -753,7 +862,8 @@ async def review_package(package: LessonPackage, outline: dict, context: dict, *
                            owner, diagnosis["codes"], diagnosis["paths"])
             await save({"evidence_failures": {owner: diagnosis}})
             return _EvidenceDefect("practice." + owner,
-                                   "practice." + owner + ": " + _evidence_defect_description(diagnosis))
+                                   "practice." + owner + ": " + _evidence_defect_description(
+                                       diagnosis, server_facts(diagnosis["claim_ids"])))
 
         while True:
             built = _evidence_patch_request(prior, scoped_payload, errors)
@@ -778,7 +888,7 @@ async def review_package(package: LessonPackage, outline: dict, context: dict, *
                 "other quantitative CASE FACT inside a fictional passage is not structural metadata "
                 "merely because the answer is text. Bind it to declared raw data; if declarations "
                 "are missing, report that specific missing-input defect for correction."}
-            response = await call("package_preflight_evidence_" + owner, request, caps[owner])
+            response = await call("package_preflight_evidence_" + owner, request, caps[owner], gated=True)
             normalize_response_case_aliases(response, package.review_context())
             diagnosis = None
             if not response.error and response.finish_reason in (None, "stop"):
@@ -786,8 +896,17 @@ async def review_package(package: LessonPackage, outline: dict, context: dict, *
                     patch = ReviewEvidencePatch.model_validate(response.data)
                     issues = []
                     if patch.issues or patch.package_issues:
-                        issues = [SemanticIssue(target="practice." + owner, description=text).model_dump()
-                                  for text in patch.issues + patch.package_issues]
+                        # The evidence model is a numeric binder, not a reviewer of public
+                        # text: its free text can ask for a computed answer in the public
+                        # instructions (smoke: "needs to display the computed net cash change").
+                        # The negative still blocks, but only span ids and a code reach the repair.
+                        logger.warning("[PREFLIGHT] Evidence scope %s negative verdict (not forwarded): %s",
+                                       owner, " | ".join(patch.issues + patch.package_issues)[:600])
+                        coded = {"claim_ids": list(dict.fromkeys(requested_ids))[:160],
+                                 "codes": ["evidence_model_rejected"], "paths": []}
+                        issues = [SemanticIssue(target="practice." + owner,
+                                                description=_evidence_defect_description(
+                                                    coded, server_facts(coded["claim_ids"]))).model_dump()]
                     if issues:
                         if (not _evidence_ids(_evidence_review(_patch_verdict(patch))) <= requested_scope
                                 or patch.practice_minutes is not None or patch.affected_sections):
@@ -796,7 +915,7 @@ async def review_package(package: LessonPackage, outline: dict, context: dict, *
                         merged = _merge_evidence_patch(prior, patch, requested_scope, scoped_payload["numeric_spans"])
                         complete_patch = ReviewEvidencePatch.model_validate(merged.model_dump(mode="json", include={
                             "calculations", "literal_facts", "literal_fact_ids", "math_roles"}))
-                        errors = _scope_failures(complete_patch, set(requested_ids), package)
+                        errors = checked = _scope_failures(complete_patch, set(requested_ids), package)
                         if not errors:
                             complete_patch = ReviewEvidencePatch.model_validate({
                                 **complete_patch.model_dump(mode="json"),
@@ -805,7 +924,7 @@ async def review_package(package: LessonPackage, outline: dict, context: dict, *
                                 "literal_facts": [fact.model_dump(mode="json") for fact in owner_facts]
                                     + [fact.model_dump(mode="json") for fact in complete_patch.literal_facts],
                             })
-                            errors = _scope_failures(complete_patch, set(ids), package)
+                            errors = checked = _scope_failures(complete_patch, set(ids), package)
                 except (ValidationError, ValueError) as exc:
                     if _known_negative(response.data):
                         await reject(unavailable=True)
@@ -867,10 +986,16 @@ async def review_package(package: LessonPackage, outline: dict, context: dict, *
     try:
         async with stage_timer:
             stage_running = True
-            if state["semantic"] is None and not await semantic_stage():
-                return result(error=_UNAVAILABLE)
+            if state["semantic"] is not None:
+                decide_semantic(True)
+            # Evidence starts with the semantic call; the semantic verdict is
+            # still awaited first and decides precedence (see after_semantic).
             tasks = [asyncio.create_task(evidence_stage(owner, ids)) for owner, ids in groups.items()
                      if owner not in state["scopes"]]
+            if state["semantic"] is None:
+                if not await semantic_stage():
+                    raise _SemanticUnavailable
+                decide_semantic(True)
             outcomes = await asyncio.gather(*tasks) if tasks else []
             if not all(outcome is True for outcome in outcomes):
                 defects = [outcome for outcome in outcomes if isinstance(outcome, _EvidenceDefect)]
@@ -901,6 +1026,10 @@ async def review_package(package: LessonPackage, outline: dict, context: dict, *
         # negative evidence before constructing the terminal aggregate.
         await drain_tasks()
         return result(rejection_failures(), error=_UNAVAILABLE if state["rejection"]["unavailable"] else None)
+    except _SemanticUnavailable:
+        stage_running = False
+        await drain_tasks()  # Cancel in-flight evidence and bill it before the result.
+        return result(error=_UNAVAILABLE)
     except TimeoutError:
         stage_running = False
         if not stage_timer.expired():

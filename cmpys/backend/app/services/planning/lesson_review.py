@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from app.services.llm.openlux import incomplete_stream_error
 from app.services.practice.contracts import Workbook, calculate
 from app.services.planning.workload_contract import build_workload_contract
 from app.services.content_quality import TUTORIAL_LESSON_FORMAT, plan_detail_reading_minutes
@@ -44,7 +45,11 @@ _EXPLICIT_RESULT = re.compile(
     # another raw datum, such as a prior-period collection amount.
     r"\b(?:exceeds?|surpasses?|outstrips?)\b[^;։!?\n]{0,180}?\bby\s*|"
     r"\bգերազանցում\s+(?:է|են)\s+[^;։!?\n]{0,180}?\(\s*"
-    + _NUMBER_LITERAL.pattern + r"\s*\)\s*)(" + _NUMBER_LITERAL.pattern + r")", re.I)
+    + _NUMBER_LITERAL.pattern + r"\s*\)\s*)(" + _NUMBER_LITERAL.pattern + r")"
+    # "the difference: 3 − 1 = 2" states an operand, not a result of 3: only an
+    # operator that starts an equation reaching "=" in the same clause. The
+    # equation's own result keeps its calculation and remaining-value checks.
+    r"(?![ \u00a0\u202f]*(?:[+×÷*/^\u2212]|-[ \u00a0\u202f])[^=;։\n]*=)", re.I)
 
 
 def _canonical_numeric_spelling(literal: str) -> str:
@@ -82,35 +87,91 @@ def _source_literal(source: str, claimed: float) -> str | None:
     # Models sometimes quote a result written in words ("zero headroom",
     # "four points", "two passes"). Verify that spelling instead of inventing
     # a missing digit. Preserve signs and reject partial/hyphenated words.
-    words = "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty".split()
-    phrases = {word: Decimal(index) for index, word in enumerate(words)}
-    phrases.update({"one and a half": Decimal("1.5"), "a half": Decimal("0.5"),
-                    "one half": Decimal("0.5"), "a quarter": Decimal("0.25"),
-                    "one quarter": Decimal("0.25"), "three quarters": Decimal("0.75")})
-    pattern = r"(?<![\w-])(?:(minus|negative)\s+|(-)\s*)?(" + "|".join(
-        re.escape(phrase) for phrase in sorted(phrases, key=len, reverse=True)) + r")(?![\w-]|\s+(?:hundred|thousand|million|billion)\b)"
-    for match in re.finditer(pattern, source, re.I):
-        value = phrases[match.group(3).casefold()]
-        if match.group(1) or match.group(2):
-            value = -value
+    for value in _number_word_matches(source, _NUMBER_WORDS):
         if value == Decimal(str(claimed)):
             return str(value)
     return None
 
 
+_NUMBER_WORDS = {word: Decimal(index) for index, word in enumerate(
+    "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen "
+    "fifteen sixteen seventeen eighteen nineteen twenty".split())}
+_NUMBER_WORDS.update({"one and a half": Decimal("1.5"), "a half": Decimal("0.5"),
+                      "one half": Decimal("0.5"), "a quarter": Decimal("0.25"),
+                      "one quarter": Decimal("0.25"), "three quarters": Decimal("0.75")})
+# Repetition counts are only read where a cited datum must be visible.
+_REPETITION_WORDS = {**_NUMBER_WORDS, "once": Decimal(1), "twice": Decimal(2), "thrice": Decimal(3)}
+
+
+def _number_word_matches(source: str, phrases: dict[str, Decimal]) -> list[Decimal]:
+    """Whole number words with their sign; partial/hyphenated/scaled words are not read."""
+    pattern = r"(?<![\w-])(?:(minus|negative)\s+|(-)\s*)?(" + "|".join(
+        re.escape(phrase) for phrase in sorted(phrases, key=len, reverse=True)) + r")(?![\w-]|\s+(?:hundred|thousand|million|billion)\b)"
+    values = []
+    for match in re.finditer(pattern, source, re.I):
+        value = phrases[match.group(3).casefold()]
+        values.append(-value if match.group(1) or match.group(2) else value)
+    return values
+
+
+# Exact spellings of one unit. Any member of a class stands for every other;
+# nothing outside these classes is inferred (no prefixes, plurals or casing).
+_UNIT_ALIAS_CLASSES = (
+    frozenset({"m", "meter", "meters", "metre", "metres", "մ", "մետր"}),
+    frozenset({"m²", "square meter", "square meters", "square metre", "square metres", "sq m",
+               "մ²", "քմ", "քառակուսի մետր"}),
+    frozenset({"cm", "centimeter", "centimeters", "centimetre", "centimetres", "սմ", "սանտիմետր"}),
+    frozenset({"cm²", "square centimeter", "square centimeters", "square centimetre",
+               "square centimetres", "sq cm", "սմ²", "քառակուսի սանտիմետր"}),
+)
+_SCALE_UNIT_WORDS = {"percent", "percentage", "hundred", "thousand", "million", "billion"}
+
+
+def _declared_unit_spellings(unit) -> set[str]:
+    """A declared unit (up to three words) and its exact aliases, or nothing."""
+    if (not isinstance(unit, str) or not re.fullmatch(r"[^\W\d_]\w{0,39}(?: [^\W\d_]\w{0,39}){0,2}", unit)
+            or any(word.casefold() in _SCALE_UNIT_WORDS for word in unit.split())):
+        return set()
+    for aliases in _UNIT_ALIAS_CLASSES:
+        if unit in aliases:
+            return set(aliases)
+    return {unit}
+
+
 def _safe_result_units(case: dict) -> set[str]:
     # Only an explicitly declared result unit, never inferred input dimensions
     # or a scaling word. Compound/ambiguous unit syntax remains unconsumed.
-    return {field["unit"] for field in _canonical_formula_fields(case)
-            if isinstance(field.get("unit"), str)
-            and re.fullmatch(r"[^\W\d_]\w{0,39}", field["unit"])
-            and field["unit"].casefold() not in {"percent", "percentage", "hundred", "thousand", "million", "billion"}}
+    return set().union(*(_declared_unit_spellings(field.get("unit")) for field in _canonical_formula_fields(case)))
+
+
+def _operand_units(case: dict | None) -> set[str]:
+    """Declared units of a case's raw data and results, for operand stripping only."""
+    case = case or {}
+    return set().union(*(_declared_unit_spellings(item.get("unit"))
+                         for key in ("data", "fields", "results") for item in case.get(key, [])
+                         if isinstance(item, dict)))
+
+
+def _strip_operand_units(span: str, units: set[str]) -> str:
+    """Same-length view with a declared unit after a numeral blanked out.
+
+    Only numerals immediately followed by an exact declared unit change; a
+    different unit, an exponent or a longer word keeps the expression unparsed.
+    """
+    if not units:
+        return span
+    unit = "(?:" + "|".join(re.escape(value) for value in sorted(units, key=len, reverse=True)) + ")"
+    pattern = (r"(?<![\w.])[-+\u2212]?" + _INTEGER_LITERAL + r"(?:\.\d+)?(?!\.\d|,\d)"
+               r"([ \u00a0\u202f]*" + unit + r")(?![\w%‰‱^²³])")
+    return re.sub(pattern, lambda match: match[0][:match.start(1) - match.start()] + " " * len(match[1]), span)
 
 
 def _unit_suffix_is_complete(tail: str) -> bool:
     # An exact declared unit ends at punctuation or a line boundary. A second
-    # word, scale, operator or unit is not part of this scalar's proof.
+    # word, scale, operator or unit is not part of this scalar's proof. The
+    # Armenian copula ("... 12 քառակուսի մետր է։") ends the clause too.
     tail = tail.lstrip(" \u00a0\u202f")
+    tail = re.sub(r"^(?:է|են)(?=[ \u00a0\u202f]*(?:[.,;:։․)\]}\n\r]|$))", "", tail).lstrip(" \u00a0\u202f")
     return not tail or tail[0] in ".,;:։․)]}\n\r"
 
 
@@ -129,14 +190,19 @@ def _matching_result_units(check, case: dict, owner: dict | None) -> set[str]:
     if owner is not None and check.case_id != "practice." + owner.get("id", ""):
         return set()
     try:
-        expression = ast.dump(ast.parse(check.expression, mode="eval").body)
+        tree = ast.parse(check.expression, mode="eval").body
+        expression = ast.dump(tree)
         fields = [field for field in _canonical_formula_fields(case)
                   if ast.dump(ast.parse(field["expression"], mode="eval").body) == expression]
     except (SyntaxError, RecursionError):
         return set()
+    if not fields and not any(isinstance(node, ast.Name) for node in ast.walk(tree)):
+        # A numeric-only proof names no field. It may use the case's result
+        # unit only when every canonical numeric field declares that one unit.
+        fields = _canonical_formula_fields(case)
     units = {field.get("unit") for field in fields}
     # Equal formulas with conflicting unit contracts are ambiguous.
-    return units & _safe_result_units(case) if len(units) == 1 else set()
+    return _declared_unit_spellings(next(iter(units))) if len(units) == 1 else set()
 
 
 def _check_source_literal(source: str, check, units: set[str] | None = None) -> str | None:
@@ -228,7 +294,11 @@ _MATH_ROLE_INSTRUCTIONS = (
     'coefficient and operation; preserve the original symbols and spacing. Use symbol_bindings only for '
     'symbolic_formula. math_quote_candidates are exact syntax suggestions, not approved proofs; verify '
     'meaning and field ownership. A role covers ONLY that coefficient occurrence; separately prove every '
-    'other displayed raw value and derived result.'
+    'other displayed raw value and derived result. Exception: a displayed formula showing NO result (a '
+    'distractor, misconception or question, e.g. 24 × 9 ÷ 2 or (b + h) ÷ 2) takes one symbolic_formula '
+    'entry quoting the WHOLE expression; its numbers must be that case\'s raw values or formula constants '
+    'and, with symbol_bindings, its tree must equal a canonical or misconception expression of that case, '
+    'or the quote must equal one of its choice labels.'
 )
 
 
@@ -980,10 +1050,14 @@ def _partial_evaluation_matches(source, derived) -> bool:
     return False
 
 
-def _verified_expression_remainder(span: str, checks: list[CalculationCheck], units_by_check: dict | None = None) -> str:
+def _verified_expression_remainder(span: str, checks: list[CalculationCheck], units_by_check: dict | None = None,
+                                   operand_units_by_check: dict | None = None) -> str:
     """Consume only source-owned expression occurrences matching a valid proof."""
     intervals = set()
     for check in checks:
+        # Declared operand units ("6 m × 4 m") are blanked in a same-length
+        # view of the expression side only; the result keeps its unit check.
+        view = _strip_operand_units(span, (operand_units_by_check or {}).get(id(check), set()))
         try:
             actual = calculate(check.expression, {}, allow_comparisons=True)
             literal = Decimal(check.claimed_literal) if check.claimed_literal is not None else None
@@ -993,7 +1067,7 @@ def _verified_expression_remainder(span: str, checks: list[CalculationCheck], un
             derived = ast.parse(check.expression, mode="eval").body
             for equality in re.finditer(r"(?<![<>=!])=(?!=)", span):
                 for left, position in ((True, equality.start()), (False, equality.end())):
-                    details = _closed_numeric_equation_side_details(span, position, left=left)
+                    details = _closed_numeric_equation_side_details(view, position, left=left)
                     if details is None:
                         continue
                     expression, start, end = details
@@ -1142,6 +1216,41 @@ def _numeric_values(span: str, *, units=()) -> set[Decimal]:
             | {Decimal(_canonical_numeric_spelling(match[1])) for match in _ATTACHED_NUMERIC_LITERAL.finditer(content)})
 
 
+_ROW_FENCE = re.compile(r"^[ \t]*```(steps|chart)[ \t]*\r?\n(.*?)^[ \t]*```", re.M | re.S)
+
+
+def _signed_row_value(source: str, start: int, span: str) -> Decimal | None:
+    """The negative value cell of a non-total steps or waterfall row at this occurrence.
+
+    The writer contract signs these cells ("− Expenses | −200 | note"), so the
+    sign is row syntax rather than a different quantity. A row whose label is
+    not a subtraction, a "=" total row, a bars chart, a table or prose keeps
+    its sign.
+    """
+    if source[start:start + len(span)] != span:
+        return None
+    for fence in _ROW_FENCE.finditer(source):
+        if not fence.start(2) <= start < fence.end(2):
+            continue
+        if fence[1] == "chart" and not re.search(r"^[ \t]*type:[ \t]*waterfall[ \t]*$", fence[2], re.M | re.I):
+            return None
+        line_start = source.rfind("\n", 0, start) + 1
+        if source[line_start:start].strip():
+            return None
+        line_end = source.find("\n", start)
+        line = source[line_start:len(source) if line_end < 0 else line_end]
+        cells = line.split("|")
+        # Only the contract's subtraction row ("− Label | −200") shows a datum
+        # with a sign; an unsigned or "=" label keeps its negative value.
+        if len(cells) < 2 or not cells[0].lstrip().startswith(("-", "\u2212")):
+            return None
+        value = re.fullmatch(r"[ \t]*[-\u2212](" + _INTEGER_LITERAL + r"(?:\.\d+)?)[ \t]*", cells[1])
+        if value is None or line_start + len(cells[0]) + 1 + len(cells[1]) > start + len(span):
+            return None
+        return -Decimal(_canonical_numeric_spelling(value[1]))
+    return None
+
+
 def _canonical_formula_fields(case: dict) -> list[dict]:
     return [field for field in case.get("fields", case.get("results", []))
             if field.get("expression") and field.get("kind", "number") == "number"]
@@ -1183,6 +1292,15 @@ def math_role_inventory(package: dict | None) -> list[dict]:
     return inventory
 
 
+# Armenian article/case endings written after a numeral ("2-ն", "2-ը",
+# "2-ում", "2-ի", "2-ով") inflect the number; the hyphen is not a minus sign.
+_ARMENIAN_NUMERAL_SUFFIX = r"-(?:ում|ով|ի|ն|ը)(?!\w)"
+
+
+def _strip_armenian_numeral_suffix(text: str) -> str:
+    return re.sub("^" + _ARMENIAN_NUMERAL_SUFFIX, "", text, count=1)
+
+
 def _coefficient_quantity_continuation_error(source: str, absolute_end: int) -> str | None:
     """Do not turn a qualified or mixed quantity into a bare coefficient.
 
@@ -1192,7 +1310,7 @@ def _coefficient_quantity_continuation_error(source: str, absolute_end: int) -> 
     their contents are a unit, so no unit-name or arbitrary prose whitelist is
     needed to reject them. All source characters remain available for review.
     """
-    tail = re.sub(r"^-(?:ի|ով)(?!\w)", "", source[absolute_end:], count=1).lstrip()
+    tail = _strip_armenian_numeral_suffix(source[absolute_end:]).lstrip()
     if tail.startswith(("(", "[", "{", "（", "［", "｛")):
         return 'coefficient has an adjacent parenthetical quantity qualifier; use an unambiguous standalone operation'
     fraction = (r"(?:half|halves|quarters?|thirds?|fourths?|fifths?|sixths?|sevenths?|"
@@ -1226,7 +1344,8 @@ def _coefficient_suffix_error(span: str, absolute_end: int) -> str | None:
 
 def _symbolic_quote_is_complete(span: str, start: int, end: int) -> bool:
     before = span[:start]
-    if re.search(r"[+*/×÷−^(-]\s*$", before) or re.match(r"\s*[+*/×÷−^)-]", span[end:]):
+    after = _strip_armenian_numeral_suffix(span[end:]) if span[:end][-1:].isdigit() else span[end:]
+    if re.search(r"[+*/×÷−^(-]\s*$", before) or re.match(r"\s*[+*/×÷−^)-]", after):
         return False
     if span[start:end].lstrip().startswith("("):
         prefix = re.search(r"([^\W\d]\w*)([ \u00a0\u202f]*)$", before)
@@ -1293,6 +1412,163 @@ def _armenian_operation_context_error(prefix: str, quote: str) -> str | None:
     return None
 
 
+_INSTANCE_OPERATORS = str.maketrans({"×": "*", "÷": "/", "−": "-", "·": "*", "⋅": "*"})
+_INSTANCE_NODES = (ast.Expression, ast.BinOp, ast.UnaryOp, ast.Constant, ast.Name, ast.Call, ast.Load,
+                   ast.operator, ast.unaryop)
+_INSTANCE_SCALE_WORD = re.compile(
+    r"(?:hundred|thousand|million|billion|trillion|percent|per[   ]+cent|dozen|"
+    r"հարյուր|հազար|միլիոն|միլիարդ|տոկոս)", re.I)
+
+
+# A word or arrow right after a formula that states what it gives is a result
+# claim; such an occurrence is never a result-free formula instance.
+_INSTANCE_RESULT_TAIL = re.compile(
+    r"(?:→|⇒|⟹|->|=>|:"
+    r"|(?:gives?|gave|giving|is|are|was|were|be|equals?|equalled|equaled|makes?|made|yields?|"
+    r"results?|produces?|comes?|came|gets?|got|returns?|totals?|totaled|totalled|amounts?|"
+    r"տալիս|տա|տվեց|ստացվում|ստանում|ստանաս|կազմում|հավասար\w*|է|են|էր)(?![\w-]))", re.I)
+
+
+def _instance_clause(source: str, start: int, end: int) -> tuple[int, int]:
+    """The clause holding source[start:end]: a whole table/fence row, else up to . ; ։ ! ? or newline."""
+    line_start = source.rfind("\n", 0, start) + 1
+    line_end = source.find("\n", end)
+    line_end = len(source) if line_end < 0 else line_end
+    if "|" in source[line_start:line_end]:
+        return line_start, line_end  # Every cell of the quote's row.
+    boundary = re.compile(r"[;։!?\n]|\.(?!\d)")
+    lower = max([match.end() for match in boundary.finditer(source, line_start, start)], default=line_start)
+    upper = boundary.search(source, end, line_end)
+    return lower, upper.start() if upper else line_end
+
+
+def _numeric_constant(node) -> bool:
+    return isinstance(node, ast.Constant) and type(node.value) in (int, float)
+
+
+def _declared_case_expressions(case: dict) -> tuple[list, list, set[str]]:
+    """Canonical and misconception expression trees and choice labels of ONE case."""
+    canonical, misconceptions, labels = [], [], set()
+    for field in [*(case.get("fields") or []), *(case.get("results") or [])]:
+        if not isinstance(field, dict):
+            continue
+        for trees, expressions in ((canonical, [field.get("expression")]),
+                                   (misconceptions, [misconception.get("expression") for misconception
+                                                     in field.get("misconceptions") or []
+                                                     if isinstance(misconception, dict)])):
+            for expression in expressions:
+                if isinstance(expression, str) and expression:
+                    try:
+                        trees.append(ast.parse(expression, mode="eval").body)
+                    except (SyntaxError, ValueError, RecursionError):
+                        continue
+        labels.update(choice["label"].strip() for choice in field.get("choices") or []
+                      if isinstance(choice, dict) and isinstance(choice.get("label"), str))
+    return canonical, misconceptions, labels
+
+
+def _instance_matches(quoted, declared, data: dict[str, Decimal], bindings: dict[str, str]) -> bool:
+    """Same tree; a declared datum is its bound symbol or exactly its value, a constant itself."""
+    if isinstance(declared, ast.Name) and declared.id in data:
+        if isinstance(quoted, ast.Name):
+            return bindings.get(quoted.id) == declared.id
+        return _numeric_constant(quoted) and Decimal(str(quoted.value)) == data[declared.id]
+    if isinstance(declared, ast.Constant):
+        return (_numeric_constant(declared) and _numeric_constant(quoted)
+                and Decimal(str(quoted.value)) == Decimal(str(declared.value)))
+    if isinstance(declared, ast.BinOp):
+        return (isinstance(quoted, ast.BinOp) and type(quoted.op) is type(declared.op)
+                and _instance_matches(quoted.left, declared.left, data, bindings)
+                and _instance_matches(quoted.right, declared.right, data, bindings))
+    if isinstance(declared, ast.UnaryOp):
+        return (isinstance(quoted, ast.UnaryOp) and type(quoted.op) is type(declared.op)
+                and _instance_matches(quoted.operand, declared.operand, data, bindings))
+    if isinstance(declared, ast.Call):
+        return (isinstance(quoted, ast.Call) and isinstance(quoted.func, ast.Name)
+                and isinstance(declared.func, ast.Name) and quoted.func.id == declared.func.id
+                and declared.func.id not in data and not quoted.keywords and not declared.keywords
+                and len(quoted.args) == len(declared.args)
+                and all(_instance_matches(q, d, data, bindings) for q, d in zip(quoted.args, declared.args)))
+    return False
+
+
+def _formula_instance_interval(role: MathRoleCheck, span: str, case: dict, source: str,
+                               source_start: int) -> tuple[int, int] | None:
+    """A displayed formula that shows no result: a distractor, misconception or question.
+
+    Accepted only when the quote is one complete expression (not an equation
+    side, not a subexpression, no attached/scaled/qualified numeral) whose
+    tree, with every number mapped to a bound datum value or declared constant
+    of THIS case and every symbol bound one-to-one to its datum IDs, equals a
+    declared misconception expression of the same case (or, for a quote with
+    no symbols, a canonical expression), or when the quote is exactly one of
+    the case's declared choice labels and all its
+    numbers are case data or declared constants. Only the quote is consumed;
+    every other value in the span keeps its own evidence obligation. As for a
+    canonical role, the prose claim about the formula (e.g. that it is wrong,
+    or what it computes) is not checked here; the arithmetic is fully tied to
+    a declared expression and no result is proven by this entry.
+    """
+    quote = role.source_quote
+    literals = list(_NUMBER_LITERAL.finditer(quote))
+    if not literals or span.count(quote) != 1:
+        return None
+    offset = span.index(quote)
+    end = offset + len(quote)
+    before, after = span[:offset], span[end:]
+    tail = _strip_armenian_numeral_suffix(after) if quote[-1:].isdigit() else after
+    rest = tail.lstrip("   ")
+    if (not _symbolic_quote_is_complete(span, offset, end)
+            or re.search(r"[=≈<>≤≥]\s*$", before) or re.match(r"\s*[=≈<>≤≥]", tail)
+            or re.search(r"[\w.,]$", before) or re.match(r"[.,]?\d", after)
+            or (tail[:1] and (tail[0].isalnum() or tail[0] in "_²³"))
+            or _coefficient_quantity_continuation_error(source, source_start + end)
+            or rest[:1] in tuple("%‰‱°$€£^") or _INSTANCE_SCALE_WORD.match(rest)
+            or _INSTANCE_RESULT_TAIL.match(rest)):
+        return None
+    # The instance must be the ONLY numeric content of its clause (or of every
+    # cell of its row): a value beside it ("gives 216", "| 216 |") could be a
+    # result the formula is claimed to produce, so this form does not apply.
+    absolute = source_start + offset
+    lower, upper = _instance_clause(source, absolute, absolute + len(quote))
+    clause = source[lower:absolute] + " " * len(quote) + source[absolute + len(quote):upper]
+    if _has_numeric_quantity(clause) or _number_word_matches(clause, _NUMBER_WORDS):
+        return None
+    text = _NUMBER_LITERAL.sub(lambda match: _canonical_numeric_spelling(match.group()), quote)
+    try:
+        tree = ast.parse(text.translate(_INSTANCE_OPERATORS).strip(), mode="eval")
+        data = {datum["id"]: Decimal(str(datum["value"])) for datum in case.get("data", [])
+                if isinstance(datum.get("id"), str) and type(datum.get("value")) in (int, float)}
+    except (SyntaxError, ValueError, RecursionError, MemoryError, InvalidOperation, KeyError, TypeError):
+        return None
+    nodes = list(ast.walk(tree))
+    if (not all(isinstance(node, _INSTANCE_NODES) for node in nodes)
+            or not any(isinstance(node, ast.BinOp) for node in nodes)
+            or any(isinstance(node, ast.Constant) and not _numeric_constant(node) for node in nodes)):
+        return None
+    # Every numeral in the quote is one parsed constant, with nothing else.
+    constants = sorted(abs(Decimal(str(node.value))) for node in nodes if _numeric_constant(node))
+    if constants != sorted(abs(Decimal(_canonical_numeric_spelling(match.group()))) for match in literals):
+        return None
+    functions = {id(node.func) for node in nodes if isinstance(node, ast.Call)}
+    names = {node.id for node in nodes if isinstance(node, ast.Name) and id(node) not in functions}
+    bindings = role.symbol_bindings
+    bound = (names == bindings.keys() and set(bindings.values()) <= data.keys()
+             and len(set(bindings.values())) == len(bindings))
+    canonical, misconceptions, labels = _declared_case_expressions(case)
+    # A symbolic canonical formula keeps the per-coefficient symbolic_formula
+    # role above; only a numeric instantiation may match a canonical tree here.
+    candidates = misconceptions if names else canonical + misconceptions
+    if bound and any(_instance_matches(tree.body, declared, data, bindings) for declared in candidates):
+        return offset, end
+    if quote.strip() in labels and (bound or not bindings) and not functions:
+        declared_constants = {abs(Decimal(str(node.value))) for declared in canonical + misconceptions
+                              for node in ast.walk(declared) if _numeric_constant(node)}
+        if set(constants) <= {abs(value) for value in data.values()} | declared_constants:
+            return offset, end
+    return None
+
+
 def _math_role_diagnostic(role: MathRoleCheck, span: str, case: dict, owner: dict | None,
                         source_field_ids: set[str], *, source: str | None = None,
                         source_start: int = 0) -> tuple[tuple[int, int] | None, str | None]:
@@ -1310,6 +1586,15 @@ def _math_role_diagnostic(role: MathRoleCheck, span: str, case: dict, owner: dic
         return None, "field_id must identify one canonical numeric field in this case"
     if span.count(role.source_quote) != 1:
         return None, "source_quote must occur exactly once, verbatim, in this numeric span"
+    interval, reason = _coefficient_role_diagnostic(role, span, case, fields[0], source, source_start)
+    if interval is None and (instance := _formula_instance_interval(role, span, case, source, source_start)):
+        return instance, None
+    return interval, reason
+
+
+def _coefficient_role_diagnostic(role: MathRoleCheck, span: str, case: dict, field: dict, source: str,
+                                 source_start: int) -> tuple[tuple[int, int] | None, str | None]:
+    """One coefficient occurrence and its stated operation; returns only that numeral."""
     quote = role.source_quote
     numbers = list(_NUMBER_LITERAL.finditer(quote))
     if len(numbers) != 1 or Decimal(_canonical_numeric_spelling(numbers[0].group())) != role.coefficient:
@@ -1321,7 +1606,7 @@ def _math_role_diagnostic(role: MathRoleCheck, span: str, case: dict, owner: dic
     if reason := _coefficient_suffix_error(source, source_start + absolute_end):
         return None, reason
     if role.role != "symbolic_formula" and re.match(
-            r"\s*[+*/×÷−^=-]", re.sub(r"^-(?:ի|ով)(?!\w)", "", after_number, count=1)):
+            r"\s*[+*/×÷−^=-]", _strip_armenian_numeral_suffix(after_number)):
         return None, 'quoted prose coefficient is part of another arithmetic expression'
     if role.role == "symbolic_formula":
         if not _symbolic_quote_is_complete(span, offset, offset + len(quote)):
@@ -1331,9 +1616,9 @@ def _math_role_diagnostic(role: MathRoleCheck, span: str, case: dict, owner: dic
     if not re.search(r"[^\W\d_]{2,}|[*×/÷]", quote):
         return None, 'a bare numeral is not an operation; quote its explicit mathematical role'
     try:
-        tree = ast.parse(fields[0]["expression"], mode="eval").body
+        tree = ast.parse(field["expression"], mode="eval").body
         data = {datum["id"]: datum["value"] for datum in case.get("data", [])}
-        calculate(fields[0]["expression"], data)
+        calculate(field["expression"], data)
         roles = _formula_coefficient_roles(tree, role.coefficient)
         if role.role == "symbolic_formula":
             if not roles or not role.symbol_bindings:
@@ -1387,6 +1672,11 @@ def _math_role_diagnostic(role: MathRoleCheck, span: str, case: dict, owner: dic
                 return False
             division = bool(
                 re.search(r"(?:\bdivid(?:e|es|ed|ing)|\bdivision)\s+(?:\w+\s+){0,6}?by\s*$", before, re.I)
+                # A bare formula/row term "÷ 2" or "/ 2" is itself the division,
+                # but only with no operand before it in this span; "24 ÷ 2" is
+                # an equation side for calculation evidence, not a role.
+                or (role.role == "divisor" and re.fullmatch(r"[÷/][ \u00a0\u202f]*", before) is not None
+                    and not after and not span[:offset].strip())
                 or armenian_operation(r"բաժան(?:ում(?:ը)?|ելով|ելու|ել|ես|եք|իր|ի|վում)", r"-(?:ի|ով)\b")
                 # Exact observed nominal/infinitive forms after a genitive
                 # coefficient. The complete operation must be in the quote;
@@ -1470,6 +1760,12 @@ def _mask_reviewed_list_ordinals(span: str, *, source: str, start: int, units=()
     return "".join(view)
 
 
+def _value_list(values: set[Decimal], limit: int = 8) -> str:
+    """Server-read numerals in ascending order (no exponent, no source prose)."""
+    ordered = [format(value.normalize(), "f") for value in sorted(values)]
+    return ", ".join(ordered[:limit]) + (", …" if len(ordered) > limit else "")
+
+
 def grounded_failures(review: LessonReview, lesson: dict, package: dict | None = None,
                       *, expected_claim_ids: set[str] | None = None) -> list[str]:
     """Verify evidence against full sources, optionally for an exact ID subset.
@@ -1501,6 +1797,8 @@ def grounded_failures(review: LessonReview, lesson: dict, package: dict | None =
                      for key, span, start, text, activity in records}
     owners = {key: activity for key, _, _, _, activity in records}
     source_contexts = {key: (text, start) for key, _, start, text, _ in records}
+    signed_rows = {key: value for key, span, start, text, _ in records
+                   if (value := _signed_row_value(text, start, span)) is not None}
     label_fields = {key: {field["id"] for field in (activity or {}).get("fields", [])
                           if isinstance(field.get("id"), str) and field["id"]
                           and field.get("label") == source}
@@ -1516,6 +1814,7 @@ def grounded_failures(review: LessonReview, lesson: dict, package: dict | None =
     checked_facts: dict[str, set[Decimal]] = {}
     verified_checks: dict[str, list[CalculationCheck]] = {}
     check_units: dict[str, dict[int, set[str]]] = {}
+    check_operand_units: dict[str, dict[int, set[str]]] = {}
     role_intervals: dict[str, list[tuple[int, int]]] = {}
     role_cases: dict[str, str] = {}
     fact_cases: dict[str, str] = {}
@@ -1589,14 +1888,23 @@ def grounded_failures(review: LessonReview, lesson: dict, package: dict | None =
         # Keep qualifiers immediately preceding the result keyword: the match
         # for "Operating profit is 10" starts at "profit", not "Operating".
         prefix = normalized(span[:signal.start(1)])
+        # Sum verbs can follow a conjunction of several labels ("February
+        # cash plus March sales total 9200"), so their label must open its
+        # clause, after at most an article/determiner.
+        clause = normalized(re.split(r"[;:։!?\n]|\.(?!\d)", span[:signal.start(1)])[-1])
         value = Decimal(_canonical_numeric_spelling(signal[1]))
         case = cases_by_id.get(fact_cases[claim_id], {})
         for datum in case.get("data", []):
             if datum.get("id") not in fact_datums[claim_id] or Decimal(str(datum["value"])) != value:
                 continue
+            # "Sales earned in March total 9200": the verb must follow the cited
+            # datum's own label directly, and the value must be that datum.
             for alias in {canonical_label(datum.get("label", "")), normalized(datum.get("label", ""))}:
                 if alias and re.search(r"(?:^| )" + re.escape(alias) +
                         r"(?:ը|ն)?(?: (?:is|was|of|equals|comes to|will be))?$", prefix):
+                    return True
+                if alias and re.fullmatch(r"(?:(?:the|a|an|this|that|these|those|its|their|our|your) )?"
+                        + re.escape(alias) + r"(?:ը|ն)? (?:were|came to|total|totals|totaled|totalled)", clause):
                     return True
         return False
     def workload_or_reference_span(span, units=()):
@@ -1640,7 +1948,13 @@ def grounded_failures(review: LessonReview, lesson: dict, package: dict | None =
         values = {Decimal(str(data[key])) for key in fact.datum_ids}
         # Every cited datum must be visible, even when labels are paraphrased.
         # Only these explicit IDs count, not all numeric values in the package.
-        if not values <= _numeric_values(span, units=metadata_units.get(fact.claim_id, ())):
+        # A signed steps/waterfall row shows datum X as −X; a repetition word
+        # ("twice") shows a count. Neither adds a value to the remaining gate.
+        visible = _numeric_values(span, units=metadata_units.get(fact.claim_id, ()))
+        visible.update(_number_word_matches(span, _REPETITION_WORDS))
+        if fact.claim_id in signed_rows:
+            visible.add(-signed_rows[fact.claim_id])
+        if not values <= visible:
             errors.append(f"{fact.claim_id}: bound datum values are absent from the source span")
             continue
         fact_cases[fact.claim_id] = fact.case_id
@@ -1663,6 +1977,7 @@ def grounded_failures(review: LessonReview, lesson: dict, package: dict | None =
         for key in check.claim_ids:
             check_units.setdefault(key, {})[id(check)] = _matching_result_units(
                 check, cases_by_id.get(check.case_id, {}), owners.get(key))
+            check_operand_units.setdefault(key, {})[id(check)] = _operand_units(cases_by_id.get(check.case_id))
         # Resolve names from this exact case before verifying source precision.
         # The reviewer need not copy every raw operand into a large formula.
         # No inferred intermediate answers or cross-case lookups are allowed.
@@ -1742,7 +2057,8 @@ def grounded_failures(review: LessonReview, lesson: dict, package: dict | None =
             results = checked_values.get(claim_id, set())
             remainder = _consume_intervals(span, role_intervals.get(claim_id, []))
             remainder = _numeric_role_remainder(remainder, owners.get(claim_id))
-            remainder = _verified_expression_remainder(remainder, verified_checks.get(claim_id, []), check_units.get(claim_id, {}))
+            remainder = _verified_expression_remainder(remainder, verified_checks.get(claim_id, []), check_units.get(claim_id, {}),
+                                                       check_operand_units.get(claim_id, {}))
             metadata_unit_guard = metadata_units.get(claim_id, ())
             numeric_remainder = _workload_remainder(remainder, units=metadata_unit_guard) if claim_id in checked_facts else remainder
             numbers = _numeric_values(numeric_remainder, units=metadata_unit_guard)
@@ -1754,8 +2070,13 @@ def grounded_failures(review: LessonReview, lesson: dict, package: dict | None =
             # One checked result cannot cover another number merely because it
             # shares a sentence. Bound raw operands may occur in its equation.
             inputs = checked_facts.get(claim_id, checked_inputs.get(claim_id, set()))
-            if numbers - results - inputs:
-                errors.append(f"{claim_id}: numeric span contains additional unverified values")
+            unverified = numbers - results - inputs
+            if claim_id in signed_rows and -signed_rows[claim_id] in inputs:
+                unverified.discard(signed_rows[claim_id])  # Row sign of a bound datum.
+            if unverified:
+                # Name the values so a correction knows exactly what to prove.
+                errors.append(f"{claim_id}: numeric span contains additional unverified values: "
+                              + _value_list(unverified))
             if claim_id in checked_facts and (_explicit_derivation(span, units=metadata_unit_guard) or _workload_arithmetic(_workload_remainder(span, units=metadata_unit_guard))) and not results:
                 errors.append(f"{claim_id}: derived result cannot be classified as a literal fact")
             if claim_id in checked_facts:
@@ -2049,6 +2370,119 @@ def _record_allocation_scope_rejection(review: LessonReview, issue: str, respons
     return review.failures()
 
 
+def _with_literal_facts(review: LessonReview, facts: list[LiteralFactCheck]) -> LessonReview:
+    """Replace the literal evidence of exactly these claims with typed bindings."""
+    ids = {fact.claim_id for fact in facts}
+    data = review.model_dump(mode="json")
+    data["literal_facts"] = ([fact for fact in data["literal_facts"] if fact["claim_id"] not in ids]
+                             + [fact.model_dump(mode="json") for fact in facts])
+    data["literal_fact_ids"] = [key for key in data["literal_fact_ids"] if key not in ids]
+    return type(review).model_validate(data)
+
+
+def _deterministic_literal_facts(review: LessonReview, lesson: dict, package: dict | None,
+                                 errors: list[str]) -> list[LiteralFactCheck]:
+    """Exact datum bindings for failing spans the reviewer itself called raw facts.
+
+    Only a span with a diagnostic and literal-only evidence is considered: a
+    reviewer's calculation or math role is never replaced by value matching.
+    Where the reviewer cited datum IDs, they may only be narrowed to the cited
+    IDs whose values the span shows, never swapped for value-chosen IDs. An
+    untyped literal_fact_ids span is bound by value only when each value is
+    exactly one datum of its owning case (lesson prose: of exactly one teaching
+    case). Each proposal must pass the same gate; a rejected claim keeps its
+    evidence.
+    """
+    from .evidence_resolver import package_cases, resolve_literal_evidence
+
+    unbound = "literal numeric facts are not bound to supplied data or workload metadata"
+    absent = "bound datum values are absent from the source span"
+    reasons: dict[str, set[str]] = {}
+    for error in errors:
+        claim_id, _, reason = error.partition(": ")
+        reasons.setdefault(claim_id, set()).add(reason)
+    derived = ({key for check in review.calculations for key in check.claim_ids}
+               | {role.claim_id for role in review.math_roles})
+    cited: dict[str, tuple[set[str], set[str]]] = {}
+    for fact in review.literal_facts:
+        case_ids, datum_ids = cited.setdefault(fact.claim_id, (set(), set()))
+        case_ids.add(fact.case_id)
+        datum_ids.update(fact.datum_ids)
+    # A fabricated datum/case ID or conflicting cases is a confused review and
+    # is never laundered into a server-made proof.
+    narrow = {key for key, (case_ids, _) in cited.items()
+              if len(case_ids) == 1 and key in reasons and reasons[key] <= {absent, unbound}} - derived
+    by_value = {key for key in set(review.literal_fact_ids) - cited.keys()
+                if reasons.get(key) == {unbound}} - derived
+    records = [record for record in _numeric_span_records(lesson, package) if record[0] in narrow | by_value]
+    if not package or not records:
+        return []
+    cases = package.get("teaching_cases", []) + (package.get("private_workbook") or {}).get("activities", [])
+    all_units = set().union(*(_metadata_units(case) for case in cases)) if cases else set()
+    units = {key: tuple(_metadata_units(activity) if activity else all_units) for key, _, _, _, activity in records}
+    spans = {key: span for key, span, *_ in records}
+    data = package_cases(package)
+    facts, _ = resolve_literal_evidence(
+        {key: span for key, span in spans.items() if key in by_value}, numeric_span_owners(lesson, package),
+        data, units=units, ownerless_teaching=True, unique_values=True)
+    proposals, _ = resolve_literal_evidence(
+        {key: span for key, span in spans.items() if key in narrow},
+        {key: next(iter(cited[key][0])) for key in narrow}, data, units=units)
+    for proposal in proposals:
+        values = data[proposal.case_id]
+        kept = [datum_id for datum_id in proposal.datum_ids if datum_id in cited[proposal.claim_id][1]]
+        # Every span value must still be one of the reviewer's own cited data.
+        if {values[d] for d in kept} == {values[d] for d in proposal.datum_ids}:
+            facts.append(LiteralFactCheck(claim_id=proposal.claim_id, case_id=proposal.case_id, datum_ids=kept))
+    for _ in range(2):  # Drop rejected claims, then confirm the rest together.
+        if not facts:
+            break
+        scoped = LessonReview.model_validate({"acceptable": True, "issues": [], "practice_minutes": review.practice_minutes,
+            "contains_calculations": False, "calculations": [],
+            "literal_facts": [fact.model_dump(mode="json") for fact in facts]})
+        rejected = {error.split(":", 1)[0] for error in grounded_failures(
+            scoped, lesson, package, expected_claim_ids={fact.claim_id for fact in facts})}
+        if not rejected:
+            return facts
+        facts = [fact for fact in facts if fact.claim_id not in rejected]
+    return []
+
+
+def _without_absent_result_calculations(patch: ReviewEvidencePatch, lesson: dict,
+                                        package: dict | None) -> ReviewEvidencePatch:
+    """Drop patch calculations for spans that do not show their claimed result.
+
+    Such an entry can only fail "claimed result is absent" for that span, so
+    removing it approves nothing: the span keeps its other evidence and the
+    full gate (including remaining unverified values) still runs on it. A span
+    whose only evidence is that calculation keeps it, and its diagnostic.
+    """
+    others: dict[str, int] = {}
+    for key in [*patch.literal_fact_ids, *(fact.claim_id for fact in patch.literal_facts),
+                *(role.claim_id for role in patch.math_roles)]:
+        others[key] = others.get(key, 0) + 1
+    absent: dict[int, set[str]] = {}
+    for index, check in enumerate(patch.calculations):
+        for key in check.claim_ids:
+            probe = LessonReview.model_validate(_canonical_review_data({
+                "acceptable": True, "issues": [], "practice_minutes": 1, "contains_calculations": True,
+                "calculations": [{**check.model_dump(mode="json", exclude_none=True), "claim_ids": [key]}]},
+                packaged=True))
+            if f"{key}: claimed result is absent from its source quote" in grounded_failures(
+                    probe, lesson, package, expected_claim_ids={key}):
+                absent.setdefault(index, set()).add(key)
+            else:
+                others[key] = others.get(key, 0) + 1
+    if not absent:
+        return patch
+    calculations = []
+    for index, check in enumerate(patch.calculations):
+        ids = [key for key in check.claim_ids if key not in absent.get(index, set()) or not others.get(key)]
+        if ids:
+            calculations.append(check.model_copy(update={"claim_ids": ids}))
+    return patch.model_copy(update={"calculations": calculations})
+
+
 async def _repair_packaged_evidence(original: LessonReview, lesson: dict, *, context: dict,
                                     grounding_errors: list[str], workload_error: str | None,
                                     client_factory):
@@ -2144,8 +2578,24 @@ async def _repair_packaged_evidence(original: LessonReview, lesson: dict, *, con
             # negative verdict (this path is entered only after approval).
             rejected = original.model_copy(deep=True)
             rejected.acceptable = False
-            rejected.issues.extend(patch.issues)
-            rejected.package_issues.extend(patch.package_issues)
+            # Every requested span is lesson prose with no case-data binding:
+            # a defect found only in those spans is a lesson defect. Reclassification only; the
+            # lesson stays blocked, and a real package defect still fails the
+            # package's own next review. Workload findings keep their class.
+            # A span bound to case data (teaching or practice) may point at a
+            # real case defect, and nothing else would schedule its package
+            # review, so its package_issues keep their class.
+            from .evidence_resolver import package_cases
+            data_cases = {case_id for case_id, data in package_cases(package).items() if data}
+            bound_cases = {entry.case_id for evidence in (original, patch)
+                           for entry in [*evidence.literal_facts, *evidence.math_roles]
+                           if entry.claim_id in allowed}
+            bound_cases.update(check.case_id for evidence in (original, patch) for check in evidence.calculations
+                               if allowed.intersection(check.claim_ids))
+            lesson_owned = (bool(allowed) and not workload_error and not allowed & owners.keys()
+                            and not bound_cases & data_cases)
+            rejected.issues.extend(patch.issues + (patch.package_issues if lesson_owned else []))
+            rejected.package_issues.extend([] if lesson_owned else patch.package_issues)
             rejected.affected_sections = list(dict.fromkeys(original.affected_sections + patch.affected_sections))
             response.data = rejected.model_dump(mode="json")
             return rejected.issues + rejected.package_issues, response, client
@@ -2155,6 +2605,7 @@ async def _repair_packaged_evidence(original: LessonReview, lesson: dict, *, con
         if not patch_ids <= allowed or (patch.practice_minutes is not None and not workload_error):
             response.error = "Lesson review evidence patch changed an unrequested field or claim"
             return [response.error], response, client
+        patch = _without_absent_result_calculations(patch, lesson, package)
         merged = original.model_dump(mode="json")
         kept_calculations = []
         for check in merged["calculations"]:
@@ -2169,7 +2620,11 @@ async def _repair_packaged_evidence(original: LessonReview, lesson: dict, *, con
         if workload_error and patch.practice_minutes is not None:
             merged["practice_minutes"] = patch.practice_minutes
         review = LessonReview.model_validate(_canonical_review_data(merged, packaged=True))
+        unbound = review.model_copy(deep=True)
         errors = grounded_failures(review, lesson, package)
+        if errors and (facts := _deterministic_literal_facts(unbound, lesson, package, errors)):
+            review = _with_literal_facts(unbound, facts)
+            errors = grounded_failures(review, lesson, package)
         errors.extend(source_arithmetic_failures(lesson, package))
         errors.extend(review.failures())
         if not errors and (issue := _tutorial_allocation_scope_issue(review, package,
@@ -2408,7 +2863,8 @@ async def review_lesson(lesson: dict, *, client_factory, context: dict):
         if response.error:
             transient = any(str(response.error).startswith(f"{provider} request failed ({category};")
                             for provider in ("zai", "OpenLux")
-                            for category in ("TimeoutError", "APITimeoutError", "APIConnectionError", "InternalServerError"))
+                            for category in ("TimeoutError", "APITimeoutError", "APIConnectionError", "InternalServerError")
+                            ) or incomplete_stream_error(response.error)
             malformed = any(str(response.error).startswith(f"{provider} request failed ({category};")
                             for provider in ("zai", "OpenLux")
                             for category in ("JSONDecodeError", "JSONProtocolError"))
@@ -2448,6 +2904,13 @@ async def review_lesson(lesson: dict, *, client_factory, context: dict):
             review = _append_compiled_evidence(review, compiled)
             original_review = review.model_copy(deep=True)
             grounding_errors = grounded_failures(review, lesson, context.get("lesson_package"))
+            if packaged and grounding_errors and (facts := _deterministic_literal_facts(
+                    original_review, lesson, context["lesson_package"], grounding_errors)):
+                # Bind the reviewer's own raw-fact spans to exact data before
+                # asking any model to repair them; the gate reruns in full.
+                original_review = _with_literal_facts(original_review, facts)
+                review = original_review.model_copy(deep=True)
+                grounding_errors = grounded_failures(review, lesson, context["lesson_package"])
             if packaged:
                 source_errors = source_arithmetic_failures(lesson, context["lesson_package"])
                 if source_errors:

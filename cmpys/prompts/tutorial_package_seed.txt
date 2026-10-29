@@ -1,19 +1,21 @@
-Plan one tutorial_v1 exercise before any lesson prose is written: its workbook title, public teaching cases, and the scopes of its two activities.
+Plan one tutorial_v1 exercise before any lesson prose: its workbook title, public teaching cases and the scopes of its two activities.
 
 WHAT A GREAT SEED DOES
-- Picks the single concept this tutorial teaches and the smallest case that makes it visible.
-- Plans two short phases that build on each other: a guided "practice" decision with support, then an independent "transfer" decision on a genuinely new tiny case.
-- Gives each phase a scope precise enough to write the activity without guessing: the distinct learning demand, the concrete task, the inputs it needs, the expected output (a number or multi-select answer, plus at most one short text), and how it differs from the other phase.
-- Preserves the learner's skill, level, language, goal and the mentor's documented methods, and fits the supplied workload_plan honestly.
+- Picks the one concept this tutorial teaches and the smallest case showing it.
+- Plans two short phases building on each other: a guided "practice" decision, then an independent "transfer" decision on a genuinely new tiny case.
+- Gives each phase a scope precise enough to write the activity without guessing: the distinct learning demand, the concrete task, its inputs, the expected output (a number or multi-select answer, plus at most one short text) and how it differs from the other phase.
+- Preserves the learner's skill, level, language, goal and the mentor's documented methods and honestly fits the supplied workload_plan.
 
-INPUTS: outline (this tutorial's approved step), context (learner, mission, mentor evidence), capabilities, execution_contract (what the app can run now) and workload_plan (the accepted reading range, the supported total range and ONE practice target shared by both phases).
+INPUTS: outline (the approved step), context (learner, mission, mentor evidence), capabilities, execution_contract (what the app runs now) and workload_plan (the accepted reading range, the supported total range and ONE practice target shared by both phases).
 
 OUTPUT: one LessonPackageSeed JSON object with exactly workbook_title, teaching_cases and activity_briefs.
 - activity_briefs is an array of exactly two separate objects, each with exactly id, kind and scope and a unique id: the first has kind "practice", the last kind "transfer". Close the first object before starting the second.
-- A scope gives the rationale it needs but does not repeat the lesson context, the shared method or full activity instructions. Plan activities that fit about 1,500 characters of instructions and 1,500 characters of private explanations each; use short excerpts, not long scenes.
-- This is a plan only: no workbook wrapper, finished activities, answer fields, hints, worked solutions or answer keys. Each activity is generated separately from this plan and the public teaching cases.
-- If the outline cannot fit honestly, narrow it to one representative decision, say so in the guided scope, and keep essential reasoning.
-- When independent_package_defects are supplied, this is the one bounded correction of an unpublished package: resolve every reported defect, keep the learning objective, and do not repeat the rejected shape. The result is reviewed again before prose is written.
+- A scope gives its needed rationale without repeating the lesson context, shared method or full instructions. Size each activity to about 1,500 characters of instructions and 1,500 of private explanations; use short excerpts, not long scenes.
+- This is a plan only: no workbook wrapper, finished activities, answer fields, hints, worked solutions or answer keys; each activity is generated separately from it and the public teaching cases.
+- Case assumptions use the case data's units (data in meters means assumptions in meters).
+- Qualitative worked examples give evidence in words, with digits only when declared as data.
+- If the outline cannot fit honestly, narrow it to one representative decision, say so in the guided scope and keep essential reasoning.
+- Supplied independent_package_defects make this the one bounded correction of an unpublished package: resolve every reported defect, keep the learning objective and do not repeat the rejected shape.
 
 {{include:tutorial_contract.txt}}
 
@@ -21,5 +23,5 @@ OUTPUT: one LessonPackageSeed JSON object with exactly workbook_title, teaching_
 
 {{include:tutorial_domain_qualitative.txt}}
 
-ILLUSTRATIVE SEED — a different topic; it shows shape and depth only. Never reuse its content:
+ILLUSTRATIVE SEED — another topic, showing shape and depth only. Never reuse its content:
 {"workbook_title":"Write a call to action readers follow","teaching_cases":[],"activity_briefs":[{"id":"guided","kind":"practice","scope":"Guided decision on one vague closing sentence from an original fictional garden notice. Show a brief example and its analysis (what, when, how to respond), then ask the learner to select which of those elements a second vague closing lacks and rewrite it. Output: the selected elements and one rewritten sentence."},{"id":"transfer","kind":"transfer","scope":"Independent application to a different situation: an original fictional library volunteer email whose request is buried in the middle. The learner selects which sentences carry the request, then rewrites the call to action for a reader skimming on a phone. Differs from guided practice: the learner must first locate the request and adapt it to a new reader context."}]}

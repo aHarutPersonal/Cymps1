@@ -91,7 +91,11 @@ class WireFactory:
             else:
                 good = complete_group(self.models[key])
             usage = NS(prompt_tokens=31, completion_tokens=47, total_tokens=78)
-            if self.outcome == "recover" and attempt > 1:
+            if self.outcome == "no_finish" and attempt > 1:
+                events = [chunk(json.dumps(good), "stop"), NS(choices=[], usage=usage)]
+            elif self.outcome == "no_finish":
+                events = [chunk('{"partial": ', None), NS(choices=[], usage=usage)]
+            elif self.outcome == "recover" and attempt > 1:
                 events = [chunk(json.dumps(good), "stop"), NS(choices=[], usage=usage)]
             elif self.outcome in {"recover", "two_bad"}:
                 events = [chunk(DUPLICATE, "stop"), NS(choices=[], usage=usage)]
@@ -132,12 +136,12 @@ async def run_caller(operation, factory):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider", ["zai", "openlux"])
 @pytest.mark.parametrize("operation", ["package", "preflight", "review", "writer"])
-@pytest.mark.parametrize("outcome", ["recover", "two_bad", "value_error", "auth", "credit", "refusal"])
+@pytest.mark.parametrize("outcome", ["recover", "two_bad", "value_error", "auth", "credit", "refusal", "no_finish"])
 async def test_real_wire_errors_use_only_existing_bounded_caller_recovery(provider, operation, outcome, safe_trace):
     factory = WireFactory(provider, operation, outcome)
     accepted, result = await run_caller(operation, factory)
-    assert accepted is (outcome == "recover")
-    expected_calls = 2 if outcome in {"recover", "two_bad"} else 1
+    assert accepted is (outcome in {"recover", "no_finish"})
+    expected_calls = 2 if outcome in {"recover", "two_bad", "no_finish"} else 1
     assert factory.counts and all(count == expected_calls for count in factory.counts.values())
     assert all(stream.closed for stream in factory.streams)
     completed = [call.kwargs["response"] for call in safe_trace.call_args_list

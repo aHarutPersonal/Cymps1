@@ -36,26 +36,46 @@ def package_cases(package: dict | None) -> dict[str, dict[str, float]]:
 
 def resolve_literal_evidence(
     spans: dict[str, str], owners: dict[str, str], cases: dict[str, dict[str, float]],
-    *, units: dict[str, tuple] | None = None,
+    *, units: dict[str, tuple] | None = None, ownerless_teaching: bool = False,
+    unique_values: bool = False,
 ) -> tuple[list[LiteralFactCheck], list[str]]:
-    """Bind spans made only of their owner's data; return facts and resolved claim ids."""
+    """Bind spans made only of their owner's data; return facts and resolved claim ids.
+
+    With ownerless_teaching, a span without an owner (lesson prose) is bound
+    only when exactly one teaching case holds all its values; a value shared
+    by two teaching cases, or held only by a practice case, stays unbound.
+    With unique_values, a value held by two data of the case (rent and fee
+    both 1200) does not say which datum is stated, so the span stays unbound.
+    """
     facts, resolved = [], []
     for claim_id, span in spans.items():
-        data = cases.get(owners.get(claim_id, ""))
-        if not data or _CALCULATION_SIGNAL.search(span) or re.search(r"\bresult\b", span, re.I):
+        if _CALCULATION_SIGNAL.search(span) or re.search(r"\bresult\b", span, re.I):
             continue
         values = _numeric_values(span, units=(units or {}).get(claim_id, ()))
         if not values:
             continue
-        try:
-            by_value = {}
-            for datum_id, value in data.items():
-                by_value.setdefault(Decimal(str(value)), []).append(datum_id)
-        except InvalidOperation:
+        owner = owners.get(claim_id)
+        if owner is None and ownerless_teaching:
+            matches = [case_id for case_id, data in cases.items()
+                       if case_id.startswith("teaching.") and values <= _by_value(data).keys()]
+            owner = matches[0] if len(matches) == 1 else None
+        data = cases.get(owner or "")
+        by_value = _by_value(data) if data else {}
+        if not by_value or not values <= by_value.keys():
             continue
-        if not values <= by_value.keys():
+        if unique_values and any(len(by_value[value]) != 1 for value in values):
             continue
         datum_ids = sorted({datum_id for value in values for datum_id in by_value[value]})
-        facts.append(LiteralFactCheck(claim_id=claim_id, case_id=owners[claim_id], datum_ids=datum_ids))
+        facts.append(LiteralFactCheck(claim_id=claim_id, case_id=owner, datum_ids=datum_ids))
         resolved.append(claim_id)
     return facts, resolved
+
+
+def _by_value(data: dict[str, float]) -> dict[Decimal, list[str]]:
+    by_value = {}
+    try:
+        for datum_id, value in data.items():
+            by_value.setdefault(Decimal(str(value)), []).append(datum_id)
+    except InvalidOperation:
+        return {}
+    return by_value

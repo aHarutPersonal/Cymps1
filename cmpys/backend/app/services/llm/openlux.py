@@ -20,6 +20,17 @@ from app.services.llm.client import LLMResponse, OpenAILLMClient
 logger = logging.getLogger(__name__)
 
 
+class IncompleteStreamError(ValueError):
+    """The stream closed without any finish reason: a transport fault, not a model answer."""
+
+
+_INCOMPLETE_STREAM = re.compile(r"(?:zai|OpenLux) request failed \(IncompleteStreamError; finish=missing\)")
+
+
+def incomplete_stream_error(error: str | None) -> bool:
+    return bool(error) and _INCOMPLETE_STREAM.fullmatch(error) is not None
+
+
 class JSONProtocolError(ValueError):
     """A completed document violates the strict JSON response contract.
 
@@ -280,6 +291,8 @@ class OpenLuxLLMClient(OpenAILLMClient):
                         finish = choice.finish_reason or finish
                         if content and on_chunk:
                             await on_chunk(text)
+            if finish is None:
+                raise IncompleteStreamError("Incomplete response")
             if finish != "stop":
                 raise ValueError("Incomplete response")
             transport_success = True

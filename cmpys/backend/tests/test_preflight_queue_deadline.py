@@ -168,6 +168,7 @@ async def test_provider_request_timeout_and_single_shared_retry_remain_bounded(m
 
         async def generate_json(self, **request):
             counts["started"] += 1
+            counts["semantic"] += issubclass(request["output_model"], PackageSemanticReview)
             try:
                 await asyncio.Event().wait()
             finally:
@@ -178,9 +179,12 @@ async def test_provider_request_timeout_and_single_shared_retry_remain_bounded(m
     failures, response, _ = await asyncio.wait_for(
         review_package(numeric_package(), {}, {}, client_factory=factory), .4)
     assert failures and response.error
-    assert counts == {"started": 2, "cancelled": 2}
+    # Both evidence scopes overlap the semantic call; the one shared retry is
+    # the semantic stage's, and the request cap still bounds the total.
+    assert counts == {"started": 4, "semantic": 2, "cancelled": 4}
+    assert response.effective_parameters["request_count"] == response.effective_parameters["max_requests"] == 4
     assert response.effective_parameters["shared_correction_used"] is True
-    assert local_limits.await_count == 2
+    assert local_limits.await_count == 4
 
 
 @pytest.mark.asyncio
@@ -199,6 +203,7 @@ async def test_caller_cancellation_cleans_active_request_and_records_one_unknown
             try:
                 await asyncio.Event().wait()
             finally:
+                counts["stopped"] += 1
                 stopped.set()
 
     factory = _deadline_client_factory(lambda **kwargs: Client(),
@@ -208,11 +213,13 @@ async def test_caller_cancellation_cleans_active_request_and_records_one_unknown
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(task, .3)
-    assert stopped.is_set() and counts["started"] == 1
-    local_limits.assert_awaited_once()
-    record = local_limits.await_args.kwargs
-    assert record["result_status"] == "preflight_cancelled"
-    assert record["response"].completion_tokens is None
+    # An overlapping evidence call may also have started (job capacity 2):
+    # every started call is stopped and recorded exactly once as unknown usage.
+    assert stopped.is_set() and 1 <= counts["started"] == counts["stopped"] <= 2
+    assert local_limits.await_count == counts["started"]
+    for call in local_limits.await_args_list:
+        assert call.kwargs["result_status"] == "preflight_cancelled"
+        assert call.kwargs["response"].completion_tokens is None
 
 
 @pytest.mark.asyncio
@@ -292,9 +299,14 @@ async def test_received_negative_stops_globally_queued_scope_before_usage_record
         release_recording.set()
         failures, response, _ = await asyncio.wait_for(task, .5)
         assert response.error is None and response.data["acceptable"] is False
-        assert failures == ["practice.guided: " + defect]
+        # The evidence model's free text is not forwarded as repair guidance;
+        # only the coded, deterministic description is (see test_preflight_fix_evidence_guidance).
+        coded = [snapshots[-1]["rejection"]["issues"][0]["description"]]
+        assert coded[0].startswith("Numeric evidence for spans ") and "evidence_model_rejected" in coded[0]
+        assert defect not in coded[0]
+        assert failures == ["practice.guided: " + coded[0]]
         assert response.effective_parameters["shared_correction_used"] is False
-        assert snapshots[-1]["rejection"]["issues"] == [{"target": "practice.guided", "description": defect}]
+        assert snapshots[-1]["rejection"]["issues"] == [{"target": "practice.guided", "description": coded[0]}]
         assert [call.kwargs["operation"] for call in local_limits.await_args_list] == [
             "package_preflight_semantic", "package_preflight_evidence_guided"]
     finally:

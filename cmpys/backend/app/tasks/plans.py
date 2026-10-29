@@ -216,7 +216,90 @@ def _deadline_client_factory(client_factory, *, deadline: float):
         timeout = min(float(kwargs.get("timeout", remaining)), remaining)
         return DeadlineClient(client_factory(**{**kwargs, "timeout": timeout}), timeout)
 
+    factory.capacity = capacity
     return factory
+
+
+# review_package runs semantic plus one evidence call per owner at once; a
+# tutorial has two activities, so three requests at peak.
+_PREFLIGHT_PEAK_REQUESTS = 3
+
+
+class _SpeculativeDraft:
+    """A first tutorial draft written while its package preflight is running.
+
+    It starts only once the preflight sends a provider request, checkpoints
+    nothing, and is used only by ``take`` with identical writer inputs. Every
+    other outcome cancels it and records its usage as discarded.
+    """
+
+    def __init__(self, stage_prefix: str):
+        self.stage_prefix = stage_prefix
+        self.started = asyncio.Event()
+        self.calls: list[tuple[str, Any, str, str, str | None]] = []
+        self.sections: dict[str, Any] | None = None
+        self.inputs: Any = None
+        self.task: asyncio.Task | None = None
+
+    def client_factory(self, factory):
+        draft = self
+
+        class Signal:
+            def __init__(self, client):
+                self._client = client
+
+            def __getattr__(self, name):
+                return getattr(self._client, name)
+
+            async def generate_json(self, **kwargs):
+                draft.started.set()
+                return await self._client.generate_json(**kwargs)
+
+        return lambda **kwargs: Signal(factory(**kwargs))
+
+    async def hold(self, sections: dict[str, Any]) -> None:
+        self.sections = copy.deepcopy(sections)
+
+    def start(self, inputs: Any, write: Callable[[], Awaitable[Any]]) -> None:
+        async def run():
+            await self.started.wait()
+            response, _ = await write()
+            return response
+        self.inputs = copy.deepcopy(inputs)
+        self.task = asyncio.create_task(run())
+
+    async def take(self, inputs: Any, step_calls: list) -> Any:
+        """The finished draft when written from exactly ``inputs``, else None."""
+        if self.task is None or inputs != self.inputs or not self.started.is_set():
+            await self.discard(step_calls)
+            return None
+        try:
+            response = await asyncio.shield(self.task)
+        except asyncio.CancelledError:
+            if not self.task.done():
+                raise  # The lesson itself was cancelled; ``discard`` cleans up.
+            response = None
+        except Exception:
+            response = None
+        if response is None or response.error:
+            await self.discard(step_calls)
+            return None
+        step_calls.extend(self.calls)
+        self.task, self.calls = None, []
+        return response
+
+    async def discard(self, step_calls: list) -> None:
+        if self.task is None:
+            return
+        task, self.task = self.task, None
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        speculative = self.stage_prefix.replace("_draft_", "_speculative_draft_", 1)
+        step_calls.extend((stage.replace(self.stage_prefix, speculative, 1), response, tier,
+                           "lesson_section_speculative_discarded", model)
+                          for stage, response, tier, _, model in self.calls)
+        self.calls, self.sections = [], None
 
 
 def _writing_thinking_level(tier: str) -> str:
@@ -1226,6 +1309,23 @@ async def _generate_plan_item_details_parallel(
         list[tuple[str, Any, str, str, str | None]],
         str | None,
     ]:
+        speculation = _SpeculativeDraft(f"parallel_lesson_{str(step.get('id') or '')}_draft_1_")
+        try:
+            return await write_lesson_body(step, step_calls, speculation)
+        finally:
+            # Every path that did not use the draft (returns, errors, cancellation)
+            # stops it and keeps its possibly billed usage.
+            await speculation.discard(step_calls)
+
+    async def write_lesson_body(
+        step: dict[str, Any],
+        step_calls: list[tuple[str, Any, str, str, str | None]],
+        speculation: _SpeculativeDraft,
+    ) -> tuple[
+        dict[str, Any] | None,
+        list[tuple[str, Any, str, str, str | None]],
+        str | None,
+    ]:
         allotted_minutes = tutorial_allocations.get(str(step.get("id")), target_step_minutes)
         capacity_allocation = None
         if tutorial:
@@ -1240,7 +1340,7 @@ async def _generate_plan_item_details_parallel(
         reading_budget = 4 if allotted_minutes == 8 else 3
         practice_target = allotted_minutes - reading_budget if tutorial else target_practice_minutes
         prior_error = ""
-        package_repair_used = False
+        package_repairs_used = 0
         semantic_repair_used = False
         package_timing_changes = []
         expected_id = str(step.get("id") or "")
@@ -1345,11 +1445,11 @@ async def _generate_plan_item_details_parallel(
                     package_timing_changes = copy.deepcopy(review_context.get("activity_timing_changes") or [])
             return review_context
 
-        async def review_package_checkpoint(review_context: dict[str, Any]):
+        async def review_package_checkpoint(review_context: dict[str, Any], *, client_factory=factory):
             from app.services.planning.package_preflight import review_package
             review_context = await restore_review_context(review_context)
             return await review_package(
-                package, step, review_context, client_factory=factory,
+                package, step, review_context, client_factory=client_factory,
                 existing_review=resumed_review, on_review=save_review_checkpoint,
             )
 
@@ -1378,6 +1478,26 @@ async def _generate_plan_item_details_parallel(
                     raise DetailArtifactPublicationSuperseded("Private draft checkpoint was superseded")
 
         from app.services.planning.package_builder import generate_initial_package
+        fresh_package = package is None
+        # The repair count is not checkpointed. A package resumed from storage
+        # may already have spent repairs, so it keeps today's single repair.
+        max_package_repairs = settings.tutorial_package_repairs if tutorial and fresh_package else 1
+        # Workload changes are always described against the pre-repair package,
+        # so a second repair cannot hide a relabel made by the first.
+        timing_baseline = None
+
+        def may_repair_package(verdict) -> bool:
+            # The first repair keeps today's rules. A further one needs the
+            # verdict's validated repair targets: the defects named precisely.
+            if package_repairs_used == 0:
+                return True
+            return package_repairs_used < max_package_repairs and bool(
+                (getattr(verdict, "effective_parameters", None) or {}).get("validated_repair_targets"))
+
+        def repair_stage(name: str) -> str:
+            stage = f"parallel_lesson_{expected_id}_{name}"
+            return stage if package_repairs_used <= 1 else f"{stage}_{package_repairs_used}"
+
         if package is None:
             package, package_response, package_client = await generate_initial_package(
                 step, {"lesson_format": lesson_format, "allotted_lesson_minutes": capacity_allocation, "goal": user_goal, "mentor_evidence": idol_evidence,
@@ -1396,16 +1516,101 @@ async def _generate_plan_item_details_parallel(
             "lesson_format": lesson_format, "allotted_lesson_minutes": capacity_allocation, "goal": user_goal, "mentor_evidence": idol_evidence, "learner_context": lesson_context,
         })
         await save_package_checkpoint(approved=preflight_passed)
+
+        def writer_tier(attempt: int) -> str:
+            return active_tier if attempt == 0 else "balanced" if active_tier == "fast" else "quality"
+
+        def build_lesson_prompt(prior_error: str) -> str:
+            lesson_prompt = load_and_render(
+                "plan_item_detail_lesson.txt",
+                {
+                    "task_title": task_title,
+                    "mission_hours": mission_hours,
+                    "user_goal": user_goal,
+                    "learning_preferences": learning_preferences,
+                    "idol_name": idol_name,
+                    "idol_evidence_json": idol_evidence,
+                    "session_context": session_context,
+                    "step_json": step,
+                    "materials_json": materials,
+                    "prior_error": prior_error,
+                    "target_lesson_minutes": allotted_minutes,
+                    "target_practice_minutes": practice_target,
+                },
+                strict=True,
+            )
+            from app.services.planning.package_preflight import outline_guidance, outline_reconciliation
+            for issue in outline_guidance(resumed_review):
+                lesson_prompt += "\nOUTLINE RECONCILIATION: " + outline_reconciliation(issue) + "\n"
+            if tutorial:
+                lesson_prompt += (f"\nThis tutorial's planning target is {allotted_minutes} minutes. "
+                                  "Its actual reading plus independently reviewed practice must take 5–8 minutes. "
+                                  "A planning target is not an exact duration requirement. Keep the approved "
+                                  "exercise scope and honest timing unchanged; never pad or inflate them.\n")
+                if capacity_allocation is not None:
+                    lesson_prompt += (
+                        f"The remaining mission capacity allocates {capacity_allocation} minutes to this "
+                        "unpublished tutorial. Its newly scoped package must fit that allocation with "
+                        "honest reading and independently reviewed practice. Preserve the learning "
+                        "objective and both guided and independent practice; never relabel estimates.\n"
+                    )
+            return lesson_prompt
+
+        def writer_inputs(lesson_prompt: str, lesson_tier: str) -> dict[str, Any]:
+            # Everything the writer reads that a preflight could change.
+            return {"prompt": lesson_prompt, "tier": lesson_tier, "package": package.writer_context(),
+                    "sections": resumed_sections, "minutes": capacity_allocation}
+
+        async def write_sections(inputs: dict[str, Any], attempt: int, call_records, on_sections):
+            from app.services.planning.lesson_writer import generate_lesson_sections
+            return await generate_lesson_sections(
+                system_prompt=system_prompt,
+                lesson_prompt=inputs["prompt"],
+                package_context=inputs["package"],
+                lesson_format=lesson_format,
+                allotted_lesson_minutes=inputs["minutes"],
+                lesson_title=str(step.get("title") or ""),
+                client_factory=factory,
+                tier=inputs["tier"],
+                deadline=deadline,
+                call_prefix=f"parallel_lesson_{expected_id}_draft_{attempt + 1}",
+                call_records=call_records,
+                completed_sections=inputs["sections"],
+                on_sections=on_sections,
+            )
+
         if expected_id not in packages and not preflight_passed:
+            preflight_factory = factory
+            old_saved_lesson = any(s.get("id") == expected_id and s.get("lesson_content")
+                                   for s in (existing_checkpoint or {}).get("steps", []))
+            if (tutorial and settings.tutorial_speculative_writer and fresh_package
+                    and not resumed_sections and resumed_review is None and not old_saved_lesson
+                    and getattr(factory, "capacity", 0) >= active_lessons * (_PREFLIGHT_PEAK_REQUESTS + 1)):
+                # Most fresh packages are approved unchanged: draft the prose
+                # while the preflight runs, but never checkpoint or use it
+                # unless that approval leaves every writer input identical.
+                speculative_inputs = copy.deepcopy(writer_inputs(build_lesson_prompt(""), writer_tier(0)))
+                speculation.start(speculative_inputs, lambda: write_sections(
+                    speculative_inputs, 0, speculation.calls, speculation.hold))
+                preflight_factory = speculation.client_factory(factory)
             # Check the small exercise contract before spending on long prose.
-            failures, preflight_response, preflight_client = await review_package_checkpoint(package_context)
+            failures, preflight_response, preflight_client = await review_package_checkpoint(
+                package_context, client_factory=preflight_factory)
             if (getattr(preflight_response, "effective_parameters", None) or {}).get("synthetic_local_validation") is not True:
                 step_calls.append((f"parallel_lesson_{expected_id}_package_preflight", preflight_response,
                                    "balanced", "exercise_contract_preflight", getattr(preflight_client, "model", None)))
             if failures:
+                await speculation.discard(step_calls)
                 if preflight_response.error:
                     return None, step_calls, "; ".join(failures)
-                package_repair_used = True
+            while failures:
+                # An unavailable recheck or a spent/untargeted budget ends the
+                # run; every repair is followed by the complete preflight again.
+                if preflight_response.error or not may_repair_package(preflight_response):
+                    return None, step_calls, "; ".join(failures)
+                package_repairs_used += 1
+                if timing_baseline is None:
+                    timing_baseline = package.writer_context()["practice"]
                 # Outline issues are never repair targets: the preflight
                 # returns them as reconciling guidance inside ``failures``.
                 repair_targets = (getattr(preflight_response, "effective_parameters", None) or {}).get("validated_repair_targets")
@@ -1415,7 +1620,6 @@ async def _generate_plan_item_details_parallel(
                     # A validated whole-package defect has no narrower activity
                     # owner. Rebuild this unpublished package once, then run the
                     # complete independent preflight again before writing prose.
-                    prior_public_package = package.writer_context()
                     package, repaired_response, repair_client = await generate_initial_package(
                         step, {**package_context,
                                "component_recovery": "bounded_per_component",
@@ -1429,7 +1633,7 @@ async def _generate_plan_item_details_parallel(
                     await clear_sections_checkpoint()
                     from app.services.planning.workload_contract import activity_timing_changes
                     package_timing_changes = activity_timing_changes(
-                        prior_public_package["practice"], package.writer_context()["practice"],
+                        timing_baseline, package.writer_context()["practice"],
                     )
                     revision_context = {
                         **package_context,
@@ -1442,7 +1646,7 @@ async def _generate_plan_item_details_parallel(
                         client_factory=factory, prior_package=package, defects=failures,
                         repair_targets=(getattr(preflight_response, "effective_parameters", None) or {}).get("validated_repair_targets"),
                     )
-                    step_calls.append((f"parallel_lesson_{expected_id}_package_repair", repaired_response,
+                    step_calls.append((repair_stage("package_repair"), repaired_response,
                                        "balanced", "exercise_contract_repair", getattr(repair_client, "model", None)))
                     if package is None:
                         return None, step_calls, repaired_response.error or "Exercise contract correction failed"
@@ -1453,7 +1657,7 @@ async def _generate_plan_item_details_parallel(
                         await save_sections_checkpoint(resumed_sections)
                     from app.services.planning.workload_contract import activity_timing_changes
                     package_timing_changes = activity_timing_changes(
-                        prior_public_package["practice"], package.writer_context()["practice"],
+                        timing_baseline, package.writer_context()["practice"],
                     )
                     revision_context = {
                         **package_context,
@@ -1461,10 +1665,8 @@ async def _generate_plan_item_details_parallel(
                     }
                 failures, preflight_response, preflight_client = await review_package_checkpoint(revision_context)
                 if (getattr(preflight_response, "effective_parameters", None) or {}).get("synthetic_local_validation") is not True:
-                    step_calls.append((f"parallel_lesson_{expected_id}_package_preflight_recheck", preflight_response,
+                    step_calls.append((repair_stage("package_preflight_recheck"), preflight_response,
                                        "balanced", "exercise_contract_preflight", getattr(preflight_client, "model", None)))
-                if failures:
-                    return None, step_calls, "; ".join(failures)
             await save_package_checkpoint(approved=True)
         # Old checkpoints are re-reviewed against the current gates rather than
         # trusting a version stamp or discarding valid long-form teaching.
@@ -1512,63 +1714,20 @@ async def _generate_plan_item_details_parallel(
             if reusable_sections:
                 await save_sections_checkpoint(reusable_sections)
 
-        for attempt in range(2):
-            lesson_tier = (
-                active_tier
-                if attempt == 0
-                else "balanced"
-                if active_tier == "fast"
-                else "quality"
-            )
-            lesson_prompt = load_and_render(
-                "plan_item_detail_lesson.txt",
-                {
-                    "task_title": task_title,
-                    "mission_hours": mission_hours,
-                    "user_goal": user_goal,
-                    "learning_preferences": learning_preferences,
-                    "idol_name": idol_name,
-                    "idol_evidence_json": idol_evidence,
-                    "session_context": session_context,
-                    "step_json": step,
-                    "materials_json": materials,
-                    "prior_error": prior_error,
-                    "target_lesson_minutes": allotted_minutes,
-                    "target_practice_minutes": practice_target,
-                },
-                strict=True,
-            )
-            from app.services.planning.package_preflight import outline_guidance, outline_reconciliation
-            for issue in outline_guidance(resumed_review):
-                lesson_prompt += "\nOUTLINE RECONCILIATION: " + outline_reconciliation(issue) + "\n"
-            if tutorial:
-                lesson_prompt += (f"\nThis tutorial's planning target is {allotted_minutes} minutes. "
-                                  "Its actual reading plus independently reviewed practice must take 5–8 minutes. "
-                                  "A planning target is not an exact duration requirement. Keep the approved "
-                                  "exercise scope and honest timing unchanged; never pad or inflate them.\n")
-                if capacity_allocation is not None:
-                    lesson_prompt += (
-                        f"The remaining mission capacity allocates {capacity_allocation} minutes to this "
-                        "unpublished tutorial. Its newly scoped package must fit that allocation with "
-                        "honest reading and independently reviewed practice. Preserve the learning "
-                        "objective and both guided and independent practice; never relabel estimates.\n"
-                    )
-            from app.services.planning.lesson_writer import generate_lesson_sections
-            response, _ = await generate_lesson_sections(
-                system_prompt=system_prompt,
-                lesson_prompt=lesson_prompt,
-                package_context=package.writer_context(),
-                lesson_format=lesson_format,
-                allotted_lesson_minutes=capacity_allocation,
-                lesson_title=str(step.get("title") or ""),
-                client_factory=factory,
-                tier=lesson_tier,
-                deadline=deadline,
-                call_prefix=f"parallel_lesson_{expected_id}_draft_{attempt + 1}",
-                call_records=step_calls,
-                completed_sections=resumed_sections,
-                on_sections=save_sections_checkpoint,
-            )
+        # Two writer attempts; only a second package repair adds one rewrite.
+        writer_attempts = 2
+        for attempt in range(3):
+            if attempt >= writer_attempts:
+                break
+            inputs = writer_inputs(build_lesson_prompt(prior_error), writer_tier(attempt))
+            response = await speculation.take(inputs, step_calls) if attempt == 0 else None
+            if response is not None:
+                # The preflight approved exactly the inputs this draft used;
+                # checkpoint it now, as the writer would have on completion.
+                if speculation.sections:
+                    await save_sections_checkpoint(speculation.sections)
+            else:
+                response, _ = await write_sections(inputs, attempt, step_calls, save_sections_checkpoint)
             draft_sections = copy.deepcopy(response.data)
             if response.error:
                 # Each failed group has used its retry. Never multiply those
@@ -1807,12 +1966,15 @@ async def _generate_plan_item_details_parallel(
                 package_issues = review_response.data.get("package_issues", []) if isinstance(review_response.data, dict) else []
                 if failures and not package_issues:
                     await clear_sections_checkpoint()
-                if package_issues and package_repair_used:
+                if package_issues and not may_repair_package(review_response):
                     return None, step_calls, "Exercise contract review failed after correction: " + "; ".join(package_issues)
-                if package_issues and not review_response.error and not package_repair_used:
-                    # Transport retries do not consume the one contract repair.
+                rewrite_repaired_package = False
+                while package_issues and not review_response.error:
+                    # Transport retries do not consume a contract repair.
                     # Keep prose if the public contract did not change.
-                    package_repair_used = True
+                    package_repairs_used += 1
+                    if timing_baseline is None:
+                        timing_baseline = package.writer_context()["practice"]
                     response.semantic_accepted = False
                     response.critical_defect = True
                     response.error = "Exercise contract review failed: " + "; ".join(package_issues)
@@ -1841,13 +2003,13 @@ async def _generate_plan_item_details_parallel(
                             repair_targets=repair_targets,
                         )
                     if (getattr(repaired_response, "effective_parameters", None) or {}).get("synthetic_local_validation") is not True:
-                        step_calls.append((f"parallel_lesson_{expected_id}_package_repair", repaired_response,
+                        step_calls.append((repair_stage("package_repair"), repaired_response,
                                            "balanced", "exercise_contract_repair", getattr(repair_client, "model", None)))
                     if repaired_package is None:
                         return None, step_calls, repaired_response.error or response.error
                     from app.services.planning.workload_contract import activity_timing_changes
                     package_timing_changes = activity_timing_changes(
-                        package.writer_context()["practice"], repaired_package.writer_context()["practice"],
+                        timing_baseline, repaired_package.writer_context()["practice"],
                     )
                     public_package_unchanged = repaired_package.writer_context() == package.writer_context()
                     package = repaired_package
@@ -1859,7 +2021,7 @@ async def _generate_plan_item_details_parallel(
                         rebuilt_context = {**repair_context, "activity_timing_changes": package_timing_changes}
                         rebuilt_failures, rebuilt_review, rebuilt_client = await review_package_checkpoint(rebuilt_context)
                         if (getattr(rebuilt_review, "effective_parameters", None) or {}).get("synthetic_local_validation") is not True:
-                            step_calls.append((f"parallel_lesson_{expected_id}_scope_repair_preflight", rebuilt_review,
+                            step_calls.append((repair_stage("scope_repair_preflight"), rebuilt_review,
                                                "balanced", "exercise_contract_preflight", getattr(rebuilt_client, "model", None)))
                         if rebuilt_failures:
                             return None, step_calls, "; ".join(rebuilt_failures)
@@ -1868,7 +2030,8 @@ async def _generate_plan_item_details_parallel(
                     if not public_package_unchanged:
                         await clear_sections_checkpoint()
                         prior_error = "The exercise contract was corrected. Rewrite against the new supplied package."
-                        continue
+                        rewrite_repaired_package = True
+                        break
                     await save_sections_checkpoint(draft_sections)
                     # Only private keys/solutions changed. The learner-facing
                     # draft is still bound to exactly the same public contract.
@@ -1881,11 +2044,20 @@ async def _generate_plan_item_details_parallel(
                                  "lesson_package": package.review_context(),
                                  "activity_timing_changes": package_timing_changes},
                     )
-                    step_calls.append((f"parallel_lesson_{expected_id}_package_repair_review",
+                    step_calls.append((repair_stage("package_repair_review"),
                                        review_response, "balanced", "independent_content_review",
                                        getattr(review_client, "model", None)))
-                    if review_response.error or review_response.data.get("package_issues"):
+                    if review_response.error:
                         return None, step_calls, "; ".join(failures)
+                    package_issues = review_response.data.get("package_issues", [])
+                    if package_issues and not may_repair_package(review_response):
+                        return None, step_calls, "; ".join(failures)
+                if rewrite_repaired_package:
+                    if package_repairs_used > 1:
+                        # A second repair gets the same rewrite and final review
+                        # as the first, even when it was found by the last review.
+                        writer_attempts = max(writer_attempts, attempt + 2)
+                    continue
                 affected = review_response.data.get("affected_sections", []) if isinstance(review_response.data, dict) else []
                 if tutorial:
                     # A reviewer cannot assign a section the new tutorial does not have.
@@ -1985,6 +2157,10 @@ async def _generate_plan_item_details_parallel(
 
         return None, step_calls, prior_error or "lesson generation failed"
 
+    # Concurrent lessons share the job's provider slots; speculation may only
+    # use a slot no lesson's preflight could need.
+    active_lessons = 0
+
     async def write_tagged_lesson(
         step: dict[str, Any],
     ) -> tuple[
@@ -1994,12 +2170,16 @@ async def _generate_plan_item_details_parallel(
         str | None,
     ]:
         from app.services.llm.admission import admission_scope
+        nonlocal active_lessons
         step_calls: list[tuple[str, Any, str, str, str | None]] = []
+        active_lessons += 1
         with admission_scope("foreground" if step.get("id") == "step_1" else "background", admission_user_id):
             try:
                 lesson, step_calls, error = await write_lesson(step, step_calls)
             except PlanDetailDeadlineExceeded as exc:
                 lesson, error = None, str(exc)
+            finally:
+                active_lessons -= 1
         return str(step.get("id") or ""), lesson, step_calls, error
 
     pending_steps = [

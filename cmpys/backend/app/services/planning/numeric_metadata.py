@@ -6,6 +6,8 @@ from collections.abc import Iterable
 
 
 _MARKER = re.compile(r"\(([0-9]{1,3})\)|([0-9]{1,3})\)|([0-9]{1,3})․")
+_TASK_LABEL = re.compile(
+    r"\b(?P<label>Task|Step|Part|Question)[ \t]+(?P<index>[1-9]\d?)[ \t]*[:).]", re.I)
 _NATURAL_QUOTED = re.compile(
     r'"(?:\\.|[^"\\])*"|“[^”]*”|«[^»]*»|‘(?:[^’]|(?<=\w)’(?=\w))*’|'
     r"(?<!\w)'(?:[^'\n]|(?<=\w)'(?=\w))*'(?!\w)")
@@ -133,7 +135,48 @@ def structural_ordinal_intervals(source: str, units: Iterable[str] = (),
     Only marker bytes are returned; all item content remains unverified data.
     The caller must never concatenate separate fields to establish a sequence.
     """
-    if not isinstance(source, str) or not _MARKER.search(source) or _ambiguous_paired_quotes(source):
+    if (not isinstance(source, str) or not (_MARKER.search(source) or _TASK_LABEL.search(source))
+            or _ambiguous_paired_quotes(source)):
+        return []
+    # Numbered markers and a "Task|Step|Part|Question 1..N" label sequence are
+    # independent structures; each must be complete within this field.
+    return sorted(_numbered_marker_intervals(source, units, reviewed_articles=reviewed_articles)
+                  + _task_label_intervals(source, units, reviewed_articles=reviewed_articles))
+
+
+def _task_label_intervals(source: str, units: Iterable[str] = (),
+                          *, reviewed_articles: bool = False) -> list[tuple[int, int]]:
+    """A complete in-order ``Task 1: ... Task 2: ...`` instruction sequence.
+
+    Only the ordinal digits are returned, and only for one label word whose
+    occurrences at list/sentence boundaries are exactly 1..N, each followed by
+    ``:``, ``)`` or ``.`` and a non-quantity item start. A lone ``Task 3``,
+    ``Step 2 costs $40``, quoted labels and item content stay numeric claims.
+    """
+    if not _TASK_LABEL.search(source):
+        return []
+    unit_values = (units,) if isinstance(units, str) else units
+    normalized_units = tuple(" ".join(unit.split()) for unit in unit_values
+                             if isinstance(unit, str) and unit.strip())
+    by_label: dict[str, list[re.Match]] = {}
+    for match in _TASK_LABEL.finditer(source):
+        if _at_list_boundary(source, match.start()) and not quoted_or_unclosed_prefix(source, match.start()):
+            by_label.setdefault(match["label"].casefold(), []).append(match)
+    ranges: list[tuple[int, int]] = []
+    for matches in by_label.values():
+        if (len(matches) >= 2 and [int(m["index"]) for m in matches] == list(range(1, len(matches) + 1))
+                and all(_meaningful_item_start(
+                            source, match.end(),
+                            matches[i + 1].start() if i + 1 < len(matches) else len(source),
+                            normalized_units, reviewed_articles=reviewed_articles)
+                        for i, match in enumerate(matches))):
+            ranges.extend(match.span("index") for match in matches)
+    return ranges
+
+
+def _numbered_marker_intervals(source: str, units: Iterable[str] = (),
+                               *, reviewed_articles: bool = False) -> list[tuple[int, int]]:
+    if not _MARKER.search(source):
         return []
     unit_values = (units,) if isinstance(units, str) else units
     normalized_units = tuple(" ".join(unit.split()) for unit in unit_values

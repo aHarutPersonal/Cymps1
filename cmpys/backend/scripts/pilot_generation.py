@@ -4,7 +4,9 @@ Run from the backend directory with PYTHONPATH=. and an explicit --max-usd.
 The cap uses configured conservative provider prices, not an invoice. A request
 reserves UTF-8 byte length (an intentionally loose token bound), wire overhead,
 and the entire visible + reasoning output ceiling before it can leave the process.
-Unknown usage retains its reservation. No SDK retries or provider fallback.
+Unknown usage retains its reservation, except a cancellation that received no
+stream event or usage, which books only its input part. No SDK retries or
+provider fallback. --replay-from serves recorded responses free, marked "replayed".
 The append-only ledger prevents a restart from silently resetting the cap.
 """
 import argparse
@@ -95,16 +97,155 @@ class Budget:
         self.append({**metadata, "id": request_id, "status": "reserved", "reserved_usd": amount})
         return request_id
 
-    def finish(self, request_id, actual, metadata):
-        if actual is not None and (not math.isfinite(actual) or actual < 0):
-            raise ValueError("Invalid billed cost; keep the pending reservation")
+    def finish(self, request_id, actual, metadata, *, input_only_usd=None):
+        """Book a settled request. Unknown usage keeps the whole reservation,
+        except a cancellation the caller proved saw no response or usage
+        (``input_only_usd``): the prompt may be billed, no output was produced."""
+        for amount in (actual, input_only_usd):
+            if amount is not None and (not math.isfinite(amount) or amount < 0):
+                raise ValueError("Invalid billed cost; keep the pending reservation")
         reserved = self.pending.pop(request_id)
-        charged = reserved if actual is None else actual
+        if actual is not None:
+            charged, basis = actual, "actual"
+        elif input_only_usd is not None:
+            charged, basis = min(input_only_usd, reserved), "input_only_cancelled"
+        else:
+            charged, basis = reserved, "full_reserve"
         self.spent += charged
         self.append({**metadata, "id": request_id, "status": "finished", "charged_usd": charged,
-                     "usage_unknown": actual is None})
+                     "usage_unknown": actual is None, "charged_basis": basis})
         if charged > reserved:
             raise RuntimeError("Usage exceeded conservative reservation; pilot stopped")
+
+    def record_replay(self, metadata):
+        """A recorded response served again: nothing was sent, nothing is charged."""
+        request_id = str(uuid4())
+        self.append({**metadata, "id": request_id, "status": "finished", "charged_usd": 0.0,
+                     "usage_unknown": False, "charged_basis": "replayed"})
+        return request_id
+
+
+def _cancelled_before_response(cancelled, response, details):
+    """True only for a cancellation that observed no stream event, text or usage.
+
+    A stream that had started may already have produced billable reasoning or
+    visible output, so it keeps the whole reservation like any other unknown.
+    """
+    return (cancelled and response is None and details.get("first_event_ms") is None
+            and details.get("first_content_ms") is None and not details.get("response_chars")
+            and all(details.get(key) is None for key in ("prompt_tokens", "completion_tokens", "total_tokens")))
+
+
+class RecordedResponses:
+    """Settled, error-free responses of an earlier run, served by request hash.
+
+    Keyed by (scenario_id, run_id, schema, request_sha256); each recording is
+    served at most once, so a hash recorded N times is served at most N times.
+    A recording that kept a system-prompt hash is served only for that prompt.
+    """
+
+    def __init__(self, directory):
+        directory = Path(directory)
+        self.entries = {}
+        for line in (directory / "usage.jsonl").read_text().splitlines():
+            row = json.loads(line)
+            if row.get("status") != "finished" or row.get("error") or not row.get("request_sha256"):
+                continue
+            path = directory / (str(row["id"]) + "-response.json")
+            if not path.exists():
+                continue
+            saved = json.loads(path.read_text())
+            if saved.get("error") or saved.get("request_sha256", row["request_sha256"]) != row["request_sha256"]:
+                continue
+            key = (row.get("scenario_id"), row.get("run_id"), row.get("schema"), row["request_sha256"])
+            self.entries.setdefault(key, []).append((row, saved))
+
+    def take(self, stage, schema_name, request_sha256, system_sha256):
+        if not stage.get("replay_run_id"):
+            return None
+        queue = self.entries.get((stage.get("scenario_id"), stage["replay_run_id"], schema_name, request_sha256), [])
+        for index, (row, saved) in enumerate(queue):
+            if row.get("system_sha256", system_sha256) == system_sha256:
+                return queue.pop(index)
+        return None
+
+
+def guard_client(client, *, budget, stage, output_dir, token_rates, reasoning_reserve, estimate_cost,
+                 recorded=None):
+    """Replace ``client.generate_json`` with the budget-guarded (or replayed) call."""
+    from app.services.llm.client import LLMResponse
+
+    generate = client.generate_json
+
+    async def guarded(*, system_prompt, user_prompt, output_model=None, **kwargs):
+        schema_name = output_model.__name__ if output_model else None
+        request_details = {**_request_diagnostics(user_prompt, schema_name),
+                           "system_sha256": hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()}
+        served = None if recorded is None else recorded.take(
+            stage, schema_name, request_details["request_sha256"], request_details["system_sha256"])
+        if served is not None:
+            row, saved = served
+            response = LLMResponse(
+                data=json.loads(json.dumps(saved["data"])), raw_response=saved.get("visible_response"),
+                finish_reason=saved.get("finish_reason"), model=row.get("model") or client.model,
+                provider=getattr(client, "provider_name", None),
+                **{key: row.get(key) for key in ("prompt_tokens", "completion_tokens", "total_tokens",
+                    "thoughts_tokens", "duration_ms", "first_event_ms", "first_content_ms", "response_chars")},
+                effective_parameters=dict(row.get("effective_parameters") or {}),
+                transport_success=True, json_valid=True)
+            request_id = budget.record_replay({**stage, "model": response.model, **request_details,
+                "schema": schema_name, "replayed_from": row["id"], "response_received": True,
+                **{key: getattr(response, key) for key in ("finish_reason", "prompt_tokens", "completion_tokens",
+                    "total_tokens", "thoughts_tokens", "duration_ms", "error", "effective_parameters")}})
+            (Path(output_dir) / (request_id + "-response.json")).write_text(json.dumps({
+                "schema": schema_name, "data": saved["data"], "error": None,
+                "visible_response": response.raw_response, "finish_reason": response.finish_reason,
+                "replayed_from": row["id"], **request_details,
+            }, ensure_ascii=False, indent=2))
+            return response
+        schema = output_model.model_json_schema() if output_model else kwargs.get("json_schema", {})
+        input_bound = len((system_prompt + user_prompt + json.dumps(schema)).encode()) + 8192
+        output_bound = (client.max_tokens or 4096) + reasoning_reserve
+        rates = token_rates(input_bound)
+        # Additional margin protects the account from small rate/rounding differences.
+        input_reserved = input_bound * rates[0] / 1_000_000 * 1.25
+        reserved = input_reserved + output_bound * rates[1] / 1_000_000 * 1.25
+        request_id = budget.reserve(reserved, {**stage, "model": client.model,
+            **request_details,
+            "input_bound": input_bound, "output_bound": output_bound,
+            "schema": schema_name})
+        response = None
+        cancelled = False
+        previous_attempt = getattr(client, "last_attempt", None)
+        attempt_started = time.perf_counter()
+        try:
+            response = await generate(system_prompt=system_prompt, user_prompt=user_prompt,
+                                      output_model=output_model, **kwargs)
+            return response
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
+        finally:
+            actual = None
+            if response is not None and response.prompt_tokens is not None and response.total_tokens is not None:
+                actual = estimate_cost(response)
+            # Synthetic content only. Keep visible structured drafts for
+            # reproducible failures; never retain provider reasoning.
+            if response is not None:
+                (Path(output_dir) / (request_id + "-response.json")).write_text(json.dumps({
+                    "schema": schema_name,
+                    "data": response.data, "error": response.error,
+                    "visible_response": response.raw_response,
+                    "finish_reason": response.finish_reason,
+                    **request_details,
+                }, ensure_ascii=False, indent=2))
+            details = _attempt_diagnostics(response, client, previous_attempt, attempt_started, schema_name)
+            budget.finish(request_id, actual, {**stage, "model": client.model, **request_details, **details},
+                          input_only_usd=input_reserved if _cancelled_before_response(cancelled, response, details)
+                          else None)
+
+    client.generate_json = guarded
+    return client
 
 
 async def run(args):
@@ -159,56 +300,31 @@ async def run(args):
         budget.append({"id": str(uuid4()), "status": "finished", "charged_usd": 0,
                        "resumed_request": request_id})
 
+    replay_from = getattr(args, "replay_from", None)
+    if replay_from is not None and not args.tutorial:
+        raise ValueError("--replay-from applies to tutorial mode only")
+    recorded = RecordedResponses(replay_from) if replay_from is not None else None
+
     def factory(**options):
         client = get_llm_client(**{**options, "allow_fallback": False})
-        generate = client.generate_json
-        async def guarded(*, system_prompt, user_prompt, output_model=None, **kwargs):
+        guard_client(client, budget=budget, stage=stage, output_dir=args.output,
+            token_rates=lambda bound: price_card_for_model(client.model, settings.llm_provider).token_rates(bound),
+            reasoning_reserve=getattr(settings, settings.llm_provider + "_reasoning_token_reserve"),
+            estimate_cost=lambda response: estimate_cost_usd(model=client.model, provider=settings.llm_provider,
+                prompt_tokens=response.prompt_tokens, completion_tokens=response.completion_tokens,
+                total_tokens=response.total_tokens),
+            recorded=recorded)
+        guarded = client.generate_json
+        async def resumable(*, system_prompt, user_prompt, output_model=None, **kwargs):
             nonlocal replay
             if replay is not None:
                 if output_model is not LessonPackage or stage.get("stage") != "package":
                     raise RuntimeError("Unexpected request before truncated package recovery")
                 previous, replay = replay, None
                 return previous
-            schema = output_model.model_json_schema() if output_model else kwargs.get("json_schema", {})
-            input_bound = len((system_prompt + user_prompt + json.dumps(schema)).encode()) + 8192
-            reserve_tokens = getattr(settings, settings.llm_provider + "_reasoning_token_reserve")
-            output_bound = (client.max_tokens or 4096) + reserve_tokens
-            rates = price_card_for_model(client.model, settings.llm_provider).token_rates(input_bound)
-            # Additional margin protects the account from small rate/rounding differences.
-            reserved = (input_bound * rates[0] + output_bound * rates[1]) / 1_000_000 * 1.25
-            request_details = _request_diagnostics(user_prompt, output_model.__name__ if output_model else None)
-            request_id = budget.reserve(reserved, {**stage, "model": client.model,
-                **request_details,
-                "input_bound": input_bound, "output_bound": output_bound,
-                "schema": output_model.__name__ if output_model else None})
-            response = None
-            previous_attempt = getattr(client, "last_attempt", None)
-            attempt_started = time.perf_counter()
-            try:
-                response = await generate(system_prompt=system_prompt, user_prompt=user_prompt,
-                                          output_model=output_model, **kwargs)
-                return response
-            finally:
-                actual = None
-                if response is not None and response.prompt_tokens is not None and response.total_tokens is not None:
-                    actual = estimate_cost_usd(model=client.model, provider=settings.llm_provider,
-                        prompt_tokens=response.prompt_tokens, completion_tokens=response.completion_tokens,
-                        total_tokens=response.total_tokens)
-                # Synthetic content only. Keep visible structured drafts for
-                # reproducible failures; never retain provider reasoning.
-                if response is not None:
-                    (args.output / (request_id + "-response.json")).write_text(json.dumps({
-                        "schema": output_model.__name__ if output_model else None,
-                        "data": response.data, "error": response.error,
-                        "visible_response": response.raw_response,
-                        "finish_reason": response.finish_reason,
-                        **request_details,
-                    }, ensure_ascii=False, indent=2))
-                budget.finish(request_id, actual, {**stage, "model": client.model,
-                    **request_details,
-                    **_attempt_diagnostics(response, client, previous_attempt, attempt_started,
-                        output_model.__name__ if output_model else None)})
-        client.generate_json = guarded
+            return await guarded(system_prompt=system_prompt, user_prompt=user_prompt,
+                                 output_model=output_model, **kwargs)
+        client.generate_json = resumable
         return client
 
     cases = json.loads((Path(__file__).parents[1] / "tests/fixtures/generation_scenarios.json").read_text())
@@ -328,11 +444,37 @@ async def run(args):
                       "cap_usd": budget.cap, "promotion": "not permitted by a small unadjudicated pilot"}), flush=True)
 
 
+_TITLE_BREAKS = {"using", "from", "for", "of", "with", "in", "on", "by", "to", "into", "via", "through", "while"}
+_TITLE_DANGLING = _TITLE_BREAKS | {"a", "an", "the", "and", "or"}
+
+
+def outline_title(goal: str, *, aim: int = 44, limit: int = 60) -> str:
+    """A complete lesson title from a scenario goal, as the outline contract asks.
+
+    The contract aims for fewer than 45 characters and allows 60. A longer
+    goal is cut before a qualifying phrase ("... using a fictional ledger"),
+    never mid-phrase, so the semantic review sees a complete title.
+    """
+    words = goal.split()
+    # The longest prefix of three or more words that ends before a qualifying phrase.
+    natural = [" ".join(words[:end]) for end in range(len(words) - 1, 2, -1)
+               if words[end].lower() in _TITLE_BREAKS and words[end - 1].lower() not in _TITLE_DANGLING]
+    for bound in (aim, limit):
+        if len(goal) <= bound:
+            return goal
+        fitting = [title for title in natural if len(title) <= bound]
+        if fitting:
+            return fitting[0]
+    while words and (len(" ".join(words)) > limit or words[-1].lower() in _TITLE_DANGLING):
+        words.pop()
+    return " ".join(words)
+
+
 def tutorial_outline(case: dict) -> dict:
     """A one-tutorial tutorial_v1 scaffold for a scenario, validated like a generated one."""
     from app.services.llm.schemas import PlanTutorialOutlineOutput
 
-    title = case["goal"] if len(case["goal"]) <= 45 else case["goal"][:46].rsplit(" ", 1)[0]
+    title = outline_title(case["goal"])
     # Explicit markers keep the scaffold valid for baseline code, where they are required.
     step = {"id": "step_1", "lesson_format": "tutorial_v1", "title": title,
             "description": "Learn one concept, apply it to a supplied case, then transfer it to a new case.",
@@ -360,6 +502,9 @@ async def _run_tutorial_cases(args, selected, factory, budget, stage, load_and_r
             if artifact_path.exists():
                 continue
             stage.update(scenario_id=case["id"], stage="tutorial_pipeline", tier="balanced", run_id=run_id)
+            if getattr(args, "replay_from", None) is not None:
+                # Repeat N replays the recorded run N (default "candidate-N") of --replay-from.
+                stage["replay_run_id"] = args.replay_run_id.format(n=repeat)
             spent_before, started = budget.spent, time.perf_counter()
             validations, packages = {}, {}
             error, lesson, calls = None, None, []
@@ -532,6 +677,11 @@ if __name__ == "__main__":
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--scenarios", default="", help="Comma-separated scenario ids, or 'all' (tutorial mode)")
     parser.add_argument("--arm", default="candidate", choices=["baseline", "candidate", "fixes"])
+    parser.add_argument("--replay-from", type=Path,
+                        help="Tutorial mode: serve settled, error-free responses recorded in this pilot "
+                             "directory by request hash (free); every other request goes live under the cap")
+    parser.add_argument("--replay-run-id", default="candidate-{n}",
+                        help="Recorded run replayed by repeat {n} (default candidate-{n})")
     parser.add_argument("--outline", action="store_true",
                         help="Compare the tutorial outline request at medium vs low reasoning")
     asyncio.run(run(parser.parse_args()))

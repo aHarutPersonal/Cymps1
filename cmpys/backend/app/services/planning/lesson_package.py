@@ -17,6 +17,7 @@ from pathlib import Path
 from pydantic import Field, model_validator
 
 from app.services.content_quality import TUTORIAL_LESSON_FORMAT
+from app.services.llm.openlux import incomplete_stream_error
 
 from app.services.practice.contracts import (
     Activity, Datum, LegacyWorkedSolution, SolutionDocument, SolutionStep, StrictModel, Workbook,
@@ -404,6 +405,73 @@ def _check_private_repair_scope(repair: PrivatePackageRepair, scope: dict[str, s
             raise ValueError("Private field repair exceeds the independently rejected scope")
     if any(patch.activity_id not in scope for patch in repair.solution_patches):
         raise ValueError("Private solution repair exceeds the independently rejected scope")
+
+
+def _restates_current(package: LessonPackage, key: str, patch: dict) -> bool:
+    """True only when an ID-addressed patch repeats its target's current content exactly."""
+    activity = next((value for value in package.workbook.activities if value.id == patch.get("activity_id")), None)
+    if activity is None:
+        return False
+    current = activity.model_dump(mode="json")
+    if key == "solution_patches":
+        return set(patch) == {"activity_id", "worked_solution"} and patch["worked_solution"] == current["worked_solution"]
+    solution = current["worked_solution"]
+    if key == "solution_step_patches":
+        steps = solution.get("steps", []) if isinstance(solution, dict) else []
+        return (set(patch) == {"activity_id", "field_id", "explanation"}
+                and any(step["field_id"] == patch["field_id"] and step["explanation"] == patch["explanation"]
+                        for step in steps))
+    field = next((value for value in current["fields"] if value["id"] == patch.get("field_id")), None)
+    changes = {name: value for name, value in patch.items()
+               if name not in {"activity_id", "field_id"} and value is not None}
+    return field is not None and bool(changes) and all(field.get(name) == value for name, value in changes.items())
+
+
+def normalize_private_repair(data, package: LessonPackage, repair_targets=None):
+    """Content-free wire cleanup of a provider repair before strict validation.
+
+    Only three normalizations, counted for telemetry: a structured worked_solution
+    without `version` gets the only supported version 1; exact duplicate patches
+    collapse to one; and a patch outside the validated scope is dropped only when
+    it restates that target's current content exactly. A patch that would change
+    out-of-scope content is kept, so scope validation still rejects it. The
+    provider object is never mutated; anything malformed is left for validation.
+    """
+    if not isinstance(data, dict):
+        return data, 0
+    try:
+        scope = _validated_repair_scope(package, repair_targets)
+    except ValueError:
+        scope = None
+    result, count = copy.deepcopy(data), 0
+    for key in ("field_patches", "solution_patches", "solution_step_patches"):
+        patches = result.get(key)
+        if not isinstance(patches, list):
+            continue
+        kept, seen = [], set()
+        for patch in patches:
+            if not isinstance(patch, dict):
+                kept.append(patch)
+                continue
+            solution = patch.get("worked_solution")
+            if key == "solution_patches" and isinstance(solution, dict) and "steps" in solution and "version" not in solution:
+                patch["worked_solution"] = {"version": 1, **solution}
+                count += 1
+            identity = json.dumps(patch, sort_keys=True, ensure_ascii=False)
+            if identity in seen:
+                count += 1
+                continue
+            seen.add(identity)
+            activity_id = patch.get("activity_id")
+            outside = scope is not None and (activity_id not in scope or (
+                key != "solution_patches" and scope[activity_id] is not None
+                and patch.get("field_id") not in scope[activity_id]))
+            if outside and _restates_current(package, key, patch):
+                count += 1
+                continue
+            kept.append(patch)
+        result[key] = kept
+    return result, count
 
 
 def _check_solution_scope(original: Activity, solution, field_ids: set[str] | None) -> None:
@@ -961,7 +1029,7 @@ async def generate_package(step, context, *, client_factory, prior_package=None,
             transient = any(str(response.error).startswith(f"{provider} request failed ({category};")
                             for provider in ("zai", "OpenLux")
                             for category in ("TimeoutError", "APITimeoutError", "APIConnectionError",
-                                             "InternalServerError", "RateLimitError"))
+                                             "InternalServerError", "RateLimitError")) or incomplete_stream_error(response.error)
             if (attempt == 0 and transient and getattr(response, "retryable", None) is not False
                     and (getattr(response, "retry_after_seconds", None) or 0) <= 5):
                 from app.services.llm.telemetry import record_llm_response
@@ -1004,7 +1072,11 @@ async def generate_package(step, context, *, client_factory, prior_package=None,
             return None, response, client
         try:
             if request["output_model"] is PrivatePackageRepair:
-                repair = PrivatePackageRepair.model_validate(response.data)
+                normalized, normalized_count = normalize_private_repair(response.data, prior_package, repair_targets)
+                if normalized_count:
+                    response.effective_parameters = {**(response.effective_parameters or {}),
+                                                     "normalized_private_repair_count": normalized_count}
+                repair = PrivatePackageRepair.model_validate(normalized)
                 try:
                     scope = _validated_repair_scope(prior_package, repair_targets)
                 except ValueError:

@@ -1,22 +1,22 @@
-Write ONE complete executable activity for a tutorial_v1 exercise from its activity_brief and the public teaching context.
+Write ONE complete executable tutorial_v1 activity from its activity_brief and the public teaching context.
 
 WHAT A GREAT ACTIVITY DOES
-- Executes exactly the brief's learning demand and output, with every input it needs inside its own instructions and data.
+- Executes exactly the brief's learning demand and output, with every needed input in its own instructions and data.
 - Asks one meaningful question, two only when the reasoning needs it, whose answer shows the skill rather than recall.
-- Supports the guided phase with a useful hint and observable checks; keeps the transfer phase genuinely independent.
-- Gives every answer field a private explanation a learner can learn from after submitting: why the method fits, which misconception it resolves and, for text answers, a complete model answer that satisfies its criteria.
+- Supports the guided phase with a useful hint and observable checks; keeps transfer genuinely independent.
+- Gives every answer field a substantive private explanation, read after submitting, that explains its answer once from raw facts and agrees with formulas and criteria: why the method fits, which misconception it resolves, each item's effect on its own and the net where items offset and, for text, a complete model answer meeting its criteria.
 
-INPUTS: outline, context, capabilities, execution_contract, public_seed (teaching cases and all briefs), activity_brief (yours), workload_plan and activity_workload (your position and an equal-share reference, never a minimum). Other activities are generated independently.
+INPUTS: outline, context, capabilities, execution_contract, public_seed (teaching cases, all briefs), your activity_brief, workload_plan and activity_workload (your position and an equal-share reference, never a minimum); other activities are generated independently.
 
-OUTPUT: the LessonActivityDraft object itself — id, title, kind, instructions, data, fields, hint, minutes_min, minutes_max and optional diagram.
-- Preserve activity_brief.id and kind exactly. Return no workbook, activity array, teaching cases, brief, patch or fragment, and no worked_solution, steps, version or field_id: the server assembles the private solution from the field explanations in field order. hint and minutes belong to the activity, outside fields.
-- data is always present and lists every raw number in the instructions, hint or explanations, including evidence for text or choice answers; it is [] only when there is none. Structural list labels and timing fields are not case facts, and derived results are never inputs.
-- Every field is one complete object with id, label (the learner-visible question or requested response, not an internal id or criterion), kind, explanation and, except for text, rubric_criterion. Text fields add 1-5 criteria; number fields an expression; choice fields at least two choices and exactly one correct_choice; multi_choice fields at least two choices and correct_choices, the exact set to select. Use only that kind's properties and omit optional defaults, empty choices and null diagrams.
-- rubric_criterion is the result-panel row: under 80 characters naming the skill a correct answer shows, never the answer itself (text criteria too: both are public). A field may add a hint (the next reasoning step, without the answer or any digit). A number field may add a prefix such as "$" (the unit is the suffix) and up to three misconceptions: an expression over this activity's data ids giving a plausible wrong answer, plus 10-240 characters of feedback naming that mistake without the corrected value.
-- Explanations are substantive and explain each required answer once, from the raw facts, agreeing with formulas and criteria. Together they are 40-4,000 characters and instructions at most 4,000; aim near 1,500 for each.
-- The activity hint gives the next useful reasoning step without the answer, a restatement of the instructions or a walkthrough.
-- minutes_min and minutes_max are this activity's own honest share of doing, explaining, checking and one revision; reading and the overall target are not counted again.
-- Refer to answers by their field labels, not invented question numbers, and write model answers as plain prose without "(1)" labels; a genuinely numbered learner task keeps its sequence.
+OUTPUT: the LessonActivityDraft itself — id, title, kind, instructions, data, fields, hint, minutes_min, minutes_max and optional diagram.
+- Keep activity_brief.id and kind exactly. Return no workbook, activity array, teaching cases, brief, patch, fragment, worked_solution, steps, version or field_id: the server builds the private solution from field explanations in order. hint and minutes belong to the activity, outside fields.
+- data is always present and lists every raw number in the instructions, hint or explanations, including evidence for text or choice answers; it is [] only when there is none, so a qualitative worked example uses digits only as declared data. Structural list labels and timing fields are not case facts; derived results are never inputs.
+- Each field is one complete object: id, label (the learner-visible question or requested response, not an internal id or criterion), kind, explanation and, except for text, rubric_criterion. Text adds 1-5 criteria; number an expression; choice 2+ choices and one correct_choice; multi_choice 2+ choices and correct_choices, the exact set to select, each option one atomic action whose label contains no other option's action. Use only that kind's properties; omit optional defaults, empty choices and null diagrams.
+- rubric_criterion is the result-panel row: under 80 characters naming the skill a correct answer shows (for multi_choice, the skill the whole correct set shows), never the answer itself (text criteria too: both are public). A number field may add a prefix like "$" (the unit is the suffix) and up to three misconceptions: an expression over this activity's data ids for a plausible wrong answer, with 10-240 characters of feedback naming the mistake without the corrected value.
+- Explanations total 40-4,000 characters, instructions at most 4,000; aim near 1,500 each.
+- A question names any formula in words, never as a bare numeric expression. The activity hint and any optional field hint give the next reasoning step without the answer, restated instructions or a walkthrough; a field hint has no digit.
+- minutes_min and minutes_max are this activity's honest share of doing, explaining, checking and one revision, not reading or overall target.
+- Refer to answers by field label, not invented question numbers; write model answers as plain prose without "(1)" labels; a genuinely numbered learner task keeps its sequence.
 
 {{include:tutorial_contract.txt}}
 
@@ -26,8 +26,8 @@ OUTPUT: the LessonActivityDraft object itself — id, title, kind, instructions,
 
 {{include:tutorial_domain_qualitative.txt}}
 
-ILLUSTRATIVE ACTIVITIES — different topics; they show shape, depth and length only. Never reuse their content:
+ILLUSTRATIVE ACTIVITIES — other topics, showing shape, depth and length only. Never reuse their content:
 {{include:tutorial_exemplar_qualitative.txt}}
 {{include:tutorial_exemplar_quantitative.txt}}
 
-BEFORE RETURNING, CHECK: id and kind match the brief; each field object is complete; numeric answers are computed from raw data and agree with their explanations; choice keys match their explanations; transfer shares no inputs or answers with any public case or example.
+BEFORE RETURNING, CHECK: id and kind match the brief; each field is complete; numeric answers come from raw data and, like choice keys, agree with their explanations; transfer shares no inputs or answers with any public case or example.

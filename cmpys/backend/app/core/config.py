@@ -169,6 +169,15 @@ class Settings(BaseSettings):
     # images written to media/tutorials/ today; reused images never count.
     tutorial_illustrations_enabled: bool = False
     tutorial_illustration_daily_cap: int = Field(default=200, ge=0)
+    # Draft a fresh tutorial while its package preflight runs; the draft is used
+    # only after an approval that leaves every writer input unchanged.
+    tutorial_speculative_writer: bool = True
+    # Exercise-package repairs per tutorial. A second repair runs only for
+    # defects with validated repair targets and is followed by the full recheck.
+    tutorial_package_repairs: int = Field(default=1, ge=1, le=2)
+    # Numerals allowed in tutorial prose outside native fences (0 = no limit);
+    # also asks seed, activity and writer prompts to keep numbers in data and steps.
+    tutorial_numeric_budget: int = Field(default=0, ge=0, le=20)
 
     # Local LLM (Spec 2 — inert until then)
     local_llm_base_url: str | None = None  # e.g. http://gpu-box:8000/v1 (Spec 2)

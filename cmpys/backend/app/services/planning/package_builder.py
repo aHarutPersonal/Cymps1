@@ -10,7 +10,9 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import logging
 import re
+import unicodedata
 from contextlib import nullcontext
 from typing import Any, Awaitable, Callable, Literal, get_args
 
@@ -18,6 +20,7 @@ from pydantic import Field, ValidationError, model_validator
 from pydantic_core import ErrorType
 
 from app.services.llm.client import LLMResponse
+from app.services.llm.openlux import incomplete_stream_error
 from app.services.llm.prompt_loader import load_and_render
 from app.services.llm.routing import operation_thinking_level
 from app.services.llm.telemetry import record_llm_response
@@ -26,8 +29,10 @@ from app.services.planning.lesson_package import (
     CAPABILITIES, LessonPackage, TeachingCase, TransferIndependenceError, digest,
     validate_derivation, validate_transfer_independence,
 )
-from app.services.practice.contracts import Activity, Datum, SolutionDocument, StrictModel
+from app.services.practice.contracts import Activity, Datum, SolutionDocument, StrictModel, calculate
 from app.services.planning.workload_contract import build_workload_planning_context
+
+logger = logging.getLogger(__name__)
 
 _STAGE_SECONDS = 240.0
 _REQUEST_SECONDS = 90.0
@@ -45,6 +50,21 @@ _PARTS_VERSION = 2
 _MAX_RETRY_AFTER_SECONDS = 2
 _USAGE_FINALIZATION_SECONDS = 2.0
 _STANDARD_VALIDATION_ERRORS = frozenset(get_args(ErrorType))
+# Option B (settings.tutorial_numeric_budget > 0): fewer numeric claims for the
+# evidence gate to prove. Appended in code, so prompt files and their budget
+# tests stay unchanged and the default (0) sends byte-identical prompts.
+_NUMERIC_BUDGET_RULE = (
+    "\nNUMBER BUDGET: Digits appear only in declared case and activity data, answer fields and "
+    "worked-solution calculation steps. Instructions, hints, explanations and examples reason in "
+    "words: beyond quoting the declared data the learner needs, they never introduce new figures "
+    "and never restate computed results.\n")
+
+
+def _with_numeric_budget(prompt: str, tutorial: bool) -> str:
+    from app.core.config import settings
+    return prompt + _NUMERIC_BUDGET_RULE if tutorial and getattr(settings, "tutorial_numeric_budget", 0) > 0 else prompt
+
+
 _EXECUTION_CONTRACT = {
     "mode": "self_contained_in_app",
     "available_inputs": "Only outline/context content and facts explicitly supplied in this activity are available now.",
@@ -322,6 +342,223 @@ def require_declared_numbers(activity: LessonPackageActivity) -> None:
         raise UndeclaredNumbersError(len(spans))
 
 
+class AnswerLeakError(ValueError):
+    """A public rubric_criterion states its field's answer before the learner answers."""
+
+    def __init__(self, leaks: list[tuple[str, str, list[str]]]):
+        super().__init__("A public rubric_criterion states the answer")
+        self.leaks = leaks  # (field id, "choices" | "value", correct choice ids)
+
+
+_WORD = re.compile(r"[^\W_]+")
+_ARTICLES = frozenset({"a", "an", "the"})
+_CRITERION_NUMBER = re.compile(r"(?<![\w.])\d{1,3}(?:,\d{3})+(?:\.\d+)?|(?<![\w.,])\d+(?:\.\d+)?")
+# "to 2 decimal places", "in 3 steps": a precision or count, never a result.
+_PRECISION_COUNT = re.compile(
+    r"\s*-?\s*(?:decimal\s+places?|dp|significant\s+figures?|sig\.?\s*figs?|digits?|steps?|places?)\b", re.I)
+
+
+def _words(text: str) -> list[str]:
+    # Case, punctuation and plural-insensitive: "Checks." matches "check".
+    words = _WORD.findall(unicodedata.normalize("NFKC", text).casefold())
+    return [word[:-1] if len(word) > 3 and word.endswith("s") else word for word in words]
+
+
+def _phrase_in(phrase: list[str], words: list[str]) -> bool:
+    size = len(phrase)
+    return bool(size) and any(words[index:index + size] == phrase for index in range(len(words) - size + 1))
+
+
+def _decimals(text: str) -> int:
+    return len(text.split(".", 1)[1]) if "." in text else 0
+
+
+def require_hidden_answers(activity: LessonPackageActivity) -> None:
+    """Reject a public result row that names the answer (live run F15).
+
+    rubric_criterion reaches the client before the learner answers; text
+    criteria do not (public_workbook drops them) and have no key to compare.
+    A short option shared with a skill word ("cost" in "Weighs the cost against
+    the benefit") is not a leak, and a row naming every option (by label or id)
+    discriminates nothing. Otherwise a row fires when it quotes a distinctive
+    correct option (3+ words), names a whole multi-select answer set, spells a
+    correct choice key, or states the value (a precision or step count is not one).
+    """
+    values = {datum.id: datum.value for datum in activity.data}
+    leaks = []
+    for field in activity.fields:
+        rubric = field.rubric_criterion or ""
+        if not rubric.strip() or field.kind == "text":
+            continue
+        if field.kind == "number":
+            expected = calculate(field.expression, values)
+            # A value already public as a datum reveals nothing new.
+            if any(abs(value - expected) <= field.tolerance for value in values.values()):
+                continue
+            for match in _CRITERION_NUMBER.finditer(rubric):
+                if _PRECISION_COUNT.match(rubric, match.end()):
+                    continue
+                spelled = match[0].replace(",", "")
+                number = float(spelled)
+                candidates = [number] + ([number / 100] if rubric[match.end():].lstrip().startswith("%") else [])
+                bound = max(field.tolerance, 0.5 * 10 ** -_decimals(spelled))
+                if any(abs(item - expected) <= bound and abs(item - expected) <= 0.01 * abs(expected)
+                       for item in candidates):
+                    leaks.append((field.id, "value", []))
+                    break
+            continue
+        correct = [field.correct_choice] if field.kind == "choice" else list(field.correct_choices)
+        words, question = _words(rubric), _words(field.label)
+        phrases = {}
+        for choice in field.choices:
+            phrase = _words(choice.label)
+            while phrase and phrase[0] in _ARTICLES:
+                phrase = phrase[1:]
+            phrases[choice.id] = phrase
+        spelled_ids = {key for key in phrases if re.search(rf"(?<![\w]){re.escape(key)}(?![\w])", rubric, re.I)}
+        if all(_phrase_in(phrase, words) or key in spelled_ids for key, phrase in phrases.items()):
+            continue
+        named = {key for key, phrase in phrases.items() if _phrase_in(phrase, words) and not _phrase_in(phrase, question)}
+        keys = {key for key in correct if ("_" in key or any(char.isdigit() for char in key)) and key in spelled_ids}
+        distinctive = {key for key in correct if key in named and len(phrases[key]) >= 3}
+        whole_set = (field.kind == "multi_choice" and len(correct) >= 2 and set(correct) <= named
+                     and named != set(phrases))
+        if keys or distinctive or whole_set:
+            leaks.append((field.id, "choices", [key for key in correct if key in keys | named]))
+    if leaks:
+        raise AnswerLeakError(leaks)
+
+
+class DerivedDataError(ValueError):
+    """A datum named as a derived result equals arithmetic over two other data."""
+
+    def __init__(self, derived: list[tuple[str, str, str, str, str]]):
+        super().__init__("Activity declares a derived result as raw data")
+        self.derived = derived  # (datum id, operand, operator, operand, expression)
+
+
+# Each marker allows only the operation it names. implied/derived allow any,
+# but only within display rounding.
+_SUM_WORDS = frozenset({"total", "sum"})
+_DIFFERENCE_WORDS = frozenset({"difference", "diff", "change", "gap", "net", "margin", "increase", "decrease", "growth"})
+_RATIO_WORDS = frozenset({"ratio", "rate", "average", "avg", "mean", "share", "percent", "percentage", "pct"})
+# A rate, share or percentage may be a raw parameter ([R-DATA]: thresholds and
+# rates are data), so on its own it must match exactly, without display rounding.
+_EXACT_RATIO_WORDS = frozenset({"rate", "share", "percent", "percentage", "pct"})
+_IMPLIED_WORDS = frozenset({"implied", "derived"})
+_PERCENT_WORDS = frozenset({"percent", "percentage", "pct"})
+_UNIT_SYMBOLS = {"$": " usd ", "%": " percent ", "€": " eur ", "£": " gbp "}
+
+
+def _unit(text: str) -> str:
+    for symbol, name in _UNIT_SYMBOLS.items():
+        text = text.replace(symbol, name)
+    return " ".join("usd" if word == "dollar" else word for word in _words(text))
+
+
+def require_raw_data(activity: LessonPackageActivity) -> None:
+    """Reject a derived result declared as raw data (live run F18).
+
+    Both conditions must hold, so a coincidence of numbers alone never fires:
+    the datum's id or label names a derived quantity, and its value equals the
+    operation that name means over two other data: total/sum an addition;
+    difference, change, margin, net, ... a subtraction (a percentage: relative
+    change times 100); ratio, rate, average, share, ... a division (a percentage:
+    times 100); implied/derived any, but only within display rounding. Added or
+    subtracted operands share the datum's unit; a percentage is never a plain sum
+    or difference of non-percentage data. total/difference/ratio/average accept a
+    value rounded for display (11 for 11.03, never beyond 4%); rate, share and
+    percentage alone must match to 0.5%. Identity operations (+0, *1) never count.
+    """
+    derived = []
+    for datum in activity.data:
+        words = set(_words(f"{datum.label} {datum.id}"))
+        value, unit = datum.value, _unit(datum.unit)
+        rounding = 0.5 * 10 ** -_decimals(format(value, ".10g"))
+        loose = min(max(rounding, 0.005 * abs(value)), 0.04 * abs(value))
+        bounds = {}
+        if words & _SUM_WORDS:
+            bounds["+"] = loose
+        if words & _DIFFERENCE_WORDS:
+            bounds["-"] = loose
+        if words & _RATIO_WORDS:
+            bounds["/"] = loose if words & (_RATIO_WORDS - _EXACT_RATIO_WORDS) else min(rounding, 0.005 * abs(value))
+        if words & _IMPLIED_WORDS:
+            for operator_ in "+-*/":
+                bounds[operator_] = max(bounds.get(operator_, 0.0), min(rounding, 0.04 * abs(value)))
+        if not bounds:
+            continue
+        percent = "percent" in unit.split() or bool(words & _PERCENT_WORDS)
+        best = None
+        others = [item for item in activity.data if item.id != datum.id]
+        for i, first in enumerate(others):
+            for j, second in enumerate(others):
+                if i == j:
+                    continue
+                a, b, x, y = first.value, second.value, first.id, second.id
+                units = (_unit(first.unit), _unit(second.unit))
+                # Percentage points add only percentages; other sums keep one unit.
+                additive = (all("percent" in item.split() for item in units) if percent
+                            else not any((unit, *units)) or len({unit, *units}) == 1)
+                candidates = []
+                if additive and 0 not in (a, b):
+                    candidates.append((a - b, "-", f"{x} - {y}"))
+                    if i < j:
+                        candidates.append((a + b, "+", f"{x} + {y}"))
+                if b and percent:
+                    candidates.append((a / b * 100, "/", f"{x} / {y} * 100"))
+                    if not any(units) or len(set(units)) == 1:
+                        candidates.append(((a - b) / b * 100, "-", f"({x} - {y}) / {y} * 100"))
+                elif not percent:
+                    if i < j and 1 not in (a, b):
+                        candidates.append((a * b, "*", f"{x} * {y}"))
+                    if b and b != 1:
+                        candidates.append((a / b, "/", f"{x} / {y}"))
+                for result, operator_, expression in candidates:
+                    error = abs(result - value)
+                    if operator_ in bounds and error <= bounds[operator_] and (best is None or error < best[0]):
+                        best = (error, (datum.id, x, operator_, y, expression))
+        if best is not None:
+            derived.append(best[1])
+    if derived:
+        raise DerivedDataError(derived)
+
+
+class ActivityChecksError(ValueError):
+    """Several component checks failed; one correction must address all of them."""
+
+    def __init__(self, errors: list[ValueError]):
+        super().__init__("Activity failed several component checks")
+        self.errors = errors
+
+
+class ActivityDraftChecksError(ValueError):
+    """A draft failed validation, and its best-effort preview failed component checks too.
+
+    One correction then hears both: the validation errors and every component defect.
+    """
+
+    def __init__(self, primary: ValueError | SyntaxError, checks: ValueError):
+        super().__init__(str(primary))
+        self.primary, self.checks = primary, checks
+
+
+_COMPONENT_CHECK_ERRORS = (UndeclaredNumbersError, AnswerLeakError, DerivedDataError, ActivityChecksError)
+
+
+def require_component_checks(activity: LessonPackageActivity) -> None:
+    errors = []
+    for check in (require_declared_numbers, require_hidden_answers, require_raw_data):
+        try:
+            check(activity)
+        except (UndeclaredNumbersError, AnswerLeakError, DerivedDataError) as exc:
+            errors.append(exc)
+    if len(errors) > 1:
+        raise ActivityChecksError(errors)
+    if errors:
+        raise errors[0]
+
+
 def _validated_activity(data: Any, seed: LessonPackageSeed, brief: ActivityBrief) -> LessonPackageActivity:
     activity = LessonPackageActivity.model_validate(data)
     if activity.id != brief.id or activity.kind != brief.kind:
@@ -377,6 +614,24 @@ def _diagnostics(exc: ValueError | SyntaxError) -> list[dict[str, Any]]:
             "but data is []. Declare every raw number shown, quoted material included, as a datum "
             "in this activity's data, or describe the fictional case without numbers. Derived "
             "results such as rates, totals and differences stay expressions over those data, never data.")}]
+    if isinstance(exc, AnswerLeakError):
+        rows = "; ".join(
+            f"{field_id} names its correct choice(s) {', '.join(keys)}" if kind == "choices"
+            else f"{field_id} states the expected value" for field_id, kind, keys in exc.leaks)
+        return [{"type": "answer_leak", "message": (
+            f"The public rubric_criterion is shown before the learner answers, but it gives the answer away: {rows}. "
+            "Rewrite each listed rubric_criterion, under 80 characters, to name the skill a correct answer shows, "
+            "never the answer itself: no correct option, answer set, choice id or expected value. Keep the "
+            "question, choices, answer key and explanation unchanged.")}]
+    if isinstance(exc, DerivedDataError):
+        rows = "; ".join(f"{datum} equals {expression}" for datum, *_, expression in exc.derived)
+        return [{"type": "derived_data", "message": (
+            f"data declares derived results as raw data: {rows}. Remove each listed datum from data and keep "
+            "it as that expression over its raw operands: use the expression wherever a field or misconception "
+            "used the datum, and let any text that shows the value present it as a calculation from those data. "
+            "Keep the raw operands as data.")}]
+    if isinstance(exc, ActivityChecksError):
+        return [item for error in exc.errors for item in _diagnostics(error)]
     # Expressions and provider drafts are private; do not echo arbitrary text.
     return [{"type": "component_contract", "message": "Preserve assigned ID/kind, use only own raw operands, and keep transfer inputs distinct from public examples."}]
 
@@ -388,6 +643,8 @@ def _private_correction_diagnostics(exc: ValueError | SyntaxError) -> list[dict[
     Input values and exception context are excluded; the separate immutable draft
     provides those values only to the model performing the bounded correction.
     """
+    if isinstance(exc, ActivityDraftChecksError):
+        return [*_private_correction_diagnostics(exc.primary), *_diagnostics(exc.checks)]
     if isinstance(exc, ValidationError):
         return [{"type": failure["type"], "loc": list(failure["loc"]), "message": failure["msg"]}
                 for failure in exc.errors(include_input=False, include_context=False, include_url=False)]
@@ -400,9 +657,18 @@ def _validation_failure_metadata(exc: ValueError | SyntaxError, model) -> dict:
     Pydantic messages/context and unknown property names may contain source text.
     Exact diagnostics remain private to the one existing correction request.
     """
+    if isinstance(exc, ActivityChecksError):
+        errors = [item for error in exc.errors for item in _validation_failure_metadata(error, model)["errors"]]
+        return {"errors": errors, "total_errors": len(errors)}
+    if isinstance(exc, ActivityDraftChecksError):
+        primary, checks = (_validation_failure_metadata(error, model) for error in (exc.primary, exc.checks))
+        return {"errors": primary["errors"] + checks["errors"],
+                "total_errors": primary["total_errors"] + checks["total_errors"]}
     if not isinstance(exc, ValidationError):
         code = ("transfer_independence" if isinstance(exc, TransferIndependenceError)
-                else "undeclared_numbers" if isinstance(exc, UndeclaredNumbersError) else "component_contract")
+                else "undeclared_numbers" if isinstance(exc, UndeclaredNumbersError)
+                else "answer_leak" if isinstance(exc, AnswerLeakError)
+                else "derived_data" if isinstance(exc, DerivedDataError) else "component_contract")
         return {"errors": [{"type": code, "loc": []}], "total_errors": 1}
     known = {"number", "choice", "multi_choice", "text"}
     def collect(schema):
@@ -448,6 +714,8 @@ def _may_retry(response: LLMResponse, *, invalid: bool) -> bool:
         return True
     if not response.error:
         return invalid and response.finish_reason in (None, "stop")
+    if incomplete_stream_error(response.error):
+        return True
     return any(response.error.startswith(f"{provider} request failed ({category};")
                for provider in ("zai", "OpenLux")
                for category in ("JSONDecodeError", "JSONProtocolError", "TimeoutError", "APITimeoutError",
@@ -686,6 +954,14 @@ async def generate_initial_package(
                             "effective_parameters": {**response.effective_parameters,
                                 "recovered_complete_brief_groups": len(recovered_seed.activity_briefs)},
                         })
+                if (model.__name__ in {"LessonActivityDraft", "TutorialActivityDraft"} and not response.error
+                        and response.finish_reason in (None, "stop")):
+                    from app.services.planning.activity_draft import recover_misnamed_ids
+                    recovered_draft, recovered_ids = recover_misnamed_ids(response.data)
+                    if recovered_ids:
+                        response = response.model_copy(update={"data": recovered_draft,
+                            "effective_parameters": {**response.effective_parameters,
+                                                     "recovered_activity_id_keys": recovered_ids}})
                 if not response.error and response.finish_reason in (None, "stop"):
                     parsed_component = copy.deepcopy(response.data)
                     try:
@@ -760,8 +1036,8 @@ async def generate_initial_package(
             allotted_lesson_minutes=context.get("allotted_lesson_minutes"))
         seed = LessonPackageSeed.model_validate(parts["seed"]) if parts is not None else None
         if seed is None:
-            seed = await component("seed", LessonPackageSeed, load_and_render(
-                "tutorial_package_seed.txt" if tutorial else "lesson_package_seed.txt", {}),
+            seed = await component("seed", LessonPackageSeed, _with_numeric_budget(load_and_render(
+                "tutorial_package_seed.txt" if tutorial else "lesson_package_seed.txt", {}), tutorial),
                 {"outline": step, "context": context, "capabilities": {**CAPABILITIES, **({"max_fields_per_activity": 2} if tutorial else {})},
                  "execution_contract": copy.deepcopy(_EXECUTION_CONTRACT),
                  "workload_plan": workload_plan},
@@ -776,8 +1052,8 @@ async def generate_initial_package(
                          if per_component_recovery else _SEED_TOKENS + len(seed.activity_briefs) * _ACTIVITY_TOKENS
                          + max(_SEED_TOKENS, _ACTIVITY_TOKENS))
         public_seed = _public_seed(seed)
-        activity_prompt = load_and_render(
-            "tutorial_activity_generate.txt" if tutorial else "lesson_activity_generate.txt", {})
+        activity_prompt = _with_numeric_budget(load_and_render(
+            "tutorial_activity_generate.txt" if tutorial else "lesson_activity_generate.txt", {}), tutorial)
         positions = {brief.id: index + 1 for index, brief in enumerate(seed.activity_briefs)}
         pending_ownership = {}
 
@@ -789,9 +1065,25 @@ async def generate_initial_package(
             )
             draft_model = TutorialActivityDraft if tutorial else LessonActivityDraft
             def parse_assigned(data):
-                draft_model.model_validate(data)
-                activity = _validated_activity(parse_activity_draft(data), seed, brief)
-                require_declared_numbers(activity)
+                try:
+                    draft_model.model_validate(data)
+                    activity = _validated_activity(parse_activity_draft(data), seed, brief)
+                except (ValueError, SyntaxError) as exc:
+                    # Let the one correction hear every defect at once: also run the
+                    # component checks on a best-effort preview of the rejected draft.
+                    # The preview is diagnostic only; any other failure keeps the
+                    # original error unchanged.
+                    from app.services.planning.activity_draft import best_effort_activity
+                    try:
+                        preview = best_effort_activity(data)
+                        if preview is not None:
+                            require_component_checks(preview)
+                    except _COMPONENT_CHECK_ERRORS as checks:
+                        raise ActivityDraftChecksError(exc, checks) from exc
+                    except Exception:  # noqa: BLE001 - diagnostic preview only
+                        logger.debug("Activity draft preview checks unavailable", exc_info=True)
+                    raise exc
+                require_component_checks(activity)
                 return activity
             value = await component("activity_" + brief.id, draft_model, activity_prompt,
                 {"outline": step, "context": context, "capabilities": {**CAPABILITIES, **({"max_fields_per_activity": 2} if tutorial else {})},

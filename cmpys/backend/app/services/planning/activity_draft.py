@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import re
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal, TYPE_CHECKING
 
@@ -248,6 +249,96 @@ def _without_empty_text_criteria(data: Any) -> Any:
             item for item in criteria if not (type(item) is str and not item.strip())
         ]
     return normalized
+
+
+_ID_TOKEN = re.compile(r"[a-z][a-z0-9_]{0,39}")
+
+
+def _misnamed_id_key(key: str) -> bool:
+    """Empty or punctuation-only (": "), or an id spelling ("_id", "Id", "id ").
+
+    A misspelled known property ("units", "lable") is never an id: renaming it
+    would silently drop its value, so it stays a schema error for the correction.
+    """
+    letters = re.sub(r"[\W_]", "", key)
+    return not letters or letters.casefold() == "id"
+
+
+def _with_recovered_id(item: Any, known: set[str]) -> dict | None:
+    if type(item) is not dict or "id" in item:
+        return None
+    unknown = [key for key in item if key not in known]
+    if (len(unknown) != 1 or not _misnamed_id_key(unknown[0]) or type(item[unknown[0]]) is not str
+            or not _ID_TOKEN.fullmatch(item[unknown[0]])):
+        return None
+    return {("id" if key == unknown[0] else key): value for key, value in item.items()}
+
+
+def recover_misnamed_ids(data: Any) -> tuple[Any, int]:
+    """Rename a misnamed id key in fields[] and choices[] objects, without mutation.
+
+    Fresh-wire adapter only (smoke: {": ": "wrong_audience", "label": ...}). An
+    object qualifies when it lacks id and has exactly one unknown key, empty,
+    punctuation-only or an id spelling, whose value is an id token; its position is kept. Anything else, including top-level keys,
+    is left for strict validation. Returns the draft and the number of renamed keys.
+    """
+    if type(data) is not dict or type(data.get("fields")) is not list:
+        return data, 0
+    field_keys = {key for model in (NumberDraftField, ChoiceDraftField, MultiChoiceDraftField, TextDraftField)
+                  for key in model.model_fields}
+    result, count = data, 0
+    for index, field in enumerate(data["fields"]):
+        if type(field) is not dict:
+            continue
+        recovered = _with_recovered_id(field, field_keys)
+        current = recovered or field
+        choices = current.get("choices")
+        if type(choices) is list:
+            fixed = [_with_recovered_id(choice, set(Choice.model_fields)) for choice in choices]
+            if any(fixed):
+                current = {**current, "choices": [new or old for new, old in zip(fixed, choices)]}
+                count += sum(1 for item in fixed if item)
+        if recovered is not None:
+            count += 1
+        if current is not field:
+            if result is data:
+                result = copy.deepcopy(data)
+            result["fields"][index] = copy.deepcopy(current)
+    return result, count
+
+
+def best_effort_activity(data: Any) -> LessonPackageActivity | None:
+    """A diagnostic preview of a rejected draft; never accepted, saved or approved.
+
+    It only lets one correction also hear the component checks (undeclared numbers,
+    answer leaks, derived data) of a draft that failed schema validation. Fields that
+    fail on their own and unknown top-level keys are left out; any other failure,
+    including an invalid shared property, gives no preview.
+    """
+    draft, _ = recover_misnamed_ids(_without_empty_text_criteria(data))
+    if type(draft) is not dict or type(draft.get("fields")) is not list:
+        return None
+    for _ in range(3):
+        try:
+            return parse_activity_draft(draft)
+        except ValidationError as exc:
+            failures = exc.errors(include_input=False, include_context=False, include_url=False)
+            fields, extras = set(), set()
+            for failure in failures:
+                loc = tuple(failure["loc"])
+                if len(loc) >= 2 and loc[0] == "fields" and type(loc[1]) is int:
+                    fields.add(loc[1])
+                elif len(loc) == 1 and failure["type"] == "extra_forbidden" and loc[0] != "fields":
+                    extras.add(loc[0])
+                else:
+                    return None
+            if len(fields) >= len(draft["fields"]):
+                return None
+            draft = {key: value for key, value in draft.items() if key not in extras}
+            draft["fields"] = [field for index, field in enumerate(draft["fields"]) if index not in fields]
+        except (ValueError, SyntaxError, TypeError):
+            return None
+    return None
 
 
 def parse_activity_draft(data: Any) -> LessonPackageActivity:
