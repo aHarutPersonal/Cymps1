@@ -550,8 +550,8 @@ async def test_confirmed_interview_hours_reach_the_staged_plan_job(monkeypatch) 
     async def fake_get_session(*args, **kwargs):
         return session
 
-    async def capture_job(db, *, session, user_id, weekly_hours, focus=None):
-        captured["job_weekly_hours"] = weekly_hours
+    async def capture_job(db, *, session, user_id, weekly_minutes, focus=None):
+        captured["job_weekly_minutes"] = weekly_minutes
         captured["job_focus"] = focus
         return plan_job
 
@@ -579,7 +579,8 @@ async def test_confirmed_interview_hours_reach_the_staged_plan_job(monkeypatch) 
     body = "".join([chunk async for chunk in response.body_iterator])
 
     assert '"type": "done"' in body
-    assert captured["job_weekly_hours"] == 8
+    # Capacity reaches the staged job as minutes (Task A4).
+    assert captured["job_weekly_minutes"] == 480
     assert captured["job_focus"] == "Publish a stable product with ten active users."
     assert captured["plan_inputs"]["weekly_capacity_hours"] == 8
     assert captured["plan_inputs"]["weekly_capacity_source"] == (

@@ -23,6 +23,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../app/design_tokens.dart';
+import '../haptics.dart';
 import '../motion/motion_config.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -235,10 +236,10 @@ class _CmpysPressableState extends State<CmpysPressable> {
       case CmpysHaptic.none:
         break;
       case CmpysHaptic.selection:
-        HapticFeedback.selectionClick();
+        playHaptic(context, AppHaptic.selection);
         break;
       case CmpysHaptic.light:
-        HapticFeedback.lightImpact();
+        playHaptic(context, AppHaptic.light);
         break;
     }
     widget.onTap?.call();

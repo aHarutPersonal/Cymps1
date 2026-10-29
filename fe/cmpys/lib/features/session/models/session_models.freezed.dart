@@ -977,6 +977,12 @@ mixin _$SessionCreateRequest {
   List<String> get interests => throw _privateConstructorUsedError;
   String? get goal => throw _privateConstructorUsedError;
 
+  /// Chips from the onboarding "situation" step (e.g. "I work full-time").
+  List<String> get situation => throw _privateConstructorUsedError;
+
+  /// Optional free text from the same step.
+  String? get situationNote => throw _privateConstructorUsedError;
+
   /// Create a copy of SessionCreateRequest
   /// with the given fields replaced by the non-null parameter values.
   @JsonKey(includeFromJson: false, includeToJson: false)
@@ -996,6 +1002,8 @@ abstract class $SessionCreateRequestCopyWith<$Res> {
     String financialStatus,
     List<String> interests,
     String? goal,
+    List<String> situation,
+    String? situationNote,
   });
 }
 
@@ -1021,6 +1029,8 @@ class _$SessionCreateRequestCopyWithImpl<
     Object? financialStatus = null,
     Object? interests = null,
     Object? goal = freezed,
+    Object? situation = null,
+    Object? situationNote = freezed,
   }) {
     return _then(
       _value.copyWith(
@@ -1039,6 +1049,14 @@ class _$SessionCreateRequestCopyWithImpl<
             goal: freezed == goal
                 ? _value.goal
                 : goal // ignore: cast_nullable_to_non_nullable
+                      as String?,
+            situation: null == situation
+                ? _value.situation
+                : situation // ignore: cast_nullable_to_non_nullable
+                      as List<String>,
+            situationNote: freezed == situationNote
+                ? _value.situationNote
+                : situationNote // ignore: cast_nullable_to_non_nullable
                       as String?,
           )
           as $Val,
@@ -1060,6 +1078,8 @@ abstract class _$$SessionCreateRequestImplCopyWith<$Res>
     String financialStatus,
     List<String> interests,
     String? goal,
+    List<String> situation,
+    String? situationNote,
   });
 }
 
@@ -1081,6 +1101,8 @@ class __$$SessionCreateRequestImplCopyWithImpl<$Res>
     Object? financialStatus = null,
     Object? interests = null,
     Object? goal = freezed,
+    Object? situation = null,
+    Object? situationNote = freezed,
   }) {
     return _then(
       _$SessionCreateRequestImpl(
@@ -1100,6 +1122,14 @@ class __$$SessionCreateRequestImplCopyWithImpl<$Res>
             ? _value.goal
             : goal // ignore: cast_nullable_to_non_nullable
                   as String?,
+        situation: null == situation
+            ? _value._situation
+            : situation // ignore: cast_nullable_to_non_nullable
+                  as List<String>,
+        situationNote: freezed == situationNote
+            ? _value.situationNote
+            : situationNote // ignore: cast_nullable_to_non_nullable
+                  as String?,
       ),
     );
   }
@@ -1113,7 +1143,10 @@ class _$SessionCreateRequestImpl extends _SessionCreateRequest {
     required this.financialStatus,
     required final List<String> interests,
     this.goal,
+    final List<String> situation = const <String>[],
+    this.situationNote,
   }) : _interests = interests,
+       _situation = situation,
        super._();
 
   @override
@@ -1131,9 +1164,25 @@ class _$SessionCreateRequestImpl extends _SessionCreateRequest {
   @override
   final String? goal;
 
+  /// Chips from the onboarding "situation" step (e.g. "I work full-time").
+  final List<String> _situation;
+
+  /// Chips from the onboarding "situation" step (e.g. "I work full-time").
+  @override
+  @JsonKey()
+  List<String> get situation {
+    if (_situation is EqualUnmodifiableListView) return _situation;
+    // ignore: implicit_dynamic_type
+    return EqualUnmodifiableListView(_situation);
+  }
+
+  /// Optional free text from the same step.
+  @override
+  final String? situationNote;
+
   @override
   String toString() {
-    return 'SessionCreateRequest(age: $age, financialStatus: $financialStatus, interests: $interests, goal: $goal)';
+    return 'SessionCreateRequest(age: $age, financialStatus: $financialStatus, interests: $interests, goal: $goal, situation: $situation, situationNote: $situationNote)';
   }
 
   @override
@@ -1148,7 +1197,13 @@ class _$SessionCreateRequestImpl extends _SessionCreateRequest {
               other._interests,
               _interests,
             ) &&
-            (identical(other.goal, goal) || other.goal == goal));
+            (identical(other.goal, goal) || other.goal == goal) &&
+            const DeepCollectionEquality().equals(
+              other._situation,
+              _situation,
+            ) &&
+            (identical(other.situationNote, situationNote) ||
+                other.situationNote == situationNote));
   }
 
   @override
@@ -1158,6 +1213,8 @@ class _$SessionCreateRequestImpl extends _SessionCreateRequest {
     financialStatus,
     const DeepCollectionEquality().hash(_interests),
     goal,
+    const DeepCollectionEquality().hash(_situation),
+    situationNote,
   );
 
   /// Create a copy of SessionCreateRequest
@@ -1179,6 +1236,8 @@ abstract class _SessionCreateRequest extends SessionCreateRequest {
     required final String financialStatus,
     required final List<String> interests,
     final String? goal,
+    final List<String> situation,
+    final String? situationNote,
   }) = _$SessionCreateRequestImpl;
   const _SessionCreateRequest._() : super._();
 
@@ -1190,6 +1249,14 @@ abstract class _SessionCreateRequest extends SessionCreateRequest {
   List<String> get interests;
   @override
   String? get goal;
+
+  /// Chips from the onboarding "situation" step (e.g. "I work full-time").
+  @override
+  List<String> get situation;
+
+  /// Optional free text from the same step.
+  @override
+  String? get situationNote;
 
   /// Create a copy of SessionCreateRequest
   /// with the given fields replaced by the non-null parameter values.

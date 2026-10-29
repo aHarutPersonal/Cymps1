@@ -5,8 +5,49 @@ Unknown costs/timings are never silently treated as zero. Small sets do not
 claim production tail-latency confidence.
 """
 import math
+import re
 from collections import defaultdict
 from statistics import mean
+
+_WORD = re.compile(r"[\w']+", re.UNICODE)
+_SENTENCE = re.compile(r"(?<=[.!?])\s+")
+
+
+def _words(text: str) -> list[str]:
+    return [word.casefold() for word in _WORD.findall(text or "")]
+
+
+def _ngrams(words: list[str], n: int) -> set[tuple[str, ...]]:
+    return {tuple(words[i:i + n]) for i in range(len(words) - n + 1)}
+
+
+def qualitative_leak_spans(public_text: str, private_answer: str, *, min_words: int = 8) -> list[str]:
+    """Word spans of a private transfer answer that also appear in public text.
+
+    Screening for adjudication: a shared span of ``min_words`` words means the
+    learner could read the answer before the independent attempt.
+    """
+    public = _ngrams(_words(public_text), min_words)
+    private = _words(private_answer)
+    return sorted({" ".join(private[i:i + min_words]) for i in range(len(private) - min_words + 1)
+                   if tuple(private[i:i + min_words]) in public})
+
+
+def unsupported_mentor_sentences(text: str, mentor_names: list[str], evidence_texts: list[str],
+                                 *, min_shared_words: int = 4) -> list[str]:
+    """Sentences naming a mentor that share no word span with any supplied evidence.
+
+    Screening for adjudication, not a production gate: it flags candidate
+    invented anecdotes for a human or model reviewer to confirm.
+    """
+    names = {part.casefold() for name in mentor_names for part in name.split() if len(part) >= 3}
+    evidence = set().union(*(_ngrams(_words(item), min_shared_words) for item in evidence_texts)) if evidence_texts else set()
+    flagged = []
+    for sentence in _SENTENCE.split(text or ""):
+        words = _words(sentence)
+        if names.intersection(words) and not _ngrams(words, min_shared_words) & evidence:
+            flagged.append(sentence.strip())
+    return flagged
 
 
 def percentile(values, fraction):
@@ -14,6 +55,17 @@ def percentile(values, fraction):
     if not values:
         return None
     return values[max(0, math.ceil(fraction * len(values)) - 1)]
+
+
+def _stage_latency(rows: list[dict]) -> dict:
+    """p50/p95 per pipeline stage from rows carrying ``stage_ms``."""
+    by_stage = defaultdict(list)
+    for row in rows:
+        for stage, value in (row.get("stage_ms") or {}).items():
+            if isinstance(value, (int, float)) and math.isfinite(value) and value >= 0:
+                by_stage[stage].append(value)
+    return {stage: {"p50": percentile(values, .5), "p95": percentile(values, .95), "observed": len(values)}
+            for stage, values in sorted(by_stage.items())}
 
 
 def summarize_runs(rows: list[dict], scenarios: list[dict]) -> dict:
@@ -64,6 +116,9 @@ def summarize_runs(rows: list[dict], scenarios: list[dict]) -> dict:
         "quality_scores_complete": len(quality) == len(rows),
         "repair_rate": mean(r.get("repair_count", 0) > 0 for r in rows) if rows else None,
         "missing_exercise_runs": sum(bool(r.get("missing_exercises")) for r in rows),
+        "answer_leak_runs": sum(bool(r.get("answer_leaks")) for r in rows),
+        "unsupported_mentor_claim_runs": sum(bool(r.get("unsupported_mentor_claims")) for r in rows),
+        "stage_latency_ms": _stage_latency(rows),
         "reference_defect_runs": sum(bool(r.get("reference_defects")) for r in rows),
         "latency_ms": {"p50": percentile(durations, .5), "p95": percentile(durations, .95),
                        "p99": percentile(durations, .99), "observed": len(durations),
@@ -83,7 +138,7 @@ def promotion_decision(candidate, baseline):
         measured = candidate["cohort_quality"].get(cohort)
         if score is None or measured is None or measured < score:
             return {"promote": False, "reason": f"Quality regression or missing evidence in {cohort}"}
-    for key in ("missing_exercise_runs", "reference_defect_runs"):
+    for key in ("missing_exercise_runs", "reference_defect_runs", "answer_leak_runs", "unsupported_mentor_claim_runs"):
         if candidate[key]:
             return {"promote": False, "reason": key}
     c, b = candidate["latency_ms"], baseline["latency_ms"]

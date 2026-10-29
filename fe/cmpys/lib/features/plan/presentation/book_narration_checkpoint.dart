@@ -48,7 +48,7 @@ class BookNarrationCheckpoint {
     if (value is! Map) return null;
 
     final textVersion = _nonNegativeInt(value['textVersion'] ?? 1);
-    if (textVersion != 1 && textVersion != 2 && textVersion != 3) return null;
+    if (textVersion == null || textVersion < 1 || textVersion > 4) return null;
     final chapterIndex = _nonNegativeInt(value['chapterIndex']);
     final segmentIndex = _nonNegativeInt(value['segmentIndex']);
     final characterOffset = _nonNegativeInt(value['characterOffset']);
@@ -77,7 +77,7 @@ class BookNarrationCheckpoint {
           ? characterOffset
           : characterOffset.clamp(0, maxCharacterOffset).toInt(),
       updatedAtEpochMs: updatedAtEpochMs,
-      textVersion: textVersion!,
+      textVersion: textVersion,
     );
   }
 
@@ -127,9 +127,11 @@ class ActiveBookNarrationResume {
     required this.updatedAtEpochMs,
   });
 
+  static const int todayBranchIndex = 0;
   static const int planBranchIndex = 1;
   static const int profileBranchIndex = 4;
   static const Set<int> supportedBranchIndexes = {
+    todayBranchIndex,
     planBranchIndex,
     profileBranchIndex,
   };

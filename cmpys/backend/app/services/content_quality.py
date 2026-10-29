@@ -1567,7 +1567,10 @@ PLAN_DETAIL_SECTION_ROWS = (
 )
 
 def lesson_sections_word_count(title: str, sections: Mapping[str, Any]) -> int:
-    """Count the exact canonical title, headings and already-rendered reading."""
+    """Count the exact canonical title, headings and already-rendered reading.
+
+    A new tutorial has no guided_practice section, so it has no heading either.
+    """
     return len(("# " + title).split()) + sum(
         len(heading.split()) + len(str(sections[name]).strip().split())
-        for name, heading in PLAN_DETAIL_SECTION_ROWS)
+        for name, heading in PLAN_DETAIL_SECTION_ROWS if sections.get(name) is not None)

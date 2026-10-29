@@ -7,7 +7,7 @@ from pydantic import ValidationError
 from app.services.planning.activity_draft import LessonActivityDraft, TutorialActivityDraft
 from app.services.planning.lesson_package import LessonPackage
 from app.services.planning.package_preflight import review_package
-from tests.lesson_package_fixtures import package_payload
+from tests.lesson_package_fixtures import multi_choice_first, package_payload
 from tests.test_activity_draft import draft_payload
 
 
@@ -21,8 +21,12 @@ async def test_noop_private_patch_recovers_only_independently_rejected_activity(
     from tests.section_client_fixture import activity_draft_fixture
     monkeypatch.setattr("app.services.llm.telemetry.record_llm_response", AsyncMock())
     prior = structured_package()
+    payload = prior.model_dump(mode="json")
+    for activity in payload["workbook"]["activities"]:
+        multi_choice_first(activity)  # a new tutorial needs a number or multi_choice answer
+    prior = LessonPackage.model_validate(payload)
     client = SimpleNamespace(generate_json=AsyncMock(side_effect=[
-        LLMResponse(data={}), LLMResponse(data=activity_draft_fixture(replacement()))]))
+        LLMResponse(data={}), LLMResponse(data=activity_draft_fixture(multi_choice_first(replacement())))]))
     result, response, _ = await generate_package({"lesson_format": "tutorial_v1"}, {},
         client_factory=lambda **kw: client, prior_package=prior,
         defects=["The response label exposes the answer and needs correction."],
@@ -32,6 +36,10 @@ async def test_noop_private_patch_recovers_only_independently_rejected_activity(
     assert result.workbook.activities[1].fields[1] == prior.workbook.activities[1].fields[1]
     assert client.generate_json.await_count == 2
     assert issubclass(client.generate_json.call_args.kwargs["output_model"], TutorialActivityDraft)
+    # The one-shot repair must not steer a tutorial into the text-only shape its own wire rejects.
+    repair_prompt = " ".join(client.generate_json.call_args.kwargs["system_prompt"].split())
+    assert "keeps at least one number or multi_choice field" in repair_prompt
+    assert "at most one text field" in repair_prompt
 
 
 def test_tutorial_wire_rejects_long_quiz_without_changing_long_lessons():

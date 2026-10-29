@@ -1,0 +1,1 @@
+{"release": "20261017-020500-evidence-context", "image_digest": "sha256:bec8540a949882fb621a13e25b274edaa1eabec58ee49bbf547bc818ed40e8d3", "verified_services": ["web", "worker", "worker-high", "worker-low", "catalog-worker", "catalog-control", "curriculum-worker", "curriculum-control", "beat"], "verified_files": 30, "file_hashes_verified_in_every_service": true}

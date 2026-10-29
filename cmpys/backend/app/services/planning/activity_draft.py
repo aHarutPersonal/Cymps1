@@ -14,7 +14,8 @@ from typing import Annotated, Any, Literal, TYPE_CHECKING
 from pydantic import Field, StrictBool, ValidationError, field_validator, model_validator
 
 from app.services.practice.contracts import (
-    Activity, AnswerField, Choice, Datum, Diagram, SolutionStep, StrictModel,
+    Activity, AnswerField, Choice, Datum, Diagram, Misconception, SolutionStep, StrictModel,
+    check_generated_fields,
 )
 
 if TYPE_CHECKING:
@@ -28,6 +29,9 @@ class _DraftField(StrictModel):
     label: str = copy.deepcopy(AnswerField.model_fields["label"])
     unit: str = copy.deepcopy(AnswerField.model_fields["unit"])
     rubric_criterion: str | None = copy.deepcopy(AnswerField.model_fields["rubric_criterion"])
+    # Shown only on request, through the per-field hint endpoint. Optional: the
+    # activity hint is the fallback.
+    hint: str | None = copy.deepcopy(AnswerField.model_fields["hint"])
     explanation: str = copy.deepcopy(SolutionStep.model_fields["explanation"])
 
     @field_validator("explanation")
@@ -40,12 +44,20 @@ class NumberDraftField(_DraftField):
     kind: Literal["number"]
     expression: str = Field(min_length=1, max_length=300)
     tolerance: float = copy.deepcopy(AnswerField.model_fields["tolerance"])
+    prefix: str = copy.deepcopy(AnswerField.model_fields["prefix"])
+    misconceptions: list[Misconception] = copy.deepcopy(AnswerField.model_fields["misconceptions"])
 
 
 class ChoiceDraftField(_DraftField):
     kind: Literal["choice"]
     choices: list[Choice] = Field(min_length=2, max_length=8)
     correct_choice: str = Field(min_length=1)
+
+
+class MultiChoiceDraftField(_DraftField):
+    kind: Literal["multi_choice"]
+    choices: list[Choice] = Field(min_length=2, max_length=8)
+    correct_choices: list[str] = Field(min_length=1, max_length=8)
 
 
 class TextDraftField(_DraftField):
@@ -56,7 +68,8 @@ class TextDraftField(_DraftField):
 
 
 DraftAnswerField = Annotated[
-    NumberDraftField | ChoiceDraftField | TextDraftField, Field(discriminator="kind"),
+    NumberDraftField | ChoiceDraftField | MultiChoiceDraftField | TextDraftField,
+    Field(discriminator="kind"),
 ]
 
 
@@ -97,23 +110,46 @@ class LessonActivityDraft(StrictModel):
     @classmethod
     def model_json_schema(cls, *args, **kwargs) -> dict:
         schema = _compact_schema(super().model_json_schema(*args, **kwargs))
-        for name in ("NumberDraftField", "ChoiceDraftField", "TextDraftField"):
+        for name in ("NumberDraftField", "ChoiceDraftField", "MultiChoiceDraftField", "TextDraftField"):
             branch = schema["$defs"][name]
             properties = branch["properties"]
             # Present ownership and assessment before its explanation, regardless
             # of Pydantic's inherited-field order. No validation rule changes.
-            order = ("id", "label", "kind", "unit", "expression", "tolerance",
-                     "choices", "correct_choice", "criteria", "rubric_criterion", "explanation")
+            order = ("id", "label", "kind", "unit", "prefix", "expression", "tolerance",
+                     "choices", "correct_choice", "correct_choices", "criteria",
+                     "misconceptions", "rubric_criterion", "hint", "explanation")
             branch["properties"] = {key: properties[key] for key in order if key in properties}
             branch["required"] = [key for key in branch["properties"] if key in branch["required"]]
         return schema
 
 
 class TutorialActivityDraft(LessonActivityDraft):
-    """A short phase has one response, or two tightly coupled responses."""
+    """A short phase has one response, or two tightly coupled responses.
+
+    New tutorials prefer numbers and multi-select over free text: every activity
+    needs a number or multi_choice field and at most one text field, and each
+    scored field names its result-panel criterion. Legacy lesson drafts keep the
+    looser LessonActivityDraft contract.
+    """
 
     fields: list[DraftAnswerField] = Field(min_length=1, max_length=2,
         description="One meaningful response, optionally a second necessary reasoning response. Simplify the task, not its timing; do not bundle a long quiz inside one text field.")
+
+    @model_validator(mode="after")
+    def new_workbook_rules(self):
+        check_generated_fields(self.id, self.fields)
+        return self
+
+    @classmethod
+    def model_json_schema(cls, *args, **kwargs) -> dict:
+        schema = super().model_json_schema(*args, **kwargs)
+        # Make the conditional rule visible before a paid response is written.
+        for name in ("NumberDraftField", "ChoiceDraftField", "MultiChoiceDraftField"):
+            branch = schema["$defs"][name]
+            if "rubric_criterion" not in branch["required"]:
+                branch["required"] = [key for key in branch["properties"]
+                                      if key in branch["required"] or key == "rubric_criterion"]
+        return schema
 
 
 class ExplanationOwnershipVerdict(StrictModel):
@@ -166,7 +202,8 @@ def explanation_ownership_candidate(data: Any) -> ExplanationOwnershipCandidate 
         return None
     last = data["fields"][-1]
     if (type(last) is not dict or "explanation" in last or type(data.get("explanation")) is not str
-            or type(last.get("kind")) is not str or last["kind"] not in {"number", "choice", "text"}):
+            or type(last.get("kind")) is not str
+            or last["kind"] not in {"number", "choice", "multi_choice", "text"}):
         return None
     try:
         LessonActivityDraft.model_validate(data)
@@ -242,9 +279,11 @@ def _without_inactive_field_defaults(data: Any) -> Any:
     if not isinstance(data, dict) or not isinstance(data.get("fields"), list):
         return data
     result = copy.deepcopy(data)
-    kinds = {"number": NumberDraftField, "choice": ChoiceDraftField, "text": TextDraftField}
+    kinds = {"number": NumberDraftField, "choice": ChoiceDraftField,
+             "multi_choice": MultiChoiceDraftField, "text": TextDraftField}
     defaults = {"choices": [], "expression": None, "correct_choice": None,
-                "tolerance": 0.01, "criteria": []}
+                "correct_choices": [], "tolerance": 0.01, "criteria": [],
+                "prefix": "", "misconceptions": []}
     for field in result["fields"]:
         if not isinstance(field, dict) or field.get("kind") not in kinds:
             continue

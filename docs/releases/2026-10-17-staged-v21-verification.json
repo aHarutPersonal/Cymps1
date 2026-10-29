@@ -1,0 +1,295 @@
+{
+  "release": "20261017-001200-structured-solutions",
+  "rollback_release": "20261016-153858-scoped-preflight",
+  "image_digest": "sha256:97e972c16a39963bc544ee3860ebc6ce51605dba20192df5cfae95ae55a86d73",
+  "status": "deployed_live_failures_followup_in_progress",
+  "full_backend": {
+    "passed": 3687,
+    "skipped": 4,
+    "warnings": 1,
+    "duration_seconds": 41.82,
+    "provider": "dummy",
+    "database": "isolated_local_test_container"
+  },
+  "exact_image_network_disabled": {
+    "passed": 1883,
+    "skipped": 2,
+    "duration_seconds": 23.02,
+    "test_modules": 63,
+    "unrelated_prototype_excluded": "test_review_payload_projection.py (not deployed; full workspace test passed)"
+  },
+  "independent_review": {
+    "blockers": 0,
+    "focused_runs": [
+      167,
+      168,
+      78
+    ],
+    "counts_overlap": true
+  },
+  "source_files_verified": 28,
+  "configuration_unchanged": true,
+  "build_platform": "linux/arm64",
+  "review_version": 21,
+  "registry_latest_promoted": false,
+  "compiler_evidence_stress": {
+    "fields": 60,
+    "before_seconds": 33.968,
+    "after_seconds": 1.149,
+    "all_proofs_preserved": true,
+    "synthetic_offline": true
+  },
+  "fresh_live_validation": "first_three_completed_0_of_3_accepted",
+  "previous_authorization": {
+    "max_tests": 6,
+    "shared_cap_usd": 3,
+    "tests_completed": 6,
+    "tests_remaining": 0,
+    "reported_usd": 1.0208688,
+    "unknown_reserved_usd": 0,
+    "remaining_usd": 1.9791312,
+    "status": "complete_test_count_exhausted"
+  },
+  "limits": [
+    "Live success of the revised pipeline remains unproven.",
+    "One saved lesson ready; two missing; full fresh app flow remains unverified."
+  ],
+  "predeploy_saved_state": {
+    "existing_qa_copy": {
+      "details_http": 200,
+      "details_status": "available",
+      "plan_http": 200,
+      "practice_http": 200,
+      "practice_state": "ready",
+      "private_keys_absent": true,
+      "ready_lessons": 1
+    },
+    "learner": {
+      "details_http": 200,
+      "details_status": "partial",
+      "plan_http": 200,
+      "practice_http": 200,
+      "practice_state": "ready",
+      "private_keys_absent": true,
+      "ready_lessons": 1
+    },
+    "new_usage_events": 0,
+    "saved_state_fingerprint": "9620a6e2d34355178ba2d25cf3e3775269f53b586c6037e1cfc423a5bcc5a42d",
+    "saved_state_unchanged": true
+  },
+  "changed_files_from_v20": 8,
+  "added_files_from_v20": 4,
+  "runtime": {
+    "release": "20261017-001200-structured-solutions",
+    "image_digest": "sha256:97e972c16a39963bc544ee3860ebc6ce51605dba20192df5cfae95ae55a86d73",
+    "verified_services": [
+      "web",
+      "worker",
+      "worker-high",
+      "worker-low",
+      "catalog-worker",
+      "catalog-control",
+      "curriculum-worker",
+      "curriculum-control",
+      "beat"
+    ],
+    "verified_files": 28,
+    "file_hashes_verified_in_every_service": true
+  },
+  "https_readiness": {
+    "status": "ready",
+    "checks": {
+      "database": true,
+      "redis": true
+    }
+  },
+  "postdeploy_saved_state": {
+    "existing_qa_copy": {
+      "details_http": 200,
+      "details_status": "available",
+      "plan_http": 200,
+      "practice_http": 200,
+      "practice_state": "ready",
+      "private_keys_absent": true,
+      "ready_lessons": 1
+    },
+    "learner": {
+      "details_http": 200,
+      "details_status": "partial",
+      "plan_http": 200,
+      "practice_http": 200,
+      "practice_state": "ready",
+      "private_keys_absent": true,
+      "ready_lessons": 1
+    },
+    "new_usage_events": 0,
+    "saved_state_fingerprint": "9620a6e2d34355178ba2d25cf3e3775269f53b586c6037e1cfc423a5bcc5a42d",
+    "saved_state_unchanged": true
+  },
+  "simulator": {
+    "device": "iPhone 16 Plus",
+    "ios": "18.6",
+    "app_launch": "passed",
+    "authenticated_session": "sign_in_required",
+    "saved_lesson_ui": "not_verified_this_revision",
+    "generation_or_progress_actions_submitted": false
+  },
+  "live_test_authorization": {
+    "max_additional_tests": 6,
+    "shared_additional_cap_usd": 1.97,
+    "combined_ceiling_usd": 3,
+    "status": "approved",
+    "scope": "synthetic accounting, geometry, writing on deployed revision and follow-up fixes",
+    "provider": "Z.ai",
+    "drafts": "private_on_backend",
+    "learner_progress": "unchanged",
+    "tests_reserved": 3,
+    "tests_completed": 3,
+    "tests_remaining": 3,
+    "reported_usd": 0.2193908,
+    "unknown_reserved_usd": 0,
+    "remaining_usd": 1.7506092
+  },
+  "live_launch_safeguards": {
+    "launcher_sha256": "76099ba9b986a5392222faa96a9b65f00dc05e0746e46c1745257ffb61386400",
+    "mock_tests_passed": 18,
+    "first_launch_tests": 3,
+    "new_shared_cap_usd": 1.97,
+    "combined_maximum_usd": 2.9908688,
+    "prior_usage_settled": true,
+    "launch_status": "launched",
+    "independent_review": "no_blockers_18_mocked_tests"
+  },
+  "pilot_launch": {
+    "combined_max_usd": 2.9908688,
+    "image_digest": "sha256:97e972c16a39963bc544ee3860ebc6ce51605dba20192df5cfae95ae55a86d73",
+    "max_tests": 6,
+    "new_tests": 3,
+    "previous_authorization_reported_usd": 1.0208688,
+    "prior_accounted_usd": 0.0,
+    "prior_request_count": 0,
+    "release": "20261017-001200-structured-solutions",
+    "remaining_usd_before_launch": 1.97,
+    "shared_cap_usd": 1.97,
+    "status": "launched",
+    "tests_reserved": 3
+  },
+  "live_batch": {
+    "batch_costs": {
+      "accounted_usd": 0.2193908,
+      "pending_reserved_usd": 0,
+      "reported_usd": 0.2193908,
+      "unknown_reserved_usd": 0
+    },
+    "cap_usd": 1.97,
+    "cases": [
+      {
+        "accounted_usd": 0.1151932,
+        "adjudicated": false,
+        "calls": 4,
+        "elapsed_seconds": 116.818,
+        "failure_count": 1,
+        "pending_reserved_usd": 0,
+        "reported_usd": 0.1151932,
+        "scenario_id": "accounting_novice_missing",
+        "status": "failed",
+        "unknown_reserved_usd": 0
+      },
+      {
+        "accounted_usd": 0.0819282,
+        "adjudicated": false,
+        "calls": 4,
+        "elapsed_seconds": 89.208,
+        "failure_count": 1,
+        "pending_reserved_usd": 0,
+        "reported_usd": 0.0819282,
+        "scenario_id": "geometry_novice_missing",
+        "status": "failed",
+        "unknown_reserved_usd": 0
+      },
+      {
+        "accounted_usd": 0.0222694,
+        "adjudicated": false,
+        "calls": 2,
+        "elapsed_seconds": 52.317,
+        "failure_count": 1,
+        "pending_reserved_usd": 0,
+        "reported_usd": 0.0222694,
+        "scenario_id": "writing_novice_missing",
+        "status": "failed",
+        "unknown_reserved_usd": 0
+      }
+    ],
+    "combined_accounted_usd": 1.2402596,
+    "exit_code": 0,
+    "finished_calls": 10,
+    "pending_calls": 0,
+    "prior_completed_accounted_usd": 1.0208688,
+    "recent_responses": [
+      {
+        "completion_tokens": 3264,
+        "duration_ms": 33105.30817700783,
+        "finish_reason": "stop",
+        "response_received": true,
+        "scenario_id": "geometry_novice_missing",
+        "schema": "LessonPackageActivity",
+        "thoughts_tokens": 0,
+        "usage_unknown": false
+      },
+      {
+        "completion_tokens": 1902,
+        "duration_ms": 27202.93920399854,
+        "finish_reason": "stop",
+        "response_received": true,
+        "scenario_id": "writing_novice_missing",
+        "schema": "LessonPackageSeed",
+        "thoughts_tokens": 0,
+        "usage_unknown": false
+      },
+      {
+        "completion_tokens": 1890,
+        "duration_ms": 25086.262876022374,
+        "finish_reason": "stop",
+        "response_received": true,
+        "scenario_id": "writing_novice_missing",
+        "schema": "LessonPackageSeed",
+        "thoughts_tokens": 39,
+        "usage_unknown": false
+      }
+    ],
+    "release": "20261017-001200-structured-solutions",
+    "running": false,
+    "tests_reserved": 3,
+    "total_costs": {
+      "accounted_usd": 0.2193908,
+      "pending_reserved_usd": 0,
+      "reported_usd": 0.2193908,
+      "unknown_reserved_usd": 0
+    }
+  },
+  "postpilot_saved_state": {
+    "existing_qa_copy": {
+      "details_http": 200,
+      "details_status": "available",
+      "plan_http": 200,
+      "practice_http": 200,
+      "practice_state": "ready",
+      "private_keys_absent": true,
+      "ready_lessons": 1
+    },
+    "learner": {
+      "details_http": 200,
+      "details_status": "partial",
+      "plan_http": 200,
+      "practice_http": 200,
+      "practice_state": "ready",
+      "private_keys_absent": true,
+      "ready_lessons": 1
+    },
+    "new_usage_events": 0,
+    "saved_state_fingerprint": "9620a6e2d34355178ba2d25cf3e3775269f53b586c6037e1cfc423a5bcc5a42d",
+    "saved_state_unchanged": true
+  },
+  "live_failure_stage": "strict_json_and_component_shape_before_semantic_review",
+  "component_audit": "2026-10-17-staged-v21-component-audit.jsonl"
+}

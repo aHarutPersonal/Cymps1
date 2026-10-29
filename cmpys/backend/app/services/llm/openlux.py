@@ -100,8 +100,31 @@ def _unwrap_schema_answer(data: dict, output_model: type[BaseModel] | None) -> d
     return candidate
 
 
+def _connect_phase_failure(error: BaseException) -> bool:
+    """True only when the connection itself failed, so no request was sent.
+
+    The SDK wraps transport errors as ``APIConnectionError`` /
+    ``APITimeoutError`` raised ``from`` the httpx error, so the cause chain
+    decides. A read timeout or a dropped stream is never a connect failure.
+    """
+    import httpx
+
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        if isinstance(current, (httpx.ConnectError, httpx.ConnectTimeout)):
+            return True
+        seen.add(id(current))
+        current = current.__cause__
+    return False
+
+
 class OpenLuxStreamError(RuntimeError):
     """Sanitized failure category for deliberate, operation-specific recovery."""
+
+    # Set by stream_text: the connect failed before any text, so one transport
+    # retry is free (nothing was sent) and cannot splice two replies.
+    connect_phase = False
 
     def __init__(self, error: Exception, provider: str = "openlux"):
         # HTTP 429 also covers exhausted credit. Never treat that as transient
@@ -342,6 +365,30 @@ class OpenLuxLLMClient(OpenAILLMClient):
         return response
 
     async def stream_text(self, system_prompt, user_prompt, *, operation):
+        """Stream visible text; retry once only a connect failure before text.
+
+        A connect-phase failure (the TCP/TLS connection never opened) sent
+        nothing and cost nothing, so it is retried once. A read timeout, any
+        other error, or any failure after text arrived is raised unchanged.
+        Each actual request records its own usage row.
+        """
+        for attempt in (1, 2):
+            try:
+                async with aclosing(self._stream_text_attempt(
+                    system_prompt, user_prompt, operation=operation, attempt=attempt,
+                )) as pieces:
+                    async for content in pieces:
+                        yield content
+                return
+            except OpenLuxStreamError as exc:
+                if attempt == 2 or not exc.connect_phase:
+                    raise
+                logger.warning(
+                    "%s stream could not connect (%s); retrying once before any text",
+                    self.provider_name, operation,
+                )
+
+    async def _stream_text_attempt(self, system_prompt, user_prompt, *, operation, attempt):
         from app.services.llm.telemetry import UsageRecord, record_usage_records
 
         started = time.perf_counter()
@@ -364,7 +411,9 @@ class OpenLuxLLMClient(OpenAILLMClient):
                 raise RuntimeError(f"{self.provider_name} returned an incomplete response")
             success = True
         except Exception as exc:
-            raise OpenLuxStreamError(exc, self.provider_name) from None
+            error = OpenLuxStreamError(exc, self.provider_name)
+            error.connect_phase = chars == 0 and _connect_phase_failure(exc)
+            raise error from None
         finally:
             # Missing usage after an interrupted stream is unknown spend,
             # not a free call. Persist the failure even without a usage chunk.
@@ -388,6 +437,7 @@ class OpenLuxLLMClient(OpenAILLMClient):
                                     metadata={
                                         "finish_reason": finish,
                                         "response_chars": chars,
+                                        "attempt": attempt,
                                     },
                                 )
                             ]

@@ -48,6 +48,7 @@ _COMPATIBLE_READ_IDENTITIES = frozenset({
 # Exact tutorial-era approval from deployed recovery 9–11. Only read access is
 # compatible: fresh generation/checkpoint reuse still requires today's gates.
 _COMPATIBLE_TUTORIAL_READ_IDENTITIES = frozenset({
+    "03b5bc34c799d4e71d291cb95909cfb36135e303d4108bc56863e7d986e888c1",  # 657463d, before the layered tutorial prompt contract
     "f442841c6cc2178d52ce4d7d95608f32e16405f07fbb7e19e650469010254751",  # preserve published work while scoping pending tutorials
     "0f1a44cbd5f9343f02401eddb4b4c84497110647142a36abeaeec76288cfb298",  # scoped editorial correction after capacity review
     "87dee55052ccd220e67ca4387bbfce5c5cfbbb626a6605dad645dca84799711a",  # named exercise duration metadata
@@ -80,7 +81,7 @@ _COMPATIBLE_TUTORIAL_READ_IDENTITIES = frozenset({
 })
 CAPABILITIES = {
     "version": 1,
-    "answer_types": ["number", "choice", "text"],
+    "answer_types": ["number", "choice", "multi_choice", "text"],
     "max_fields_per_activity": 10,
     "activities": {"min": 2, "max": 6},
     "supports": ["saved_answers", "feedback", "schematic_geometry", "revision"],
@@ -132,6 +133,15 @@ def _generation_package_schema(schema: dict) -> dict:
                 },
             },
             "required": ["criteria"],
+        },
+        {
+            "properties": {
+                "kind": {"const": "multi_choice"},
+                "choices": {"minItems": 2},
+                "correct_choices": {"type": "array", "minItems": 1,
+                                    "items": {"type": "string", "minLength": 1}},
+            },
+            "required": ["choices", "correct_choices"],
         },
     ]
     activity = definitions["Activity"]
@@ -287,6 +297,8 @@ class LessonPackage(StrictModel):
             for field in activity.fields:
                 if field.kind == "number":
                     validate_derivation(field.expression, data)
+                    for misconception in field.misconceptions:
+                        validate_derivation(misconception.expression, data)
             validate_transfer_independence(activity, self.teaching_cases)
             if isinstance(activity.worked_solution, SolutionDocument):
                 from app.services.practice.solution_compiler import compile_worked_solution
@@ -322,6 +334,7 @@ class PrivateFieldPatch(StrictModel):
     field_id: str = Field(max_length=40)
     expression: str | None = Field(default=None, min_length=1, max_length=300)
     correct_choice: str | None = Field(default=None, min_length=1, max_length=40)
+    correct_choices: list[str] | None = Field(default=None, min_length=1, max_length=8)
     criteria: list[str] | None = Field(default=None, min_length=1, max_length=5)
 
 
@@ -422,7 +435,8 @@ def apply_private_package_repair(package: LessonPackage, repair: PrivatePackageR
         changes = patch.model_dump(exclude={"activity_id", "field_id"}, exclude_none=True)
         if field is None:
             raise ValueError("Unknown private field target")
-        allowed = {"number": "expression", "choice": "correct_choice", "text": "criteria"}[field["kind"]]
+        allowed = {"number": "expression", "choice": "correct_choice",
+                   "multi_choice": "correct_choices", "text": "criteria"}[field["kind"]]
         if set(changes) != {allowed}:
             raise ValueError("Private patch must change only the answer for the field's existing kind")
         field.update(changes)
@@ -490,8 +504,18 @@ def render_package_results(sections: dict, package: LessonPackage, *, require_al
     return render_public_package_results(sections, package.writer_context(), require_all=require_all)
 
 
+_LESSON_SECTION_KEYS = frozenset({"why_this_matters", "core_framework", "worked_example", "failure_modes",
+                                  "check_your_understanding", "references"})
+
+
 def render_public_package_results(sections: dict, package_context: dict, *, require_all=True) -> dict:
-    """Use the identical public binding expansion for drafting and publication."""
+    """Use the identical public binding expansion for drafting and publication.
+
+    Tokens are replaced wherever they occur, including inside native reader
+    fences, so callers validate fence arithmetic on the returned text. A new
+    tutorial has lesson sections but no guided_practice: its practice bindings
+    live only in the workbook, so full coverage requires its result tokens only.
+    """
     values = {"result:" + r["claim_id"]: r["display_value"]
               for c in package_context.get("teaching_cases", []) for r in c["results"]}
     activities = package_context.get("practice", {}).get("activities", [])
@@ -519,13 +543,16 @@ def render_public_package_results(sections: dict, package_context: dict, *, requ
             return [render(v) for v in value]
         return value
     result = {k: render(v) for k, v in sections.items()}
-    if require_all and seen != values.keys():
+    required = set(values)
+    if sections.keys() & _LESSON_SECTION_KEYS and sections.get("guided_practice") is None:
+        required -= practice_labels.keys()
+    if require_all and not required <= seen:
         raise ValueError("Every teaching result and practice field must use its server-rendered binding token")
     return result
 
 
 def validation_identity() -> dict:
-    from app.services.llm.prompt_loader import PROMPTS_DIR
+    from app.services.llm.prompt_loader import PROMPTS_DIR, resolve_prompt_text
     from app.services.llm.schemas import (
         PlanDetailLessonSectionsOutput, PlanTutorialLessonSectionsOutput,
         PlanTutorialStepOutput, PlanTutorialOutlineOutput,
@@ -539,14 +566,16 @@ def validation_identity() -> dict:
              "plan_item_tutorial_outline.txt")
     return {"review_version": REVIEW_VERSION, "package_version": PACKAGE_VERSION,
             "capability_hash": digest(CAPABILITIES),
-            "prompt_hash": digest({name: (PROMPTS_DIR / name).read_text() for name in names}),
+            # Resolved text: an edit to an included contract file is a prompt change.
+            "prompt_hash": digest({name: resolve_prompt_text(name, PROMPTS_DIR) for name in names}),
             # These contracts live in Python rather than the old prompt files.
             # Private drafts must not survive an untracked writer/review change.
             "generation_contract_hash": digest({name: (Path(__file__).parent / name).read_text()
                 for name in ("lesson_writer.py", "package_review.py", "lesson_review.py", "workload_contract.py",
                              "package_builder.py", "lesson_package.py", "activity_draft.py", "numeric_metadata.py",
                              "package_preflight.py", "private_checkpoint.py", "../practice/solution_compiler.py",
-                             "tutorial_visuals.py", "tutorial_capacity.py", "../content_quality.py")}),
+                             "tutorial_visuals.py", "tutorial_blocks.py", "tutorial_capacity.py",
+                             "../content_quality.py")}),
             "schema_hash": digest([LessonPackage.model_json_schema(), PlanDetailLessonSectionsOutput.model_json_schema(),
                                    LessonPackageSeed.model_json_schema(), LessonPackageActivity.model_json_schema(),
                                    LessonActivityDraft.model_json_schema(), ExplanationOwnershipVerdict.model_json_schema(),
@@ -840,7 +869,9 @@ async def _repair_public_activities(step, context, package, scope, defects, *, c
                         "Instructions and all explanations together each have a 4000-character maximum. "
                         "Do not invent phase timers or additional word quotas. If categories have defensible overlap, "
                         "use a text response with observable criteria accepting valid interpretations, not a hidden "
-                        "single-choice key. Resolve the ambiguity in the task itself. Every quantitative case fact, "
+                        "single-choice key. A tutorial_v1 activity keeps at least one number or multi_choice field "
+                        "(an exact selection the case fully determines) and at most one text field. "
+                        "Resolve the ambiguity in the task itself. Every quantitative case fact, "
                         "even in fictional prose, needs its own accurately labeled raw datum; omit unnecessary "
                         "invented quantities throughout when they do not serve this exercise." + _ACTIVITY_REPAIR_LIMITS
                     ),
@@ -895,7 +926,7 @@ async def generate_package(step, context, *, client_factory, prior_package=None,
             "{activity_id,field_id,explanation} for that field. Do not copy other fields or other "
             "activities into solution_patches: the server preserves every untouched step exactly. "
             "Use whole solution_patches only for an activity-wide target, and never overlap both forms. "
-            "A field patch may change only expression for number, correct_choice for choice, or criteria for text. "
+            "A field patch may change only expression for number, correct_choice for choice, correct_choices for multi_choice, or criteria for text. "
             "Never clear a required answer key with null. Free audience selection, preferences and self-assessment "
             "cannot have a fixed correct choice; changing their field kind is a public defect. "
             "Use named raw facts from that activity in formulas, never constant answers. Preserve all public "

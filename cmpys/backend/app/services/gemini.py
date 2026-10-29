@@ -245,7 +245,9 @@ async def _stream_generate(
     if settings.llm_provider in {"openlux", "zai"} and not grounded:
         from app.services.llm.client import get_llm_client
         from app.services.llm.openlux import OpenLuxStreamError
+        from app.services.llm.routing import operation_thinking_level
 
+        thinking_level = operation_thinking_level(operation, thinking_level)
         # Recover interactive tutoring/onboarding only before any text arrives;
         # switching mid-answer would splice two different replies.
         recover_interview = settings.llm_provider == "openlux" and operation in {"interview_stream", "guided_learning_stream"} and bool(settings.gemini_api_key)

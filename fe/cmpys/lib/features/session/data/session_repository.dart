@@ -14,6 +14,37 @@ final sessionRepositoryProvider = Provider<SessionRepository>((ref) {
   return SessionRepository(dioClient: ref.watch(dioClientProvider));
 });
 
+/// The longest [idolTimelineProvider] waits for its two requests; after it
+/// the load fails (the Record falls back to the seeded ledger).
+const idolTimelineTimeout = Duration(seconds: 8);
+
+/// How long a loaded [idolTimelineProvider] result is kept after its last
+/// listener goes, so reopening the Record or the Mentor screen doesn't
+/// fetch again. Failures aren't kept.
+const idolTimelineCacheFor = Duration(minutes: 5);
+
+/// A catalog mentor's documented timeline ([SessionRepository.idolTimeline]),
+/// keyed by the mentor's name. Shared by the mentor timeline widget and the
+/// Record; `ref.invalidate` it to retry (that always fetches again).
+final idolTimelineProvider = FutureProvider.autoDispose
+    .family<List<IdolTimelineEntry>, String>((ref, idolName) async {
+      var disposed = false;
+      Timer? cache;
+      ref.onDispose(() {
+        disposed = true;
+        cache?.cancel();
+      });
+      final rows = await ref
+          .watch(sessionRepositoryProvider)
+          .idolTimeline(idolName)
+          .timeout(idolTimelineTimeout);
+      if (!disposed) {
+        final link = ref.keepAlive();
+        cache = Timer(idolTimelineCacheFor, link.close);
+      }
+      return rows;
+    });
+
 /// The agentic-session flow refers to the repository by this name.
 typedef AgenticSessionRepository = SessionRepository;
 
@@ -92,6 +123,115 @@ class SessionRepository {
     final response = await _dioClient.get('/idols/discover', queryParameters: {'q': query, 'limit': 10});
     return (response.data['candidates'] as List)
         .map((m) => Map<String, dynamic>.from(m as Map)).toList();
+  }
+
+  /// "Prepare profile": queue a research job for a person who is not in the
+  /// library yet. `POST /idols/import` returns at once with the queued job; the
+  /// worker drafts the profile, and it is checked before it is published.
+  Future<IdolImportResult> importIdol(String name) async {
+    var clean = name.trim().replaceAll(RegExp(r'\s+'), ' ');
+    if (clean.length > _maxImportNameLength) {
+      clean = clean.substring(0, _maxImportNameLength).trimRight();
+    }
+    final response = await _dioClient.post(
+      '/idols/import',
+      data: {
+        'provider': 'llm',
+        'externalId': 'llm:${_slug(clean)}',
+        'name': clean,
+      },
+    );
+    return IdolImportResult.fromJson(
+      Map<String, dynamic>.from(response.data as Map),
+    );
+  }
+
+  /// The documented timeline for a catalog mentor, found by name.
+  ///
+  /// Suggestions carry no catalog id, so the published idol is looked up with
+  /// `GET /idols/search` (exact name or alias) and its events are read from
+  /// `GET /idols/{id}/timeline`. An idol that is not in the catalog, or has no
+  /// event with a known age, gives an empty list.
+  ///
+  /// Only an unambiguous match counts: when two catalog idols share the name
+  /// (homonyms), or the search page could not hold every match, the result
+  /// is empty rather than another person's timeline.
+  Future<List<IdolTimelineEntry>> idolTimeline(String idolName) async {
+    final wanted = _fold(idolName);
+    if (wanted.isEmpty) return const [];
+    // The search is a substring match with no ordering, so ask for the
+    // server's largest page: a short page could cut the exact match off.
+    final search = await _dioClient.get(
+      '/idols/search',
+      queryParameters: {'q': idolName.trim(), 'limit': _idolSearchLimit},
+    );
+    final rows = search.data['idols'] as List? ?? const [];
+    final total = (search.data['total'] as num?)?.toInt() ?? rows.length;
+    if (total > rows.length) return const [];
+    final matches = <String>{};
+    for (final raw in rows) {
+      final idol = Map<String, dynamic>.from(raw as Map);
+      final names = [
+        idol['name']?.toString() ?? '',
+        for (final alias in (idol['aliases'] as List? ?? const []))
+          (alias as Map)['alias_text']?.toString() ?? '',
+      ];
+      final id = idol['id']?.toString() ?? '';
+      if (id.isNotEmpty && names.any((n) => _fold(n) == wanted)) {
+        matches.add(id);
+      }
+    }
+    if (matches.length != 1) return const [];
+    final idolId = matches.single;
+
+    final response = await _dioClient.get(
+      '/idols/$idolId/timeline',
+      queryParameters: {'limit': 50},
+    );
+    final entries = <IdolTimelineEntry>[];
+    for (final raw in (response.data['events'] as List? ?? const [])) {
+      final event = Map<String, dynamic>.from(raw as Map);
+      final age = event['ageAtEvent'];
+      if (age is! num) continue;
+      final title = (event['canonicalTitle']?.toString() ?? '').trim();
+      final text = title.isNotEmpty
+          ? title
+          : (event['canonicalDescription']?.toString() ?? '').trim();
+      if (text.isEmpty) continue;
+      final id = event['id']?.toString().trim() ?? '';
+      final category = event['category']?.toString().trim() ?? '';
+      entries.add(
+        IdolTimelineEntry(
+          age: age.toInt(),
+          text: text,
+          id: id.isEmpty ? null : id,
+          category: category.isEmpty ? null : category,
+        ),
+      );
+    }
+    return entries;
+  }
+
+  /// Idol names are stored in a 255-character column; stay well inside it.
+  static const _maxImportNameLength = 120;
+
+  /// `GET /idols/search`'s largest page.
+  static const _idolSearchLimit = 100;
+
+  static String _fold(String value) =>
+      value.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
+
+  /// `llm:` external ids are the name in snake case, as the catalog's other
+  /// model-sourced rows are (`llm:elon_musk`). Letters of any script are kept,
+  /// so two different names never share an id.
+  static String _slug(String name) {
+    final slug = name
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^\p{L}\p{N}]+', unicode: true), '_')
+        .replaceAll(RegExp(r'^_+|_+$'), '');
+    if (slug.isNotEmpty) return slug;
+    // Nothing but symbols: hex of the text still keeps distinct names apart.
+    return name.codeUnits.map((c) => c.toRadixString(16)).join('_');
   }
 
   Future<List<Map<String, dynamic>>> learningMessages(String sessionId) async {
@@ -279,6 +419,7 @@ class SessionRepository {
     String content, {
     bool isKickoff = false,
     String? questionId,
+    bool missingEvidence = false,
   }) async* {
     debugPrint('💬 Sending interview message to session $sessionId');
 
@@ -286,6 +427,9 @@ class SessionRepository {
       'content': content,
       'is_kickoff': isKickoff,
       if (questionId != null) 'question_id': questionId,
+      // The learner picked the question's "I don't have one yet" option:
+      // planning records missing evidence rather than a self-report.
+      if (missingEvidence) 'missing_evidence': true,
     });
 
     final stream = response.data.stream as Stream<List<int>>;

@@ -41,6 +41,8 @@ User prompts and their consumers (placeholders per PROMPT_PLACEHOLDERS below):
 - discover_feed.txt — discover feed generation in api/v1/feed.py.
 - thinking_plan.txt / thinking_task.txt — streamed "thinking out loud" narration.
 - image_generate.txt — DEPRECATED, not wired to any service.
+- tutorial_illustration.txt — Imagen prompt for the optional per-tutorial hero
+  illustration (services/planning/tutorial_illustration.py).
 """
 import json
 import logging
@@ -272,6 +274,9 @@ PROMPT_PLACEHOLDERS = {
     "plan_backbone_generate.txt": [
         "user_goal",
         "hours_per_week",
+        "weekly_minutes",
+        "weekly_capacity_label",
+        "capacity_rule",
         "target_age",
         "user_context",
         "idol_name",
@@ -290,6 +295,9 @@ PROMPT_PLACEHOLDERS = {
     "plan_week_generate.txt": [
         "user_goal",
         "hours_per_week",
+        "weekly_minutes",
+        "weekly_capacity_label",
+        "capacity_rule",
         "user_context",
         "idol_name",
         "idol_domain",
@@ -344,7 +352,6 @@ PROMPT_PLACEHOLDERS = {
         "user_financial_status",
         "user_interests_json",
         "user_goal",
-        "chat_history_json",
     ],
 
     "interview_question.txt": [
@@ -360,6 +367,7 @@ PROMPT_PLACEHOLDERS = {
         "user_message",
         "required_answer_key",
         "required_answer_instruction",
+        "required_control_contract",
         "answered_keys_json",
         "missing_keys_json",
     ],
@@ -379,7 +387,8 @@ PROMPT_PLACEHOLDERS = {
         "interview_transcript_json",
         "comparison_summary",
         "idol_facts_json",
-        "weekly_hours",
+        "weekly_minutes",
+        "weekly_capacity_label",
     ],
 
     "idol_suggest.txt": [
@@ -423,6 +432,8 @@ PROMPT_PLACEHOLDERS = {
         "user_background",
         "user_achievements",
     ],
+
+    "tutorial_illustration.txt": ["title", "concept", "domain"],
 
 }
 
@@ -504,6 +515,29 @@ def extract_placeholders(template: str) -> list[str]:
     return list(set(m for m in matches if m not in json_tokens))
 
 
+_INCLUDE_PATTERN = re.compile(r"\{\{include:([A-Za-z0-9_][A-Za-z0-9_.-]*\.txt)\}\}")
+
+
+def resolve_prompt_text(name: str, prompts_dir: Path | None = None) -> str:
+    """Read a template with ``{{include:<file>.txt}}`` lines expanded.
+
+    Shared contracts live in one file and appear byte-identically in every
+    prompt that includes them. Includes are one level deep and must name a
+    plain file in the same directory; identity hashes use this resolved text
+    so editing an included file invalidates dependent drafts.
+    """
+    directory = prompts_dir or PROMPTS_DIR
+    content = (directory / name).read_text(encoding="utf-8")
+
+    def include(match: re.Match[str]) -> str:
+        included = (directory / match.group(1)).read_text(encoding="utf-8").rstrip("\n")
+        if _INCLUDE_PATTERN.search(included):
+            raise ValueError(f"Nested prompt include in {match.group(1)}")
+        return included
+
+    return _INCLUDE_PATTERN.sub(include, content)
+
+
 @lru_cache(maxsize=32)
 def load_prompt(name: str) -> str:
     """
@@ -527,8 +561,8 @@ def load_prompt(name: str) -> str:
     if not prompt_path.exists():
         raise FileNotFoundError(f"Prompt template not found: {prompt_path}")
     
-    content = prompt_path.read_text(encoding="utf-8")
-    
+    content = resolve_prompt_text(name)
+
     # Track loaded prompts
     _loaded_prompts.add(name)
     
@@ -705,6 +739,7 @@ PROMPT_REGISTRY = {
             "book_writer_system.txt",
             "book_module_generate.txt",
         ],
+        "generate_tutorial_illustration": ["tutorial_illustration.txt"],
     },
     "curriculum": {
         "grounded_research": [

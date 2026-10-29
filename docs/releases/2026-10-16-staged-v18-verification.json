@@ -1,0 +1,93 @@
+{
+  "release": "20261016-144021-contract-recovery",
+  "rollback_release": "20261016-141535-source-evidence",
+  "status": "deployed_live_validation_failed",
+  "full_backend": {
+    "passed": 3385,
+    "skipped": 4,
+    "warnings": 1,
+    "duration_seconds": 31.17
+  },
+  "exact_image_network_disabled": {
+    "passed": 1610,
+    "skipped": 1,
+    "duration_seconds": 17.36
+  },
+  "independent_review": {
+    "blockers": 0,
+    "focused_tests": 233,
+    "final_tests": 22,
+    "counts_overlap": true
+  },
+  "source_files_verified": 23,
+  "changed_files_from_v17": 7,
+  "added_files_from_v17": 0,
+  "configuration_unchanged": true,
+  "paid_test_authorization_remaining": false,
+  "fresh_live_validation": "failed_0_of_3",
+  "prior_v17_batch": {
+    "accepted": 0,
+    "count": 3,
+    "reported_cost_usd": 0.305534,
+    "unknown_reserved_usd": 0,
+    "pending_calls": 0,
+    "calls": 14,
+    "timeouts": 0
+  },
+  "combined_v15_v16_v17_accounted_usd": 1.30866815,
+  "registry_latest_promoted": false,
+  "image_digest": "sha256:ee8fd49866fabbf7a1a282bd118d73a1c5f8f44ccca9d1724af46ae0a0ddd124",
+  "runtime": {
+    "file_hashes_verified_in_every_service": true,
+    "image_digest": "sha256:ee8fd49866fabbf7a1a282bd118d73a1c5f8f44ccca9d1724af46ae0a0ddd124",
+    "release": "20261016-144021-contract-recovery",
+    "verified_files": 23,
+    "verified_services": [
+      "web",
+      "worker",
+      "worker-high",
+      "worker-low",
+      "catalog-worker",
+      "catalog-control",
+      "curriculum-worker",
+      "curriculum-control",
+      "beat"
+    ]
+  },
+  "https_readiness": {
+    "status": "ready",
+    "checks": {
+      "database": true,
+      "redis": true
+    }
+  },
+  "saved_state_unchanged": true,
+  "saved_state_fingerprint": "9620a6e2d34355178ba2d25cf3e3775269f53b586c6037e1cfc423a5bcc5a42d",
+  "new_usage_events_from_smoke": 0,
+  "saved_learner_lesson_state": {
+    "ready": 1,
+    "missing": 2
+  },
+  "requested_batch": {
+    "approved_by_owner": true,
+    "count": 3,
+    "cases": [
+      "accounting",
+      "geometry",
+      "writing"
+    ],
+    "shared_cap_usd": 0.68,
+    "status": "complete",
+    "combined_accounting_ceiling_usd": 1.98866815,
+    "observed_started_at_utc": "2026-10-16T14:47:56.029763622Z",
+    "accepted": 0,
+    "reported_cost_usd": 0.2466632,
+    "unknown_reserved_usd": 0.08340125,
+    "accounted_usd": 0.33006445,
+    "pending_calls": 0,
+    "finished_calls": 13
+  },
+  "combined_v15_through_v18_accounted_usd": 1.6387326,
+  "postpilot_saved_state_unchanged": true,
+  "postpilot_new_usage_events": 0
+}

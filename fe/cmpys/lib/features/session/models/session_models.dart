@@ -244,14 +244,46 @@ class SessionCreateRequest with _$SessionCreateRequest {
     required String financialStatus,
     required List<String> interests,
     String? goal,
+
+    /// Chips from the onboarding "situation" step (e.g. "I work full-time").
+    @Default(<String>[]) List<String> situation,
+
+    /// Optional free text from the same step.
+    String? situationNote,
   }) = _SessionCreateRequest;
 
-  Map<String, dynamic> toJson() => {
-    'age': age,
-    'financial_status': financialStatus,
-    'interests': interests,
-    if (goal != null) 'goal': goal,
-  };
+  /// Backend limits (`SessionCreate`): a goal of at most 200 characters, up to
+  /// 8 situation items of 1–60 characters, and a note of at most 500.
+  static const maxGoalLength = 200;
+  static const maxSituationItems = 8;
+  static const maxSituationItemLength = 60;
+  static const maxSituationNoteLength = 500;
+
+  static String _clip(String value, int max) =>
+      value.length <= max ? value : value.substring(0, max).trimRight();
+
+  /// The request body. Free text is trimmed and clipped, and blank situation
+  /// items are dropped, so a long answer never turns into a 422; the optional
+  /// fields are left out when empty so older servers see the same body as before.
+  Map<String, dynamic> toJson() {
+    final cleanGoal = goal == null ? null : _clip(goal!.trim(), maxGoalLength);
+    final cleanSituation = [
+      for (final item in situation)
+        if (item.trim().isNotEmpty) _clip(item.trim(), maxSituationItemLength),
+    ].take(maxSituationItems).toList();
+    final cleanNote = situationNote == null
+        ? null
+        : _clip(situationNote!.trim(), maxSituationNoteLength);
+    return {
+      'age': age,
+      'financial_status': financialStatus,
+      'interests': interests,
+      if (cleanGoal != null && cleanGoal.isNotEmpty) 'goal': cleanGoal,
+      if (cleanSituation.isNotEmpty) 'situation': cleanSituation,
+      if (cleanNote != null && cleanNote.isNotEmpty)
+        'situation_note': cleanNote,
+    };
+  }
 }
 
 /// Request to choose the session mentor.
@@ -365,4 +397,57 @@ class DailyFeedResponse with _$DailyFeedResponse {
   Map<String, dynamic> toJson() => {
     'insights': insights.map((e) => e.toJson()).toList(),
   };
+}
+
+/// Result of `POST /idols/import` (`IdolImportResponse`).
+///
+/// The endpoint only enqueues the research job, so a new profile comes back as
+/// a queued job for an idol that is still pending review; nothing in the
+/// response is a progress figure.
+class IdolImportResult {
+  const IdolImportResult({
+    required this.idolId,
+    this.jobId,
+    required this.status,
+  });
+
+  factory IdolImportResult.fromJson(Map<String, dynamic> json) =>
+      IdolImportResult(
+        idolId: json['idolId']?.toString() ?? '',
+        jobId: json['jobId']?.toString(),
+        status: json['status']?.toString() ?? 'queued',
+      );
+
+  final String idolId;
+  final String? jobId;
+  final String status;
+
+  /// Only an explicit `published` (the catalog's own status) is ready to
+  /// preview; anything else is a profile still waiting to be checked.
+  bool get isPublished => status.toLowerCase() == 'published';
+
+  /// The research job failed (the server can return a recent failed job
+  /// instead of starting another): nothing is queued, and the learner may
+  /// try again later.
+  bool get isFailed => status.trim().toLowerCase() == 'failed';
+}
+
+/// One documented event from `GET /idols/{id}/timeline`, placed by age.
+class IdolTimelineEntry {
+  const IdolTimelineEntry({
+    required this.age,
+    required this.text,
+    this.id,
+    this.category,
+  });
+
+  final int age;
+  final String text;
+
+  /// The event's catalog id, when the server sent one.
+  final String? id;
+
+  /// The event's category (`career`, `learning`, `finance`, `impact`,
+  /// `mindset` or `other`), when the server sent one.
+  final String? category;
 }

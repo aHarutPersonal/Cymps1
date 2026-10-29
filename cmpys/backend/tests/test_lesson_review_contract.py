@@ -607,3 +607,17 @@ async def test_truncated_review_cannot_approve_even_valid_looking_json():
         client_factory=lambda **kwargs: client, context={})
     assert failures and 'incomplete' in returned.error
     client.generate_json.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_final_review_prompt_knows_multi_select_answers_are_supported():
+    from app.services.llm.client import LLMResponse
+    client = SimpleNamespace(generate_json=AsyncMock(return_value=LLMResponse(data=_review(), finish_reason='stop')))
+    await review_lesson({'lesson_content': 'A complete explanation.'}, client_factory=lambda **kw: client, context={})
+    prompt = " ".join(client.generate_json.await_args_list[0].kwargs['system_prompt'].split())
+    assert "number, single-choice, multi-select and free-text answers" in prompt
+
+
+def test_lesson_writer_contract_lists_every_supported_field_kind():
+    from app.services.planning.lesson_writer import _COMMON_CONTRACT
+    assert "numeric/choice/multi_choice/text fields" in " ".join(_COMMON_CONTRACT.split())

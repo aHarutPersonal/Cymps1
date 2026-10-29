@@ -1,3 +1,4 @@
+import 'package:cmpys/core/ui/v3/v3.dart';
 import 'package:cmpys/features/cmpys/data/cmpys_seed.dart';
 import 'package:cmpys/features/cmpys/presentation/onboarding/intake_step.dart';
 import 'package:cmpys/features/cmpys/presentation/onboarding/personalize_step.dart';
@@ -23,6 +24,7 @@ class _IntakeRepo extends Fake implements SessionRepository {
     String content, {
     bool isKickoff = false,
     String? questionId,
+    bool missingEvidence = false,
   }) async* {
     yield {'type': 'chunk', 'content': 'What would you like to learn first?'};
     yield {
@@ -59,7 +61,7 @@ void main() {
     await tester.enterText(find.byType(TextField), 'Morgan');
     await tester.tap(find.text('Continue'));
     await tester.pumpAndSettle();
-    await tester.tap(find.byIcon(Icons.chevron_left_rounded));
+    await tester.tap(find.byType(V3IconButton));
     await tester.pumpAndSettle();
     expect(
       tester.widget<TextField>(find.byType(TextField)).controller!.text,

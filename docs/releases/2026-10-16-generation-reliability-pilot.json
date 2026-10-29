@@ -1,0 +1,188 @@
+{
+  "scenario_id": "accounting_novice_missing",
+  "tier": "balanced",
+  "full_pipeline": true,
+  "accepted": false,
+  "adjudicated": false,
+  "elapsed_ms": 470005.49056699674,
+  "estimated_cost_usd": 0.6037452499999999,
+  "cost_scope": "complete lesson pipeline including package",
+  "failures": [
+    "Concurrent lesson generation failed: step_1: Section drafting failed: framing: zai request failed (TimeoutError; shared deadline); practice: lesson drafting deadline reached"
+  ],
+  "validation_identity": {
+    "review_version": 8,
+    "package_version": 1,
+    "capability_hash": "1815a97ad0c7246f737c493fbec7b9217c6a5dd6a7d96cacd93c0c34b3afe48f",
+    "prompt_hash": "cdd99632a9176250944e80d798415bb67278d8fe9d3f35e62961fbbb0fe4cae9",
+    "generation_contract_hash": "d5dd5dfd85acf3532793e336ca26cc7d70df27851184e0d83921b9a8312c4b3a",
+    "schema_hash": "69872a66dd96125909e6196f7257f85ad5242b0eefda87a9e266781858b57dc8"
+  },
+  "attempts": [
+    {
+      "stage": "parallel_lesson_step_1_package",
+      "error": null,
+      "duration_ms": 83811.04358799348
+    },
+    {
+      "stage": "parallel_lesson_step_1_package_preflight",
+      "error": null,
+      "duration_ms": 22319.608167003025
+    },
+    {
+      "stage": "parallel_lesson_step_1_draft_1_framing_1",
+      "error": null,
+      "duration_ms": 32790.42116200435
+    },
+    {
+      "stage": "parallel_lesson_step_1_draft_1_mechanism_1",
+      "error": null,
+      "duration_ms": 44415.43162500602
+    },
+    {
+      "stage": "parallel_lesson_step_1_draft_1_worked_1",
+      "error": null,
+      "duration_ms": 39530.249991003075
+    },
+    {
+      "stage": "parallel_lesson_step_1_draft_1_practice_1",
+      "error": null,
+      "duration_ms": 45460.16542399593
+    },
+    {
+      "stage": "parallel_lesson_step_1_review_1",
+      "error": null,
+      "duration_ms": 83234.86969700025
+    },
+    {
+      "stage": "parallel_lesson_step_1_draft_2_framing_1",
+      "error": "Lesson section contract failed: references has 35 words; minimum is 40; meet its requested target",
+      "duration_ms": 34073.228590001236
+    },
+    {
+      "stage": "parallel_lesson_step_1_draft_2_mechanism_1",
+      "error": null,
+      "duration_ms": 43504.5304549858
+    },
+    {
+      "stage": "parallel_lesson_step_1_draft_2_worked_1",
+      "error": null,
+      "duration_ms": 43152.452195005026
+    },
+    {
+      "stage": "parallel_lesson_step_1_draft_2_practice_1",
+      "error": "zai request failed (TimeoutError; shared deadline)",
+      "duration_ms": 46998.574280994944
+    },
+    {
+      "stage": "parallel_lesson_step_1_draft_2_framing_2",
+      "error": "zai request failed (TimeoutError; shared deadline)",
+      "duration_ms": 13276.256341006956
+    }
+  ],
+  "cap_usd": 3,
+  "known_usage_usd": 0.40606999999999993,
+  "unknown_reserved_usd": 0.19767524999999997,
+  "unknown_calls": 2,
+  "requests": 14,
+  "stages": [
+    {
+      "schema": "LessonPackage",
+      "duration_ms": 80035.41127200879,
+      "charged_or_reserved_usd": 0.041884,
+      "usage_unknown": false,
+      "error": "zai request failed (ValueError; finish=length)"
+    },
+    {
+      "schema": "LessonPackage",
+      "duration_ms": 83811.04358799348,
+      "charged_or_reserved_usd": 0.036197,
+      "usage_unknown": false,
+      "error": null
+    },
+    {
+      "schema": "PackageReview",
+      "duration_ms": 22319.608167003025,
+      "charged_or_reserved_usd": 0.0115416,
+      "usage_unknown": false,
+      "error": null
+    },
+    {
+      "schema": "LessonSectionGroup_framing",
+      "duration_ms": 32790.42116200435,
+      "charged_or_reserved_usd": 0.0213948,
+      "usage_unknown": false,
+      "error": null
+    },
+    {
+      "schema": "LessonSectionGroup_mechanism",
+      "duration_ms": 44415.43162500602,
+      "charged_or_reserved_usd": 0.0277382,
+      "usage_unknown": false,
+      "error": null
+    },
+    {
+      "schema": "LessonSectionGroup_worked",
+      "duration_ms": 39530.249991003075,
+      "charged_or_reserved_usd": 0.0242602,
+      "usage_unknown": false,
+      "error": null
+    },
+    {
+      "schema": "LessonSectionGroup_practice",
+      "duration_ms": 45460.16542399593,
+      "charged_or_reserved_usd": 0.0315828,
+      "usage_unknown": false,
+      "error": null
+    },
+    {
+      "schema": "LessonReview",
+      "duration_ms": 19987.435064002057,
+      "charged_or_reserved_usd": 0.053428,
+      "usage_unknown": false,
+      "error": null
+    },
+    {
+      "schema": "LessonReview",
+      "duration_ms": 83234.86969700025,
+      "charged_or_reserved_usd": 0.0809646,
+      "usage_unknown": false,
+      "error": null
+    },
+    {
+      "schema": "LessonSectionGroup_framing",
+      "duration_ms": 34073.228590001236,
+      "charged_or_reserved_usd": 0.0228888,
+      "usage_unknown": false,
+      "error": null
+    },
+    {
+      "schema": "LessonSectionGroup_mechanism",
+      "duration_ms": 43504.5304549858,
+      "charged_or_reserved_usd": 0.0274194,
+      "usage_unknown": false,
+      "error": null
+    },
+    {
+      "schema": "LessonSectionGroup_worked",
+      "duration_ms": 43152.452195005026,
+      "charged_or_reserved_usd": 0.0267706,
+      "usage_unknown": false,
+      "error": null
+    },
+    {
+      "schema": null,
+      "duration_ms": null,
+      "charged_or_reserved_usd": 0.09878424999999999,
+      "usage_unknown": true,
+      "error": null
+    },
+    {
+      "schema": null,
+      "duration_ms": null,
+      "charged_or_reserved_usd": 0.09889099999999999,
+      "usage_unknown": true,
+      "error": null
+    }
+  ]
+}

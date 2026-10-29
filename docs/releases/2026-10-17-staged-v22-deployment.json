@@ -1,0 +1,1 @@
+{"release": "20261017-013000-field-drafts", "image_digest": "sha256:9b30b39bfb0f6dc5b4e82114c2dace33eef546c78c5bbba1af8225006bb68fdb", "verified_services": ["web", "worker", "worker-high", "worker-low", "catalog-worker", "catalog-control", "curriculum-worker", "curriculum-control", "beat"], "verified_files": 29, "file_hashes_verified_in_every_service": true}

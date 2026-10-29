@@ -250,7 +250,9 @@ async def test_negative_preflight_blocks_compiler_evidence_and_exposes_only_type
 
 
 @pytest.mark.asyncio
-async def test_preflight_requests_only_authored_residual_and_keeps_complete_seed_union():
+async def test_preflight_requests_only_authored_residual_and_keeps_complete_seed_union(monkeypatch):
+    # Model-residual mechanics, for spans code cannot bind (resolver off).
+    monkeypatch.setattr(preflight, "_accepted_literal_facts", lambda *args: {})
     raw = typed_package().model_dump(mode="json")
     raw["workbook"]["activities"][0]["worked_solution"]["steps"][0]["explanation"] += " Receipts are 120."
     package, client = LessonPackage.model_validate(raw), Reviewer()
@@ -271,7 +273,8 @@ async def test_preflight_requests_only_authored_residual_and_keeps_complete_seed
 
 
 @pytest.mark.asyncio
-async def test_preflight_residual_correction_preserves_seed_and_budget():
+async def test_preflight_residual_correction_preserves_seed_and_budget(monkeypatch):
+    monkeypatch.setattr(preflight, "_accepted_literal_facts", lambda *args: {})
     raw = typed_package().model_dump(mode="json")
     raw["workbook"]["activities"][0]["worked_solution"]["steps"][0]["explanation"] += " Receipts are 120."
     package, client = LessonPackage.model_validate(raw), Reviewer()
@@ -339,3 +342,18 @@ async def test_model_cannot_replace_compiler_owned_final_evidence():
         client_factory=lambda **kwargs: client, context={"lesson_package": typed_package().review_context()})
     assert errors and result.error == "Lesson review included unrequested compiler-owned evidence"
     assert client.generate_json.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_preflight_binds_a_literal_residual_in_code_without_an_evidence_call():
+    raw = typed_package().model_dump(mode="json")
+    raw["workbook"]["activities"][0]["worked_solution"]["steps"][0]["explanation"] += " Receipts are 120."
+    package, client = LessonPackage.model_validate(raw), Reviewer()
+    snapshots = []
+    async def save(value): snapshots.append(copy.deepcopy(value))
+    errors, response, _ = await preflight.review_package(package, {}, {}, client_factory=client.factory, on_review=save)
+    assert not errors and not response.error
+    assert [name for name, _ in client.calls] == ["PackageSemanticReview"]
+    facts = snapshots[-1]["scopes"]["a0"]["evidence"]["literal_facts"]
+    assert [fact["datum_ids"] for fact in facts] == [["receipts"]]
+    preflight.validate_preflight_state(snapshots[-1], package=package, outline={}, context={})

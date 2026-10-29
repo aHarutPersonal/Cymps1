@@ -5,9 +5,10 @@ import json
 
 from app.core.config import settings
 from app.services.llm import get_llm_client
+from app.services.llm.routing import operation_thinking_level
 from app.services.llm.telemetry import record_llm_response
 from app.services.llm.tracing import traced_operation
-from app.services.practice.contracts import Activity, TextReview, Workbook
+from app.services.practice.contracts import Activity, GeneratedWorkbook, TextReview
 
 
 # Generation and persistence must finish before another request can reclaim
@@ -67,7 +68,8 @@ async def _structured_request(prompt: str, payload: dict, schema, operation: str
         client = get_llm_client(
             tier="balanced",
             timeout=primary_timeout, max_tokens=PRACTICE_OUTPUT_TOKENS, allow_fallback=False,
-            thinking_level="low" if settings.llm_provider == "zai" else None
+            thinking_level=operation_thinking_level(
+                operation, "low" if settings.llm_provider == "zai" else None)
         )
     recovery_timeout = 30
     model = None
@@ -125,14 +127,17 @@ async def _structured_request(prompt: str, payload: dict, schema, operation: str
     return model
 
 
-async def generate_workbook(step: dict, context: dict) -> Workbook:
+async def generate_workbook(step: dict, context: dict) -> GeneratedWorkbook:
+    # New workbooks must satisfy the stricter v3 rules (a number or multi_choice
+    # field in every activity, at most one text field). Stored workbooks still
+    # validate against the lenient Workbook.
     return await _structured(
         "lesson_practice_generate.txt",
         {
             "lesson": step,
             "context": context,
         },
-        Workbook,
+        GeneratedWorkbook,
         "lesson_practice_generate",
     )
 

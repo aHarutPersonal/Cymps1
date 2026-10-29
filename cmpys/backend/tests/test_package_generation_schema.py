@@ -34,8 +34,10 @@ def test_wire_number_requires_a_nonempty_expression_and_own_activity_facts():
 
 def test_wire_choice_and_text_require_their_actual_assessment_keys():
     variants = branches()
-    assert set(variants) == {"number", "choice", "text"}
+    assert set(variants) == {"number", "choice", "text", "multi_choice"}
     assert set(variants["choice"]["required"]) == {"choices", "correct_choice"}
+    assert set(variants["multi_choice"]["required"]) == {"choices", "correct_choices"}
+    assert variants["multi_choice"]["properties"]["correct_choices"]["minItems"] == 1
     assert variants["choice"]["properties"]["choices"]["minItems"] == 2
     assert variants["choice"]["properties"]["correct_choice"] == {"type": "string", "minLength": 1}
     assert variants["text"]["required"] == ["criteria"]

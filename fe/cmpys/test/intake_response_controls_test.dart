@@ -257,7 +257,9 @@ void main() {
     await tester.pumpWidget(_composerHarness(responseUi, submitted.add));
 
     expect(find.text('8'), findsOneWidget);
-    expect(find.byType(TextField), findsNothing);
+    // v3: the big number is editable in place (no separate free-text field).
+    expect(find.byType(TextField), findsOneWidget);
+    expect(find.byKey(const ValueKey('intake-number-input')), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('intake-number-plus')));
     await tester.pump();
@@ -299,7 +301,8 @@ void main() {
 
     await tester.tap(find.text('Send answer'));
     await tester.pump();
-    expect(submitted, ['3 hours per week']);
+    // v3 sends the weekly-hours answer as "N hours a week".
+    expect(submitted, ['3 hours a week']);
   });
 
   testWidgets('number picker exposes adjustable value semantics', (
@@ -636,7 +639,7 @@ void main() {
       );
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 120));
-      await tester.tap(find.text('Type instead'));
+      await tester.tap(find.text('Write my own'));
       await tester.pump(const Duration(milliseconds: 250));
       await tester.enterText(find.byType(TextField), 'I am not sure');
       await tester.pump();
@@ -659,7 +662,7 @@ void main() {
       await tester.tap(find.text('Back to number picker'));
       await tester.pump(const Duration(milliseconds: 250));
       expect(find.text('8'), findsOneWidget);
-      await tester.tap(find.text('Type instead'));
+      await tester.tap(find.text('Write my own'));
       await tester.pump(const Duration(milliseconds: 250));
       expect(find.text(validation), findsNothing);
       expect(
@@ -668,6 +671,9 @@ void main() {
       );
       await tester.tap(find.text('Back to number picker'));
       await tester.pump(const Duration(milliseconds: 250));
+      // The v3 number panel is taller than this 600 pt test screen allows.
+      await tester.ensureVisible(find.text('Send answer'));
+      await tester.pump();
       await tester.tap(find.text('Send answer'));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 250));
@@ -707,6 +713,7 @@ class _ResponseUiRepository extends Fake implements SessionRepository {
     String content, {
     bool isKickoff = false,
     String? questionId,
+    bool missingEvidence = false,
   }) async* {
     if (isKickoff) {
       yield {'type': 'chunk', 'content': 'What keeps you accountable?'};
@@ -761,6 +768,7 @@ class _StaleQuestionRepository extends Fake implements SessionRepository {
     String content, {
     bool isKickoff = false,
     String? questionId,
+    bool missingEvidence = false,
   }) async* {
     if (!isKickoff) {
       answeredQuestionIds.add(questionId);
@@ -826,6 +834,7 @@ class _InvalidHoursRepository extends Fake implements SessionRepository {
     String content, {
     bool isKickoff = false,
     String? questionId,
+    bool missingEvidence = false,
   }) async* {
     if (!isKickoff) {
       answers.add(content);

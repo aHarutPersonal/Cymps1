@@ -1,0 +1,137 @@
+{
+  "release": "20261016-150539-validation-boundaries",
+  "rollback_release": "20261016-144021-contract-recovery",
+  "status": "deployed_live_batch_failed_followup_in_progress",
+  "full_backend": {
+    "passed": 3441,
+    "skipped": 4,
+    "warnings": 1,
+    "duration_seconds": 31.8
+  },
+  "exact_image_network_disabled": {
+    "passed": 1666,
+    "skipped": 1,
+    "duration_seconds": 18.19
+  },
+  "independent_review": {
+    "blockers": 0,
+    "focused_tests": 421,
+    "additional_markdown_probes": 7,
+    "additional_grouping_probes": 200,
+    "counts_overlap": true
+  },
+  "source_files_verified": 23,
+  "changed_files_from_v18": 5,
+  "added_files_from_v18": 0,
+  "configuration_unchanged": true,
+  "build_platform": "linux/arm64",
+  "review_version": 19,
+  "paid_test_authorization_remaining": true,
+  "fresh_live_validation": "completed_0_of_3_accepted",
+  "prior_v18_batch": {
+    "accepted": 0,
+    "count": 3,
+    "calls": 13,
+    "timeouts": 1,
+    "reported_cost_usd": 0.2466632,
+    "unknown_reserved_usd": 0.08340125,
+    "accounted_usd": 0.33006445,
+    "pending_calls": 0
+  },
+  "combined_v15_through_v18_accounted_usd": 1.6387326,
+  "registry_latest_promoted": false,
+  "exact_offline_capture_replays": {
+    "accounting": "initial_seed_passes_unchanged_invalid_assumptions_still_rejected",
+    "writing": "original_initial_preflight_evidence_passes_negative_patch_retained",
+    "provider_calls": 0,
+    "network": "disabled",
+    "captures": "read_only"
+  },
+  "limits": [
+    "Live geometry evidence completeness remains unresolved.",
+    "Offline checks do not establish fresh-generation success or latency.",
+    "The larger scope bound permits larger activity request input.",
+    "One saved learner lesson ready; two missing."
+  ],
+  "image_digest": "sha256:5aa0cfd877fa11a2bd5925ea44da4eefabd07df638cd411bcd7c58aec4427efc",
+  "runtime": {
+    "file_hashes_verified_in_every_service": true,
+    "image_digest": "sha256:5aa0cfd877fa11a2bd5925ea44da4eefabd07df638cd411bcd7c58aec4427efc",
+    "release": "20261016-150539-validation-boundaries",
+    "verified_files": 23,
+    "verified_services": [
+      "web",
+      "worker",
+      "worker-high",
+      "worker-low",
+      "catalog-worker",
+      "catalog-control",
+      "curriculum-worker",
+      "curriculum-control",
+      "beat"
+    ]
+  },
+  "https_readiness": {
+    "status": "ready",
+    "checks": {
+      "database": true,
+      "redis": true
+    }
+  },
+  "saved_state_unchanged": true,
+  "saved_state_fingerprint": "9620a6e2d34355178ba2d25cf3e3775269f53b586c6037e1cfc423a5bcc5a42d",
+  "new_usage_events_from_smoke": 0,
+  "saved_learner_lesson_state": {
+    "ready": 1,
+    "missing": 2
+  },
+  "requested_validation_authorization": {
+    "status": "first_batch_complete_three_slots_remaining",
+    "max_synthetic_tests": 6,
+    "shared_additional_cap_usd": 3.0,
+    "scope": "deployed revision and follow-up fixes; accounting, geometry and writing synthetic cases",
+    "provider": "Z.ai",
+    "drafts": "private",
+    "learner_state_changes": false,
+    "paid_calls_started": 19,
+    "tests_reserved": 3,
+    "tests_remaining": 3,
+    "shared_ledger_release": "20261016-150539-validation-boundaries",
+    "batch_label": "",
+    "batch_case_count": 3,
+    "accounted_usd": 0.5345142,
+    "remaining_usd": 2.4654858
+  },
+  "live_batch": {
+    "accepted": 0,
+    "tests": 3,
+    "calls": 19,
+    "reported_cost_usd": 0.5345142,
+    "unknown_reserved_usd": 0,
+    "pending_reserved_usd": 0,
+    "accounted_usd": 0.5345142
+  },
+  "postpilot_saved_state": {
+    "existing_qa_copy": {
+      "details_http": 200,
+      "details_status": "available",
+      "plan_http": 200,
+      "practice_http": 200,
+      "practice_state": "ready",
+      "private_keys_absent": true,
+      "ready_lessons": 1
+    },
+    "learner": {
+      "details_http": 200,
+      "details_status": "partial",
+      "plan_http": 200,
+      "practice_http": 200,
+      "practice_state": "ready",
+      "private_keys_absent": true,
+      "ready_lessons": 1
+    },
+    "new_usage_events": 0,
+    "saved_state_fingerprint": "9620a6e2d34355178ba2d25cf3e3775269f53b586c6037e1cfc423a5bcc5a42d",
+    "saved_state_unchanged": true
+  }
+}

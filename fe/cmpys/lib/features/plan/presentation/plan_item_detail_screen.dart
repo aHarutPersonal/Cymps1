@@ -1,35 +1,59 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:phosphor_flutter/phosphor_flutter.dart';
 
 import '../../../app/design_tokens.dart';
 import '../../../core/network/api_error.dart';
 import '../../../core/ui/app_shell.dart';
-import '../../../core/ui/cmpys/cmpys_primitives.dart';
+import '../../../core/ui/motion/motion_config.dart';
 import '../../../core/ui/motion/page_transition.dart';
+import '../../../core/ui/v3/v3.dart';
+import '../../cmpys/state/plan_data.dart'
+    show TutorialRowState, tutorialRowStates;
+import '../../cmpys/state/today_data.dart' show accessTypeForMaterial;
 import '../data/plan_repository.dart';
 import '../models/plan_models.dart';
 import '../state/current_plan_provider.dart';
 import 'achievement_sheet.dart';
+import 'backend_plan_widgets.dart' show TutorialGlowDisc, TutorialShake;
+import 'book_narration_checkpoint.dart';
 import 'book_reader_screen.dart';
 import 'cycle_completion_screen.dart';
-import 'lesson_reader_screen.dart';
+import 'habit_detail_view.dart';
+import 'material_row.dart';
 import 'material_reader_screen.dart';
 import 'material_video_screen.dart';
 import 'material_web_screen.dart';
+import 'mission_detail_data.dart';
+import 'open_lesson_reader.dart';
+import '../../../core/ui/narration_dock_page.dart';
 
-/// Detail view for one generated plan item — description, success metric,
-/// teach-first lesson steps, and materials (GET /plan-items/{id}/detailed).
+/// `oklch(0.8 0.1 285)` in sRGB: the night card's "Mental model" kick.
+const Color _irisLight = Color(0xFFB7B5FC);
+
+/// Detail view for one generated plan item (GET /plan-items/{id}/detailed).
+/// A mission is the v3 `MissionScreen` (`v3/plan.jsx`): kick, workload,
+/// tutorial timeline, deliverable with its definition of done, the mental
+/// model card and the materials with their reading access; a daily item is
+/// [HabitDetailView].
 ///
 /// Lesson details are generated lazily by a Celery worker; while
 /// `details_status` is pending this screen polls and reveals the lesson when
 /// it lands.
 class PlanItemDetailScreen extends ConsumerStatefulWidget {
-  const PlanItemDetailScreen({super.key, required this.itemId});
+  const PlanItemDetailScreen({
+    super.key,
+    required this.itemId,
+    this.shellBranchIndex = ActiveBookNarrationResume.planBranchIndex,
+  });
 
   final String itemId;
+
+  /// The shell branch this screen was opened from (Today or Plan), handed to
+  /// the book reader and the tutorial reader it opens.
+  final int shellBranchIndex;
 
   @override
   ConsumerState<PlanItemDetailScreen> createState() =>
@@ -53,10 +77,6 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
   static const _detailFailureMessage =
       'This lesson could not be prepared. Please generate it again.';
 
-  final _reflection = TextEditingController();
-  bool _reflectionLoaded = false;
-  bool _savingReflection = false;
-  String? _reflectionStatus;
   PlanItemDetailed? _detailed;
   PlanJobStatus? _detailJob;
   String? _activeDetailJobId;
@@ -78,6 +98,19 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
   final Set<String> _preparingBookGuideKeys = {};
   final Map<String, BookReadingAccess> _bookAccess = {};
   final Map<String, Future<BookReadingAccess>> _bookAccessFlights = {};
+
+  /// Taps on each locked tutorial, which rock its lock.
+  final Map<String, int> _shakes = {};
+
+  /// Books whose reading access is being checked before their sheet opens.
+  final Set<String> _checkingAccessKeys = {};
+
+  /// Bumped when a book's reading access resolves, so an open material
+  /// sheet shows what its CTA will now open.
+  final ValueNotifier<int> _accessRevision = ValueNotifier(0);
+
+  /// How long a material tap waits for an in-flight access check.
+  static const _accessWait = Duration(seconds: 3);
 
   @override
   void initState() {
@@ -105,7 +138,7 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
     WidgetsBinding.instance.removeObserver(this);
     _pollRevision++;
     _poll?.cancel();
-    _reflection.dispose();
+    _accessRevision.dispose();
     super.dispose();
   }
 
@@ -141,10 +174,6 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
           _pollStartedAt = DateTime.now();
           _pollAttempt = 0;
           _takingLong = false;
-        }
-        if (!_reflectionLoaded && detailed.item.isDailyRhythm) {
-          _reflection.text = detailed.dailyReflection;
-          _reflectionLoaded = true;
         }
         _error = null;
         if (detailed.detailsReady || detailed.completed) {
@@ -308,7 +337,12 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
         await _load();
       } else if ((job.readyLessonCount ?? 0) > detailed!.readyLessonCount ||
           (_lessonCheckpointSteps.contains(job.step) &&
-              job.progressPercent > detailed.detailsProgress)) {
+              job.progressPercent > detailed.detailsProgress) ||
+          // Fetch the syllabus once the outline exists; the detail step
+          // guard keeps this to one refresh if the API returns none.
+          (job.step == 'outline_ready' &&
+              detailed.steps.isEmpty &&
+              detailed.detailsStep != 'outline_ready')) {
         // Ready counts survive transient stage changes and rounded percentages
         // in long tutorial sequences. Refresh the persisted content whenever
         // another tutorial is ready, including while the reader is open.
@@ -339,10 +373,6 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
   Future<void> _toggleComplete() async {
     final detailed = _detailed;
     if (detailed == null || _toggling) return;
-    if (detailed.item.isDailyRhythm) {
-      await _toggleDaily();
-      return;
-    }
     setState(() => _toggling = true);
     try {
       final result = await ref
@@ -350,14 +380,17 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
           .toggleItemComplete(
             detailed.item.id,
             artifactJobId: detailed.artifactJobId,
+            // The state the learner asked for, so a retry after a lost
+            // response never flips the mission back.
+            complete: !detailed.completed,
           );
       if (!mounted) return;
       if (result.completed) {
-        showCmpysToast(
+        showV3Toast(
           context,
           "Marked done. Kept your word.",
-          icon: Icons.check_rounded,
-          tone: AppColors.green,
+          icon: V3Icons.check,
+          tone: V3ToastTone.success,
         );
       }
       // Refresh both this screen and the plan-wide progress numbers.
@@ -375,7 +408,8 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
           context,
           ref: ref,
           item: item,
-          planId: plan?.id ?? '',
+          // No plan loaded yet: the achievement carries no plan id.
+          planId: plan?.id,
           cycleNumber: plan?.cycleNumber ?? 1,
         );
       }
@@ -388,43 +422,11 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
       }
     } catch (_) {
       if (mounted) {
-        showCmpysToast(
+        showV3Toast(
           context,
           "Couldn’t update - try again.",
-          icon: Icons.error_outline_rounded,
-          tone: AppColors.ink2,
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _toggling = false);
-    }
-  }
-
-  Future<void> _toggleDaily() async {
-    final detailed = _detailed;
-    if (detailed == null || _toggling) return;
-    setState(() => _toggling = true);
-    try {
-      final completed = await ref
-          .read(planRepositoryProvider)
-          .toggleDailyTask(detailed.item.id);
-      if (!mounted) return;
-      await _load();
-      ref.invalidate(todayViewProvider);
-      if (!mounted) return;
-      showCmpysToast(
-        context,
-        completed ? 'Daily rhythm complete.' : 'Daily rhythm reopened.',
-        icon: completed ? Icons.check_rounded : Icons.undo_rounded,
-        tone: completed ? AppColors.green : AppColors.ink2,
-      );
-    } catch (_) {
-      if (mounted) {
-        showCmpysToast(
-          context,
-          'Couldn’t update today’s rhythm — try again.',
-          icon: Icons.error_outline_rounded,
-          tone: AppColors.ink2,
+          icon: V3Icons.alert,
+          tone: V3ToastTone.warn,
         );
       }
     } finally {
@@ -454,11 +456,11 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
       }
     } catch (_) {
       if (mounted) {
-        showCmpysToast(
+        showV3Toast(
           context,
           'Couldn’t restart this lesson — try again.',
-          icon: Icons.error_outline_rounded,
-          tone: AppColors.danger,
+          icon: V3Icons.alert,
+          tone: V3ToastTone.warn,
         );
       }
     } finally {
@@ -468,38 +470,100 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.paper,
-      appBar: AppBar(
+    final detailed = _detailed;
+    if (_error == null && detailed != null && detailed.item.isDailyRhythm) {
+      return HabitDetailView(detailed: detailed, onReload: _load);
+    }
+    final loaded = _error == null ? detailed : null;
+    final workload = loaded == null
+        ? null
+        : missionWorkload(
+            loaded.item,
+            loaded.steps,
+            tutorialsPending: !loaded.detailsReady,
+          );
+    // Watched here, in this element's own build: the footer scaffold builds
+    // the body later, inside its own build.
+    final kick = loaded == null
+        ? ''
+        : ref.watch(
+            currentPlanProvider.select(
+              (state) => missionKick(loaded.item, state.plan),
+            ),
+          );
+    final topBar = V3TopBar(
+      onBack: () => Navigator.of(context).maybePop(),
+      right: workload == null || workload.total <= 0
+          ? null
+          : V3Tag(
+              icon: V3Icons.clock,
+              // With the tutorials' time unknown only the allocation is
+              // true, so the tag shows that alone.
+              child: Text(
+                workload.splitKnown
+                    ? '${workload.total}/${workload.allocated} min'
+                    : '${workload.allocated} min',
+                style: AppTypography.tnum,
+              ),
+            ),
+    );
+    Widget body(BuildContext context, double bottom) => _error != null
+        ? _errorView()
+        : loaded == null
+        ? _loadingView()
+        : _content(loaded, workload!, kick, bottom);
+    final footer = loaded == null ? null : _footer(loaded);
+    return NarrationDockPage(
+      child: Scaffold(
         backgroundColor: AppColors.paper,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_rounded, color: AppColors.ink),
-          onPressed: () => Navigator.of(context).pop(),
+        // Reserve the floating dock outside the scroll viewport. End padding
+        // alone lets a retry button sit under the dock partway through a scroll.
+        body: Padding(
+          padding: EdgeInsets.only(
+            bottom: AppShell.isWithinShell(context)
+                ? AppShell.bottomNavClearance(context)
+                : 0,
+          ),
+          child: footer == null
+              ? Column(
+                  children: [
+                    topBar,
+                    Expanded(child: body(context, 0)),
+                  ],
+                )
+              : V3FooterScaffold(topBar: topBar, body: body, footer: footer),
         ),
       ),
-      // Reserve the floating dock outside the scroll viewport. End padding
-      // alone lets a retry button sit under the dock partway through a scroll.
-      body: Padding(
-        padding: EdgeInsets.only(
-          bottom: AppShell.isWithinShell(context)
-              ? AppShell.bottomNavClearance(context)
-              : 0,
+    );
+  }
+
+  Widget _loadingView() {
+    return Semantics(
+      label: 'Loading',
+      child: ExcludeSemantics(
+        child: ListView(
+          physics: const NeverScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
+          children: const [
+            Align(
+              alignment: Alignment.centerLeft,
+              child: V3Skel(width: 150, height: 12),
+            ),
+            SizedBox(height: 14),
+            V3Skel(height: 34, radius: 10),
+            SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: V3Skel(width: 190, height: 34, radius: 10),
+            ),
+            SizedBox(height: 16),
+            V3Skel(height: 14),
+            SizedBox(height: 8),
+            V3Skel(height: 14),
+            SizedBox(height: 18),
+            V3Skel(height: 96, radius: AppRadii.r),
+          ],
         ),
-        child: _error != null
-            ? _errorView()
-            : _detailed == null
-            ? const Center(
-                child: SizedBox(
-                  width: 22,
-                  height: 22,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    valueColor: AlwaysStoppedAnimation<Color>(AppColors.green),
-                  ),
-                ),
-              )
-            : _content(_detailed!),
       ),
     );
   }
@@ -507,241 +571,476 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
   Widget _errorView() {
     return Center(
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.wifi_off_rounded, size: 32, color: AppColors.ink3),
-            const SizedBox(height: 14),
-            Text(
-              _error!,
-              textAlign: TextAlign.center,
-              style: AppTypography.bodyDim,
-            ),
-            const SizedBox(height: 18),
-            CmpysButton(
-              variant: CmpysBtnVariant.primary,
-              size: CmpysBtnSize.md,
-              leadingIcon: Icons.refresh_rounded,
-              onTap: () => _load(resetPolling: true),
-              child: const Text('Try again'),
-            ),
-          ],
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(22),
+          decoration: v3Card(),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                alignment: Alignment.center,
+                decoration: const BoxDecoration(
+                  color: AppColors.paper2,
+                  shape: BoxShape.circle,
+                ),
+                child: const V3Icon(
+                  V3Icons.alert,
+                  size: 20,
+                  color: AppColors.ink3,
+                ),
+              ),
+              const SizedBox(height: 14),
+              Text(
+                _error!,
+                textAlign: TextAlign.center,
+                style: AppTypography.sans(
+                  15,
+                  FontWeight.w500,
+                ).copyWith(color: AppColors.ink2, height: 1.45),
+              ),
+              const SizedBox(height: 18),
+              V3Button(
+                size: V3Size.md,
+                icon: V3Icons.refresh,
+                onPressed: () => _load(resetPolling: true),
+                child: const Text('Try again'),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _content(PlanItemDetailed d) {
+  /// "Mark as done" for a mission without tutorials (its only way to finish).
+  Widget? _footer(PlanItemDetailed d) {
+    if (!d.detailsReady && !d.completed) return null;
+    if (d.steps.isNotEmpty) return null;
+    return d.completed
+        ? V3Button(
+            kind: V3ButtonKind.soft,
+            full: true,
+            icon: V3Icons.refresh,
+            disabled: _toggling,
+            onPressed: _toggleComplete,
+            child: const Text('Mark as not done'),
+          )
+        : V3Button(
+            full: true,
+            icon: V3Icons.check,
+            disabled: _toggling,
+            onPressed: _toggleComplete,
+            child: const Text('Mark as done'),
+          );
+  }
+
+  Widget _content(
+    PlanItemDetailed d,
+    MissionWorkload workload,
+    String kick,
+    double bottom,
+  ) {
     final item = d.item;
-    final done = item.isDailyRhythm ? d.completedToday : d.completed;
+    // A stopped job stays quiet while the current tutorial is readable; the
+    // learner meets the retry when they reach the tutorial that is missing.
     final showPreparation =
-        !item.isDailyRhythm && !d.completed && !d.detailsReady;
+        !d.completed &&
+        !d.detailsReady &&
+        !(_preparationStopped(d) && d.currentStepReadable);
+    // The syllabus shows as soon as the outline exists; unready tutorials
+    // stay locked or preparing until they are published.
+    final showTimeline =
+        d.steps.isNotEmpty &&
+        (d.detailsReady || d.hasReadyLesson || d.detailsLoading);
+    final states = _rowStates(d);
+    final doneCount = states.where((s) => s == TutorialRowState.done).length;
+    final doneLines = definitionOfDoneLines(d.definitionOfDone);
+    final model = splitMentalModel(d.mentalModel);
+    final metric = item.successMetric.trim();
+    final completion = _completionNote(d);
     return ListView(
       key: const Key('plan-detail-scroll'),
-      padding: EdgeInsets.fromLTRB(
-        22,
-        4,
-        22,
-        AppShell.isWithinShell(context)
-            ? 24
-            : AppShell.bottomNavClearance(context),
+      padding: EdgeInsets.only(
+        bottom: math.max(
+          bottom,
+          AppShell.isWithinShell(context)
+              ? 24
+              : AppShell.bottomNavClearance(context),
+        ),
       ),
       children: [
-        CmpysKicker(
-          item.isDailyRhythm
-              ? 'Daily rhythm · Week ${item.weekStart}'
-              : 'Week ${item.weekStart}'
-                    '${item.weekEnd != item.weekStart ? '–${item.weekEnd}' : ''} mission',
-        ),
-        const SizedBox(height: 8),
-        Text(
-          item.title,
-          style: AppTypography.h1.copyWith(
-            fontSize: 26,
-            letterSpacing: -0.4,
-            height: 1.25,
-          ),
-        ),
-        const SizedBox(height: 10),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            _chip(_typeMeta(item.type).icon, _typeMeta(item.type).label),
-            _chip(PhosphorIconsRegular.clock, '~${item.durationLabel}'),
-            if (done) ...[
-              _chip(Icons.check_rounded, 'Done', tone: AppColors.green),
-            ],
-          ],
-        ),
-        if (showPreparation) ...[
-          const SizedBox(height: 18),
-          _generatingCard(d),
-        ],
-        const SizedBox(height: 18),
-        _missionBackground(item),
-        if (item.successMetric.isNotEmpty) ...[
-          const SizedBox(height: 16),
-          CmpysCardSurface(
-            color: AppColors.greenSoft,
-            border: false,
-            pad: const EdgeInsets.all(16),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Icon(
-                  PhosphorIconsRegular.target,
-                  size: 18,
-                  color: AppColors.green,
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    item.successMetric,
-                    style: AppTypography.bodyMedium.copyWith(
-                      fontSize: 14,
-                      height: 1.45,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-        const SizedBox(height: 26),
-        if (item.isDailyRhythm)
-          _dailyRhythmCard(d)
-        else if (d.completed && d.steps.isEmpty)
-          _completedWithoutLessonCard()
-        else if (d.detailsReady || d.hasReadyLesson) ...[
-          if (d.steps.isNotEmpty) ...[
-            Row(
-              children: [
-                Expanded(
-                  child: CmpysKicker(
-                    d.isTutorialSequence
-                        ? 'Short tutorials'
-                        : 'Focused lessons',
-                  ),
-                ),
-                Text(
-                  '${d.completedStepIds.length}/${d.steps.length}',
-                  style: AppTypography.captionMedium.copyWith(
-                    color: AppColors.green2,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            Text(
-              d.isTutorialSequence
-                  ? 'One concept, a visual, a worked example, and a short practice. Complete each tutorial to unlock the next.'
-                  : 'Complete one lesson at a time. Finishing the active lesson unlocks the next.',
-              style: AppTypography.caption.copyWith(
-                color: AppColors.ink3,
-                fontSize: 12.5,
-                height: 1.4,
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              V3Rise(
+                child: Text(kick.toUpperCase(), style: AppTypography.kick),
               ),
-            ),
-            const SizedBox(height: 12),
-            for (var i = 0; i < d.steps.length; i++) ...[
-              _lessonCard(d, d.steps[i], i),
-              const SizedBox(height: 12),
+              const SizedBox(height: 10),
+              V3Rise(
+                delay: const Duration(milliseconds: 50),
+                child: Text(
+                  item.title,
+                  style: AppTypography.display(
+                    40,
+                  ).copyWith(color: AppColors.ink),
+                ),
+              ),
+              if (item.description.trim().isNotEmpty) ...[
+                const SizedBox(height: 12),
+                V3Rise(
+                  delay: const Duration(milliseconds: 100),
+                  child: _missionBackground(item),
+                ),
+              ],
+              if (showPreparation) ...[
+                const SizedBox(height: 18),
+                _generatingCard(d),
+              ],
+              if (workload.splitKnown && workload.total > 0) ...[
+                const SizedBox(height: 18),
+                V3Rise(
+                  delay: const Duration(milliseconds: 150),
+                  child: _workloadCard(workload),
+                ),
+              ],
             ],
-          ],
-        ],
-        if (!item.isDailyRhythm && d.materials.isNotEmpty) ...[
-          const SizedBox(height: 10),
-          const CmpysKicker('Materials'),
-          const SizedBox(height: 12),
-          for (final m in d.materials) ...[
-            _materialCard(m),
-            const SizedBox(height: 12),
-          ],
-        ],
-        const SizedBox(height: 18),
-        if (item.isDailyRhythm)
-          CmpysButton(
-            variant: d.completedToday
-                ? CmpysBtnVariant.dark
-                : CmpysBtnVariant.primary,
-            size: CmpysBtnSize.lg,
-            full: true,
-            disabled: _toggling,
-            leadingIcon: d.completedToday
-                ? Icons.undo_rounded
-                : Icons.check_rounded,
-            onTap: _toggleDaily,
-            child: Text(
-              d.completedToday
-                  ? 'Mark as not done today'
-                  : 'Complete for today',
-            ),
+          ),
+        ),
+        if (d.completed && d.steps.isEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 30, 20, 0),
+            child: _completedWithoutLessonCard(),
           )
-        else if (!d.detailsReady && !d.completed)
-          const SizedBox.shrink()
-        else if (d.steps.isEmpty)
-          CmpysButton(
-            variant: d.completed
-                ? CmpysBtnVariant.dark
-                : CmpysBtnVariant.primary,
-            size: CmpysBtnSize.lg,
-            full: true,
-            disabled: _toggling,
-            leadingIcon: d.completed ? Icons.undo_rounded : Icons.check_rounded,
-            onTap: _toggleComplete,
-            child: Text(d.completed ? 'Mark as not done' : 'Mark as done'),
-          )
-        else if (d.completed)
-          CmpysCardSurface(
-            color: AppColors.greenSoft,
-            border: false,
-            child: Row(
+        else if (showTimeline)
+          V3Section(
+            title:
+                '${d.isTutorialSequence ? 'Tutorials' : 'Lessons'} · '
+                '$doneCount of ${d.steps.length}',
+            child: _timeline(d, states),
+          ),
+        if (metric.isNotEmpty || doneLines.isNotEmpty || model != null)
+          V3Section(
+            title: 'Deliverable',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Icon(Icons.check_circle_rounded, color: AppColors.green2),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    d.isTutorialSequence
-                        ? 'All tutorials are complete. Mission accomplished.'
-                        : 'All focused lessons are complete. Mission accomplished.',
-                    style: AppTypography.bodyMedium.copyWith(
-                      color: AppColors.green2,
-                      fontSize: 14,
-                    ),
-                  ),
+                if (metric.isNotEmpty || doneLines.isNotEmpty)
+                  _deliverableCard(metric, doneLines),
+                if (model != null) ...[
+                  if (metric.isNotEmpty || doneLines.isNotEmpty)
+                    const SizedBox(height: 10),
+                  _mentalModelCard(model),
+                ],
+              ],
+            ),
+          ),
+        if (d.materials.isNotEmpty)
+          V3Section(
+            title: 'Materials',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (var i = 0; i < d.materials.length; i++) ...[
+                  if (i > 0) const SizedBox(height: 8),
+                  _materialRow(d.materials[i]),
+                ],
+                const SizedBox(height: 10),
+                Text(
+                  'Required practice is solvable inside CMPYS. Materials are optional depth.',
+                  style: AppTypography.sans(
+                    12.5,
+                  ).copyWith(color: AppColors.ink3, height: 1.5),
                 ),
               ],
             ),
-          )
-        else
-          CmpysCardSurface(
-            color: AppColors.paper2,
-            child: Row(
-              children: [
-                const Icon(
-                  PhosphorIconsRegular.lockSimple,
-                  color: AppColors.ink3,
-                  size: 18,
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    d.isTutorialSequence
-                        ? 'Complete all tutorials in order to finish this mission.'
-                        : 'Complete all lessons in order to finish this mission.',
-                    style: AppTypography.caption.copyWith(
-                      color: AppColors.ink2,
-                      fontSize: 13,
-                    ),
-                  ),
-                ),
-              ],
-            ),
+          ),
+        if (completion != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 24, 20, 0),
+            child: completion,
           ),
       ],
+    );
+  }
+
+  /// The closing line under a mission with tutorials: accomplished, or how
+  /// it finishes.
+  Widget? _completionNote(PlanItemDetailed d) {
+    if (d.steps.isEmpty) return null;
+    if (d.completed) {
+      return _noteCard(
+        color: AppColors.sageSoft,
+        icon: V3Icons.check,
+        tone: AppColors.sage2,
+        text: d.isTutorialSequence
+            ? 'All tutorials are complete. Mission accomplished.'
+            : 'All focused lessons are complete. Mission accomplished.',
+      );
+    }
+    if (!d.detailsReady) return null;
+    return _noteCard(
+      color: AppColors.paper2,
+      icon: V3Icons.lock,
+      tone: AppColors.ink2,
+      text: d.isTutorialSequence
+          ? 'Complete all tutorials in order to finish this mission.'
+          : 'Complete all lessons in order to finish this mission.',
+    );
+  }
+
+  Widget _noteCard({
+    required Color color,
+    required V3Icons icon,
+    required Color tone,
+    required String text,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(color: color, borderRadius: AppRadii.brR),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 1),
+            child: V3Icon(icon, size: 18, color: tone),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              text,
+              style: AppTypography.sans(
+                14,
+                FontWeight.w500,
+              ).copyWith(color: tone, height: 1.45),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── workload ───────────────────────────────────────────────────────────
+
+  Widget _workloadCard(MissionWorkload w) {
+    final parts = [
+      (
+        minutes: w.reading,
+        color: AppColors.iris,
+        id: 'reading',
+        label: 'Reading',
+      ),
+      (
+        minutes: w.practice,
+        color: AppColors.ember,
+        id: 'practice',
+        label: 'Practice',
+      ),
+      (
+        minutes: w.deliverable,
+        color: AppColors.gold,
+        id: 'deliverable',
+        label: 'Deliverable',
+      ),
+    ];
+    final filled = [
+      for (final part in parts)
+        if (part.minutes > 0) part,
+    ];
+    final small = AppTypography.sans(13).copyWith(color: AppColors.ink2);
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: v3Card(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.baseline,
+            textBaseline: TextBaseline.alphabetic,
+            children: [
+              Expanded(
+                child: Text(
+                  'Workload',
+                  style: AppTypography.sans(
+                    13,
+                    FontWeight.w600,
+                  ).copyWith(color: AppColors.ink),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  '${w.total} / ${w.allocated} min allocated',
+                  textAlign: TextAlign.end,
+                  style: small.merge(AppTypography.tnum),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(9),
+            child: SizedBox(
+              key: const Key('workload-bar'),
+              height: 10,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (var i = 0; i < filled.length; i++) ...[
+                    if (i > 0) const SizedBox(width: 2),
+                    Expanded(
+                      flex: filled[i].minutes,
+                      child: V3Rise(
+                        delay: Duration(milliseconds: 200 + i * 120),
+                        duration: const Duration(milliseconds: 700),
+                        offset: 10,
+                        child: ColoredBox(
+                          key: Key('workload-${filled[i].id}'),
+                          color: filled[i].color,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 14,
+            runSpacing: 6,
+            children: [
+              for (final part in parts)
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        color: part.color,
+                        borderRadius: BorderRadius.circular(3),
+                      ),
+                    ),
+                    const SizedBox(width: 5),
+                    Flexible(
+                      child: Text(
+                        '${part.label} ${part.minutes}',
+                        style: AppTypography.sans(12)
+                            .copyWith(color: AppColors.ink2)
+                            .merge(AppTypography.tnum),
+                      ),
+                    ),
+                  ],
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── deliverable ────────────────────────────────────────────────────────
+
+  Widget _deliverableCard(String metric, List<String> doneLines) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: v3Card(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (metric.isNotEmpty)
+            Text(
+              metric,
+              style: AppTypography.sans(
+                15,
+              ).copyWith(color: AppColors.ink, height: 1.5),
+            ),
+          if (doneLines.isNotEmpty) ...[
+            SizedBox(height: metric.isNotEmpty ? 16 : 0),
+            Text('DEFINITION OF DONE', style: AppTypography.kick),
+            const SizedBox(height: 4),
+            for (var i = 0; i < doneLines.length; i++)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      key: Key('done-check-$i'),
+                      width: 18,
+                      height: 18,
+                      margin: const EdgeInsets.only(top: 1),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: AppColors.hair2, width: 1.5),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        doneLines[i],
+                        style: AppTypography.sans(
+                          14,
+                        ).copyWith(color: AppColors.ink2, height: 1.45),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _mentalModelCard(({String? title, String body}) model) {
+    return ClipRRect(
+      key: const Key('mental-model-card'),
+      borderRadius: AppRadii.brR,
+      child: ColoredBox(
+        color: AppColors.night,
+        child: Stack(
+          children: [
+            const Positioned.fill(child: V3Grain()),
+            Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    'MENTAL MODEL',
+                    style: AppTypography.kick.copyWith(color: _irisLight),
+                  ),
+                  if (model.title case final title?) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      title,
+                      style: AppTypography.display(
+                        28,
+                      ).copyWith(color: Colors.white),
+                    ),
+                  ],
+                  if (model.body.isNotEmpty) ...[
+                    SizedBox(height: model.title == null ? 8 : 6),
+                    Text(
+                      model.body,
+                      style: AppTypography.read(
+                        15,
+                      ).copyWith(color: AppColors.nink2, height: 1.55),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -760,145 +1059,51 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
           overflow: collapsible && !_descriptionExpanded
               ? TextOverflow.ellipsis
               : null,
-          style: AppTypography.body.copyWith(fontSize: 15, height: 1.55),
+          style: AppTypography.sans(
+            15,
+          ).copyWith(color: AppColors.ink2, height: 1.5),
         ),
         if (collapsible)
-          TextButton(
+          V3Pressable(
             key: const Key('mission-background-toggle'),
-            style: TextButton.styleFrom(
-              foregroundColor: AppColors.green2,
-              padding: EdgeInsets.zero,
-              alignment: Alignment.centerLeft,
-            ),
-            onPressed: () =>
+            onTap: () =>
                 setState(() => _descriptionExpanded = !_descriptionExpanded),
-            child: Text(
-              _descriptionExpanded
-                  ? 'Show less background'
-                  : 'Read full mission background',
+            pressedScale: 1,
+            focusRadius: BorderRadius.circular(8),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              widthFactor: 1,
+              child: Text(
+                _descriptionExpanded
+                    ? 'Show less background'
+                    : 'Read full mission background',
+                style: AppTypography.sans(
+                  13.5,
+                  FontWeight.w600,
+                ).copyWith(color: AppColors.ink),
+              ),
             ),
           ),
       ],
     );
   }
 
-  Future<void> _saveReflection() async {
-    if (_savingReflection) return;
-    setState(() {
-      _savingReflection = true;
-      _reflectionStatus = null;
-    });
-    final text = _reflection.text;
-    try {
-      await ref
-          .read(planRepositoryProvider)
-          .saveDailyReflection(widget.itemId, text);
-      if (mounted) {
-        setState(
-          () => _reflectionStatus = _reflection.text == text
-              ? 'Saved'
-              : 'New changes are not saved yet',
-        );
-      }
-    } catch (_) {
-      if (mounted) {
-        setState(
-          () => _reflectionStatus =
-              'Couldn’t save. Your text is still here; please retry.',
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _savingReflection = false);
-    }
-  }
-
-  Widget _dailyRhythmCard(PlanItemDetailed detailed) {
-    final instructions = detailed.dailyInstructions?.trim();
-    return CmpysCardSurface(
-      color: AppColors.greenSoft,
-      border: false,
-      pad: const EdgeInsets.all(18),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(
-                PhosphorIconsRegular.repeat,
-                size: 19,
-                color: AppColors.green2,
-              ),
-              const SizedBox(width: 9),
-              Text(
-                'TODAY’S RHYTHM',
-                style: AppTypography.kicker.copyWith(color: AppColors.green2),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Text(
-            instructions == null || instructions.isEmpty
-                ? detailed.item.description
-                : instructions,
-            style: AppTypography.body.copyWith(fontSize: 14, height: 1.5),
-          ),
-          const SizedBox(height: 10),
-          Text(
-            'This resets each day and never blocks the next week.',
-            style: AppTypography.caption.copyWith(
-              color: AppColors.ink3,
-              fontSize: 12.5,
-            ),
-          ),
-          const SizedBox(height: 16),
-          TextField(
-            controller: _reflection,
-            minLines: 4,
-            maxLines: 10,
-            maxLength: 8000,
-            onChanged: (_) =>
-                setState(() => _reflectionStatus = 'Unsaved changes'),
-            decoration: const InputDecoration(
-              labelText: 'Your reflection today',
-              hintText:
-                  'What did you try, what did you notice, and what will you change?',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          TextButton(
-            onPressed: _savingReflection ? null : _saveReflection,
-            child: Text(_savingReflection ? 'Saving…' : 'Save reflection'),
-          ),
-          if (_reflectionStatus != null) Text(_reflectionStatus!),
-        ],
-      ),
-    );
-  }
-
   Widget _completedWithoutLessonCard() {
-    return CmpysCardSurface(
-      color: AppColors.greenSoft,
-      border: false,
-      pad: const EdgeInsets.all(18),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Icon(Icons.check_circle_rounded, color: AppColors.green2),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              'This mission was completed before focused lessons were added. '
-              'Your completion is preserved—there is nothing left to load.',
-              style: AppTypography.bodyMedium.copyWith(
-                color: AppColors.green2,
-                fontSize: 14,
-                height: 1.45,
-              ),
-            ),
-          ),
-        ],
-      ),
+    return _noteCard(
+      color: AppColors.sageSoft,
+      icon: V3Icons.check,
+      tone: AppColors.sage2,
+      text:
+          'This mission was completed before focused lessons were added. '
+          'Your completion is preserved—there is nothing left to load.',
     );
+  }
+
+  bool _preparationStopped(PlanItemDetailed detailed) {
+    final activeRetry =
+        _activeDetailJobId != null && _terminalDetailError == null;
+    return _terminalDetailError != null ||
+        (detailed.detailsFailed && !activeRetry);
   }
 
   Widget _generatingCard(PlanItemDetailed detailed) {
@@ -910,35 +1115,32 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
                 detailed.detailsStep == 'catalog_not_available') ||
             (_detailJob?.isFailed == true &&
                 _detailJob?.step == 'catalog_not_available'));
+    final bodyStyle = AppTypography.sans(
+      13.5,
+    ).copyWith(color: AppColors.ink2, height: 1.45);
     if (catalogUnavailable) {
-      return CmpysCardSurface(
-        pad: const EdgeInsets.all(18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'This lesson isn’t available yet.',
-              style: AppTypography.bodyMedium,
-            ),
-            const SizedBox(height: 10),
-            Text(
-              'The learning materials and practice for this task aren’t ready. '
-              'Retrying now won’t prepare them. Your completed work is saved.',
-              style: AppTypography.body.copyWith(
-                fontSize: 13.5,
-                color: AppColors.ink2,
-                height: 1.45,
-              ),
-            ),
-            const SizedBox(height: 14),
-            CmpysButton(
-              variant: CmpysBtnVariant.primary,
-              size: CmpysBtnSize.md,
-              onTap: () => Navigator.of(context).maybePop(),
-              child: const Text('Back to plan'),
-            ),
-          ],
-        ),
+      return _statusCard(
+        children: [
+          Text(
+            'This lesson isn’t available yet.',
+            style: AppTypography.sans(
+              15,
+              FontWeight.w600,
+            ).copyWith(color: AppColors.ink),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'The learning materials and practice for this task aren’t ready. '
+            'Retrying now won’t prepare them. Your completed work is saved.',
+            style: bodyStyle,
+          ),
+          const SizedBox(height: 14),
+          V3Button(
+            size: V3Size.md,
+            onPressed: () => Navigator.of(context).maybePop(),
+            child: const Text('Back to plan'),
+          ),
+        ],
       );
     }
     final failureMessage = _terminalDetailError ?? detailed.detailsError;
@@ -947,136 +1149,98 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
       final hasReadyLessons = detailed.steps.any(
         (step) => step.lessonContent?.trim().isNotEmpty == true,
       );
-      return CmpysCardSurface(
-        pad: const EdgeInsets.all(18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Icon(
-              Icons.error_outline_rounded,
-              size: 24,
-              color: AppColors.ochre2,
-            ),
-            const SizedBox(height: 10),
-            Text(
-              hasReadyLessons
-                  ? 'Some lessons could not be prepared. Your ready lessons '
-                        'and progress are saved.'
-                  : failureMessage ??
-                        'This lesson could not be prepared. Please try again.',
-              style: AppTypography.body.copyWith(
-                fontSize: 13.5,
-                color: AppColors.ink2,
-                height: 1.45,
-              ),
-            ),
-            const SizedBox(height: 14),
-            CmpysButton(
-              key: const Key('plan-detail-regenerate'),
-              variant: CmpysBtnVariant.primary,
-              size: CmpysBtnSize.md,
-              leadingIcon: Icons.refresh_rounded,
-              disabled: _retrying,
-              onTap: _retryDetails,
-              child: Text(_retrying ? 'Restarting…' : 'Generate again'),
-            ),
-          ],
-        ),
+      return _statusCard(
+        children: [
+          const V3Icon(V3Icons.alert, size: 22, color: AppColors.gold2),
+          const SizedBox(height: 10),
+          Text(
+            hasReadyLessons
+                ? 'Some lessons could not be prepared. Your ready lessons '
+                      'and progress are saved.'
+                : failureMessage ??
+                      'This lesson could not be prepared. Please try again.',
+            style: bodyStyle,
+          ),
+          const SizedBox(height: 14),
+          V3Button(
+            key: const Key('plan-detail-regenerate'),
+            size: V3Size.md,
+            icon: V3Icons.refresh,
+            disabled: _retrying,
+            onPressed: _retryDetails,
+            child: Text(_retrying ? 'Restarting…' : 'Generate again'),
+          ),
+        ],
       );
     }
     if (_takingLong) {
-      return CmpysCardSurface(
-        pad: const EdgeInsets.all(18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Icon(
-              PhosphorIconsRegular.clock,
-              size: 24,
-              color: AppColors.ochre2,
-            ),
-            const SizedBox(height: 10),
-            Text(
-              detailed.isTutorialSequence
-                  ? '${_tutorialProgressCopy(detailed)} You can leave this screen and return later—your place is saved.'
-                  : 'This lesson is still being prepared in the background. You can '
-                        'leave this screen and return later—your place is saved.',
-              style: AppTypography.body.copyWith(
-                fontSize: 13.5,
-                color: AppColors.ink2,
-                height: 1.45,
-              ),
-            ),
-            const SizedBox(height: 14),
-            CmpysButton(
-              variant: CmpysBtnVariant.outline,
-              size: CmpysBtnSize.md,
-              leadingIcon: Icons.refresh_rounded,
-              onTap: _checkDetailsAgain,
-              child: const Text('Check status'),
-            ),
-          ],
-        ),
+      return _statusCard(
+        children: [
+          const V3Icon(V3Icons.clock, size: 22, color: AppColors.gold2),
+          const SizedBox(height: 10),
+          Text(
+            detailed.isTutorialSequence
+                ? '${_tutorialProgressCopy(detailed)} You can leave this screen and return later—your place is saved.'
+                : 'This lesson is still being prepared in the background. You can '
+                      'leave this screen and return later—your place is saved.',
+            style: bodyStyle,
+          ),
+          const SizedBox(height: 14),
+          V3Button(
+            kind: V3ButtonKind.line,
+            size: V3Size.md,
+            icon: V3Icons.refresh,
+            onPressed: _checkDetailsAgain,
+            child: const Text('Check status'),
+          ),
+        ],
       );
     }
 
     final progress = (_detailJob?.progressPercent ?? detailed.detailsProgress)
         .clamp(0, 100);
     final step = _detailJob?.step ?? detailed.detailsStep;
-    final progressValue = progress > 0 ? progress / 100.0 : null;
-    return CmpysCardSurface(
-      pad: const EdgeInsets.all(18),
+    return _statusCard(
+      children: [
+        Row(
+          children: [
+            const V3Spinner(color: AppColors.ember, size: 16),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                detailed.isTutorialSequence
+                    ? _tutorialProgressCopy(detailed)
+                    : _detailProgressCopy(step),
+                style: bodyStyle,
+              ),
+            ),
+            if (progress > 0) ...[
+              const SizedBox(width: 8),
+              Text(
+                '$progress%',
+                style: AppTypography.sans(
+                  12.5,
+                  FontWeight.w600,
+                ).copyWith(color: AppColors.ink2).merge(AppTypography.tnum),
+              ),
+            ],
+          ],
+        ),
+        if (progress > 0) ...[
+          const SizedBox(height: 12),
+          V3Bar(value: progress / 100, height: 4),
+        ],
+      ],
+    );
+  }
+
+  Widget _statusCard({required List<Widget> children}) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: v3Card(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              SizedBox(
-                width: 16,
-                height: 16,
-                child: CircularProgressIndicator(
-                  value: progressValue,
-                  strokeWidth: 2,
-                  valueColor: const AlwaysStoppedAnimation<Color>(
-                    AppColors.green,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  detailed.isTutorialSequence
-                      ? _tutorialProgressCopy(detailed)
-                      : _detailProgressCopy(step),
-                  style: AppTypography.body.copyWith(
-                    fontSize: 13.5,
-                    color: AppColors.ink2,
-                    fontStyle: FontStyle.italic,
-                  ),
-                ),
-              ),
-              if (progress > 0) ...[
-                const SizedBox(width: 8),
-                Text(
-                  '$progress%',
-                  style: AppTypography.captionMedium.copyWith(
-                    color: AppColors.green2,
-                  ),
-                ),
-              ],
-            ],
-          ),
-          const SizedBox(height: 12),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(4),
-            child: LinearProgressIndicator(
-              value: progressValue,
-              minHeight: 4,
-              backgroundColor: AppColors.hair,
-              valueColor: const AlwaysStoppedAnimation<Color>(AppColors.green),
-            ),
-          ),
-        ],
+        children: children,
       ),
     );
   }
@@ -1120,215 +1284,294 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
     };
   }
 
-  Widget _lessonCard(
-    PlanItemDetailed detailed,
-    PlanStepDetail step,
-    int index,
-  ) {
-    final completed = detailed.isStepCompleted(step.id);
-    final unit = step.isTutorial ? 'tutorial' : 'lesson';
-    final unlocked = detailed.isStepUnlocked(index);
-    final active = unlocked && !completed;
-    final hasLesson =
-        step.lessonContent != null && step.lessonContent!.trim().isNotEmpty;
-    final missingLesson = unlocked && !completed && !hasLesson;
-    final activeRetry =
-        _activeDetailJobId != null && _terminalDetailError == null;
-    final preparationStopped =
-        missingLesson &&
-        (_terminalDetailError != null ||
-            (detailed.detailsFailed && !activeRetry));
-    final preparing =
-        !detailed.detailsReady && missingLesson && !preparationStopped;
+  // ── tutorial timeline ──────────────────────────────────────────────────
 
-    return CmpysCardSurface(
-      key: Key(
-        'lesson-${index + 1}-${completed
-            ? 'completed'
-            : active
-            ? 'active'
-            : 'locked'}',
-      ),
-      color: preparing || preparationStopped
-          ? AppColors.paper2
-          : active
-          ? AppColors.greenSoft
-          : unlocked
-          ? AppColors.card
-          : AppColors.paper2,
-      raised: active,
-      onTap: !unlocked
-          ? () => _showLessonLocked(
-              index,
-              detailed.activeStepIndex,
-              step.isTutorial,
-            )
-          : hasLesson
-          ? () => _openLesson(detailed, step, index)
-          : null,
-      pad: const EdgeInsets.all(16),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 36,
-            height: 36,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: completed
-                  ? AppColors.green
-                  : active
-                  ? Colors.white
-                  : AppColors.card.withValues(alpha: 0.7),
-              shape: BoxShape.circle,
-            ),
-            child: completed
-                ? const Icon(Icons.check_rounded, color: Colors.white, size: 18)
-                : unlocked
-                ? Text(
-                    '${index + 1}',
-                    style: AppTypography.captionMedium.copyWith(
-                      color: AppColors.green2,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  )
-                : const Icon(
-                    PhosphorIconsRegular.lockSimple,
-                    color: AppColors.ink3,
-                    size: 16,
-                  ),
-          ),
-          const SizedBox(width: 13),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  preparationStopped
-                      ? 'NOT READY'
-                      : preparing
-                      ? 'PREPARING'
-                      : active
-                      ? 'CURRENT ${unit.toUpperCase()}'
-                      : completed
-                      ? 'COMPLETED · TAP TO REVIEW'
-                      : 'LOCKED',
-                  style: AppTypography.kicker.copyWith(
-                    color: preparing || preparationStopped
-                        ? AppColors.ochre2
-                        : active
-                        ? AppColors.green2
-                        : completed
-                        ? AppColors.green
-                        : AppColors.ink3,
-                    fontSize: 8.5,
-                  ),
-                ),
-                const SizedBox(height: 5),
-                Text(
-                  step.title,
-                  style: AppTypography.bodyMedium.copyWith(
-                    color: unlocked ? AppColors.ink : AppColors.ink3,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                if (preparing || preparationStopped)
-                  Text(
-                    preparationStopped
-                        ? 'Your outline is saved. Check the status above for next steps.'
-                        : step.isTutorial
-                        ? 'Your next tutorial is being prepared. It will appear here automatically.'
-                        : 'The outline is ready. Full lesson content is still being written.',
-                    style: AppTypography.caption.copyWith(
-                      color: AppColors.ink3,
-                      fontSize: 11.5,
-                      height: 1.4,
-                    ),
-                  )
-                else
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 5,
-                    children: [
-                      if (step.isTutorial && step.totalMinutes != null)
-                        _lessonMeta(
-                          PhosphorIconsRegular.clock,
-                          '${step.totalMinutes} min total',
-                        ),
-                      if (!step.isTutorial ||
-                          step.effectiveReadingMinutes != null)
-                        _lessonMeta(
-                          PhosphorIconsRegular.bookOpenText,
-                          '${step.effectiveReadingMinutes ?? _lessonReadMinutes(step)} min read',
-                        ),
-                      _lessonMeta(
-                        PhosphorIconsRegular.timer,
-                        step.isTutorial && step.effectivePracticeMinutes != null
-                            ? '${step.effectivePracticeMinutes} min practice'
-                            : 'Practice in app',
-                      ),
-                      if (step.resources.isNotEmpty)
-                        _lessonMeta(
-                          PhosphorIconsRegular.books,
-                          '${step.resources.length} reference${step.resources.length == 1 ? '' : 's'}',
-                        ),
-                    ],
-                  ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.only(top: 8),
-            child: preparationStopped
-                ? const Icon(
-                    Icons.error_outline_rounded,
-                    color: AppColors.ochre2,
-                    size: 20,
-                  )
-                : preparing
-                ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      valueColor: AlwaysStoppedAnimation<Color>(
-                        AppColors.ochre2,
-                      ),
-                    ),
-                  )
-                : Icon(
-                    unlocked ? Icons.chevron_right_rounded : Icons.lock_outline,
-                    color: active ? AppColors.green2 : AppColors.ink3,
-                    size: 20,
-                  ),
-          ),
-        ],
-      ),
-    );
+  /// [tutorialRowStates], with this screen's own view of a stop: a job that
+  /// failed while polling stops preparation, and an explicit retry restarts
+  /// it even while the loaded details still say "failed".
+  List<TutorialRowState> _rowStates(PlanItemDetailed d) {
+    final base = tutorialRowStates(d);
+    final stopped = _preparationStopped(d);
+    if (stopped == d.detailsFailed) return base;
+    return [
+      for (var i = 0; i < base.length; i++)
+        if (base[i] == TutorialRowState.done || d.steps[i].hasContent)
+          base[i]
+        else if (!stopped)
+          TutorialRowState.preparing
+        else if (i == d.activeStepIndex)
+          TutorialRowState.stopped
+        else
+          TutorialRowState.locked,
+    ];
   }
 
-  Widget _lessonMeta(IconData icon, String label) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
+  Widget _timeline(PlanItemDetailed d, List<TutorialRowState> states) {
+    final count = d.steps.length;
+    final done = states.where((s) => s == TutorialRowState.done).length;
+    final fill = count <= 1
+        ? (done > 0 ? 1.0 : 0.0)
+        : (done / (count - 1)).clamp(0.0, 1.0);
+    final motion = MotionConfig.enabled(context);
+    return Stack(
       children: [
-        Icon(icon, size: 13, color: AppColors.ink3),
-        const SizedBox(width: 4),
-        Text(
-          label,
-          style: AppTypography.caption.copyWith(
-            color: AppColors.ink3,
-            fontSize: 11.5,
+        Positioned(
+          key: const Key('tutorial-progress-line'),
+          left: 21,
+          top: 22,
+          bottom: 22,
+          width: 2,
+          child: ColoredBox(
+            color: AppColors.hair,
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: TweenAnimationBuilder<double>(
+                tween: Tween(begin: 0, end: fill),
+                duration: motion ? const Duration(seconds: 1) : Duration.zero,
+                curve: AppMotion.out,
+                builder: (context, value, _) => FractionallySizedBox(
+                  heightFactor: value,
+                  widthFactor: 1,
+                  child: const ColoredBox(color: AppColors.sage),
+                ),
+              ),
+            ),
           ),
+        ),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (var i = 0; i < count; i++)
+              V3Rise(
+                key: ValueKey('rise-${d.steps[i].id}'),
+                delay: Duration(milliseconds: i * 50),
+                duration: const Duration(milliseconds: 500),
+                child: _tutorialRow(d, i, states[i]),
+              ),
+          ],
         ),
       ],
     );
   }
 
-  int _lessonReadMinutes(PlanStepDetail step) {
-    final words = (step.lessonContent ?? '').split(RegExp(r'\s+')).length;
-    return (words / 200).ceil().clamp(1, 60);
+  Widget _tutorialRow(PlanItemDetailed d, int index, TutorialRowState state) {
+    final step = d.steps[index];
+    final number = index + 1;
+    final unit = step.isTutorial || d.isTutorialSequence
+        ? 'Tutorial'
+        : 'Lesson';
+    final completed = d.isStepCompleted(step.id);
+    final active = d.isStepUnlocked(index) && !completed;
+    final open = step.hasContent ? () => _openLesson(d, step, index) : null;
+    final onTap = switch (state) {
+      TutorialRowState.done || TutorialRowState.current => open,
+      TutorialRowState.preparing => () => showV3Toast(
+        context,
+        'Still being prepared and reviewed',
+        icon: V3Icons.clock,
+        tone: V3ToastTone.warn,
+      ),
+      TutorialRowState.locked => () {
+        setState(() => _shakes[step.id] = (_shakes[step.id] ?? 0) + 1);
+        showV3Toast(
+          context,
+          'Finish ${unit.toLowerCase()} ${d.activeStepIndex + 1} first',
+          icon: V3Icons.lock,
+          tone: V3ToastTone.warn,
+        );
+      },
+      // "Generate again" sits in the status card above.
+      TutorialRowState.stopped => null,
+    };
+    final label = switch (state) {
+      TutorialRowState.done => '$unit $number: ${step.title}, done',
+      TutorialRowState.current =>
+        '$unit $number: ${step.title}, current. Continue',
+      TutorialRowState.locked => '$unit $number: ${step.title}, locked',
+      TutorialRowState.preparing =>
+        step.title.trim().isEmpty
+            ? '$unit $number, preparing and reviewing'
+            : '$unit $number: ${step.title.trim()}, preparing and reviewing',
+      TutorialRowState.stopped =>
+        '$unit $number: ${step.title}, couldn’t be prepared',
+    };
+    return V3Pressable(
+      key: Key(
+        'lesson-$number-${completed
+            ? 'completed'
+            : active
+            ? 'active'
+            : 'locked'}',
+      ),
+      onTap: onTap,
+      minTapTarget: 0,
+      focusRadius: BorderRadius.circular(18),
+      semanticLabel: label,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Row(
+          children: [
+            _tutorialDisc(step, state),
+            const SizedBox(width: 14),
+            Expanded(child: _tutorialBody(step, unit, number, state, open)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _tutorialDisc(PlanStepDetail step, TutorialRowState state) {
+    Widget plain(Color fill, Widget child, {bool border = false}) => Container(
+      width: 44,
+      height: 44,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: fill,
+        shape: BoxShape.circle,
+        border: border ? Border.all(color: AppColors.hair2, width: 1.5) : null,
+      ),
+      child: child,
+    );
+    return switch (state) {
+      TutorialRowState.done => plain(
+        AppColors.sage,
+        const V3Icon(
+          V3Icons.check,
+          size: 18,
+          strokeWidth: 2.8,
+          color: Colors.white,
+        ),
+      ),
+      TutorialRowState.current => const TutorialGlowDisc(
+        size: 44,
+        child: V3Icon(V3Icons.play, size: 16, color: Colors.white),
+      ),
+      TutorialRowState.preparing => plain(
+        AppColors.card,
+        const V3Spinner(color: AppColors.ink3, size: 16),
+        border: true,
+      ),
+      TutorialRowState.stopped => plain(
+        AppColors.card,
+        const V3Icon(V3Icons.alert, size: 16, color: AppColors.gold2),
+        border: true,
+      ),
+      TutorialRowState.locked => plain(
+        AppColors.card,
+        TutorialShake(
+          tick: _shakes[step.id] ?? 0,
+          child: const V3Icon(V3Icons.lock, size: 16, color: AppColors.ink3),
+        ),
+        border: true,
+      ),
+    };
+  }
+
+  Widget _tutorialBody(
+    PlanStepDetail step,
+    String unit,
+    int number,
+    TutorialRowState state,
+    VoidCallback? open,
+  ) {
+    final small = AppTypography.sans(12).copyWith(color: AppColors.ink3);
+    if (state == TutorialRowState.preparing) {
+      final title = step.title.trim();
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // The outline title when the syllabus has one; else the design's
+          // skeleton line.
+          if (title.isEmpty)
+            const FractionallySizedBox(
+              widthFactor: 0.7,
+              child: V3Skel(height: 14),
+            )
+          else
+            Text(
+              title,
+              style: AppTypography.sans(
+                15.5,
+                FontWeight.w500,
+              ).copyWith(color: AppColors.ink2, height: 1.3),
+            ),
+          const SizedBox(height: 6),
+          Text('$unit $number · preparing and reviewing', style: small),
+        ],
+      );
+    }
+    final current = state == TutorialRowState.current;
+    final minutes = _minutesLine(step);
+    final content = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          state == TutorialRowState.stopped
+              ? '$unit $number · couldn’t be prepared'
+              : '$unit $number',
+          style: AppTypography.sans(
+            12,
+            FontWeight.w600,
+          ).copyWith(color: AppColors.ink3),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          step.title,
+          style:
+              AppTypography.sans(
+                15.5,
+                current ? FontWeight.w600 : FontWeight.w500,
+              ).copyWith(
+                color: state == TutorialRowState.locked
+                    ? AppColors.ink2
+                    : AppColors.ink,
+                height: 1.3,
+              ),
+        ),
+        if (state == TutorialRowState.stopped) ...[
+          const SizedBox(height: 3),
+          Text(
+            'Your outline is saved. Check the status above for next steps.',
+            style: small.copyWith(height: 1.4),
+          ),
+        ] else if (minutes != null) ...[
+          const SizedBox(height: 3),
+          Text(minutes, style: small.merge(AppTypography.tnum)),
+        ],
+        if (current) ...[
+          const SizedBox(height: 12),
+          V3Button(
+            size: V3Size.sm,
+            icon: V3Icons.play,
+            onPressed: open,
+            child: const Text('Continue'),
+          ),
+        ],
+      ],
+    );
+    if (!current) return content;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.hair),
+      ),
+      child: content,
+    );
+  }
+
+  /// "{read} min read + {prac} min practice", or whichever half is known.
+  String? _minutesLine(PlanStepDetail step) {
+    final read = step.effectiveReadingMinutes;
+    final practice = step.effectivePracticeMinutes;
+    return switch ((read, practice)) {
+      (final r?, final p?) => '$r min read + $p min practice',
+      (final r?, null) => '$r min read',
+      (null, final p?) => '$p min practice',
+      _ => null,
+    };
   }
 
   Future<void> _openLesson(
@@ -1336,92 +1579,30 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
     PlanStepDetail step,
     int index,
   ) async {
-    final completed = detailed.isStepCompleted(step.id);
-    final changed = await Navigator.of(context, rootNavigator: true).push<bool>(
-      CmpysPageRoute<bool>(
-        builder: (_) => LessonReaderScreen(
-          itemId: detailed.item.id,
-          missionTitle: detailed.item.title,
-          step: step,
-          stepNumber: index + 1,
-          totalSteps: detailed.steps.length,
-          materials: detailed.materials,
-          completed: completed,
-          artifactJobId: detailed.artifactJobId,
-        ),
-      ),
+    final changed = await openLessonReader(
+      context,
+      ref,
+      detailed,
+      index,
+      shellBranchIndex: widget.shellBranchIndex,
     );
     if (!mounted) return;
     // Returning after a long reading/practice session starts a new foreground
     // window even if the learner backed out without completing the tutorial.
     await _load(resetPolling: true);
     if (!mounted) return;
-    if (changed == true) {
-      ref.read(currentPlanProvider.notifier).refresh();
-      if (mounted) {
-        showCmpysToast(
-          context,
-          index == detailed.steps.length - 1
-              ? 'Mission complete.'
-              : step.isTutorial
-              ? 'Tutorial complete. Your next tutorial is unlocked.'
-              : 'Lesson complete. The next lesson is unlocked.',
-          icon: Icons.check_rounded,
-          tone: AppColors.green,
-        );
-      }
+    if (changed) {
+      showV3Toast(
+        context,
+        index == detailed.steps.length - 1
+            ? 'Mission complete.'
+            : step.isTutorial
+            ? 'Tutorial complete. Your next tutorial is unlocked.'
+            : 'Lesson complete. The next lesson is unlocked.',
+        icon: V3Icons.check,
+        tone: V3ToastTone.success,
+      );
     }
-  }
-
-  Future<void> _showLessonLocked(
-    int index,
-    int activeIndex,
-    bool isTutorial,
-  ) async {
-    final unit = isTutorial ? 'Tutorial' : 'Lesson';
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: AppColors.card,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-      ),
-      builder: (sheetContext) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(22, 18, 22, 24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Icon(
-                PhosphorIconsRegular.lockSimple,
-                color: AppColors.ochre2,
-                size: 30,
-              ),
-              const SizedBox(height: 13),
-              Text(
-                '$unit ${index + 1} is locked',
-                style: AppTypography.h2.copyWith(fontSize: 23),
-              ),
-              const SizedBox(height: 7),
-              Text(
-                'Complete $unit ${activeIndex + 1} first. Your next ${unit.toLowerCase()} will unlock automatically.',
-                style: AppTypography.body.copyWith(
-                  color: AppColors.ink2,
-                  fontSize: 14,
-                  height: 1.45,
-                ),
-              ),
-              const SizedBox(height: 18),
-              CmpysButton(
-                full: true,
-                onTap: () => Navigator.of(sheetContext).pop(),
-                child: Text('Back to current ${unit.toLowerCase()}'),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
   }
 
   Future<BookReadingAccess> _checkBookAccess(PlanMaterialDetail material) {
@@ -1445,6 +1626,7 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
                   access.resourceId!;
             }
           });
+          _accessRevision.value++;
         }
         return access;
       } finally {
@@ -1481,21 +1663,21 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
       } on BookGuideUnavailableException catch (error) {
         if (!mounted) return;
         setState(() => _preparingBookGuideKeys.remove(preparationKey));
-        showCmpysToast(
+        showV3Toast(
           context,
           error.message,
-          icon: PhosphorIconsRegular.warningCircle,
-          tone: AppColors.danger,
+          icon: V3Icons.alert,
+          tone: V3ToastTone.warn,
         );
         return;
       } catch (_) {
         if (!mounted) return;
         setState(() => _preparingBookGuideKeys.remove(preparationKey));
-        showCmpysToast(
+        showV3Toast(
           context,
           'Could not open the book. Try again.',
-          icon: Icons.cloud_off_rounded,
-          tone: AppColors.danger,
+          icon: V3Icons.alert,
+          tone: V3ToastTone.warn,
         );
         return;
       }
@@ -1507,16 +1689,18 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
         }
       });
       if (bookResourceId == null && readingSource == null) {
-        showCmpysToast(
+        showV3Toast(
           context,
           'The book is not available yet. Try another resource or check again later.',
-          icon: PhosphorIconsRegular.hourglass,
-          tone: AppColors.ochre2,
+          icon: V3Icons.clock,
+          tone: V3ToastTone.warn,
         );
         return;
       }
     }
     Widget? screen;
+    final missionTitle = _detailed?.item.title.trim() ?? '';
+    final openedFrom = missionTitle.isEmpty ? null : 'Mission · $missionTitle';
     if (videoId != null) {
       screen = MaterialVideoScreen(material: m, videoId: videoId);
     } else if (m.type == 'book' && bookResourceId != null) {
@@ -1524,7 +1708,7 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
         resourceId: bookResourceId,
         fallbackTitle: m.title,
         fallbackSourceUrl: m.directUrl,
-        shellBranchIndex: 1,
+        shellBranchIndex: widget.shellBranchIndex,
       );
     } else if (readingSource != null) {
       screen = MaterialWebScreen(
@@ -1532,13 +1716,27 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
         url: readingSource.url,
         sourceDescription: readingSource.description,
         initialSectionTitle: readingSource.sectionTitle,
+        access: readingSource.scope == 'excerpt'
+            ? AccessType.excerpt
+            : AccessType.original,
+        openedFrom: openedFrom,
       );
     } else if (m.prefersExternalLink) {
-      screen = MaterialWebScreen(title: m.title, url: m.directUrl!);
+      screen = MaterialWebScreen(
+        title: m.title,
+        url: m.directUrl!,
+        access: AccessType.web,
+        openedFrom: openedFrom,
+      );
     } else if (m.hasInAppContent) {
       screen = MaterialReaderScreen(material: m);
     } else if (m.directUrl != null) {
-      screen = MaterialWebScreen(title: m.title, url: m.directUrl!);
+      screen = MaterialWebScreen(
+        title: m.title,
+        url: m.directUrl!,
+        access: AccessType.web,
+        openedFrom: openedFrom,
+      );
     }
     if (screen == null) return;
     final route = CmpysPageRoute<void>(builder: (_) => screen!);
@@ -1569,197 +1767,72 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
   bool _isPreparingBookGuide(PlanMaterialDetail material) =>
       _preparingBookGuideKeys.contains(_bookPreparationKey(material));
 
-  ({IconData icon, String label})? _materialAction(PlanMaterialDetail m) {
-    if (m.youtubeVideoId != null) {
-      return (icon: PhosphorIconsFill.playCircle, label: 'Watch');
-    }
-    if (m.type == 'book' && _bookResourceId(m) != null) {
-      return (icon: PhosphorIconsRegular.bookOpen, label: 'Read');
-    }
-    if (m.type == 'book' && m.directUrl != null) {
-      return (icon: PhosphorIconsRegular.globe, label: 'Open source');
-    }
-    if (m.type == 'book') {
-      if (_isPreparingBookGuide(m)) {
-        return (icon: PhosphorIconsRegular.hourglass, label: 'Preparing…');
-      }
-      final access = _bookAccess[_bookPreparationKey(m)];
-      if (access?.source != null) {
-        return (
-          icon: PhosphorIconsRegular.bookOpen,
-          label: access!.source!.actionLabel,
-        );
-      }
-      if (access?.unavailable != null) return null;
-      return (icon: PhosphorIconsRegular.bookOpen, label: 'Check access');
-    }
-    if (m.prefersExternalLink) {
-      return (icon: PhosphorIconsRegular.globe, label: 'Open');
-    }
-    if (m.hasInAppContent) {
-      return (icon: PhosphorIconsRegular.bookOpen, label: 'Read');
-    }
-    if (m.directUrl != null) {
-      return (icon: PhosphorIconsRegular.globe, label: 'Open');
-    }
-    return null;
-  }
+  // ── materials ──────────────────────────────────────────────────────────
 
-  Widget _materialCard(PlanMaterialDetail m) {
-    final action = _materialAction(m);
-    final preparingBookGuide = _isPreparingBookGuide(m);
-    return CmpysCardSurface(
-      onTap: action != null && !preparingBookGuide
-          ? () => _openMaterial(m)
-          : null,
-      pad: const EdgeInsets.all(16),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(_materialIcon(m.type), size: 20, color: AppColors.ink2),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  m.title,
-                  style: AppTypography.bodyMedium.copyWith(fontSize: 14.5),
-                ),
-                if (m.authorOrCreator != null &&
-                    m.authorOrCreator!.isNotEmpty) ...[
-                  const SizedBox(height: 2),
-                  Text(
-                    m.authorOrCreator!,
-                    style: AppTypography.caption.copyWith(
-                      color: AppColors.ink3,
-                      fontSize: 12.5,
-                    ),
-                  ),
-                ],
-                if (m.reason != null && m.reason!.isNotEmpty) ...[
-                  const SizedBox(height: 6),
-                  Text(
-                    m.reason!,
-                    style: AppTypography.caption.copyWith(
-                      color: AppColors.ink2,
-                      fontSize: 13,
-                      height: 1.4,
-                    ),
-                  ),
-                ],
-                if (_bookAccess[_bookPreparationKey(m)]?.source
-                    case final source?) ...[
-                  const SizedBox(height: 6),
-                  Text(
-                    source.description,
-                    style: AppTypography.caption.copyWith(
-                      color: AppColors.green2,
-                      fontSize: 12,
-                    ),
-                  ),
-                ],
-                if (action == null) ...[
-                  const SizedBox(height: 6),
-                  Text(
-                    _bookAccess[_bookPreparationKey(m)]?.unavailable != null
-                        ? 'No readable edition is available in CMPYS yet.'
-                        : m.exactLinkUnavailable
-                        ? 'Exact source link unavailable'
-                        : 'Reference is still being prepared',
-                    style: AppTypography.caption.copyWith(
-                      color: AppColors.ink3,
-                      fontSize: 12,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-          if (action != null) ...[
-            const SizedBox(width: 10),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-              decoration: BoxDecoration(
-                color: AppColors.greenSoft,
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(action.icon, size: 14, color: AppColors.green2),
-                  const SizedBox(width: 5),
-                  Text(
-                    action.label,
-                    style: AppTypography.caption.copyWith(
-                      color: AppColors.green2,
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ],
-      ),
+  AccessType _accessType(PlanMaterialDetail m) => accessTypeForMaterial(
+    m,
+    resolvedGuideId: _bookResourceId(m),
+    bookAccess: _bookAccess[_bookPreparationKey(m)],
+  );
+
+  /// A book whose reading access the screen has not resolved yet (the same
+  /// books [_load] checks).
+  bool _accessUnresolved(PlanMaterialDetail m) =>
+      m.type == 'book' &&
+      _bookResourceId(m) == null &&
+      m.directUrl == null &&
+      _bookAccess[_bookPreparationKey(m)] == null;
+
+  Widget _materialRow(PlanMaterialDetail m) {
+    final preparing = _isPreparingBookGuide(m);
+    final checking = _checkingAccessKeys.contains(_bookPreparationKey(m));
+    return MaterialRow(
+      material: m,
+      type: _accessType(m),
+      preparing: preparing,
+      checking: checking,
+      // Single flight: a guide being prepared, or a sheet waiting on its
+      // access check, is not opened again.
+      onTap: preparing || checking ? null : () => _showMaterialSheet(m),
     );
   }
 
-  Widget _chip(IconData icon, String label, {Color tone = AppColors.ink2}) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: AppColors.paper2,
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 13, color: tone),
-          const SizedBox(width: 5),
-          Text(
-            label,
-            style: AppTypography.caption.copyWith(
-              color: tone,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ],
+  /// `MaterialSheet`: why the material is here, what CMPYS can show of it,
+  /// and its one action, which runs [_openMaterial] once the sheet closes.
+  ///
+  /// A book whose access is still being checked waits for that check (at
+  /// most [_accessWait], with the row's spinner) so the sheet names what its
+  /// CTA opens; a slower check updates the open sheet when it lands. If this
+  /// page is no longer on top when the wait ends, the sheet does not open.
+  Future<void> _showMaterialSheet(PlanMaterialDetail m) async {
+    final key = _bookPreparationKey(m);
+    if (_accessUnresolved(m)) {
+      setState(() => _checkingAccessKeys.add(key));
+      try {
+        await _checkBookAccess(m).timeout(_accessWait);
+      } catch (_) {
+        // Slow or failed: open on what is known; the sheet follows the check.
+      }
+      if (!mounted) return;
+      setState(() => _checkingAccessKeys.remove(key));
+      // The learner may have moved on during the wait (another page is over
+      // this one): never open the sheet on top of it.
+      if (ModalRoute.of(context)?.isCurrent != true) return;
+    }
+    final open = await showV3Sheet<bool>(
+      context,
+      builder: (sheetContext) => ValueListenableBuilder<int>(
+        valueListenable: _accessRevision,
+        builder: (context, _, _) => _materialSheetBody(sheetContext, m),
       ),
     );
+    if (open == true && mounted) await _openMaterial(m);
   }
 
-  ({IconData icon, String label}) _typeMeta(String type) {
-    switch (type) {
-      case 'habit':
-        return (icon: PhosphorIconsRegular.arrowClockwise, label: 'Daily');
-      case 'reading':
-        return (icon: PhosphorIconsRegular.bookOpen, label: 'Reading');
-      case 'course':
-        return (icon: PhosphorIconsRegular.graduationCap, label: 'Course');
-      case 'practice':
-        return (icon: PhosphorIconsRegular.barbell, label: 'Practice');
-      case 'reflection':
-        return (icon: PhosphorIconsRegular.notePencil, label: 'Reflection');
-      default:
-        return (icon: PhosphorIconsRegular.target, label: 'Project');
-    }
-  }
-
-  IconData _materialIcon(String? type) {
-    switch (type) {
-      case 'book':
-        return PhosphorIconsRegular.bookOpen;
-      case 'video':
-        return PhosphorIconsFill.playCircle;
-      case 'article':
-        return PhosphorIconsRegular.fileText;
-      case 'in_app_lesson':
-        return PhosphorIconsRegular.chalkboardTeacher;
-      default:
-        return PhosphorIconsRegular.link;
-    }
-  }
+  Widget _materialSheetBody(BuildContext sheetContext, PlanMaterialDetail m) =>
+      MaterialSheetBody(
+        material: m,
+        type: _accessType(m),
+        onOpen: () => Navigator.of(sheetContext).pop(true),
+      );
 }

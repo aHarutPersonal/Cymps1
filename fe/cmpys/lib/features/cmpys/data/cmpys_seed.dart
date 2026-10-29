@@ -214,6 +214,44 @@ const cmpysInterests = <String>[
   'Mindfulness',
 ];
 
+/// The ten interests on the onboarding "Interests" step (`INTERESTS` in the
+/// v3 design). [cmpysInterests] stays for the screens that still read it.
+const cmpysOnboardingInterests = <String>[
+  'Investing',
+  'Business',
+  'Writing',
+  'Science',
+  'Design',
+  'Leadership',
+  'Engineering',
+  'Public speaking',
+  'Personal finance',
+  'History',
+];
+
+/// Starting points under the free-text goal field (`GOALS` in the v3 design).
+const cmpysOnboardingGoalSuggestions = <String>[
+  'Judge whether a business is worth owning',
+  'Write clearer, more persuasive essays',
+  'Become a sharper decision-maker',
+];
+
+/// The situation chips on the last onboarding step.
+const cmpysOnboardingSituations = <String>[
+  'I work full-time',
+  'I’m a student',
+  'Mornings are best',
+  'Evenings are best',
+  'I commute',
+  'Limited budget for books',
+];
+
+/// The longest goal the backend accepts.
+const cmpysGoalMaxLength = 200;
+
+/// The longest optional situation note the backend accepts.
+const cmpysSituationNoteMaxLength = 500;
+
 class CmpysGoal {
   const CmpysGoal(this.id, this.label, this.sub);
   final String id;
@@ -229,6 +267,18 @@ const cmpysGoals = <CmpysGoal>[
   CmpysGoal('network', 'Expand my network', 'Relationships & mentors'),
   CmpysGoal('clarity', 'Find direction', 'Figure out what matters'),
 ];
+
+/// The legacy goal whose label [text] spells out (ignoring case and edge
+/// spaces), or null for any other wording. Only those goals map to a financial
+/// status when the session is created.
+String? cmpysGoalIdForText(String text) {
+  final wanted = text.trim().toLowerCase();
+  if (wanted.isEmpty) return null;
+  for (final g in cmpysGoals) {
+    if (g.label.toLowerCase() == wanted) return g.id;
+  }
+  return null;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Comparison — you vs Buffett at 24
@@ -263,9 +313,12 @@ class CmpysDimension {
 }
 
 class CmpysMilestone {
-  const CmpysMilestone(this.id, this.label);
+  const CmpysMilestone(this.id, this.label, {this.age});
   final String id;
   final String label;
+
+  /// The age the mentor reached it (`hit_by_age`); null when unknown.
+  final int? age;
 }
 
 class CmpysStrength {
@@ -615,6 +668,8 @@ class CmpysIdea {
     this.sourceUrl,
     this.sourceTitle,
     this.sourceReference,
+    this.quoteType,
+    this.verificationLevel,
   });
   final String id;
   final String text;
@@ -628,6 +683,14 @@ class CmpysIdea {
   final String? sourceUrl;
   final String? sourceTitle;
   final String? sourceReference;
+
+  /// Raw `/feed` `quote_type` of the linked catalog quote (`sourced`,
+  /// `attributed`, `paraphrase`); null when no quote is linked.
+  final String? quoteType;
+
+  /// Raw `/feed` `verification_level` (`source_backed`, `verified`,
+  /// `inconclusive`, `rejected`); null when no quote is linked.
+  final String? verificationLevel;
 }
 
 const cmpysIdeas = <CmpysIdea>[
@@ -902,234 +965,6 @@ String _friendlyJoin(Iterable<String> items) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Long-form readers (article / book lesson / video chapter list)
-// ─────────────────────────────────────────────────────────────────────────────
-
-enum CmpysReadingBlockKind { heading, paragraph, quote }
-
-class CmpysReadingBlock {
-  const CmpysReadingBlock(this.kind, this.text);
-  final CmpysReadingBlockKind kind;
-  final String text;
-}
-
-class CmpysReading {
-  const CmpysReading({
-    required this.id,
-    required this.title,
-    required this.tag,
-    required this.minutes,
-    required this.author,
-    required this.body,
-  });
-  final String id;
-  final String title;
-  final String tag;
-  final int minutes;
-  final String author;
-  final List<CmpysReadingBlock> body;
-}
-
-const cmpysReadings = <String, CmpysReading>{
-  'r2': CmpysReading(
-    id: 'r2',
-    title: 'How Buffett actually reads',
-    tag: 'Article',
-    minutes: 6,
-    author: 'CMPYS Editorial',
-    body: [
-      CmpysReadingBlock(
-        CmpysReadingBlockKind.heading,
-        'Reading for judgment, not for finishing',
-      ),
-      CmpysReadingBlock(
-        CmpysReadingBlockKind.paragraph,
-        'Most people read to reach the last page. Warren Buffett reads to change how he thinks. The distinction sounds small. It is everything.',
-      ),
-      CmpysReadingBlock(
-        CmpysReadingBlockKind.paragraph,
-        'He estimates he spends 80% of his working day reading. Not skimming — reading. Annual reports, newspapers, biographies, and the same handful of investing books, returned to again and again until the ideas became reflexes.',
-      ),
-      CmpysReadingBlock(
-        CmpysReadingBlockKind.quote,
-        'I just sit in my office and read all day.',
-      ),
-      CmpysReadingBlock(
-        CmpysReadingBlockKind.heading,
-        'Three habits you can borrow today',
-      ),
-      CmpysReadingBlock(
-        CmpysReadingBlockKind.paragraph,
-        'First: read slowly enough to argue with the author. If you never disagree, you’re not reading — you’re absorbing.',
-      ),
-      CmpysReadingBlock(
-        CmpysReadingBlockKind.paragraph,
-        'Second: re-read the few things that matter rather than chasing the many that don’t. Depth compounds; breadth distracts.',
-      ),
-      CmpysReadingBlock(
-        CmpysReadingBlockKind.paragraph,
-        'Third: keep a notebook of what surprised you. Surprise is the sound of a model updating.',
-      ),
-      CmpysReadingBlock(
-        CmpysReadingBlockKind.paragraph,
-        'Start with 25 pages a day. In a year that’s roughly 30 books — more than most of the people you’ll ever compete with.',
-      ),
-    ],
-  ),
-  'm4': CmpysReading(
-    id: 'm4',
-    title: 'Your one-paragraph money philosophy',
-    tag: 'Article',
-    minutes: 5,
-    author: 'CMPYS Editorial',
-    body: [
-      CmpysReadingBlock(
-        CmpysReadingBlockKind.heading,
-        'Decide the rules before you need them',
-      ),
-      CmpysReadingBlock(
-        CmpysReadingBlockKind.paragraph,
-        'In a calm moment, money decisions are easy. In a panic, they’re nearly impossible. The solution is to decide your rules now, in writing, while you’re thinking clearly.',
-      ),
-      CmpysReadingBlock(
-        CmpysReadingBlockKind.paragraph,
-        'Warren can state his entire philosophy in a sentence or two. That clarity is what lets him act when everyone else freezes.',
-      ),
-      CmpysReadingBlock(
-        CmpysReadingBlockKind.quote,
-        'Rule No. 1: Never lose money. Rule No. 2: Never forget Rule No. 1.',
-      ),
-      CmpysReadingBlock(
-        CmpysReadingBlockKind.paragraph,
-        'Write your own paragraph. What will you always do? What will you never do? How much can you lose without losing sleep? Keep it where you’ll see it.',
-      ),
-    ],
-  ),
-  'n2': CmpysReading(
-    id: 'n2',
-    title: 'How to find a mentor (without being weird)',
-    tag: 'Article',
-    minutes: 7,
-    author: 'CMPYS Editorial',
-    body: [
-      CmpysReadingBlock(CmpysReadingBlockKind.heading, 'Give before you ask'),
-      CmpysReadingBlock(
-        CmpysReadingBlockKind.paragraph,
-        'The fastest way to lose a potential mentor is to open with a demand on their time. The fastest way to earn one is to be useful first, and specific second.',
-      ),
-      CmpysReadingBlock(
-        CmpysReadingBlockKind.paragraph,
-        'Buffett wrote to Benjamin Graham, took his class, worked for him for free when offered nothing else. He made himself worth mentoring.',
-      ),
-      CmpysReadingBlock(
-        CmpysReadingBlockKind.heading,
-        'A message that actually works',
-      ),
-      CmpysReadingBlock(
-        CmpysReadingBlockKind.paragraph,
-        'Be brief. Reference something specific they made or said. Ask one precise question they can answer in two minutes. Make it effortless to say yes.',
-      ),
-      CmpysReadingBlock(
-        CmpysReadingBlockKind.paragraph,
-        'Then — this is the part people skip — report back what you did with their advice. Nothing earns a second conversation like evidence the first one mattered.',
-      ),
-    ],
-  ),
-};
-
-class CmpysBook {
-  const CmpysBook({
-    required this.id,
-    required this.title,
-    required this.chapter,
-    required this.author,
-    required this.via,
-    required this.minutes,
-    required this.pages,
-    required this.note,
-  });
-  final String id;
-  final String title;
-  final String chapter;
-  final String author;
-  final String via;
-  final int minutes;
-  final List<String> pages;
-  final String note;
-}
-
-const cmpysBooks = <String, CmpysBook>{
-  'r3': CmpysBook(
-    id: 'r3',
-    title: 'The Intelligent Investor',
-    chapter: 'Chapter 8 — The Investor and Market Fluctuations',
-    author: 'Benjamin Graham',
-    via: 'Annotated by Warren',
-    minutes: 12,
-    pages: [
-      'Imagine that in some private business you own a small share that cost you \$1,000. One of your partners, named Mr. Market, is very obliging indeed.',
-      'Every day he tells you what he thinks your interest is worth and offers either to buy you out or to sell you an additional interest on that basis.',
-      'Sometimes his idea of value seems plausible and justified. Often, however, Mr. Market lets his enthusiasm or his fears run away with him, and the value he proposes seems a little short of silly.',
-      'The intelligent investor is a realist who sells to optimists and buys from pessimists. You are neither right nor wrong because the crowd disagrees with you. You are right because your data and reasoning are right.',
-      'The investor who permits himself to be stampeded by the unjustified market declines of his holdings is perversely transforming his basic advantage into a basic disadvantage.',
-    ],
-    note:
-        'Warren read this chapter as a young man and called it the best thing ever written about investing. The lesson is temperament: the market is there to serve you, not instruct you.',
-  ),
-  'd2': CmpysBook(
-    id: 'd2',
-    title: 'The Snowball',
-    chapter: 'On the Inner Scorecard',
-    author: 'Alice Schroeder',
-    via: 'On Warren’s life',
-    minutes: 8,
-    pages: [
-      'The big question about how people behave is whether they’ve got an Inner Scorecard or an Outer Scorecard.',
-      'It helps if you can be satisfied with how you act, even when the world is keeping score differently.',
-      'Warren’s father gave him this: it’s better to be judged by your own standard than to chase the approval of a crowd whose standard keeps moving.',
-      'Would you rather be the best lover in the world and known as the worst, or the worst lover and known as the best? An Inner Scorecard person doesn’t hesitate.',
-      'Most failures of discipline are really failures of scorekeeping — measuring yourself against the wrong audience.',
-    ],
-    note:
-        'Discipline gets easier when you stop performing for an audience and start keeping your own promises.',
-  ),
-};
-
-class CmpysVideoInfo {
-  const CmpysVideoInfo({
-    required this.id,
-    required this.title,
-    required this.minutes,
-    required this.channel,
-    required this.desc,
-    required this.chapters,
-  });
-  final String id;
-  final String title;
-  final int minutes;
-  final String channel;
-  final String desc;
-  final List<String> chapters;
-}
-
-const cmpysVideos = <String, CmpysVideoInfo>{
-  'm2': CmpysVideoInfo(
-    id: 'm2',
-    title: 'The eighth wonder: compound interest',
-    minutes: 9,
-    channel: 'CMPYS Learn',
-    desc:
-        'A nine-minute walk through the single idea behind every great fortune — including Warren’s.',
-    chapters: [
-      'Why your intuition is wrong about growth',
-      'The snowball, visualized',
-      'Time vs. amount: which wins',
-      'Starting small, starting now',
-    ],
-  ),
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Onboarding draft (collected as the user moves through personalize → intake)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1146,7 +981,19 @@ class CmpysOnboardingDraft {
   String name;
   int age;
   Set<String> interests;
+
+  /// The goal as the user wrote it (at most [cmpysGoalMaxLength] characters).
+  String goal = '';
+
+  /// A legacy goal id, set only when [goal] is one of [cmpysGoals]; it drives
+  /// the financial-status hint sent with the session.
   String? goalId;
+
+  /// Situation chips from the last personalization step, in the order chosen.
+  Set<String> situation = <String>{};
+
+  /// Optional free text from the same step.
+  String situationNote = '';
   Map<String, String> intakeAnswers;
 
   /// Backend agentic-session id, set once discovery creates one. Reused so

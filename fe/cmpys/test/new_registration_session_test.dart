@@ -63,7 +63,7 @@ void main() {
   });
 
   test(
-    'new registration clears prior local account state before routing',
+    'new registration starts its own local account before routing',
     () async {
       final tokenStore = TokenStore();
       final authController = AuthController(
@@ -71,11 +71,14 @@ void main() {
         tokenStore: tokenStore,
       );
       var localStoreWasReset = false;
+      final opened = <(String, String?)>[];
       final controller = SessionController(
         tokenStore: tokenStore,
         meRepository: _StubMeRepository(tokenStore),
         authController: authController,
         resetLocalAccountData: () async => localStoreWasReset = true,
+        openLocalAccount: (id, owner) async => opened.add((id, owner)),
+        closeLocalAccount: () async {},
       );
 
       await controller.onAuthenticated(isNewRegistration: true);
@@ -83,7 +86,12 @@ void main() {
       final prefs = await SharedPreferences.getInstance();
       expect(prefs.getBool(SessionKeys.onboardingComplete), isNull);
       expect(prefs.getString(SessionKeys.currentIdolId), isNull);
-      expect(localStoreWasReset, isTrue);
+      // The device store is per account (owner decision 2): the new
+      // account opens its own, empty store, and an unkeyed store from an
+      // older build (no known owner) is never adopted by it. Nothing of
+      // another account's is deleted.
+      expect(localStoreWasReset, isFalse);
+      expect(opened, [('new-user-id', null)]);
       expect(controller.state, isA<SessionNeedsOnboarding>());
     },
   );

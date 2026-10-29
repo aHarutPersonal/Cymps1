@@ -1,0 +1,75 @@
+{
+  "all_passed": true,
+  "checks": [
+    {
+      "check": "authenticate existing synthetic account",
+      "status": 200,
+      "passed": true
+    },
+    {
+      "check": "load prepared workbook",
+      "status": 200,
+      "passed": true
+    },
+    {
+      "check": "private keys hidden",
+      "passed": true
+    },
+    {
+      "check": "save answers",
+      "status": 200,
+      "passed": true
+    },
+    {
+      "check": "reload saved answers",
+      "status": 200,
+      "passed": true
+    },
+    {
+      "check": "reject stale save",
+      "status": 409,
+      "passed": true
+    },
+    {
+      "check": "incorrect answer feedback",
+      "status": 200,
+      "passed": true
+    },
+    {
+      "check": "idempotent resubmission",
+      "status": 200,
+      "passed": true
+    },
+    {
+      "check": "cannot complete failed practice",
+      "status": 409,
+      "passed": true
+    },
+    {
+      "check": "cannot skip exercise",
+      "status": 409,
+      "passed": true
+    },
+    {
+      "check": "reject stale artifact",
+      "status": 409,
+      "passed": true
+    },
+    {
+      "check": "reject unauthenticated read",
+      "status": 401,
+      "passed": true
+    },
+    {
+      "check": "no model calls",
+      "passed": true
+    },
+    {
+      "check": "source progress unchanged",
+      "passed": true
+    }
+  ],
+  "synthetic_account": true,
+  "paid_calls": 0,
+  "successful_completion_tested": false
+}

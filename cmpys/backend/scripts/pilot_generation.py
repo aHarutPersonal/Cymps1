@@ -14,6 +14,7 @@ import json
 import math
 import os
 import re
+import statistics
 import time
 from pathlib import Path
 from uuid import uuid4
@@ -213,6 +214,15 @@ async def run(args):
     cases = json.loads((Path(__file__).parents[1] / "tests/fixtures/generation_scenarios.json").read_text())
     selected = [next(c for c in cases if c["domain"] == domain and c["learner_level"] == "novice" and c["evidence_status"] == "missing")
                 for domain in args.domains.split(",")]
+    if args.outline:
+        await _run_outline_cases(args, cases, factory, budget, stage, load_and_render)
+        return
+    if args.tutorial:
+        if args.scenarios:
+            wanted = args.scenarios.split(",")
+            selected = [c for c in cases if c["id"] in wanted] if wanted != ["all"] else cases
+        await _run_tutorial_cases(args, selected, factory, budget, stage, load_and_render)
+        return
     for case in selected:
         prefix = case["id"] + ("-" + args.label if args.label else "")
         stage.update(scenario_id=case["id"], stage="package", tier="balanced")
@@ -318,6 +328,196 @@ async def run(args):
                       "cap_usd": budget.cap, "promotion": "not permitted by a small unadjudicated pilot"}), flush=True)
 
 
+def tutorial_outline(case: dict) -> dict:
+    """A one-tutorial tutorial_v1 scaffold for a scenario, validated like a generated one."""
+    from app.services.llm.schemas import PlanTutorialOutlineOutput
+
+    title = case["goal"] if len(case["goal"]) <= 45 else case["goal"][:46].rsplit(" ", 1)[0]
+    # Explicit markers keep the scaffold valid for baseline code, where they are required.
+    step = {"id": "step_1", "lesson_format": "tutorial_v1", "title": title,
+            "description": "Learn one concept, apply it to a supplied case, then transfer it to a new case.",
+            "resources": ["Optional background reference"]}
+    material = {"title": "Optional background reference", "type": "course", "author_or_creator": None,
+                "search_query": "Optional background reference", "duration_minutes": 15,
+                "reason": "Optional context only; unavailable during this pilot."}
+    return PlanTutorialOutlineOutput.model_validate({
+        "lesson_format": "tutorial_v1", "steps": [step], "materials": [material],
+        "definition_of_done": "Complete both prepared activities and revise using feedback.",
+        "mental_model": "Apply the mechanism to a new case and explain the reasoning."}).model_dump(mode="json")
+
+
+async def _run_tutorial_cases(args, selected, factory, budget, stage, load_and_render):
+    """Full tutorial_v1 pipeline per scenario and repeat, as evaluate_generation rows."""
+    from app.services.planning.lesson_package import validation_identity
+    from app.tasks.plans import _generate_plan_item_details_parallel
+
+    for case in selected:
+        context = {"goal": case["goal"], "learner_context": {"level": case["learner_level"],
+            "locale": case["locale"], "untrusted_note": case["untrusted_note"]}, "mentor_evidence": {}}
+        for repeat in range(1, args.repeats + 1):
+            run_id = f"{args.arm}-{repeat}"
+            artifact_path = args.output / f"{case['id']}-{run_id}.json"
+            if artifact_path.exists():
+                continue
+            stage.update(scenario_id=case["id"], stage="tutorial_pipeline", tier="balanced", run_id=run_id)
+            spent_before, started = budget.spent, time.perf_counter()
+            validations, packages = {}, {}
+            error, lesson, calls = None, None, []
+            try:
+                async with asyncio.timeout(480):
+                    lesson, calls, error = await _generate_plan_item_details_parallel(
+                        system_prompt=load_and_render("planner_system.txt", {}), task_title=case["goal"],
+                        mission_hours=0.1, user_goal=case["goal"],
+                        learning_preferences="Short tutorials with a worked example and in-app practice",
+                        idol_name="No verified mentor", idol_domain=case["domain"], idol_evidence={},
+                        session_context=json.dumps(context), active_tier="balanced",
+                        routing_reason="local_budgeted_tutorial_pilot", client_factory=factory,
+                        existing_checkpoint={"_generation": {"outline": tutorial_outline(case)}},
+                        prepared_packages=packages, validation_records=validations)
+            except TimeoutError:
+                error = "Tutorial pilot deadline reached"
+            except RuntimeError as exc:
+                if "pilot" not in str(exc).lower() and "cap" not in str(exc).lower():
+                    raise
+                error = str(exc)  # Budget stop: record the partial run, then stop spending.
+            row = {"scenario_id": case["id"], "run_id": run_id, "arm": args.arm,
+                   "accepted": bool(validations) and not error, "adjudicated": False,
+                   "quality_score": None, "usable_ms": (time.perf_counter() - started) * 1000,
+                   "cost_usd": budget.spent - spent_before,
+                   "repair_count": sum(any(k in str(c[0]) for k in ("repair", "correct", "recheck", "_2")) for c in calls),
+                   "calls": len(calls), "failures": [error] if error else [],
+                   "validation_identity": validation_identity(),
+                   "attempts": [{"stage": c[0], "error": c[1].error, "duration_ms": c[1].duration_ms} for c in calls],
+                   "packages": {k: v.model_dump(mode="json") for k, v in packages.items()}, "lesson": lesson}
+            artifact_path.write_text(json.dumps(row, indent=2, ensure_ascii=False))
+            with (args.output / "runs.jsonl").open("a") as handle:
+                handle.write(json.dumps({k: v for k, v in row.items() if k not in {"lesson", "packages", "attempts", "validation_identity"}}) + "\n")
+            print(json.dumps({k: row[k] for k in ("scenario_id", "run_id", "accepted", "usable_ms", "cost_usd", "calls", "failures")}), flush=True)
+            if budget.spent + sum(budget.pending.values()) >= budget.cap:
+                print(json.dumps({"stopped": "budget cap reached"}), flush=True)
+                return
+    print(json.dumps({"estimated_charged_or_reserved_usd": budget.spent + sum(budget.pending.values()),
+                      "cap_usd": budget.cap, "promotion": "screening only; not the promotion rule"}), flush=True)
+
+
+# Missions span the 2-3 h range where the 45 s outline cap failed live (26 Oct).
+OUTLINE_MISSIONS = (("accounting_novice_evidence", 2.0), ("writing_experienced_missing", 2.5),
+                    ("software_novice_evidence", 3.0))
+# Explicit reasoning levels: "medium" (sent as high) was the default before 26 Oct.
+OUTLINE_ARMS = ("medium", "low")
+
+
+def outline_mission(case: dict, hours: float) -> dict:
+    """A multi-hour mission for one scenario (synthetic content only)."""
+    return {"title": case["goal"],
+            "description": (f"Over about {hours:g} hours, build this skill step by step: "
+                            f"{case['goal'][0].lower() + case['goal'][1:]}. Study each idea on a supplied "
+                            "case, practise it in the app, and finish by revising one complete piece of work."),
+            "success_metric": (f"A revised, self-checked piece of {case['domain'].replace('_', ' ')} work "
+                               "that applies the skill to a new case.")}
+
+
+def summarize_outline_runs(rows: list[dict], *, cap_ms: float = 45_000) -> dict:
+    """Per arm: valid outlines, how many fit the production cap, latency, cost and size."""
+    summary = {}
+    for arm in sorted({row["arm"] for row in rows}):
+        runs = [row for row in rows if row["arm"] == arm]
+        valid = [row for row in runs if not row["error"]]
+        durations = sorted(row["duration_ms"] for row in runs)
+        summary[arm] = {
+            "runs": len(runs), "valid": len(valid),
+            "valid_within_cap": sum(row["duration_ms"] <= cap_ms for row in valid),
+            "median_ms": round(statistics.median(durations)), "max_ms": round(durations[-1]),
+            "cost_usd": round(sum(row["cost_usd"] or 0 for row in runs), 4),
+            "mean_lessons": round(statistics.mean(row["lessons"] for row in valid), 1) if valid else None,
+        }
+    return summary
+
+
+async def _run_outline_cases(args, cases, factory, budget, stage, load_and_render):
+    """The production outline request at each reasoning level, paired in time."""
+    from app.core.config import settings
+    from app.services.llm.pricing import estimate_cost_usd
+    from app.services.llm.schemas import (MAX_PLAN_DETAIL_MATERIALS, MAX_PLAN_DETAIL_RESOURCES_PER_LESSON,
+                                          MIN_PLAN_DETAIL_MATERIALS, PlanTutorialOutlineOutput)
+    from app.tasks.plans import (_outline_client_options, _plan_detail_lesson_count_bounds,
+                                 _validate_plan_detail_outline_response)
+
+    by_id = {case["id"]: case for case in cases}
+    log_path = args.output / "outline-runs.jsonl"
+    rows = [json.loads(line) for line in log_path.read_text().splitlines()] if log_path.exists() else []
+    done = {(row["scenario_id"], row["arm"], row["repeat"]) for row in rows}
+    system_prompt = load_and_render("planner_system.txt", {})
+
+    async def attempt(case, hours, arm, repeat, prompt, minimum, maximum):
+        options = _outline_client_options(tutorial=True, maximum_lessons=maximum, tier="balanced")
+        production_timeout = options["timeout"]
+        options["thinking_level"] = arm
+        # A generous request timeout measures true latency against the production cap.
+        client = factory(**{**options, "timeout": 150})
+        started = time.perf_counter()
+        response = await client.generate_json(system_prompt=system_prompt, user_prompt=prompt,
+                                              output_model=PlanTutorialOutlineOutput)
+        duration_ms = (time.perf_counter() - started) * 1000
+        _validate_plan_detail_outline_response(response, minimum_lessons=minimum, maximum_lessons=maximum,
+                                               tutorial=True)
+        cost = None
+        if response.prompt_tokens is not None and response.total_tokens is not None:
+            cost = estimate_cost_usd(model=client.model, provider=settings.llm_provider,
+                prompt_tokens=response.prompt_tokens, completion_tokens=response.completion_tokens,
+                total_tokens=response.total_tokens)
+        steps = [] if response.error else response.data.get("steps", [])
+        row = {"scenario_id": case["id"], "mission_hours": hours, "arm": arm, "repeat": repeat,
+               "thinking_level": options["thinking_level"], "production_timeout_s": production_timeout,
+               "max_tokens": options["max_tokens"], "lesson_bounds": [minimum, maximum],
+               "duration_ms": duration_ms, "finish_reason": response.finish_reason,
+               "prompt_tokens": response.prompt_tokens, "completion_tokens": response.completion_tokens,
+               "thoughts_tokens": getattr(response, "thoughts_tokens", None), "cost_usd": cost,
+               "error": response.error, "lessons": len(steps),
+               "materials": 0 if response.error else len(response.data.get("materials", [])),
+               "mean_description_words": round(statistics.mean(len(str(s.get("description", "")).split())
+                                                                for s in steps), 1) if steps else None}
+        (args.output / f"{case['id']}-{arm}-{repeat}.json").write_text(json.dumps(
+            {**row, "outline": None if response.error else response.data}, indent=2, ensure_ascii=False))
+        return row
+
+    for scenario_id, hours in OUTLINE_MISSIONS:
+        case = by_id[scenario_id]
+        minimum, maximum = _plan_detail_lesson_count_bounds(hours, lesson_format="tutorial_v1")
+        mission = outline_mission(case, hours)
+        context = {"goal": case["goal"], "learner_context": {"level": case["learner_level"],
+            "locale": case["locale"], "untrusted_note": case["untrusted_note"]}, "mentor_evidence": {}}
+        session_context = (json.dumps(context) + "\n\nCurrent mission (an incremental step toward the overall goal):\n"
+                           + json.dumps(mission, ensure_ascii=False))
+        prompt = load_and_render("plan_item_tutorial_outline.txt", {
+            "task_title": mission["title"], "mission_hours": hours, "user_goal": case["goal"],
+            "learning_preferences": "Short tutorials with a worked example and in-app practice",
+            "idol_name": "No verified mentor", "idol_domain": case["domain"], "idol_evidence_json": {},
+            "session_context": session_context, "minimum_lessons": minimum, "maximum_lessons": maximum,
+            "minimum_materials": MIN_PLAN_DETAIL_MATERIALS, "maximum_materials": MAX_PLAN_DETAIL_MATERIALS,
+            "maximum_resources_per_lesson": MAX_PLAN_DETAIL_RESOURCES_PER_LESSON}, strict=True)
+        for repeat in range(1, args.repeats + 1):
+            arms = [arm for arm in OUTLINE_ARMS if (scenario_id, arm, repeat) not in done]
+            if not arms:
+                continue
+            stage.update(scenario_id=scenario_id, stage="outline", tier="balanced", run_id=f"r{repeat}")
+            new_rows = await asyncio.gather(*(attempt(case, hours, arm, repeat, prompt, minimum, maximum)
+                                              for arm in arms))
+            with log_path.open("a") as handle:
+                for row in new_rows:
+                    handle.write(json.dumps(row) + "\n")
+                    print(json.dumps({k: row[k] for k in ("scenario_id", "mission_hours", "arm", "repeat",
+                        "duration_ms", "finish_reason", "lessons", "cost_usd", "error")}), flush=True)
+            rows.extend(new_rows)
+            if budget.spent + sum(budget.pending.values()) >= budget.cap:
+                print(json.dumps({"stopped": "budget cap reached"}), flush=True)
+                break
+    summary = summarize_outline_runs(rows)
+    (args.output / "outline-summary.json").write_text(json.dumps(summary, indent=2))
+    print(json.dumps({"summary": summary, "estimated_charged_or_reserved_usd":
+                      budget.spent + sum(budget.pending.values()), "cap_usd": budget.cap}), flush=True)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--max-usd", type=float, required=True)
@@ -328,4 +528,10 @@ if __name__ == "__main__":
     parser.add_argument("--full-pipeline", action="store_true")
     parser.add_argument("--resume-truncated-package", type=Path)
     parser.add_argument("--resume-package-response", type=Path)
+    parser.add_argument("--tutorial", action="store_true", help="Run the full tutorial_v1 pipeline")
+    parser.add_argument("--repeats", type=int, default=1)
+    parser.add_argument("--scenarios", default="", help="Comma-separated scenario ids, or 'all' (tutorial mode)")
+    parser.add_argument("--arm", default="candidate", choices=["baseline", "candidate", "fixes"])
+    parser.add_argument("--outline", action="store_true",
+                        help="Compare the tutorial outline request at medium vs low reasoning")
     asyncio.run(run(parser.parse_args()))

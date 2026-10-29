@@ -40,11 +40,22 @@ class _CompletedPlanRepo extends Fake implements PlanRepository {
       'id': jobId,
       'status': 'completed',
       'progressPercent': 100,
+      // Tutorial 1 is ready, so the lab may say the plan is ready to begin.
+      'results': {'ready_lesson_count': 1},
     });
   }
 }
 
+/// The v3 lab never stops moving while it works (halo rings, spinners), so
+/// settle-based tests run it with animations off, as the OS setting would.
+Widget _reducedMotion(BuildContext context, Widget? child) => MediaQuery(
+  data: MediaQuery.of(context).copyWith(disableAnimations: true),
+  child: child!,
+);
+
 void main() {
+  comparisonWhileWaitingTests();
+
   testWidgets('starts results automatically and waits for the real plan', (
     tester,
   ) async {
@@ -65,6 +76,7 @@ void main() {
           planRepositoryProvider.overrideWithValue(planRepo),
         ],
         child: MaterialApp(
+          builder: _reducedMotion,
           home: CmpysMentorLabStep(
             idol: defaultIdol(),
             draft: draft,
@@ -80,107 +92,67 @@ void main() {
     expect(draft.comparisonMd, 'Comparison ready.');
     expect(draft.blueprintMd, 'Blueprint ready.');
     expect(draft.planJobId, 'plan-job-1');
-    expect(
-      find.text('Your roadmap is ready. Lessons are preparing.'),
-      findsOneWidget,
-    );
-    expect(find.text('Enter CMPYS'), findsOneWidget);
+    expect(find.text('Your plan is ready'), findsOneWidget);
+    expect(find.text('to begin.'), findsOneWidget);
+    expect(find.text('Go to Today'), findsOneWidget);
+    expect(find.text('See the full plan'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
-    await tester.tap(find.text('Enter CMPYS'));
+    await tester.tap(find.text('Go to Today'));
     await tester.pump();
     expect(finished, isTrue);
 
     await tester.pumpWidget(const SizedBox());
   });
+}
 
-  testWidgets('perspectives can be swiped without affecting plan readiness', (
-    tester,
-  ) async {
-    final draft = CmpysOnboardingDraft()..sessionId = 'session-1';
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          sessionRepositoryProvider.overrideWithValue(_ResultsRepo()),
-          planRepositoryProvider.overrideWithValue(_CompletedPlanRepo()),
-        ],
-        child: MaterialApp(
-          home: CmpysMentorLabStep(
-            idol: defaultIdol(),
-            draft: draft,
-            onDone: () {},
+class _RunningPlanRepo extends Fake implements PlanRepository {
+  @override
+  Future<PlanJobStatus> getJobStatus(String jobId) async {
+    return PlanJobStatus.fromJson({
+      'id': jobId,
+      'status': 'running',
+      'progressPercent': 20,
+    });
+  }
+}
+
+void comparisonWhileWaitingTests() {
+  testWidgets(
+    'shows the streamed comparison while the plan is still building',
+    (tester) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final draft = CmpysOnboardingDraft()..sessionId = 'session-1';
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            sessionRepositoryProvider.overrideWithValue(_ResultsRepo()),
+            planRepositoryProvider.overrideWithValue(_RunningPlanRepo()),
+          ],
+          child: MaterialApp(
+            home: CmpysMentorLabStep(
+              idol: defaultIdol(),
+              draft: draft,
+              onDone: () {},
+            ),
           ),
         ),
-      ),
-    );
-    await tester.pumpAndSettle();
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
 
-    expect(find.text('Seneca'), findsOneWidget);
-    await tester.ensureVisible(find.byType(PageView));
-    await tester.drag(find.byType(PageView), const Offset(-600, 0));
-    await tester.pumpAndSettle();
-    expect(find.text('Isaac Newton'), findsOneWidget);
-    expect(find.text('Enter CMPYS'), findsOneWidget);
+      expect(
+        find.textContaining('Comparison ready.', findRichText: true),
+        findsOneWidget,
+      );
+      expect(find.text('Go to Today'), findsNothing);
+      expect(tester.takeException(), isNull);
 
-    await tester.pumpWidget(const SizedBox());
-  });
-
-  testWidgets('verified role-model quotes include portraits and sources', (
-    tester,
-  ) async {
-    final draft = CmpysOnboardingDraft()..sessionId = 'session-1';
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          sessionRepositoryProvider.overrideWithValue(_ResultsRepo()),
-          planRepositoryProvider.overrideWithValue(_CompletedPlanRepo()),
-        ],
-        child: MaterialApp(
-          home: CmpysMentorLabStep(
-            idol: defaultIdol(),
-            draft: draft,
-            onDone: () {},
-          ),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    expect(find.text('Seneca'), findsOneWidget);
-    expect(find.byKey(const Key('mentor-voice-Seneca')), findsOneWidget);
-    expect(
-      find.text('Source: Moral Letters to Lucilius, Letter 11'),
-      findsOneWidget,
-    );
-    expect(find.textContaining('protector or your pattern'), findsOneWidget);
-    expect(tester.takeException(), isNull);
-
-    await tester.ensureVisible(find.byTooltip('Next perspective'));
-    await tester.tap(find.byTooltip('Next perspective'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Isaac Newton'), findsOneWidget);
-    expect(find.byKey(const Key('mentor-voice-Isaac Newton')), findsOneWidget);
-    expect(
-      find.text('Source: Letter to Robert Hooke, 5 February 1676'),
-      findsOneWidget,
-    );
-
-    await tester.tap(find.byTooltip('Next perspective'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Warren Buffett'), findsWidgets);
-    expect(
-      find.byKey(const Key('mentor-voice-Warren Buffett')),
-      findsOneWidget,
-    );
-    expect(
-      find.text('Source: Columbia Business School, “Fast Forward,” 2015'),
-      findsOneWidget,
-    );
-    expect(find.textContaining('choose your heroes'), findsOneWidget);
-    expect(tester.takeException(), isNull);
-
-    await tester.pumpWidget(const SizedBox());
-  });
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 }

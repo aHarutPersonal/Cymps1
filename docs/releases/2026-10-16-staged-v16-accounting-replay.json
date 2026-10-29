@@ -1,0 +1,91 @@
+[
+  {
+    "preflights": [
+      {
+        "actual_recorded_response_replay": {
+          "advisory_count": 0,
+          "failure_categories": {
+            "other_or_semantic": 2
+          },
+          "failure_count": 2,
+          "math_role_count": 0,
+          "package_issue_count": 0,
+          "recorded_calls_consumed": 1,
+          "semantic_acceptable": false,
+          "semantic_issue_count": 2,
+          "unavailable": false
+        },
+        "alias_count": 0,
+        "candidate_count": 0,
+        "canonical_private_claims": 0,
+        "patch": {
+          "diagnostic_chars": 661,
+          "invalid_ids": 0,
+          "package_chars": 12882,
+          "payload_chars": 18636,
+          "prior_calculations": 11,
+          "prior_facts": 0,
+          "retained_unaffected_span_ids": 14,
+          "schema_chars": 2284,
+          "scope_real_spans": 7,
+          "system_chars": 2105
+        },
+        "proof_error_count": 9,
+        "remaining_proof_categories": {
+          "numeric span contains additional unverified values": 7,
+          "reviewer_arithmetic_mismatch": 2
+        },
+        "remaining_proof_errors": 9,
+        "remaining_source_errors": 0,
+        "semantic_acceptable": false
+      },
+      {
+        "actual_recorded_response_replay": {
+          "advisory_count": 0,
+          "failure_categories": {
+            "review_unavailable": 1
+          },
+          "failure_count": 1,
+          "math_role_count": 0,
+          "package_issue_count": 0,
+          "recorded_calls_consumed": 2,
+          "semantic_acceptable": null,
+          "semantic_issue_count": 0,
+          "unavailable": true
+        },
+        "alias_count": 17,
+        "candidate_count": 0,
+        "canonical_private_claims": 0,
+        "patch": {
+          "diagnostic_chars": 403,
+          "invalid_ids": 0,
+          "package_chars": 13123,
+          "payload_chars": 17979,
+          "prior_calculations": 8,
+          "prior_facts": 2,
+          "retained_unaffected_span_ids": 14,
+          "schema_chars": 2276,
+          "scope_real_spans": 6,
+          "system_chars": 2105
+        },
+        "proof_error_count": 39,
+        "remaining_proof_categories": {
+          "calculation is not bound to an exact source span": 1,
+          "claimed result is absent from its source quote": 1,
+          "numeric span contains additional unverified values": 5
+        },
+        "remaining_proof_errors": 7,
+        "remaining_source_errors": 0,
+        "semantic_acceptable": true
+      }
+    ],
+    "scenario_id": "accounting_novice_missing"
+  },
+  {
+    "completed_reports_audited": 1,
+    "provider": "dummy",
+    "network": "disabled",
+    "captures": "read_only",
+    "publication": "none"
+  }
+]

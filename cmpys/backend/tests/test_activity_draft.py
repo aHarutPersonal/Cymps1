@@ -4,7 +4,7 @@ import copy
 import pytest
 from pydantic import ValidationError
 
-from app.services.planning.activity_draft import LessonActivityDraft, parse_activity_draft
+from app.services.planning.activity_draft import LessonActivityDraft, TutorialActivityDraft, parse_activity_draft
 from app.services.planning.package_builder import LessonPackageActivity
 from app.services.practice.contracts import Activity, AnswerField, SolutionDocument, Workbook, public_workbook
 from app.services.practice.solution_compiler import compile_worked_solution
@@ -27,7 +27,7 @@ def draft_payload():
             {"id": "period", "kind": "choice", "label": "Which period produced the collections?",
              "choices": [{"id": "earlier", "label": "An earlier period"},
                          {"id": "current", "label": "The current period"}],
-             "correct_choice": "earlier",
+             "correct_choice": "earlier", "rubric_criterion": "Places the collections in the earlier period",
              "explanation": "The scenario explicitly identifies these as collections of earlier-period sales."},
             {"id": "reason", "kind": "text", "label": "Explain why sales and collections differ.",
              "criteria": ["Distinguishes the time of the sale from the time of the cash receipt."],
@@ -95,11 +95,12 @@ def test_wire_has_complete_discriminated_variants_and_no_solution_envelope():
     assert schema["properties"]["data"]["maxItems"] == 20
     items = schema["properties"]["fields"]["items"]
     assert items["discriminator"]["propertyName"] == "kind"
-    assert len(items["oneOf"]) == 3
+    assert len(items["oneOf"]) == 4
     for name, required, forbidden in [
-        ("NumberDraftField", {"expression"}, {"choices", "correct_choice", "criteria"}),
-        ("ChoiceDraftField", {"choices", "correct_choice"}, {"expression", "tolerance", "criteria"}),
-        ("TextDraftField", {"criteria"}, {"expression", "tolerance", "choices", "correct_choice"}),
+        ("NumberDraftField", {"expression"}, {"choices", "correct_choice", "correct_choices", "criteria"}),
+        ("ChoiceDraftField", {"choices", "correct_choice"}, {"expression", "tolerance", "criteria", "correct_choices"}),
+        ("MultiChoiceDraftField", {"choices", "correct_choices"}, {"expression", "tolerance", "criteria", "correct_choice"}),
+        ("TextDraftField", {"criteria"}, {"expression", "tolerance", "choices", "correct_choice", "correct_choices"}),
     ]:
         branch = schema["$defs"][name]
         assert set(branch["required"]) == {"id", "label", "kind", "explanation", *required}
@@ -327,3 +328,138 @@ def test_empty_criteria_cleanup_never_relocates_an_unowned_root_explanation():
     assert ("fields", 2, "text", "explanation") in locations
     assert ("explanation",) in locations
     assert raw == original
+
+
+# ---------------------------------------------------------------------------
+# Practice v3 on the generation wire: multi_choice, field hints, misconceptions
+# ---------------------------------------------------------------------------
+
+def v3_draft():
+    return {
+        "id": "guided", "title": "Classify the spending", "kind": "practice",
+        "instructions": "A fictional workshop spends money on the items in the table. Find upkeep spending and classify each item.",
+        "data": [{"id": "total", "label": "Total spending", "value": 70, "unit": "m"},
+                 {"id": "growth", "label": "Growth spending", "value": 25, "unit": "m"}],
+        "hint": "Separate spending that keeps the workshop running from spending that grows it.",
+        "minutes_min": 4, "minutes_max": 8,
+        "fields": [
+            {"id": "upkeep", "kind": "number", "label": "Upkeep spending", "prefix": "$", "unit": "m",
+             "expression": "total - growth", "hint": "Take the growth part out of the total.",
+             "rubric_criterion": "Uses upkeep spending, not total spending",
+             "misconceptions": [{"expression": "total", "feedback": "That is the total. Growth spending is not upkeep."}],
+             "explanation": "Upkeep is the total minus the growth part, because growth spending expands the workshop rather than maintaining it."},
+            {"id": "items", "kind": "multi_choice", "label": "Which items are growth spending?",
+             "choices": [{"id": "shed", "label": "A new shed"}, {"id": "lathe", "label": "A second lathe"},
+                         {"id": "belts", "label": "Replacement belts"}],
+             "correct_choices": ["shed", "lathe"], "rubric_criterion": "Separates growth from upkeep",
+             "explanation": "A new shed and a second lathe add capacity; replacement belts only keep the existing lathe running."},
+        ],
+    }
+
+
+def test_multi_choice_draft_round_trips_and_renders_its_correct_labels():
+    canonical = parse_activity_draft(v3_draft())
+    number, multi = canonical.fields
+    assert multi.kind == "multi_choice" and multi.correct_choices == ["shed", "lathe"]
+    assert (number.prefix, number.hint, number.misconceptions[0].expression) == ("$", "Take the growth part out of the total.", "total")
+    assert isinstance(canonical.worked_solution, SolutionDocument)
+    text = compile_worked_solution(canonical).text
+    assert "A new shed" in text and "A second lathe" in text
+    # The correct set is the key: the distractor label is not the answer.
+    assert "Replacement belts" not in text
+    wire = activity_repair_reference(canonical)
+    assert "correct_choices" not in wire["fields"][0] and "prefix" not in wire["fields"][1]
+    assert "misconceptions" not in wire["fields"][1] and "correct_choice" not in wire["fields"][1]
+    assert parse_activity_repair_draft(wire).model_dump(mode="json") == canonical.model_dump(mode="json")
+
+
+def test_wire_exposes_four_discriminated_kinds_and_their_v3_properties():
+    schema = LessonActivityDraft.model_json_schema()
+    items = schema["properties"]["fields"]["items"]
+    assert len(items["oneOf"]) == 4
+    multi = schema["$defs"]["MultiChoiceDraftField"]
+    assert set(multi["required"]) == {"id", "label", "kind", "explanation", "choices", "correct_choices"}
+    assert {"expression", "tolerance", "correct_choice", "criteria", "prefix", "misconceptions"}.isdisjoint(multi["properties"])
+    assert list(multi["properties"])[-1] == "explanation" and list(multi["properties"])[:3] == ["id", "label", "kind"]
+    number = schema["$defs"]["NumberDraftField"]["properties"]
+    assert {"prefix", "misconceptions", "hint", "rubric_criterion"} <= set(number)
+    for name in ("ChoiceDraftField", "TextDraftField", "MultiChoiceDraftField"):
+        assert {"hint", "rubric_criterion"} <= set(schema["$defs"][name]["properties"])
+        assert "misconceptions" not in schema["$defs"][name]["properties"]
+    assert "prefix" not in schema["$defs"]["ChoiceDraftField"]["properties"]
+
+
+def test_tutorial_draft_enforces_the_new_workbook_rules():
+    text = {"id": "why", "kind": "text", "label": "Say why in at most 40 words.",
+            "criteria": ["Uses the supplied figures"],
+            "explanation": "A strong answer ties the classification to what the item adds to capacity."}
+    only_text = v3_draft(); only_text["fields"] = [text]
+    with pytest.raises(ValidationError) as error:
+        TutorialActivityDraft.model_validate(only_text)
+    assert "number or multi_choice" in str(error.value) and "guided" in str(error.value)
+    two_texts = v3_draft(); two_texts["fields"] = [text, {**text, "id": "why2"}]
+    with pytest.raises(ValidationError) as error:
+        TutorialActivityDraft.model_validate(two_texts)
+    assert "number or multi_choice" in str(error.value)  # two short fields: a text pair has no number
+    # Legacy lesson drafts (their prompt is unchanged) keep accepting text-only work.
+    LessonActivityDraft.model_validate(only_text)
+    parse_activity_draft(only_text)
+    # The intended pair is accepted, in either order of kinds.
+    paired = v3_draft(); paired["fields"] = [paired["fields"][1], text]
+    assert [f.kind for f in parse_activity_repair_draft(paired, tutorial=True).fields] == ["multi_choice", "text"]
+
+
+@pytest.mark.parametrize("index", [0, 1])
+def test_tutorial_draft_requires_a_rubric_criterion_on_scored_fields(index):
+    raw = v3_draft(); del raw["fields"][index]["rubric_criterion"]
+    with pytest.raises(ValidationError) as error:
+        TutorialActivityDraft.model_validate(raw)
+    assert "rubric_criterion" in str(error.value)
+    LessonActivityDraft.model_validate(raw)  # not required for legacy lesson drafts
+    schema = TutorialActivityDraft.model_json_schema()
+    for name in ("NumberDraftField", "ChoiceDraftField", "MultiChoiceDraftField"):
+        assert "rubric_criterion" in schema["$defs"][name]["required"]
+    assert "rubric_criterion" not in schema["$defs"]["TextDraftField"]["required"]
+    assert "rubric_criterion" not in LessonActivityDraft.model_json_schema()["$defs"]["NumberDraftField"]["required"]
+
+
+def test_private_repair_can_patch_a_multi_choice_answer_key_and_nothing_else():
+    from app.services.planning.lesson_package import LessonPackage, PrivatePackageRepair, apply_private_package_repair
+
+    def package():
+        first = parse_activity_draft(v3_draft()).model_dump(mode="json")
+        second = {**copy.deepcopy(first), "id": "transfer", "kind": "transfer"}
+        return LessonPackage.model_validate({"teaching_cases": [], "workbook": {"title": "Classify", "activities": [first, second]}})
+
+    patched = apply_private_package_repair(package(), PrivatePackageRepair.model_validate(
+        {"field_patches": [{"activity_id": "guided", "field_id": "items", "correct_choices": ["shed"]}]}))
+    assert patched.workbook.activities[0].fields[1].correct_choices == ["shed"]
+    with pytest.raises(ValueError):
+        apply_private_package_repair(package(), PrivatePackageRepair.model_validate(
+            {"field_patches": [{"activity_id": "guided", "field_id": "items", "correct_choice": "shed"}]}))
+    with pytest.raises(ValueError):
+        apply_private_package_repair(package(), PrivatePackageRepair.model_validate(
+            {"field_patches": [{"activity_id": "guided", "field_id": "items", "correct_choices": ["missing"]}]}))
+
+
+@pytest.mark.parametrize("expression", ["70", "total / total", "total - total"])
+def test_misconceptions_are_derived_from_named_facts_like_the_answer(expression):
+    raw = v3_draft()
+    raw["fields"][0]["misconceptions"] = [{"expression": expression, "feedback": "A guessed constant is not a mistake."}]
+    with pytest.raises(ValidationError):
+        parse_activity_draft(raw)
+    from app.services.planning.lesson_package import LessonPackage
+
+    good = parse_activity_draft(v3_draft()).model_dump(mode="json")
+    good["fields"][0]["misconceptions"] = [{"expression": expression, "feedback": "A guessed constant is not a mistake."}]
+    other = {**copy.deepcopy(good), "id": "transfer", "kind": "transfer"}
+    with pytest.raises(ValidationError):
+        LessonPackage.model_validate({"teaching_cases": [], "workbook": {"title": "Classify", "activities": [good, other]}})
+
+
+@pytest.mark.parametrize("blank", ["     ", " \t\n  "])
+def test_tutorial_draft_rejects_a_whitespace_only_rubric_criterion(blank):
+    raw = v3_draft(); raw["fields"][0]["rubric_criterion"] = blank
+    with pytest.raises(ValidationError) as error:
+        TutorialActivityDraft.model_validate(raw)
+    assert "rubric_criterion" in str(error.value)

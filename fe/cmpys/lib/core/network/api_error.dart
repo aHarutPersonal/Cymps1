@@ -1,3 +1,21 @@
+/// One field a request failed validation on (an item of a 422 response's
+/// `detail` list): the field's name (the last part of its `loc`, such as
+/// `email`) and the validator's error `type` (such as `value_error`). The
+/// validator's own message is not kept: it is never shown to users.
+class ApiFieldError {
+  const ApiFieldError({required this.field, required this.type});
+
+  final String field;
+  final String type;
+
+  @override
+  bool operator ==(Object other) =>
+      other is ApiFieldError && other.field == field && other.type == type;
+
+  @override
+  int get hashCode => Object.hash(field, type);
+}
+
 /// API error representation.
 class ApiError implements Exception {
   const ApiError({
@@ -5,12 +23,16 @@ class ApiError implements Exception {
     this.code,
     this.statusCode,
     this.retryAfterSeconds,
+    this.fieldErrors = const [],
   });
 
   final String message;
   final String? code;
   final int? statusCode;
   final int? retryAfterSeconds;
+
+  /// The fields a 422 validation failure names; empty otherwise.
+  final List<ApiFieldError> fieldErrors;
 
   /// Create ApiError from HTTP status code.
   factory ApiError.fromStatusCode(int statusCode, [String? message]) {

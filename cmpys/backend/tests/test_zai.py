@@ -107,3 +107,30 @@ def test_execution_schema_requires_metrics_and_mission_depth():
     schema = ExecutionBinaryTask.model_json_schema()
     assert "success_metric" in schema["required"]
     assert schema["properties"]["success_metric"]["type"] == "string"
+
+
+@pytest.mark.asyncio
+async def test_zai_off_disables_thinking_and_reserve(monkeypatch):
+    client = get_llm_client(max_tokens=500, thinking_level="off")
+    assert client.thinking_level == "off"
+    _, request = transport(monkeypatch, client, [chunk('{"ok":true}', "stop")])
+    result = await client.generate_json("JSON system", "User")
+    assert result.error is None and result.data == {"ok": True}
+    assert request["extra_body"] == {"thinking": {"type": "disabled"}}
+    assert "reasoning_effort" not in request
+    assert request["max_tokens"] == 500
+
+
+def test_override_applies_only_to_named_operation(monkeypatch):
+    from app.services.llm.routing import operation_thinking_level
+
+    monkeypatch.setattr(settings, "zai_reasoning_overrides", {"interview_stream": "off"})
+    assert operation_thinking_level("interview_stream", "low") == "off"
+    assert operation_thinking_level("comparison_stream", "low") == "low"
+    monkeypatch.setattr(settings, "llm_provider", "openlux")
+    assert operation_thinking_level("interview_stream", "low") == "low"
+
+
+def test_reasoning_overrides_reject_unknown_levels():
+    with pytest.raises(ValueError):
+        Settings(_env_file=None, zai_reasoning_overrides={"interview_stream": "medium"})

@@ -9,10 +9,16 @@ class ResultsGenerationException implements Exception {
   const ResultsGenerationException({
     required this.code,
     this.retryAfterSeconds = 0,
+    this.section,
   });
 
   final String code;
   final int retryAfterSeconds;
+
+  /// The pipeline section the server was working on (`comparison`,
+  /// `blueprint` or `plan`), when it said so. The mentor lab uses it to mark
+  /// the stage that failed.
+  final String? section;
 
   String get message => switch (code) {
     'generation_unavailable' =>
@@ -39,6 +45,8 @@ Future<void> streamGenerateResults({
   void Function(String accumulated)? onComparison,
   void Function(String accumulated)? onBlueprint,
   void Function(String jobId)? onPlanJob,
+  void Function(bool ready)? onComparisonScores,
+  void Function()? onDone,
 }) async {
   String section = '';
   final comparison = CoalescedText(
@@ -85,9 +93,19 @@ Future<void> streamGenerateResults({
           final jobId = ev['job_id']?.toString() ?? '';
           if (jobId.isNotEmpty) onPlanJob?.call(jobId);
           break;
+        case 'comparison_scores':
+          // The structured dimension scores behind the Compare screen. They
+          // follow the blueprint, so this also marks the blueprint complete:
+          // publish its pending text before telling the caller.
+          comparison.flush();
+          blueprint.flush();
+          onComparisonScores?.call(ev['ready'] == true);
+          break;
         case 'error':
           final delay = ev['retry_after_seconds'];
+          final failedSection = ev['section']?.toString() ?? section;
           throw ResultsGenerationException(
+            section: failedSection.isEmpty ? null : failedSection,
             code: ev['code']?.toString() ?? 'generation_failed',
             retryAfterSeconds: delay is num && delay.isFinite
                 ? delay.toInt().clamp(0, 3600)
@@ -96,6 +114,10 @@ Future<void> streamGenerateResults({
                 : 0,
           );
         case 'done':
+          // The pipeline finished: publish any pending text first.
+          comparison.flush();
+          blueprint.flush();
+          onDone?.call();
           break;
       }
     }

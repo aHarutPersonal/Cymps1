@@ -19,6 +19,14 @@ from app.schemas.achievement import (
 
 router = APIRouter(prefix="/achievements", tags=["achievements"])
 
+# A total order: rows tie on achievement_date (often null), and offset paging
+# over a non-unique order can skip a row between pages.
+ACHIEVEMENT_LIST_ORDER = (
+    UserAchievement.achievement_date.desc().nulls_last(),
+    UserAchievement.created_at.desc(),
+    UserAchievement.id,
+)
+
 
 def _to_response(achievement: UserAchievement) -> AchievementResponse:
     """Convert model to response schema."""
@@ -124,7 +132,7 @@ async def list_achievements(
     total = total_result.scalar() or 0
     
     # Get paginated results
-    stmt = stmt.order_by(UserAchievement.achievement_date.desc().nulls_last())
+    stmt = stmt.order_by(*ACHIEVEMENT_LIST_ORDER)
     stmt = stmt.offset(offset).limit(limit)
     
     result = await db.execute(stmt)

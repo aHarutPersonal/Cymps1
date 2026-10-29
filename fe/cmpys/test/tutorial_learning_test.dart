@@ -1,3 +1,4 @@
+import 'package:cmpys/core/reading/lesson_fences.dart';
 import 'package:cmpys/core/ui/cmpys/learning_diagram_view.dart';
 import 'package:cmpys/features/plan/data/plan_repository.dart';
 import 'package:cmpys/features/plan/models/plan_models.dart';
@@ -82,6 +83,8 @@ Widget _app(PlanRepository repository) => ProviderScope(
 );
 
 void main() {
+  syllabusTests();
+
   test(
     'tutorial metadata inherits from the outline and preserves 12 steps',
     () {
@@ -129,41 +132,44 @@ void main() {
     );
   });
 
-  test(
-    'seven short backend sections form four tutorial pages without loss',
-    () {
-      const headings = [
-        'Why This Matters',
-        'Core Framework',
-        'Worked Example',
-        'Failure Modes',
-        'Guided Practice',
-        'Check Your Understanding',
-        'References',
-      ];
-      final markdown = [
-        for (var i = 0; i < headings.length; i++)
-          '## ${headings[i]}\nUnique teaching content $i.',
-      ].join('\n\n');
-      final compact = splitLessonSections(markdown, compactTutorial: true);
-      expect(compact.map((section) => section.title), [
-        'The idea',
-        'Worked example',
-        'Try it',
-        'Check your understanding',
-      ]);
-      final body = compact.map((section) => section.markdown).join('\n');
-      for (var i = 0; i < headings.length; i++) {
-        expect(body, contains('### ${headings[i]}'));
-        expect(body, contains('Unique teaching content $i.'));
-      }
-      expect(splitLessonSections(markdown).length, 7);
-      expect(
-        splitLessonSections(_tutorialMarkdown, compactTutorial: true).length,
-        4,
-      );
-    },
-  );
+  test('seven backend sections read in the design order without loss', () {
+    const headings = [
+      'Why This Matters',
+      'Core Framework',
+      'Worked Example',
+      'Failure Modes',
+      'Guided Practice',
+      'Check Your Understanding',
+      'References',
+    ];
+    final markdown = [
+      for (var i = 0; i < headings.length; i++)
+        '## ${headings[i]}\nUnique teaching content $i.',
+    ].join('\n\n');
+    final outline = outlineLesson(markdown);
+    expect(outline.sections.map((section) => section.label), [
+      'Why this skill',
+      'The idea',
+      'Worked example',
+      'Common errors',
+      'Try it',
+      'Check yourself',
+      'References',
+    ]);
+    final body = [
+      for (final section in outline.sections)
+        for (final piece in section.pieces.whereType<LessonProse>())
+          piece.markdown,
+    ].join('\n');
+    for (var i = 0; i < headings.length; i++) {
+      expect(body, contains('Unique teaching content $i.'));
+    }
+    // A lesson with its own headings keeps them.
+    expect(
+      outlineLesson(_tutorialMarkdown).sections.map((section) => section.label),
+      ['One clear idea', 'See it', 'Worked example', 'Try it'],
+    );
+  });
 
   test('job ready count is read independently of rounded progress', () {
     final job = PlanJobStatus.fromJson({
@@ -184,17 +190,16 @@ void main() {
     await tester.pump();
     await tester.pump();
     expect(find.textContaining('1 of 12 tutorials ready.'), findsOneWidget);
-    await tester.scrollUntilVisible(find.text('CURRENT TUTORIAL'), 250);
-    expect(find.text('SHORT TUTORIALS'), findsOneWidget);
-    expect(find.text('7 min total'), findsWidgets);
-    expect(find.text('4 min read'), findsWidgets);
-    expect(find.text('3 min practice'), findsWidgets);
+    await tester.scrollUntilVisible(find.text('Continue'), 250);
+    expect(find.text('Tutorials · 0 of 12'), findsOneWidget);
+    expect(find.text('4 min read + 3 min practice'), findsOneWidget);
+    expect(find.text('Tutorial 2 · preparing and reviewing'), findsOneWidget);
     await tester.tap(find.text('Explain concept 1'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
-    expect(find.text('TUTORIAL 1 · PART 1 OF 4'), findsOneWidget);
-    expect(find.textContaining('Tutorial 1 of 12'), findsOneWidget);
-    expect(find.text('Practice in app'), findsNothing);
+    // The mission passes its week to the reader's kicker.
+    expect(find.text('TUTORIAL 1 OF 12 · WEEK 1'), findsOneWidget);
+    expect(find.text('Open practice · 3 min'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
   });
@@ -229,9 +234,9 @@ void main() {
     await tester.pump();
     expect(repo.detailCalls, 2);
     expect(find.textContaining('2 of 12 tutorials ready.'), findsOneWidget);
-    await tester.scrollUntilVisible(find.text('CURRENT TUTORIAL'), 250);
+    await tester.scrollUntilVisible(find.text('Continue'), 250);
     expect(find.text('Explain concept 2'), findsOneWidget);
-    expect(find.text('PREPARING'), findsNothing);
+    expect(find.text('Tutorial 2 · preparing and reviewing'), findsNothing);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
   });
@@ -275,7 +280,7 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('four tutorial sections render the visual and worked example', (
+  testWidgets('tutorial sections render the visual and worked example', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -295,17 +300,110 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.text('7 min total'), findsOneWidget);
-    await tester.tap(find.text('Next'));
-    await tester.pumpAndSettle();
+    expect(find.text('4 min read'), findsOneWidget);
+    expect(find.text('3 min practice'), findsOneWidget);
+    // One continuous scroll: every section is laid out in order.
     expect(find.byType(LearningDiagramView), findsOneWidget);
-    await tester.tap(find.text('Next'));
-    await tester.pumpAndSettle();
-    expect(find.text('Worked example'), findsOneWidget);
-    await tester.tap(find.text('Next'));
-    await tester.pumpAndSettle();
-    expect(find.text('Try it'), findsOneWidget);
-    expect(find.text('Close tutorial'), findsOneWidget);
+    final idea = tester.getTopLeft(find.text('ONE CLEAR IDEA')).dy;
+    final example = tester.getTopLeft(find.text('WORKED EXAMPLE')).dy;
+    final tryIt = tester.getTopLeft(find.text('TRY IT')).dy;
+    expect(idea, lessThan(example));
+    expect(example, lessThan(tryIt));
+    expect(find.text('Review practice & attempts'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }
+
+PlanItemDetailed _syllabusOnly() => PlanItemDetailed.fromJson({
+  'item': {'id': 'mission-1', 'title': 'Explain with evidence'},
+  'details_status': 'generating',
+  'job_id': 'job-1',
+  'details_progress': 62,
+  'details_step': 'outline_ready',
+  'completed_step_ids': const <String>[],
+  'progress': {'completed_steps': 0, 'total_steps': 3},
+  'details': {
+    'lesson_format': 'tutorial_v1',
+    'steps': List.generate(
+      3,
+      (index) => {
+        'id': 'step_${index + 1}',
+        'lesson_format': 'tutorial_v1',
+        'title': 'Explain concept ${index + 1}',
+        'description': 'Practice concept ${index + 1} on a supplied case.',
+        'lesson_content': null,
+      },
+    ),
+    'materials': const <Map<String, Object?>>[],
+  },
+});
+
+void syllabusTests() {
+  testWidgets('the mission syllabus shows before the first tutorial is ready', (
+    tester,
+  ) async {
+    final repo = _TutorialRepository([_syllabusOnly()]);
+    await tester.pumpWidget(_app(repo));
+    await tester.pump();
+    await tester.pump();
+    await tester.scrollUntilVisible(find.text('Explain concept 3'), 250);
+    for (var index = 1; index <= 3; index++) {
+      expect(find.text('Explain concept $index'), findsOneWidget);
+      expect(
+        find.text('Tutorial $index · preparing and reviewing'),
+        findsOneWidget,
+      );
+    }
+    // Nothing is readable yet: tapping a planned tutorial opens no reader.
+    await tester.tap(find.text('Explain concept 1'));
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.textContaining('PART 1 OF 4'), findsNothing);
+    expect(find.text('Still being prepared and reviewed'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('a running job fetches the syllabus once its outline is ready', (
+    tester,
+  ) async {
+    final repo = _TutorialRepository(
+      [_preparingWithoutOutline(), _syllabusOnly()],
+      jobs: const [
+        PlanJobStatus(
+          id: 'job-1',
+          status: 'running',
+          step: 'outline_ready',
+          progressPercent: 62,
+        ),
+      ],
+    );
+    await tester.pumpWidget(_app(repo));
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('Explain concept 1'), findsNothing);
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pump();
+    await tester.pump();
+    expect(repo.detailCalls, 2);
+    await tester.scrollUntilVisible(find.text('Explain concept 1'), 250);
+    expect(find.text('Explain concept 1'), findsOneWidget);
+    // Later polls stay on the job endpoint until a tutorial is ready.
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pump();
+    await tester.pump();
+    expect(repo.detailCalls, 2);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+}
+
+PlanItemDetailed _preparingWithoutOutline() => PlanItemDetailed.fromJson({
+  'item': {'id': 'mission-1', 'title': 'Explain with evidence'},
+  'details_status': 'generating',
+  'job_id': 'job-1',
+  'details_progress': 10,
+  'details_step': 'generating_lessons',
+  'completed_step_ids': const <String>[],
+  'progress': {'completed_steps': 0, 'total_steps': 0},
+});

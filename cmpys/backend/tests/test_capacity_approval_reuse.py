@@ -6,7 +6,40 @@ from tests.test_short_tutorial_pipeline import short_package
 
 PREVIOUS = {'review_version': 23, 'package_version': 1, 'capability_hash': '1815a97ad0c7246f737c493fbec7b9217c6a5dd6a7d96cacd93c0c34b3afe48f', 'prompt_hash': 'fc899f550b96b760a700da1f5bac50b0118b87b2e615c8106a6b0e4d47ef69eb', 'generation_contract_hash': '4c8e291d46f1d4e58fb1ebc4a09bba28bc0de261d41e400d7ce6ef36c662823d', 'schema_hash': '6c9911659a81cbd8598269be5181940c1bd27d828843305fabac7de560b91a01'}
 
-@pytest.mark.parametrize("previous", [PREVIOUS, {'review_version': 23, 'package_version': 1, 'capability_hash': '1815a97ad0c7246f737c493fbec7b9217c6a5dd6a7d96cacd93c0c34b3afe48f', 'prompt_hash': 'fc899f550b96b760a700da1f5bac50b0118b87b2e615c8106a6b0e4d47ef69eb', 'generation_contract_hash': '90612ce1e3b1ea98c5a841b0ac4aa1805fd4ce957e33e938e5ba79b9a1ad159a', 'schema_hash': '6c9911659a81cbd8598269be5181940c1bd27d828843305fabac7de560b91a01'}, {'review_version': 23, 'package_version': 1, 'capability_hash': '1815a97ad0c7246f737c493fbec7b9217c6a5dd6a7d96cacd93c0c34b3afe48f', 'prompt_hash': 'fc899f550b96b760a700da1f5bac50b0118b87b2e615c8106a6b0e4d47ef69eb', 'generation_contract_hash': '61f1e2c32242a46855d525774c17d89f2f3f1c6b89b401d794fff15edd89d9c2', 'schema_hash': '6c9911659a81cbd8598269be5181940c1bd27d828843305fabac7de560b91a01'}])
+# Deployed predecessor pins from before the layered tutorial prompt contract.
+HISTORICAL = [PREVIOUS, {'review_version': 23, 'package_version': 1, 'capability_hash': '1815a97ad0c7246f737c493fbec7b9217c6a5dd6a7d96cacd93c0c34b3afe48f', 'prompt_hash': 'fc899f550b96b760a700da1f5bac50b0118b87b2e615c8106a6b0e4d47ef69eb', 'generation_contract_hash': '90612ce1e3b1ea98c5a841b0ac4aa1805fd4ce957e33e938e5ba79b9a1ad159a', 'schema_hash': '6c9911659a81cbd8598269be5181940c1bd27d828843305fabac7de560b91a01'}, {'review_version': 23, 'package_version': 1, 'capability_hash': '1815a97ad0c7246f737c493fbec7b9217c6a5dd6a7d96cacd93c0c34b3afe48f', 'prompt_hash': 'fc899f550b96b760a700da1f5bac50b0118b87b2e615c8106a6b0e4d47ef69eb', 'generation_contract_hash': '61f1e2c32242a46855d525774c17d89f2f3f1c6b89b401d794fff15edd89d9c2', 'schema_hash': '6c9911659a81cbd8598269be5181940c1bd27d828843305fabac7de560b91a01'}]
+
+
+@pytest.fixture
+def previous(monkeypatch):
+    """A capacity-only predecessor of today's identity, pinned like a release.
+
+    Only generation_contract_hash differs; dependency files are pinned at their
+    current bytes, exactly as a capacity-only release records them.
+    """
+    import hashlib
+    from pathlib import Path
+    from app.services.planning import private_checkpoint
+    identity = {**module.validation_identity(), "generation_contract_hash": "f" * 64}
+    pins = frozenset({module.digest(identity)})
+    monkeypatch.setattr(module, "_CAPACITY_REVIEW_PREDECESSORS", pins)
+    # The checkpoint store binds the pin set at import for its predecessor query.
+    monkeypatch.setattr(private_checkpoint, "_CAPACITY_REVIEW_PREDECESSORS", pins)
+    base = Path(module.__file__).parent
+    monkeypatch.setattr(module, "_CAPACITY_REVIEW_DEPENDENCIES", {
+        name: hashlib.sha256((base / name).read_bytes()).hexdigest()
+        for name in module._CAPACITY_REVIEW_DEPENDENCIES})
+    return identity
+
+
+@pytest.mark.parametrize("historical", HISTORICAL)
+def test_prompt_contract_change_retires_historical_capacity_pins(historical):
+    step = long_tutorial(); package = short_package()
+    approval = {**historical, "content_hash": module.digest(step), "package_hash": module.digest(package.model_dump(mode="json"))}
+    assert historical["prompt_hash"] != module.validation_identity()["prompt_hash"]
+    assert module.reusable_published_approval(step, package, approval) is False
+
+
 @pytest.mark.parametrize("mutation", [None, "content", "package", "identity", "schema", "dependency", "extra"])
 def test_capacity_only_change_reuses_only_exact_approved_content(monkeypatch, mutation, previous):
     step = long_tutorial(); package = short_package()
@@ -27,7 +60,7 @@ def test_current_approval_still_requires_both_content_hashes():
     assert not module.reusable_published_approval(step,package,approval)
 
 @pytest.mark.asyncio
-async def test_retry_carries_forward_known_unchanged_review_without_provider_calls():
+async def test_retry_carries_forward_known_unchanged_review_without_provider_calls(previous):
     from app.services.llm.client import LLMResponse
     from app.tasks.plans import _assemble_parallel_lesson_response, _generate_plan_item_details_parallel
     from tests.test_short_tutorial_pipeline import outline
@@ -36,7 +69,7 @@ async def test_retry_carries_forward_known_unchanged_review_without_provider_cal
     response=LLMResponse(data=module.render_public_package_results(sections(),package.writer_context()))
     _assemble_parallel_lesson_response(response,step=scaffold['steps'][0],material_titles={'Resource 1'},target_minutes=6)
     assert not response.error
-    step=response.data;approval={**PREVIOUS,'content_hash':module.digest(step),'package_hash':module.digest(package.model_dump(mode='json'))}
+    step=response.data;approval={**previous,'content_hash':module.digest(step),'package_hash':module.digest(package.model_dump(mode='json'))}
     saved={**scaffold,'steps':[copy.deepcopy(step)],'_generation':{'outline':scaffold,'outline_contract_version':3,'lesson_validation':{step['id']:approval}}}
     validations={}
     result,calls,error=await _generate_plan_item_details_parallel(system_prompt='Teach',task_title='Sequence',mission_hours=0.1,user_goal='Reason',learning_preferences='examples',idol_name='Mentor',idol_domain='writing',idol_evidence={},session_context='',active_tier='balanced',routing_reason='test',client_factory=lambda **kwargs:pytest.fail('Unchanged published tutorial must not call a provider'),prepared_packages={step['id']:package},validation_records=validations,existing_checkpoint=saved)
@@ -47,11 +80,11 @@ async def test_retry_carries_forward_known_unchanged_review_without_provider_cal
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mutation", [None,"owner","input","step","envelope_hash","identity"])
-async def test_exact_pinned_private_draft_recovery_retains_all_scope_guards(mutation):
+async def test_exact_pinned_private_draft_recovery_retains_all_scope_guards(mutation, previous):
     from tests.test_private_generation_checkpoint import Database,STEP_ID,STEP_HASH
-    db=Database();old=db.new_job();previous=db.store(old,validation_identity=PREVIOUS)
+    db=Database();old=db.new_job();prior=db.store(old,validation_identity=previous)
     package=short_package()
-    assert await previous.save_package(STEP_ID,STEP_HASH,package.model_dump(mode="json"),preflight_passed=False)
+    assert await prior.save_package(STEP_ID,STEP_HASH,package.model_dump(mode="json"),preflight_passed=False)
     old.status="failed";new=db.new_job();current=db.store(new,validation_identity=module.validation_identity())
     if mutation=="owner": old.private_checkpoint_json["user_id"]="00000000-0000-0000-0000-000000000001"
     if mutation=="input": old.private_checkpoint_json["input_hash"]=module.digest("different inputs")

@@ -1,0 +1,185 @@
+{
+  "release": "20261016-082000-evidence-repair",
+  "cap_usd": 3,
+  "shared_ledger": true,
+  "running": false,
+  "exit_code": 0,
+  "finished_calls": 9,
+  "pending_calls": 0,
+  "reported_cost_usd": 0.1719342,
+  "unknown_reserved_usd": 0.1720745,
+  "pending_reserved_usd": 0,
+  "accounted_usd": 0.3440087,
+  "responses": [
+    {
+      "scenario_id": "accounting_novice_missing",
+      "schema": "LessonPackage",
+      "seconds": 102.723,
+      "status": "completed",
+      "unknown_usage": false
+    },
+    {
+      "scenario_id": "accounting_novice_missing",
+      "schema": "LessonPackage",
+      "seconds": 71.225,
+      "status": "completed",
+      "unknown_usage": false
+    },
+    {
+      "scenario_id": "accounting_novice_missing",
+      "schema": "PackageReview",
+      "seconds": 41.786,
+      "status": "completed",
+      "unknown_usage": false
+    },
+    {
+      "scenario_id": "accounting_novice_missing",
+      "schema": "PrivatePackageRepair",
+      "seconds": 9.97,
+      "status": "completed",
+      "unknown_usage": false
+    },
+    {
+      "scenario_id": "accounting_novice_missing",
+      "schema": "PackageReview",
+      "seconds": 14.358,
+      "status": "completed",
+      "unknown_usage": false
+    },
+    {
+      "scenario_id": "geometry_novice_missing",
+      "schema": "LessonPackage",
+      "seconds": 61.922,
+      "status": "completed",
+      "unknown_usage": false
+    },
+    {
+      "scenario_id": "geometry_novice_missing",
+      "schema": "LessonPackage",
+      "seconds": 5.294,
+      "status": "completed",
+      "unknown_usage": false
+    },
+    {
+      "scenario_id": "writing_novice_missing",
+      "schema": null,
+      "seconds": null,
+      "status": "response_missing_or_interrupted",
+      "unknown_usage": true
+    },
+    {
+      "scenario_id": "writing_novice_missing",
+      "schema": null,
+      "seconds": null,
+      "status": "response_missing_or_interrupted",
+      "unknown_usage": true
+    }
+  ],
+  "cases": [
+    {
+      "scenario_id": "accounting_novice_missing",
+      "reported_cost_usd": 0.1385422,
+      "unknown_reserved_usd": 0,
+      "pending_reserved_usd": 0,
+      "accounted_usd": 0.1385422,
+      "calls": 5,
+      "status": "failed",
+      "accepted": false,
+      "adjudicated": false,
+      "elapsed_seconds": 240.207,
+      "failure_count": 1,
+      "validation_identity": {
+        "review_version": 11,
+        "package_version": 1,
+        "capability_hash": "1815a97ad0c7246f737c493fbec7b9217c6a5dd6a7d96cacd93c0c34b3afe48f",
+        "prompt_hash": "593c4b360c76045ab0b8029f78c3ae3a691f8441b31bca5274853cf7646d8303",
+        "generation_contract_hash": "e1a737cd3d0a22bd2c7922d619dae08f07e9f47a2c8fa58959bbd9832401f61a",
+        "schema_hash": "1d0cf0045863177a578bddcf267a7ccada58a0ea89111935117bf8878fc67a5e"
+      },
+      "attempts": [
+        {
+          "stage": "parallel_lesson_step_1_package",
+          "error": false,
+          "seconds": 71.225
+        },
+        {
+          "stage": "parallel_lesson_step_1_package_preflight",
+          "error": false,
+          "seconds": 41.786
+        },
+        {
+          "stage": "parallel_lesson_step_1_package_repair",
+          "error": false,
+          "seconds": 9.97
+        },
+        {
+          "stage": "parallel_lesson_step_1_package_preflight_recheck",
+          "error": false,
+          "seconds": 14.358
+        }
+      ],
+      "word_count": 0,
+      "activity_count": 0
+    },
+    {
+      "scenario_id": "geometry_novice_missing",
+      "reported_cost_usd": 0.033392,
+      "unknown_reserved_usd": 0,
+      "pending_reserved_usd": 0,
+      "accounted_usd": 0.033392,
+      "calls": 2,
+      "status": "failed",
+      "accepted": false,
+      "adjudicated": false,
+      "elapsed_seconds": 67.258,
+      "failure_count": 1,
+      "validation_identity": {
+        "review_version": 11,
+        "package_version": 1,
+        "capability_hash": "1815a97ad0c7246f737c493fbec7b9217c6a5dd6a7d96cacd93c0c34b3afe48f",
+        "prompt_hash": "593c4b360c76045ab0b8029f78c3ae3a691f8441b31bca5274853cf7646d8303",
+        "generation_contract_hash": "e1a737cd3d0a22bd2c7922d619dae08f07e9f47a2c8fa58959bbd9832401f61a",
+        "schema_hash": "1d0cf0045863177a578bddcf267a7ccada58a0ea89111935117bf8878fc67a5e"
+      },
+      "attempts": [
+        {
+          "stage": "parallel_lesson_step_1_package",
+          "error": true,
+          "seconds": 5.294
+        }
+      ],
+      "word_count": 0,
+      "activity_count": 0
+    },
+    {
+      "scenario_id": "writing_novice_missing",
+      "reported_cost_usd": 0,
+      "unknown_reserved_usd": 0.1720745,
+      "pending_reserved_usd": 0,
+      "accounted_usd": 0.1720745,
+      "calls": 2,
+      "status": "failed",
+      "accepted": false,
+      "adjudicated": false,
+      "elapsed_seconds": 240.511,
+      "failure_count": 1,
+      "validation_identity": {
+        "review_version": 11,
+        "package_version": 1,
+        "capability_hash": "1815a97ad0c7246f737c493fbec7b9217c6a5dd6a7d96cacd93c0c34b3afe48f",
+        "prompt_hash": "593c4b360c76045ab0b8029f78c3ae3a691f8441b31bca5274853cf7646d8303",
+        "generation_contract_hash": "e1a737cd3d0a22bd2c7922d619dae08f07e9f47a2c8fa58959bbd9832401f61a",
+        "schema_hash": "1d0cf0045863177a578bddcf267a7ccada58a0ea89111935117bf8878fc67a5e"
+      },
+      "attempts": [
+        {
+          "stage": "parallel_lesson_step_1_package",
+          "error": true,
+          "seconds": 120.004
+        }
+      ],
+      "word_count": 0,
+      "activity_count": 0
+    }
+  ]
+}

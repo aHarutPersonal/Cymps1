@@ -2,6 +2,8 @@
 // /jobs/{id}). Hand-written fromJson, matching the backend's response schemas:
 // plan/item payloads are camelCase, item-detail payloads are snake_case.
 
+import 'dart:math' as math;
+
 /// Result of toggling a plan item's completion state. Contains the new
 /// completed flag plus plan-level signals used by the achievement cycle flow.
 class ToggleResult {
@@ -98,6 +100,7 @@ class BackendPlan {
     required this.durationWeeks,
     required this.weeklyHours,
     required this.items,
+    this.weeklyMinutes,
     this.cycleNumber = 1,
     this.idolName,
     this.roadmapThesis,
@@ -111,6 +114,10 @@ class BackendPlan {
   final String id;
   final int durationWeeks;
   final int weeklyHours;
+
+  /// Exact weekly capacity in minutes (half-hour steps); [weeklyHours] is the
+  /// legacy whole-hour value. Null from servers that predate it.
+  final int? weeklyMinutes;
   final int cycleNumber;
   final List<BackendPlanItem> items;
   final String? idolName;
@@ -209,6 +216,7 @@ class BackendPlan {
     id: j['id']?.toString() ?? '',
     durationWeeks: (j['durationWeeks'] as num?)?.toInt() ?? 12,
     weeklyHours: (j['weeklyHours'] as num?)?.toInt() ?? 10,
+    weeklyMinutes: (j['weeklyMinutes'] as num?)?.toInt(),
     cycleNumber: (j['cycleNumber'] as num?)?.toInt() ?? 1,
     items:
         (j['items'] as List?)
@@ -237,6 +245,8 @@ class TodayTaskItem {
     required this.type,
     required this.estimatedHours,
     required this.completedToday,
+    this.estimatedMinutes,
+    this.sessionMinutes,
     this.dailyInstructions,
   });
 
@@ -245,15 +255,97 @@ class TodayTaskItem {
   final String type; // habit | practice
   final int estimatedHours; // hours for the week
   final bool completedToday;
+
+  /// Exact minutes for the week (`estimated_minutes`); null from servers that
+  /// predate it, when [estimatedHours] is the only allocation.
+  final int? estimatedMinutes;
+
+  /// Minutes of one practice session (`session_minutes`): the weekly minutes
+  /// over the rhythm's sessions per week. Null from servers that predate it.
+  final int? sessionMinutes;
   final String? dailyInstructions;
+
+  /// The week's allocation in minutes: exact when the server sends it, else
+  /// the whole hours.
+  int get weeklyMinutes {
+    final minutes = estimatedMinutes;
+    return minutes != null && minutes > 0 ? minutes : estimatedHours * 60;
+  }
 
   factory TodayTaskItem.fromJson(Map<String, dynamic> j) => TodayTaskItem(
     id: j['id']?.toString() ?? '',
     title: j['title'] as String? ?? '',
     type: j['type'] as String? ?? 'habit',
     estimatedHours: (j['estimated_hours'] as num?)?.toInt() ?? 1,
+    estimatedMinutes: (j['estimated_minutes'] as num?)?.toInt(),
+    sessionMinutes: (j['session_minutes'] as num?)?.toInt(),
     completedToday: j['completed_today'] as bool? ?? false,
     dailyInstructions: j['daily_instructions'] as String?,
+  );
+}
+
+/// The user's daily streak (GET /streak). The server keeps no per-day
+/// history here: only the current run, the longest run and the last day with
+/// a completion.
+class StreakSummary {
+  const StreakSummary({
+    required this.current,
+    required this.longest,
+    this.lastActive,
+  });
+
+  final int current;
+  final int longest;
+
+  /// Last calendar day with a completion (a date, no time), if any.
+  final DateTime? lastActive;
+
+  factory StreakSummary.fromJson(Map<String, dynamic> j) {
+    final raw = DateTime.tryParse(j['last_active_date']?.toString() ?? '');
+    return StreakSummary(
+      current: (j['current_streak'] as num?)?.toInt() ?? 0,
+      longest: (j['longest_streak'] as num?)?.toInt() ?? 0,
+      lastActive: raw == null ? null : DateTime(raw.year, raw.month, raw.day),
+    );
+  }
+}
+
+/// One day of a habit's week grid (GET /plan-items/{id}/daily-status).
+class DailyStatusDay {
+  const DailyStatusDay({required this.date, required this.completed});
+
+  /// The calendar day (a UTC date, no time).
+  final DateTime date;
+  final bool completed;
+
+  factory DailyStatusDay.fromJson(Map<String, dynamic> j) {
+    final raw = DateTime.tryParse(j['date']?.toString() ?? '');
+    return DailyStatusDay(
+      date: raw == null
+          ? DateTime.utc(1970)
+          : DateTime.utc(raw.year, raw.month, raw.day),
+      completed: j['completed'] as bool? ?? false,
+    );
+  }
+}
+
+/// A habit's own Monday-to-Sunday completions for the server's current week
+/// (GET /plan-items/{id}/daily-status), the source of the Plan tab's
+/// per-habit 7-day grid.
+class DailyStatus {
+  const DailyStatus({required this.itemId, required this.days});
+
+  final String itemId;
+  final List<DailyStatusDay> days;
+
+  factory DailyStatus.fromJson(Map<String, dynamic> j) => DailyStatus(
+    itemId: j['item_id']?.toString() ?? '',
+    days:
+        (j['days'] as List?)
+            ?.whereType<Map<String, dynamic>>()
+            .map(DailyStatusDay.fromJson)
+            .toList() ??
+        const [],
   );
 }
 
@@ -294,6 +386,7 @@ class PlanJobStatus {
     this.errorMessage,
     this.thinkingLine,
     this.readyLessonCount,
+    this.totalLessonCount,
   });
 
   final String id;
@@ -308,6 +401,9 @@ class PlanJobStatus {
   /// Persisted content count, independent of rounded job progress.
   final int? readyLessonCount;
 
+  /// How many lessons the job will prepare, when its result says so.
+  final int? totalLessonCount;
+
   bool get isCompleted => status == 'completed';
   bool get isFailed => status == 'failed';
 
@@ -320,7 +416,51 @@ class PlanJobStatus {
     thinkingLine: (j['thinkingStream'] as Map?)?['currentLine']?.toString(),
     readyLessonCount: ((j['results'] as Map?)?['ready_lesson_count'] as num?)
         ?.toInt(),
+    totalLessonCount: ((j['results'] as Map?)?['total_lesson_count'] as num?)
+        ?.toInt(),
   );
+}
+
+/// A tutorial's AI-generated hero image (backend `TutorialIllustration`):
+/// [url] is usually relative (served from `/media/tutorials/`), [alt] is the
+/// accessible description, and [aspect] is `w:h` (only "16:9" today).
+class TutorialIllustration {
+  const TutorialIllustration({
+    required this.url,
+    this.alt = '',
+    this.provider = '',
+    this.aspect = '16:9',
+  });
+
+  final String url;
+  final String alt;
+  final String provider;
+  final String aspect;
+
+  /// Width over height from [aspect]; 16:9 when it is missing or invalid.
+  double get aspectRatio {
+    final parts = aspect.split(':');
+    if (parts.length == 2) {
+      final w = double.tryParse(parts[0].trim());
+      final h = double.tryParse(parts[1].trim());
+      if (w != null && h != null && w > 0 && h > 0) return w / h;
+    }
+    return 16 / 9;
+  }
+
+  /// Null unless [json] is a map with a non-empty `url`; the field is
+  /// optional, so older payloads read without an image.
+  static TutorialIllustration? fromJson(Object? json) {
+    if (json is! Map) return null;
+    final url = json['url']?.toString().trim() ?? '';
+    if (url.isEmpty) return null;
+    return TutorialIllustration(
+      url: url,
+      alt: json['alt']?.toString().trim() ?? '',
+      provider: json['provider']?.toString() ?? '',
+      aspect: json['aspect']?.toString() ?? '16:9',
+    );
+  }
 }
 
 /// One teach-first step inside a plan item's generated lesson details.
@@ -337,6 +477,7 @@ class PlanStepDetail {
     this.substeps = const [],
     this.lessonContent,
     this.lessonFormat,
+    this.illustration,
   });
 
   final String id;
@@ -352,6 +493,9 @@ class PlanStepDetail {
   /// Full markdown lesson for this step.
   final String? lessonContent;
   final String? lessonFormat;
+
+  /// Optional hero image for a tutorial (absent when disabled or failed).
+  final TutorialIllustration? illustration;
 
   bool get isTutorial => lessonFormat == 'tutorial_v1';
   bool get hasContent => lessonContent?.trim().isNotEmpty ?? false;
@@ -401,6 +545,7 @@ class PlanStepDetail {
         (j['substeps'] as List?)?.map((e) => e.toString()).toList() ?? const [],
     lessonContent: j['lesson_content'] as String?,
     lessonFormat: j['lesson_format'] as String? ?? defaultLessonFormat,
+    illustration: TutorialIllustration.fromJson(j['illustration']),
   );
 }
 
@@ -717,6 +862,9 @@ class PlanItemDetailed {
     this.dailyReflection = '',
     this.completedToday = false,
     this.lessonFormat,
+    this.definitionOfDone,
+    this.mentalModel,
+    this.sessionMinutes,
   });
 
   final BackendPlanItem item;
@@ -741,6 +889,29 @@ class PlanItemDetailed {
   final bool completedToday;
   final String? lessonFormat;
 
+  /// Mission outcome copy from `details.definition_of_done` /
+  /// `details.mental_model`. Absent on older lessons.
+  final String? definitionOfDone;
+  final String? mentalModel;
+
+  /// A daily habit's minutes for one session (`session_minutes`, the value
+  /// Today shows). Null from servers that predate it; then use
+  /// [sessionMinutesOrWeekShare].
+  final int? sessionMinutes;
+
+  /// The habit's minutes for one session: [sessionMinutes] when the server
+  /// sends it, else about a seventh of the week's allocation, at least one
+  /// minute (what `habitSessionMinutes` does for Today's items).
+  int get sessionMinutesOrWeekShare {
+    final session = sessionMinutes;
+    if (session != null && session > 0) return session;
+    final weekly = item.estimatedMinutes;
+    final week = weekly != null && weekly > 0
+        ? weekly
+        : item.estimatedHours * 60;
+    return math.max(1, (week / 7).round());
+  }
+
   bool get isTutorialSequence =>
       lessonFormat == 'tutorial_v1' ||
       (steps.isNotEmpty && steps.every((step) => step.isTutorial));
@@ -760,6 +931,13 @@ class PlanItemDetailed {
       (detailsPartial && detailsError == null && jobId != null);
 
   bool isStepCompleted(String stepId) => completedStepIds.contains(stepId);
+
+  /// The learner's next uncompleted step is published and can be read now.
+  bool get currentStepReadable {
+    if (steps.isEmpty) return false;
+    final step = steps[activeStepIndex];
+    return step.hasContent && !isStepCompleted(step.id);
+  }
 
   int get activeStepIndex {
     for (var index = 0; index < steps.length; index++) {
@@ -814,6 +992,74 @@ class PlanItemDetailed {
       dailyInstructions: j['daily_instructions']?.toString(),
       dailyReflection: j['daily_reflection']?.toString() ?? '',
       completedToday: j['completed_today'] as bool? ?? false,
+      definitionOfDone: _optionalText(details?['definition_of_done']),
+      mentalModel: _optionalText(details?['mental_model']),
+      sessionMinutes: _sessionMinutes(j),
+    );
+  }
+
+  /// `session_minutes` on the response, or on its item payload.
+  static int? _sessionMinutes(Map<String, dynamic> j) {
+    final item = j['item'] as Map?;
+    final value =
+        j['session_minutes'] ??
+        item?['session_minutes'] ??
+        item?['sessionMinutes'];
+    return value is num ? value.toInt() : null;
+  }
+
+  static String? _optionalText(Object? value) {
+    if (value is! String) return null;
+    final text = value.trim();
+    return text.isEmpty ? null : text;
+  }
+}
+
+/// One of the user's achievements on the server (`GET /achievements`,
+/// `AchievementResponse`): what the Record restores on sign-in.
+class ServerAchievement {
+  const ServerAchievement({
+    required this.id,
+    required this.title,
+    required this.category,
+    required this.source,
+    this.notes,
+    this.achievementDate,
+    this.createdAt,
+  });
+
+  final String id;
+  final String title;
+
+  /// `career`, `learning`, `finance`, `impact`, `mindset` or `other`.
+  final String category;
+
+  /// `manual`, `plan_item` or `plan_cycle`.
+  final String source;
+  final String? notes;
+
+  /// The date the user gave (a calendar date), when they gave one.
+  final DateTime? achievementDate;
+
+  /// When the server saved it.
+  final DateTime? createdAt;
+
+  /// A row from the list, or null when it has no id (it can't be matched or
+  /// deleted later).
+  static ServerAchievement? tryParse(Object? raw) {
+    if (raw is! Map) return null;
+    final id = raw['id'];
+    if (id is! String || id.trim().isEmpty) return null;
+    String? text(Object? v) => v is String ? v : null;
+    DateTime? when(Object? v) => v is String ? DateTime.tryParse(v) : null;
+    return ServerAchievement(
+      id: id,
+      title: text(raw['title']) ?? '',
+      category: text(raw['category']) ?? 'other',
+      source: text(raw['source']) ?? 'manual',
+      notes: text(raw['notes']),
+      achievementDate: when(raw['achievementDate']),
+      createdAt: when(raw['createdAt']),
     );
   }
 }

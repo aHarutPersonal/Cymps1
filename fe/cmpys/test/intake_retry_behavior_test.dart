@@ -44,6 +44,7 @@ class _SelectionRetryRepository extends Fake implements SessionRepository {
     String content, {
     bool isKickoff = false,
     String? questionId,
+    bool missingEvidence = false,
   }) async* {
     interviewSends++;
     yield {'type': 'chunk', 'content': 'What will you build first?'};
@@ -87,7 +88,8 @@ void main() {
 
       await tester.tap(find.text('Retry'));
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 100));
+      // The mentor's line streams in word by word (v3 `Stream`).
+      await tester.pump(const Duration(milliseconds: 300));
 
       expect(repository.selectionAttempts, 2);
       expect(repository.interviewSends, 1);

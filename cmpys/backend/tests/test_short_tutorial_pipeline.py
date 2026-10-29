@@ -32,17 +32,37 @@ Bounded claim
 ```"""
 
 
+STEPS = """```steps
+title: Bound one claim
+State the claim | | Name what you assert and for whom it holds.
+Add the evidence | | Point to the supplied fact that supports it.
+Limit the scope | | Say where the claim stops being true.
+```"""
+
+CHECK = """```check
+Q: Which claim is bounded?
+- [ ] Remote work is always better.
+- [x] Remote work helped this team ship faster last quarter.
+Why: It names its scope and the evidence behind it.
+```"""
+
+
 def sections():
     # Synthetic prose checks shape/timing/bindings; independent semantic review
     # below is explicitly mocked. These are not production teaching examples.
-    counts = {"why_this_matters": 30, "core_framework": 155, "worked_example": 130,
-              "failure_modes": 30, "guided_practice": 80,
-              "check_your_understanding": 35, "references": 20}
+    # New tutorials carry no guided_practice: practice bindings live in the workbook.
+    counts = {"why_this_matters": 30, "core_framework": 155, "worked_example": 140,
+              "failure_modes": 30, "check_your_understanding": 25, "references": 20}
     result = {name: "explanation " * count for name, count in counts.items()}
     result["core_framework"] += "\n" + VISUAL
-    result["guided_practice"] += " [[practice:guided.argument]] [[practice:transfer.argument]]"
+    result["worked_example"] += "\n\n" + STEPS
+    result["check_your_understanding"] += "\n\n" + CHECK
     result["substeps"] = ["Inspect the supplied claim, write the supporting evidence in the answer field, and check its stated scope."]
     return result
+
+
+def kwargs_schema(model):
+    return model.model_json_schema()["properties"]
 
 
 def outline(count=6):
@@ -77,7 +97,10 @@ def test_short_profile_is_explicit_and_preserves_legacy_serialization():
     assert plan_detail_step_quality_issues(plan_detail_step_model(step).model_validate(step)) == []
     with pytest.raises(ValidationError):
         PlanDetailStepOutput.model_validate({k: v for k, v in step.items() if k != "lesson_format"})
-    legacy = {**step, "estimate_minutes": 60, "reading_minutes": 10, "practice_minutes": 50}
+    # Long lessons still carry substeps; tutorials no longer generate them.
+    assert step["substeps"] == []
+    legacy = {**step, "estimate_minutes": 60, "reading_minutes": 10, "practice_minutes": 50,
+              "substeps": ["Complete the supplied case, explain the decision and save the revised answer."]}
     legacy.pop("lesson_format")
     assert "lesson_format" not in PlanDetailStepOutput.model_validate(legacy).model_dump()
     with pytest.raises(ValueError, match="Unknown lesson format"):
@@ -126,7 +149,8 @@ async def test_tutorial_drafts_once_and_strips_private_practice():
     assert len(calls) == len(prompts) == 1
     assert options[0]["max_tokens"] == 2600
     assert "PRIVATE ANSWER" not in prompts[0]
-    assert "450-800" in prompts[0]
+    assert "450-740" in prompts[0]
+    assert "guided_practice" not in kwargs_schema(PlanTutorialLessonSectionsOutput)
     assert response.semantic_accepted is None  # Writer output is never approval.
 
 
@@ -222,7 +246,9 @@ async def test_real_review_uses_actual_tutorial_workload_not_planning_average(
         async def generate_json(self, **kwargs):
             if issubclass(kwargs["output_model"], PlanTutorialLessonSectionsOutput):
                 data = sections()
-                data["worked_example"] += " example" * extra_words
+                # Extra prose goes before the steps fence; text after a closing
+                # fence on the same line would break the fence.
+                data["worked_example"] = "example " * extra_words + data["worked_example"]
                 return LLMResponse(data=data, finish_reason="stop")
             if kwargs["output_model"].__name__ == ReviewEvidencePatch.__name__:
                 return LLMResponse(data={"practice_minutes": practice_minutes}, finish_reason="stop")

@@ -54,8 +54,9 @@ void main() {
   });
 
   test('generated comparison scores survive a local store restart', () async {
+    // The store persists for the signed-in account.
     final store = CmpysStore();
-    await store.ready;
+    await store.openAccount('acct', unkeyedOwner: 'acct');
     store.syncFromSession(_session('persisted', scores: {
       'version': 2,
       'methodology': 'like_for_like_evidence',
@@ -74,7 +75,7 @@ void main() {
     store.dispose();
 
     final reloaded = CmpysStore();
-    await reloaded.ready;
+    await reloaded.openAccount('acct', unkeyedOwner: 'acct');
     expect(reloaded.state.sessionId, 'persisted');
     expect(reloaded.state.liveDims(), hasLength(1));
     expect(reloaded.state.liveDims().single.you, 55);

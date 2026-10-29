@@ -3,7 +3,8 @@ an execution-ready plan. Preserve the supplied task identities and time budget;
 add the depth needed to act without another planning conversation.
 
 USER GOAL: {user_goal}
-WEEKLY CAPACITY: {hours_per_week} hours
+WEEKLY CAPACITY: {weekly_capacity_label} = {weekly_minutes} minutes = {hours_per_week} hours
+CAPACITY RULE: {capacity_rule}
 USER CONTEXT:
 {user_context}
 
@@ -24,8 +25,9 @@ EXECUTION CONTRACT:
 - Return exactly the same number of tasks, in the same order and with the same
   type and estimated_hours as the approved backbone. Titles may become more
   precise but must preserve the approved intent.
-- Mission task estimates remain within 2-8 hours so their right-sized set of
-  substantial lessons can truthfully fill the assigned workload.
+- Mission task estimates remain within 2-8 hours (in a week under 3 hours,
+  exactly the mission minutes in the CAPACITY RULE) so their right-sized set
+  of lessons can truthfully fill the assigned workload.
 - primary_mission must be 35-70 concrete words connecting this week's skill,
   artifact, and place in the twelve-week progression.
 - Every mission description must be 80-140 substantive words. Name the exact
@@ -42,16 +44,12 @@ EXECUTION CONTRACT:
   stopping rule. It must be executable from the Today screen by itself.
 - success_metric must remain binary, measurable, and consistent with the
   backbone. Never write "task completed".
-- predicted_friction and friction_solution must each stay under 350 characters and be specific to this learner,
-  domain, and week.
 - Do not invent quotations, chapter numbers, mentor facts, URLs, or resources.
 - The sum of estimated_hours must remain exactly {hours_per_week}; preserve the
   approved weekly workload rather than shrinking it during expansion.
 
 Return strict JSON only:
 {
-  "roadmap_thesis": "Repeat the supplied roadmap thesis.",
-  "anti_goals": ["One relevant anti-goal."],
   "weeks": [
     {
       "week_number": 1,
@@ -65,9 +63,7 @@ Return strict JSON only:
           "daily_instructions": null,
           "success_metric": "Binary evidence of completion."
         }
-      ],
-      "predicted_friction": "Specific obstacle.",
-      "friction_solution": "Specific response."
+      ]
     }
   ]
 }
@@ -78,6 +74,6 @@ Adjust scaffolding, worked examples, and case complexity to the checked, named s
 A supported transfer calls for another independent case; an unhinted transfer can justify
 more complexity in that skill, not a blanket promotion. Uncertain review needs clarification;
 a draft is not a failed assessment. If the approved task's prerequisites are not established,
-include a brief diagnostic and targeted prerequisite work within its intent, and state the
-unresolved prerequisite in predicted_friction. Do not claim it has already been mastered.
+include a brief diagnostic and targeted prerequisite work within its intent, and name the
+unresolved prerequisite in that task's description. Do not claim it has already been mastered.
 Preserve approved task identities and time budgets; do not rewrite completed work.

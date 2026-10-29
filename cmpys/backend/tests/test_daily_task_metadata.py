@@ -1,7 +1,13 @@
 """Tests for daily task metadata used by Today and Daily Focus."""
 
-from app.api.v1.daily_tasks import _daily_instructions_for_item
-from app.models.plan import PlanItem
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from app.api.v1 import daily_tasks
+from app.api.v1.daily_tasks import _daily_instructions_for_item, _session_minutes
+from app.models.plan import PlanItem, PlanItemType
 
 
 def test_daily_instructions_prefers_plan_metadata():
@@ -24,3 +30,62 @@ def test_daily_instructions_falls_back_to_detail_metadata():
     )
 
     assert _daily_instructions_for_item(item) == "Use the generated detail instructions."
+
+
+@pytest.mark.parametrize(
+    ("hours", "meta_minutes", "expected"),
+    [
+        (1, 15, 5),  # a 60-minute week's rhythm: three 5-minute sessions
+        (1, 50, 17),  # under an hour: three sessions, 16.7 -> 17
+        (1, None, 15),  # a legacy whole hour: four 15-minute sessions
+        (2, 90, 23),  # 22.5 rounds half up
+        (2, None, 30),
+        (0, None, 1),  # never below one minute
+    ],
+)
+def test_session_minutes_follow_the_rhythm_cadence(hours, meta_minutes, expected):
+    """A habit's weekly minutes are practised in rhythm_cadence sessions."""
+    item = PlanItem(
+        id="habit-1",
+        estimated_hours=hours,
+        meta_json={} if meta_minutes is None else {"estimated_minutes": meta_minutes},
+    )
+
+    assert _session_minutes(item) == expected
+
+
+@pytest.mark.asyncio
+async def test_today_view_reports_weekly_and_session_minutes():
+    """Today rows carry the week's minutes and one session's minutes."""
+    item = PlanItem(
+        id="habit-1",
+        title="Set a 5-minute timer and read",
+        type=PlanItemType.HABIT,
+        week_start=1,
+        week_end=12,
+        estimated_hours=1,
+        meta_json={"estimated_minutes": 15},
+    )
+    plan_result = MagicMock()
+    plan_result.scalar_one_or_none.return_value = SimpleNamespace(id="plan-1")
+    completions = MagicMock()
+    completions.fetchall.return_value = []
+    db = AsyncMock()
+    db.execute.side_effect = [plan_result, completions]
+
+    with (
+        patch.object(
+            daily_tasks,
+            "_items_and_execution_week",
+            AsyncMock(return_value=([item], 1)),
+        ),
+        patch.object(daily_tasks, "calculate_streak", AsyncMock(return_value=0)),
+    ):
+        response = await daily_tasks.get_today_view(
+            "plan-1", db, SimpleNamespace(id="user-1")
+        )
+
+    row = response.items[0]
+    assert row.estimated_minutes == 15
+    assert row.session_minutes == 5
+    assert response.model_dump()["items"][0]["session_minutes"] == 5

@@ -1,0 +1,96 @@
+{
+  "accepted": false,
+  "reported_usd": 0.272397,
+  "unknown_reserved_usd": 0.1558415,
+  "accounted_usd": 0.4282385,
+  "cap_usd": 3,
+  "pending_requests": 0,
+  "provider_calls": 8,
+  "provider_time_seconds": 547.57,
+  "pipeline_seconds": 378.81,
+  "calls": [
+    {
+      "id": "db5bb550-4dbd-4264-822f-919fe446148f",
+      "stage": "package",
+      "model": "glm-5.3",
+      "duration_ms": 95976.47222899832,
+      "charged_usd": 0.041639,
+      "usage_unknown": false,
+      "error": "zai request failed (ValueError; finish=length)"
+    },
+    {
+      "id": "2c348402-767a-4c5b-ba2b-3507f36a7011",
+      "stage": "package",
+      "model": "glm-5.3",
+      "duration_ms": 72860.26992699772,
+      "charged_usd": 0.031398,
+      "usage_unknown": false,
+      "error": null
+    },
+    {
+      "id": "321f2f20-e5b2-48f6-b535-8366e5191360",
+      "stage": "full_pipeline",
+      "model": "glm-5.3",
+      "duration_ms": 11364.198445997317,
+      "charged_usd": 0.0059456,
+      "usage_unknown": false,
+      "error": null
+    },
+    {
+      "id": "55cd7458-fa71-4299-9d7f-7f877d30700a",
+      "stage": "full_pipeline",
+      "model": "glm-5.3",
+      "duration_ms": 120001.9112930022,
+      "charged_usd": 0.15584150000000002,
+      "usage_unknown": true,
+      "error": "zai request failed (TimeoutError; finish=missing)"
+    },
+    {
+      "id": "7ca07436-cd5d-4aa8-93c6-4d365e2b64e3",
+      "stage": "full_pipeline",
+      "model": "glm-5.3",
+      "duration_ms": 126734.31475600228,
+      "charged_usd": 0.0652504,
+      "usage_unknown": false,
+      "error": null
+    },
+    {
+      "id": "3bd6c152-cf5c-420f-84d6-92f9cfbc5a0b",
+      "stage": "full_pipeline",
+      "model": "glm-5.3",
+      "duration_ms": 47208.846676003304,
+      "charged_usd": 0.0361096,
+      "usage_unknown": false,
+      "error": null
+    },
+    {
+      "id": "b4677d25-ae1e-486a-b848-af811b484a82",
+      "stage": "full_pipeline",
+      "model": "glm-5.3",
+      "duration_ms": 43671.41461999563,
+      "charged_usd": 0.0321744,
+      "usage_unknown": false,
+      "error": null
+    },
+    {
+      "id": "925e1fbc-20e6-41ea-aec0-b6f1158c37f4",
+      "stage": "full_pipeline",
+      "model": "glm-5.3",
+      "duration_ms": 29750.07837000885,
+      "charged_usd": 0.05988,
+      "usage_unknown": false,
+      "error": null
+    }
+  ],
+  "failures": [
+    "Concurrent lesson generation failed: step_1: Content review failed: Numeric verification coverage is incomplete or contains fabricated span IDs; Private worked_solution for activity guided_practice_arev misstates the reconciliation: it says the difference is caused by «պարտքով վաճառքի դեռ չգանձված 150000-ը հանած չվճարված ծախսի 100000-ը», implying only 150,000 AMD of credit sales is uncollected. Per the lesson facts and the case data, the full 300,000 AMD credit sales is uncollected, and the 50,000 AMD gap equals 300,000 uncollected credit sales − 150,000 collection of prior debts − 100,000 unpaid expenses. The private explanation drops the 150,000 collection term and contradicts the prose worked example."
+  ],
+  "deployed_release": "20261015-153900-package-recovery",
+  "image_digest": "sha256:40dc08587cec75b6ddc54d80656cc1c4bc447e97776676d758500607c480016d",
+  "backend_tests_passed": 310,
+  "flutter_tests_passed": 27,
+  "isolated_http_checks_passed": 14,
+  "generation_accepted": false,
+  "full_end_to_end_complete": false,
+  "api_readiness_passed": true
+}

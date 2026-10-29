@@ -7,10 +7,13 @@ import 'package:go_router/go_router.dart';
 
 import 'package:cmpys/core/network/api_error.dart';
 import 'package:cmpys/core/ui/app_shell.dart';
+import 'package:cmpys/core/ui/v3/v3.dart';
 import 'package:cmpys/features/cmpys/state/cmpys_backend_sync.dart';
+import 'package:cmpys/features/cmpys/state/today_data.dart';
 import 'package:cmpys/features/plan/data/plan_repository.dart';
 import 'package:cmpys/features/plan/models/plan_models.dart';
 import 'package:cmpys/features/plan/presentation/plan_item_detail_screen.dart';
+import 'package:cmpys/features/plan/state/current_plan_provider.dart';
 
 /// Scripted repository: returns each queued result (value or error) in order,
 /// repeating the last one when the queue runs out.
@@ -139,7 +142,10 @@ PlanItemDetailed _availableItem() => PlanItemDetailed(
   detailsStatus: 'available',
 );
 
-PlanItemDetailed _partialItem({String? error}) => PlanItemDetailed(
+PlanItemDetailed _partialItem({
+  String? error,
+  Set<String> completed = const {'step_1'},
+}) => PlanItemDetailed(
   item: BackendPlanItem.fromJson(const {
     'id': 'x',
     'title': 'Build the prototype',
@@ -150,8 +156,8 @@ PlanItemDetailed _partialItem({String? error}) => PlanItemDetailed(
   jobId: 'detail-job',
   detailsStep: 'first_lesson_ready',
   detailsProgress: 70,
-  completedStepIds: const {'step_1'},
-  completedSteps: 1,
+  completedStepIds: completed,
+  completedSteps: completed.length,
   totalSteps: 3,
   steps: const [
     PlanStepDetail(
@@ -338,6 +344,8 @@ void main() {
           overrides: [
             planRepositoryProvider.overrideWithValue(repo),
             cmpysBackendSyncProvider.overrideWith((ref) async {}),
+            // The shell's Today badge reads this; keep it off the scripted repo.
+            todayViewProvider.overrideWith((ref) async => null),
           ],
           child: MaterialApp.router(
             routerConfig: router,
@@ -486,14 +494,48 @@ void main() {
     await tester.pump();
 
     expect(find.text('Frame the problem'), findsOneWidget);
+    // The outline title stays visible while that lesson is prepared.
     expect(find.text('Test the prototype'), findsOneWidget);
-    expect(find.text('PREPARING'), findsOneWidget);
+    expect(find.text('Lesson 2 · preparing and reviewing'), findsOneWidget);
+    expect(find.text('Lesson 3 · preparing and reviewing'), findsOneWidget);
     expect(find.textContaining('Lesson one is ready'), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox());
   });
 
   for (final failsDuringPolling in [false, true]) {
+    testWidgets(
+      'a stop stays quiet while the current lesson is readable, polled=$failsDuringPolling',
+      (tester) async {
+        final repo = _ScriptedRepo(
+          [
+            _partialItem(
+              error: failsDuringPolling ? null : 'Preparation failed.',
+              completed: const {},
+            ),
+          ],
+          jobScript: const [_failedJob],
+        );
+        await tester.pumpWidget(_app(repo));
+        await tester.pump();
+        await tester.pump();
+        if (failsDuringPolling) {
+          await tester.pump(const Duration(seconds: 2));
+          await tester.pump();
+          await tester.pump();
+        }
+        expect(find.byKey(const Key('lesson-1-active')), findsOneWidget);
+        expect(find.byKey(const Key('plan-detail-regenerate')), findsNothing);
+        expect(
+          find.textContaining('Some lessons could not be prepared'),
+          findsNothing,
+        );
+        expect(find.textContaining('preparing and reviewing'), findsNothing);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+
     testWidgets(
       'failed partial lesson stops its preparing indicator, polled=$failsDuringPolling',
       (tester) async {
@@ -513,8 +555,8 @@ void main() {
           await tester.pump();
           await tester.pump();
         }
-        expect(find.text('NOT READY'), findsOneWidget);
-        expect(find.text('PREPARING'), findsNothing);
+        expect(find.text('Lesson 2 · couldn’t be prepared'), findsOneWidget);
+        expect(find.textContaining('preparing and reviewing'), findsNothing);
         expect(
           find.text(
             'Some lessons could not be prepared. Your ready lessons '
@@ -531,7 +573,7 @@ void main() {
         expect(
           find.descendant(
             of: find.byKey(const Key('lesson-2-active')),
-            matching: find.byType(CircularProgressIndicator),
+            matching: find.byType(V3Spinner),
           ),
           findsNothing,
         );
@@ -557,13 +599,14 @@ void main() {
       await tester.pumpWidget(_app(repo));
       await tester.pump();
       await tester.pump();
-      expect(find.text('NOT READY'), findsOneWidget);
+      expect(find.text('Lesson 2 · couldn’t be prepared'), findsOneWidget);
       await tester.tap(find.byKey(const Key('plan-detail-regenerate')));
       await tester.pump();
       await tester.pump();
       expect(repo.retries, 1);
-      expect(find.text('PREPARING'), findsOneWidget);
-      expect(find.text('NOT READY'), findsNothing);
+      expect(find.text('Lesson 2 · preparing and reviewing'), findsOneWidget);
+      expect(find.text('Lesson 3 · preparing and reviewing'), findsOneWidget);
+      expect(find.textContaining('couldn’t be prepared'), findsNothing);
       await tester.pumpWidget(const SizedBox());
     },
   );
@@ -586,7 +629,7 @@ void main() {
     expect(repo.calls, 2);
     expect(find.text('Frame the problem'), findsOneWidget);
     expect(find.text('Test the prototype'), findsOneWidget);
-    expect(find.text('PREPARING'), findsOneWidget);
+    expect(find.text('Lesson 2 · preparing and reviewing'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
   });
 
@@ -746,25 +789,34 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('practice item renders as a daily rhythm without generation', (
+  testWidgets('practice item renders as a daily habit without generation', (
     tester,
   ) async {
     final repo = _ScriptedRepo([_dailyItem(), _dailyItem(completed: true)]);
-    await tester.pumpWidget(_app(repo));
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          planRepositoryProvider.overrideWithValue(repo),
+          todayViewProvider.overrideWith((ref) async => null),
+          todayStreakProvider.overrideWith((ref) async => null),
+        ],
+        child: const MaterialApp(home: PlanItemDetailScreen(itemId: 'x')),
+      ),
+    );
     await tester.pumpAndSettle();
 
-    expect(find.text('DAILY RHYTHM · WEEK 1'), findsOneWidget);
+    expect(find.text('DAILY HABIT · WEEK 1'), findsOneWidget);
     expect(
       find.text('Run one focused drill and write down the result.'),
       findsOneWidget,
     );
-    expect(find.text('Complete for today'), findsOneWidget);
+    expect(find.text('Mark done for today'), findsOneWidget);
     expect(find.textContaining('Writing your lesson'), findsNothing);
 
-    await tester.tap(find.text('Complete for today'));
+    await tester.tap(find.text('Mark done for today'));
     await tester.pumpAndSettle();
     expect(repo.dailyToggles, 1);
-    expect(find.text('Mark as not done today'), findsOneWidget);
+    expect(find.text('Mark as not done'), findsOneWidget);
     await tester.pump(const Duration(seconds: 3));
     await tester.pumpAndSettle();
   });
@@ -787,10 +839,16 @@ void main() {
       );
     await tester.pumpWidget(_app(repo));
     await tester.pumpAndSettle();
+    // The row's badge says what CMPYS has before anything opens.
+    expect(find.text('Excerpt only'), findsOneWidget);
+    expect(find.text('Study guide'), findsNothing);
+    await tester.ensureVisible(find.text('The Personal MBA'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('The Personal MBA'));
+    await tester.pumpAndSettle();
     expect(find.text('Read excerpt'), findsOneWidget);
-    expect(find.text('Read'), findsNothing);
     expect(
-      find.text('Author excerpt. Full book not included.'),
+      find.text('A verified excerpt. The full book is not included.'),
       findsOneWidget,
     );
     expect(repo.guideWaits, 0);
@@ -809,12 +867,21 @@ void main() {
       );
     await tester.pumpWidget(_app(repo));
     await tester.pumpAndSettle();
-    expect(find.text('Read'), findsNothing);
-    expect(find.text('Check access'), findsNothing);
-    expect(
-      find.text('No readable edition is available in CMPYS yet.'),
-      findsOneWidget,
+    expect(find.text('No readable edition'), findsOneWidget);
+    await tester.ensureVisible(find.text('The Personal MBA'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('The Personal MBA'));
+    await tester.pumpAndSettle();
+    expect(find.text('Open guide'), findsNothing);
+    final button = tester.widget<V3Button>(
+      find.ancestor(
+        of: find.text('Not available to read'),
+        matching: find.byType(V3Button),
+      ),
     );
+    expect(button.disabled, isTrue);
+    await tester.tap(find.text('Not available to read'), warnIfMissed: false);
+    await tester.pump();
     expect(repo.guideWaits, 0);
     await tester.pumpWidget(const SizedBox());
   });
@@ -826,20 +893,30 @@ void main() {
     await tester.pumpWidget(_app(repo));
     await tester.pumpAndSettle();
 
-    expect(find.text('Check access'), findsOneWidget);
-    await tester.tap(find.text('Check access'));
+    // Nothing ruled out yet: opening it prepares the in-app guide.
+    expect(find.text('Study guide'), findsOneWidget);
+    await tester.ensureVisible(find.text('The Personal MBA'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('The Personal MBA'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Open guide'));
     await tester.pump();
+    // The sheet closes, then the guide preparation starts (its spinner
+    // keeps animating, so pump past the close instead of settling).
+    await tester.pump(const Duration(milliseconds: 600));
 
     expect(find.text('Preparing…'), findsOneWidget);
     expect(repo.guideWaits, 1);
-    await tester.tap(find.text('Preparing…'));
+    await tester.tap(find.text('The Personal MBA'));
     await tester.pump();
+    expect(find.text('Open guide'), findsNothing);
     expect(repo.guideWaits, 1);
 
     repo.guide.complete(null);
     await tester.pump();
     await tester.pump();
-    expect(find.text('Check access'), findsOneWidget);
+    expect(find.text('Preparing…'), findsNothing);
+    expect(find.text('Study guide'), findsOneWidget);
     await tester.pump(const Duration(seconds: 3));
     await tester.pumpWidget(const SizedBox());
   });

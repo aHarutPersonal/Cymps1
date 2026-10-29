@@ -1,0 +1,154 @@
+{
+  "release": "20261017-020500-evidence-context",
+  "rollback_release": "20261017-013000-field-drafts",
+  "image_digest": "sha256:bec8540a949882fb621a13e25b274edaa1eabec58ee49bbf547bc818ed40e8d3",
+  "manifest_sha256": "f242cf3c0eb392d7316aeafadb115d620be483ea0b38f019aba3b46cc7719e27",
+  "status": "deployed_verified_offline_continuation",
+  "review_version": 22,
+  "runtime_files": 30,
+  "changed_existing_files_from_v22": 5,
+  "new_files_from_v22": 1,
+  "configuration_unchanged": true,
+  "full_backend": {
+    "passed": 3985,
+    "skipped": 4,
+    "warnings": 1,
+    "duration_seconds": 44.21,
+    "provider": "dummy",
+    "database": "isolated_local_test_container"
+  },
+  "exact_image_network_disabled": {
+    "passed": 2181,
+    "skipped": 2,
+    "duration_seconds": 28.88,
+    "test_modules": 68
+  },
+  "independent_review": {
+    "blocking_findings": 0,
+    "final_focused_passes": 304,
+    "replay_selftests": "passed"
+  },
+  "fresh_live_validation": "not_authorized_offline_only",
+  "live_authorization": {
+    "max_tests": 6,
+    "shared_cap_usd": 1.97,
+    "tests_completed": 6,
+    "tests_remaining": 0,
+    "reported_usd": 0.565886,
+    "unknown_reserved_usd": 0,
+    "remaining_usd": 1.404114,
+    "earlier_completed_reported_usd": 1.0208688,
+    "combined_ceiling_usd": 3,
+    "progress_changes": false,
+    "tests_reserved": 6,
+    "tests_unreserved": 0,
+    "tests_in_progress": 0,
+    "status": "complete_test_count_exhausted"
+  },
+  "offline_replay": {
+    "provider_calls": 0,
+    "writing": "complete structural package recovered; semantic review not performed",
+    "accounting": "exact candidate eligible; no assignment or fabricated verdict",
+    "geometry": "two observed grammar failures resolved; original bad/missing proofs remain rejected; source inventory unchanged",
+    "publication_approval_inferred": false
+  },
+  "request_limits": {
+    "normal_component_calls_unchanged": true,
+    "narrow_seed_retry_ownership_case": "N+3 calls versus N+2 previously; one 1000 requested-token mapping response",
+    "typical_two_activity_max_requested_output": 13400,
+    "typical_combined_cap_increase_at_2048_reasoning_reserve": 1248,
+    "component_active_stage_seconds": 240,
+    "component_request_seconds": 90
+  },
+  "predeploy_saved_state": {
+    "existing_qa_copy": {
+      "details_http": 200,
+      "details_status": "available",
+      "plan_http": 200,
+      "practice_http": 200,
+      "practice_state": "ready",
+      "private_keys_absent": true,
+      "ready_lessons": 1
+    },
+    "learner": {
+      "details_http": 200,
+      "details_status": "partial",
+      "plan_http": 200,
+      "practice_http": 200,
+      "practice_state": "ready",
+      "private_keys_absent": true,
+      "ready_lessons": 1
+    },
+    "new_usage_events": 0,
+    "saved_state_fingerprint": "9620a6e2d34355178ba2d25cf3e3775269f53b586c6037e1cfc423a5bcc5a42d",
+    "saved_state_unchanged": true
+  },
+  "limits": [
+    "Fresh live generation is unverified.",
+    "An unclassified saved geometry phrase remains rejected; incorrect and incomplete old proof also remain rejected.",
+    "One saved lesson ready, two missing; authenticated simulator full flow remains unverified."
+  ],
+  "deployment": {
+    "release": "20261017-020500-evidence-context",
+    "exit_code": 0,
+    "duration_seconds": 43.01,
+    "log": "retained_privately_on_backend",
+    "rollback_release": "20261017-013000-field-drafts"
+  },
+  "runtime": {
+    "release": "20261017-020500-evidence-context",
+    "image_digest": "sha256:bec8540a949882fb621a13e25b274edaa1eabec58ee49bbf547bc818ed40e8d3",
+    "verified_services": [
+      "web",
+      "worker",
+      "worker-high",
+      "worker-low",
+      "catalog-worker",
+      "catalog-control",
+      "curriculum-worker",
+      "curriculum-control",
+      "beat"
+    ],
+    "verified_files": 30,
+    "file_hashes_verified_in_every_service": true
+  },
+  "https_readiness": {
+    "status": "ready",
+    "checks": {
+      "database": true,
+      "redis": true
+    }
+  },
+  "postdeploy_saved_state": {
+    "existing_qa_copy": {
+      "details_http": 200,
+      "details_status": "available",
+      "plan_http": 200,
+      "practice_http": 200,
+      "practice_state": "ready",
+      "private_keys_absent": true,
+      "ready_lessons": 1
+    },
+    "learner": {
+      "details_http": 200,
+      "details_status": "partial",
+      "plan_http": 200,
+      "practice_http": 200,
+      "practice_state": "ready",
+      "private_keys_absent": true,
+      "ready_lessons": 1
+    },
+    "new_usage_events": 0,
+    "saved_state_fingerprint": "9620a6e2d34355178ba2d25cf3e3775269f53b586c6037e1cfc423a5bcc5a42d",
+    "saved_state_unchanged": true
+  },
+  "pending_test_request": {
+    "max_tests": 6,
+    "shared_cap_usd": 1.4,
+    "across_followup_revisions": true,
+    "status": "declined_offline_only",
+    "provider": "zai",
+    "data": "synthetic",
+    "progress_changes": false
+  }
+}

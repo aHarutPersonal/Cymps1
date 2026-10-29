@@ -183,6 +183,18 @@ void main() {
       );
     });
 
+    test('a book opened from Today resumes into Today (R3-M9)', () {
+      final today = resume(
+        ownerId: 'account-a',
+        branchIndex: ActiveBookNarrationResume.todayBranchIndex,
+      );
+      expect(ActiveBookNarrationResume.todayBranchIndex, 0);
+      expect(
+        ActiveBookNarrationResume.tryFromJson(today.toJson())?.branchIndex,
+        ActiveBookNarrationResume.todayBranchIndex,
+      );
+    });
+
     test('copyWith consumes playing state without losing the checkpoint', () {
       final value = resume(ownerId: 'account-a');
       final consumed = value.copyWith(wasPlaying: false);

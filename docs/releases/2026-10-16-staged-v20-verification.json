@@ -1,0 +1,227 @@
+{
+  "release": "20261016-153858-scoped-preflight",
+  "rollback_release": "20261016-150539-validation-boundaries",
+  "status": "deployed_live_validation_failed_followup_in_progress",
+  "full_backend": {
+    "passed": 3566,
+    "skipped": 4,
+    "warnings": 1,
+    "duration_seconds": 38.3
+  },
+  "exact_image_network_disabled": {
+    "passed": 1758,
+    "skipped": 2,
+    "duration_seconds": 23.08
+  },
+  "independent_review": {
+    "blockers": 0,
+    "focused_tests": 55,
+    "optional_database_skips": 1,
+    "counts_overlap": true
+  },
+  "additional_global_queue_regression": {
+    "passed": 5,
+    "provider": "dummy"
+  },
+  "source_files_verified": 24,
+  "changed_files_from_v19": 6,
+  "added_files_from_v19": 1,
+  "configuration_unchanged": true,
+  "build_platform": "linux/arm64",
+  "review_version": 20,
+  "registry_latest_promoted": false,
+  "fresh_live_validation": "completed_0_of_3_accepted",
+  "requested_validation_authorization": {
+    "max_tests": 6,
+    "shared_cap_usd": 3,
+    "tests_completed": 6,
+    "tests_remaining": 0,
+    "reported_usd": 1.0208688,
+    "unknown_reserved_usd": 0,
+    "remaining_usd": 1.9791312,
+    "same_ledger": true,
+    "tests_reserved": 6,
+    "tests_running": 0,
+    "status": "completed_test_count_exhausted"
+  },
+  "limits": [
+    "Latest live batch accepted zero of three lessons.",
+    "Accounting still fails numeric proof extraction despite canonical formulas passing independent recomputation.",
+    "Geometry still receives semantic rejection after a bounded private repair.",
+    "Writing full-package public correction exhausted its output ceiling.",
+    "One saved lesson ready; two missing; no complete fresh app flow verified."
+  ],
+  "image_digest": "sha256:1eafe22d991943427ccb28eee78bff5ef09c455c22400145cf4ffaa55063613e",
+  "runtime": {
+    "release": "20261016-153858-scoped-preflight",
+    "image_digest": "sha256:1eafe22d991943427ccb28eee78bff5ef09c455c22400145cf4ffaa55063613e",
+    "verified_services": [
+      "web",
+      "worker",
+      "worker-high",
+      "worker-low",
+      "catalog-worker",
+      "catalog-control",
+      "curriculum-worker",
+      "curriculum-control",
+      "beat"
+    ],
+    "verified_files": 24,
+    "file_hashes_verified_in_every_service": true
+  },
+  "https_readiness": {
+    "status": "ready",
+    "checks": {
+      "database": true,
+      "redis": true
+    }
+  },
+  "prepilot_saved_state": {
+    "existing_qa_copy": {
+      "details_http": 200,
+      "details_status": "available",
+      "plan_http": 200,
+      "practice_http": 200,
+      "practice_state": "ready",
+      "private_keys_absent": true,
+      "ready_lessons": 1
+    },
+    "learner": {
+      "details_http": 200,
+      "details_status": "partial",
+      "plan_http": 200,
+      "practice_http": 200,
+      "practice_state": "ready",
+      "private_keys_absent": true,
+      "ready_lessons": 1
+    },
+    "new_usage_events": 0,
+    "saved_state_fingerprint": "9620a6e2d34355178ba2d25cf3e3775269f53b586c6037e1cfc423a5bcc5a42d",
+    "saved_state_unchanged": true
+  },
+  "pilot_launch": {
+    "image_digest": "sha256:1eafe22d991943427ccb28eee78bff5ef09c455c22400145cf4ffaa55063613e",
+    "new_tests": 3,
+    "prior_accounted_usd": 0.5345142,
+    "prior_request_count": 19,
+    "release": "20261016-153858-scoped-preflight",
+    "remaining_usd_before_launch": 2.4654858,
+    "shared_cap_usd": 3.0,
+    "status": "launched",
+    "tests_reserved": 6
+  },
+  "live_batch": {
+    "batch_costs": {
+      "accounted_usd": 0.4863546,
+      "pending_reserved_usd": 0,
+      "reported_usd": 0.4863546,
+      "unknown_reserved_usd": 0
+    },
+    "cap_usd": 3.0,
+    "cases": [
+      {
+        "accounted_usd": 0.194191,
+        "adjudicated": false,
+        "calls": 9,
+        "elapsed_seconds": 177.149,
+        "failure_count": 1,
+        "pending_reserved_usd": 0,
+        "reported_usd": 0.194191,
+        "scenario_id": "accounting_novice_missing",
+        "status": "failed",
+        "unknown_reserved_usd": 0
+      },
+      {
+        "accounted_usd": 0.121426,
+        "adjudicated": false,
+        "calls": 7,
+        "elapsed_seconds": 107.231,
+        "failure_count": 1,
+        "pending_reserved_usd": 0,
+        "reported_usd": 0.121426,
+        "scenario_id": "geometry_novice_missing",
+        "status": "failed",
+        "unknown_reserved_usd": 0
+      },
+      {
+        "accounted_usd": 0.1707376,
+        "adjudicated": false,
+        "calls": 6,
+        "elapsed_seconds": 173.744,
+        "failure_count": 1,
+        "pending_reserved_usd": 0,
+        "reported_usd": 0.1707376,
+        "scenario_id": "writing_novice_missing",
+        "status": "failed",
+        "unknown_reserved_usd": 0
+      }
+    ],
+    "exit_code": 0,
+    "finished_calls": 22,
+    "pending_calls": 0,
+    "recent_responses": [
+      {
+        "completion_tokens": 1146,
+        "duration_ms": 17586.387041024864,
+        "finish_reason": "stop",
+        "response_received": true,
+        "scenario_id": "writing_novice_missing",
+        "schema": "PackageSemanticReview",
+        "thoughts_tokens": 923,
+        "usage_unknown": false
+      },
+      {
+        "completion_tokens": 166,
+        "duration_ms": 2521.7257360054646,
+        "finish_reason": "stop",
+        "response_received": true,
+        "scenario_id": "writing_novice_missing",
+        "schema": "PrivatePackageRepair",
+        "thoughts_tokens": 16,
+        "usage_unknown": false
+      },
+      {
+        "completion_tokens": 8548,
+        "duration_ms": 60023.73339800397,
+        "finish_reason": "length",
+        "response_received": true,
+        "scenario_id": "writing_novice_missing",
+        "schema": "LessonPackage",
+        "thoughts_tokens": 32,
+        "usage_unknown": false
+      }
+    ],
+    "release": "20261016-153858-scoped-preflight",
+    "running": false,
+    "tests_reserved": 6,
+    "total_costs": {
+      "accounted_usd": 1.0208688,
+      "pending_reserved_usd": 0,
+      "reported_usd": 1.0208688,
+      "unknown_reserved_usd": 0
+    }
+  },
+  "postpilot_saved_state": {
+    "existing_qa_copy": {
+      "details_http": 200,
+      "details_status": "available",
+      "plan_http": 200,
+      "practice_http": 200,
+      "practice_state": "ready",
+      "private_keys_absent": true,
+      "ready_lessons": 1
+    },
+    "learner": {
+      "details_http": 200,
+      "details_status": "partial",
+      "plan_http": 200,
+      "practice_http": 200,
+      "practice_state": "ready",
+      "private_keys_absent": true,
+      "ready_lessons": 1
+    },
+    "new_usage_events": 0,
+    "saved_state_fingerprint": "9620a6e2d34355178ba2d25cf3e3775269f53b586c6037e1cfc423a5bcc5a42d",
+    "saved_state_unchanged": true
+  }
+}

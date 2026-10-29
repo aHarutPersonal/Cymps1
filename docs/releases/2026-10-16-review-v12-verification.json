@@ -1,0 +1,40 @@
+{
+  "release": "20261016-092000-review-provenance",
+  "image_digest": "sha256:bb02016c87458fca2f69dcbca3b9e3cab9c347696298d55ee27c8316cf3fdca0",
+  "deployed": true,
+  "review_version": 12,
+  "backend_tests": {
+    "passed": 2715,
+    "skipped": 4,
+    "warnings": 1,
+    "seconds": 24.37
+  },
+  "exact_image_tests": {
+    "passed": 776,
+    "skipped": 1,
+    "network_enabled": false,
+    "seconds": 9.71
+  },
+  "independent_targeted_tests": 239,
+  "independent_inventory_cases": 4000,
+  "independent_duplicate_context_permutations": 24,
+  "verified_file_hashes": 17,
+  "app_import": true,
+  "paid_calls_after_batch": 0,
+  "fresh_live_success_verified": false,
+  "known_limitations": [
+    "Three-domain v11 batch accepted zero lessons",
+    "Actual accounting wording remains semantically unresolved",
+    "Writing timeout cause lacks completion metadata",
+    "Conservative source arithmetic binding does not infer ambiguous prose semantics"
+  ],
+  "https_readiness": {
+    "status": "ready",
+    "checks": {
+      "database": true,
+      "redis": true
+    }
+  },
+  "saved_state_unchanged": true,
+  "learner_usage_events_created_by_checks": 0
+}

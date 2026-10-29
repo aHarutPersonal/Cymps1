@@ -32,10 +32,11 @@ class PlanGenerateRequest(BaseModel):
     # calendar planner. Keeping the API contract exact prevents prompt/runtime
     # disagreement and incomplete plans.
     durationWeeks: int = Field(default=12, ge=12, le=12)
-    # A mission needs at least two hours for three substantial lessons, and the
-    # required daily rhythm needs one more. Anything lower would mislabel the
-    # actual workload.
-    weeklyHours: int = Field(default=10, ge=3, le=168)
+    # Whole hours for older clients. A week under three hours is planned
+    # honestly as one short mission plus a short rhythm, so one hour is the
+    # floor. weeklyMinutes (half-hour steps), when sent, takes precedence.
+    weeklyHours: int = Field(default=10, ge=1, le=168)
+    weeklyMinutes: int | None = Field(default=None, ge=60, le=10080, multiple_of=30)
     focus: str | None = Field(default=None, max_length=10000)
     # Optional: the agentic session this plan continues. When provided, the
     # interview transcript / comparison / blueprint from that exact session are
@@ -82,6 +83,9 @@ class PlanItemResponse(BaseModel):
     successMetric: str
     estimatedHours: int
     estimatedMinutes: int | None = Field(default=None, ge=0)
+    # Daily rhythms only (GET /plan-items/{id}/detailed): minutes of ONE session,
+    # the value Today shows. estimatedMinutes stays the weekly allocation.
+    session_minutes: int | None = Field(default=None, ge=1)
     status: PlanItemStatus
     progressPercent: int
     notes: str | None = None
@@ -102,7 +106,9 @@ class PlanResponse(BaseModel):
     idolName: str | None = None
     targetAge: int
     durationWeeks: int
+    # Legacy whole hours, ceil(weeklyMinutes / 60); weeklyMinutes is exact.
     weeklyHours: int
+    weeklyMinutes: int | None = None
     cycleNumber: int = 1
     items: list[PlanItemResponse] = []
     createdAt: datetime
@@ -124,6 +130,15 @@ class PlanResponse(BaseModel):
 # =============================================================================
 
 
+class TutorialIllustration(BaseModel):
+    """AI-generated 16:9 hero image for a tutorial step (decorative, optional)."""
+
+    url: str  # Relative, served from /media/tutorials/
+    alt: str = Field(max_length=160)
+    provider: Literal["gemini_imagen"]
+    aspect: Literal["16:9"]
+
+
 class StepDetail(BaseModel):
     """A single step within a plan item."""
 
@@ -140,6 +155,9 @@ class StepDetail(BaseModel):
     resources: list[str] | None = None  # Material IDs referenced by this step
     substeps: list[str] | None = None  # Tactical sub-actions
     lesson_content: str | None = None  # Full markdown lesson for this step
+    # Added after publication by a best-effort task; absent when disabled, capped
+    # or failed. Never required to read or complete the tutorial.
+    illustration: TutorialIllustration | None = None
 
 
 class BookIdeaDetail(BaseModel):
@@ -179,6 +197,10 @@ class ItemDetails(BaseModel):
     materials: list[MaterialDetail] = []
     generated_from_prompt_version: str | None = None
     generated_at: str | None = None
+    # Mission-level outcome copy already stored by outline/details generation
+    # and catalog composition; optional so older lessons still parse.
+    definition_of_done: str | None = None
+    mental_model: str | None = None
 
 
 class ItemProgress(BaseModel):

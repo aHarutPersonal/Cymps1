@@ -1,0 +1,61 @@
+{
+  "running": false,
+  "exit_code": 0,
+  "finished_calls": 4,
+  "pending_calls": 0,
+  "reported_cost_usd": 0.0828832,
+  "unknown_reserved_usd": 0.08482274999999999,
+  "pending_reserved_usd": 0,
+  "accounted_usd": 0.16770595,
+  "responses": [
+    {
+      "schema": null,
+      "seconds": 0.0,
+      "error": false,
+      "unknown_usage": true
+    },
+    {
+      "schema": "LessonPackage",
+      "seconds": 78.85,
+      "error": false,
+      "unknown_usage": false
+    },
+    {
+      "schema": "PackageReview",
+      "seconds": 33.3,
+      "error": false,
+      "unknown_usage": false
+    },
+    {
+      "schema": "PackageReview",
+      "seconds": 41.45,
+      "error": false,
+      "unknown_usage": false
+    }
+  ],
+  "accepted": false,
+  "elapsed_seconds": 274.187,
+  "failure_count": 1,
+  "validation_identity": {
+    "review_version": 10,
+    "package_version": 1,
+    "capability_hash": "1815a97ad0c7246f737c493fbec7b9217c6a5dd6a7d96cacd93c0c34b3afe48f",
+    "prompt_hash": "98e465bab4aae70070a9c729558e1ba86af525682137b56274e2a08420389f4c",
+    "generation_contract_hash": "81d5fa00a2871a91d62a3966202ffa34513cdefe732ff7f6291713197932dffb",
+    "schema_hash": "1d0cf0045863177a578bddcf267a7ccada58a0ea89111935117bf8878fc67a5e"
+  },
+  "attempts": [
+    {
+      "stage": "parallel_lesson_step_1_package",
+      "error": false,
+      "seconds": 78.85
+    },
+    {
+      "stage": "parallel_lesson_step_1_package_preflight",
+      "error": true,
+      "seconds": 41.45
+    }
+  ],
+  "word_count": 0,
+  "activity_count": 0
+}

@@ -11,11 +11,26 @@ import logging
 import re
 import time
 
+from app.services.intake_diagnostics import (
+    answer_evidence_status,
+    normalized,
+    reports_no_achievements,
+)
+from app.services.interview_inputs import (
+    INTERVIEW_ANSWER_KEYS_V1,
+    INTERVIEW_ANSWER_KEYS_V2,
+    is_noncommittal_answer,
+)
 from app.services.llm.prompt_loader import load_and_render, sanitize_untrusted_input
 
 logger = logging.getLogger(__name__)
 
-COMPARISON_SCORE_VERSION = 2
+# Version 3 uses the design's five dimensions (knowledge, practice, capital,
+# network, judgment). Version 2 payloads, which carry the old ids (habits,
+# clarity), stay stored and servable exactly as written; they are never
+# re-scored or re-normalized into version 3.
+COMPARISON_SCORE_VERSION = 3
+COMPARISON_SCORE_READABLE_VERSIONS = frozenset({2, COMPARISON_SCORE_VERSION})
 COMPARISON_SCORE_METHOD = "like_for_like_evidence"
 COMPARISON_SCORE_MAX_ATTEMPTS = 4
 COMPARISON_SCORE_PROVIDER_TIMEOUT_SECONDS = 20.0
@@ -29,12 +44,37 @@ EVIDENCE_LEVEL_POINTS = {0: 0, 1: 25, 2: 50, 3: 75, 4: 100}
 # Missing model output must never create a flattering seed score. Every absent
 # dimension is represented as unassessed until evidence supports comparison.
 FIXED_DIMENSIONS: list[dict[str, str]] = [
-    {"id": "capital", "label": "Capital at work"},
     {"id": "knowledge", "label": "Knowledge base"},
-    {"id": "habits", "label": "Daily discipline"},
-    {"id": "network", "label": "Trusted network"},
-    {"id": "clarity", "label": "Strategic clarity"},
+    {"id": "practice", "label": "Practice volume"},
+    {"id": "capital", "label": "Capital & resources"},
+    {"id": "network", "label": "Network"},
+    {"id": "judgment", "label": "Written judgment"},
 ]
+
+# Which interview answers speak for which dimension (the v2 question set). An
+# answer is evidence for every dimension it is bound to. Learning preferences,
+# weekly hours and the target outcome are plan context, not dimension evidence.
+ANSWER_BINDINGS: dict[str, tuple[str, ...]] = {
+    "knowledge": (
+        "achievement_inventory",
+        "foundation_check",
+        "application_check",
+        "skill_confidence",
+    ),
+    "practice": ("practice_volume", "achievement_inventory"),
+    "capital": ("resources_capital",),
+    "network": ("network_support",),
+    "judgment": ("work_sample", "self_check_method"),
+}
+# Interviews that used the 8-key question set (sessions started before intake
+# v3) are scored with the same dimension ids through their own answers.
+LEGACY_ANSWER_BINDINGS: dict[str, tuple[str, ...]] = {
+    "knowledge": ("current_capability",),
+    "practice": ("achievement_inventory",),
+    "capital": ("constraints_resources",),
+    "network": ("learning_habits_support",),
+    "judgment": ("target_outcome",),
+}
 
 _VALID_STATUSES = {
     "comparable",
@@ -116,10 +156,17 @@ _SCORES_SCHEMA = {
 
 
 def comparison_scores_are_current(value: object) -> bool:
-    """Return whether persisted scores implement the honest v2 contract."""
+    """Return whether persisted scores implement the honest like-for-like contract.
+
+    Version 3 (new) and version 2 (stored before the dimension change) share the
+    methodology and status vocabulary, so both are servable. A version 2 payload
+    is returned as stored and is never queued for re-scoring.
+    """
+    version = value.get("version") if isinstance(value, dict) else None
     return (
         isinstance(value, dict)
-        and value.get("version") == COMPARISON_SCORE_VERSION
+        and isinstance(version, int)
+        and version in COMPARISON_SCORE_READABLE_VERSIONS
         and value.get("methodology") == COMPARISON_SCORE_METHOD
         and value.get("placement_version") == 1
         and isinstance(value.get("overall"), dict)
@@ -246,7 +293,8 @@ def _normalize_dimension(seed: dict[str, str], raw: dict | None) -> dict:
     comparable = status == "comparable"
     return {
         "id": seed["id"],
-        "label": _clean_text(raw.get("label")) or seed["label"],
+        # Labels are server copy; a model-written label never reaches the app.
+        "label": seed["label"],
         "status": status,
         "comparison_basis": _clean_text(raw.get("comparison_basis")),
         "you": EVIDENCE_LEVEL_POINTS[you_level] if comparable else None,
@@ -260,6 +308,157 @@ def _normalize_dimension(seed: dict[str, str], raw: dict | None) -> dict:
         "you_note": you_note,
         "idol_note": idol_note,
     }
+
+
+# ---------------------------------------------------------------------------
+# Interview evidence for each dimension (decided here, after the model)
+# ---------------------------------------------------------------------------
+#
+# The model proposes statuses and levels, but whether a dimension has any user
+# evidence at all is decided deterministically from the learner's interview
+# answers. A skipped, declined or honestly empty answer is unscored: it is not
+# a low score. ``answer_evidence_status`` calls these answers "self_reported"
+# (they are not "I don't know"), so the answers below are recognised here.
+
+_NONE_WORD = (
+    r"(?:zero|none|nothing|nobody|no one|no|not yet|n a|нет|ничего|пока нет|пока ничего)"
+)
+_NONE_FILLER = (
+    r"(?: (?:yet|at all|so far|right now|for now|one|ones|people|person|persons|"
+    r"pieces?|of work|work|sample|samples|to show|to share|finished|completed))*"
+)
+# "none", "nothing yet", "no one yet", "I have none", "zero".
+_NONE_RE = re.compile(rf"(?:(?:i )?(?:have|ve|got) )?{_NONE_WORD}{_NONE_FILLER}")
+# "I don't have one yet", "I do not have a work sample".
+_NO_HAVE_RE = re.compile(
+    r"(?:i )?(?:(?:don t|dont|do not) (?:currently |really )?have|have nothing|"
+    r"haven t got|have not got)"
+    r"(?: (?:one|any|a|an|anything|sample|samples|work|work sample|piece|pieces|"
+    r"yet|at all|to show|to share|right now|for now))*"
+)
+# "Prefer not to say", "I'd rather not say".
+_PREFER_NOT_RE = re.compile(
+    r"(?:i )?(?:(?:d|would) )?(?:rather|prefer) not(?: to)?"
+    r"(?: (?:say|answer|share|tell|disclose|specify))?(?: (?:that|this|it))?"
+    r"|no comment"
+)
+# "I don't really check", "I never check my work".
+_NO_CHECK_RE = re.compile(
+    r"(?:i )?(?:(?:don t|dont|do not|never|rarely|hardly ever) "
+    r"(?:really |usually |often |actually |tend to |ever )?(?:check|verify|review|test)"
+    r"(?: (?:it|them|my work|my own work|my judgment|anything|things|at all|much))*"
+    r"|(?:haven t|have not) (?:really )?(?:checked|verified)"
+    r"|not really)"
+)
+_NUMBER_RE = re.compile(r"(?<![\w.,])(\d+(?:[.,]\d+)?)(?!\w)")
+
+
+def _is_none_answer(text: str) -> bool:
+    value = normalized(text)
+    return bool(_NONE_RE.fullmatch(value) or _NO_HAVE_RE.fullmatch(value))
+
+
+def _is_prefer_not_to_say(text: str) -> bool:
+    return bool(_PREFER_NOT_RE.fullmatch(normalized(text)))
+
+
+def _is_no_self_check(text: str) -> bool:
+    value = normalized(text)
+    return bool(_NO_CHECK_RE.fullmatch(value) or _NONE_RE.fullmatch(value))
+
+
+def _is_zero_count(text: str) -> bool:
+    """A counted answer ("0", "0 people", "No one yet") that reports nobody/nothing.
+
+    The number controls start at 0, so an untouched stepper and a deliberate
+    zero cannot be told apart. Either way the dimension stays unscored.
+    """
+    numbers = _NUMBER_RE.findall(text)
+    if numbers:
+        return all(float(number.replace(",", ".")) == 0 for number in numbers)
+    return _is_none_answer(text)
+
+
+# Answers that are honest but are not evidence for their dimension. They are
+# excluded from the dimension's evidence; they do not unscore it. A dimension
+# bound to several answers stays scorable from another real one, and a
+# single-answer dimension (capital, network) has nothing else to stand on.
+_NON_EVIDENCE_ANSWERS = {
+    "resources_capital": _is_prefer_not_to_say,
+    "constraints_resources": _is_prefer_not_to_say,
+    "self_check_method": _is_no_self_check,
+    "work_sample": _is_none_answer,
+    "practice_volume": _is_zero_count,
+    "network_support": _is_zero_count,
+    "learning_habits_support": _is_none_answer,
+}
+
+_V2_ONLY_ANSWER_KEYS = tuple(
+    key
+    for key in INTERVIEW_ANSWER_KEYS_V2
+    if key not in INTERVIEW_ANSWER_KEYS_V1 and key != "learning_preferences"
+)
+
+
+def _answer_bindings_for(baseline: dict) -> dict[str, tuple[str, ...]]:
+    """Choose the dimension bindings for the question set the interview used."""
+    marker = baseline.get("interview_key_set")
+    if marker == "v2":
+        return ANSWER_BINDINGS
+    if marker == "v1":
+        return LEGACY_ANSWER_BINDINGS
+    # A baseline stored before the marker existed is an 8-key interview. One
+    # that carries a v2-only answer (a hand-built baseline) is a v2 interview.
+    if any(isinstance(baseline.get(key), dict) for key in _V2_ONLY_ANSWER_KEYS):
+        return ANSWER_BINDINGS
+    return LEGACY_ANSWER_BINDINGS
+
+
+def _answer_text(baseline: dict, key: str) -> str:
+    record = baseline.get(key)
+    if not isinstance(record, dict):
+        return ""
+    return " ".join(str(record.get("answer") or "").split())
+
+
+def _missing_evidence_keys(baseline: dict) -> set[str]:
+    """Answer keys flagged ``missing_evidence`` by the client.
+
+    This is the "I don't have one yet" option. Unlike an honest non-evidence
+    answer, a flagged key forces ``insufficient_user_evidence`` for every
+    dimension it is bound to, whatever else is answered.
+    """
+    flagged = baseline.get("missing_evidence_keys")
+    if not isinstance(flagged, (list, tuple, set)):
+        return set()
+    return {key for key in flagged if isinstance(key, str)}
+
+
+def _key_counts_as_evidence(baseline: dict, key: str) -> bool:
+    text = _answer_text(baseline, key)
+    if not text or answer_evidence_status(text) != "self_reported":
+        return False
+    statuses = baseline.get("answer_evidence_status")
+    if isinstance(statuses, dict) and statuses.get(key) in {"missing", "unknown"}:
+        return False
+    predicate = _NON_EVIDENCE_ANSWERS.get(key)
+    if predicate and predicate(text):
+        return False
+    if key == "achievement_inventory" and reports_no_achievements(text):
+        return False
+    if key == "target_outcome" and is_noncommittal_answer(text):
+        return False
+    return True
+
+
+def _has_user_evidence(
+    baseline: dict, keys: tuple[str, ...], flagged: set[str]
+) -> bool:
+    """A dimension is scored when no bound answer is flagged as missing evidence
+    and at least one bound answer is real self-reported evidence."""
+    if any(key in flagged for key in keys):
+        return False
+    return any(_key_counts_as_evidence(baseline, key) for key in keys)
 
 
 def _overall_summary(dimensions: list[dict], achievement_status: str) -> dict:
@@ -297,8 +496,9 @@ def _overall_summary(dimensions: list[dict], achievement_status: str) -> dict:
             "comparable_dimensions": comparable_count,
             "total_dimensions": total,
             "reason": (
-                "Knowledge, capital, habits, network, and clarity measure different "
-                "constructs. Their ordinal tiers are not averaged into an ability score."
+                "Knowledge, practice, capital, network, and written judgment "
+                "measure different constructs. Their ordinal tiers are not "
+                "averaged into an ability score."
             ),
         }
 
@@ -319,7 +519,7 @@ def normalize_comparison_scores(
     achievement_baseline_status: str = "missing",
     learner_baseline: dict | None = None,
 ) -> dict:
-    """Normalize model output into the server-owned comparison v2 contract."""
+    """Normalize model output into the server-owned comparison v3 contract."""
     raw = raw or {}
     achievement_status = _choice(
         achievement_baseline_status,
@@ -337,30 +537,12 @@ def normalize_comparison_scores(
     ]
 
     if learner_baseline is not None:
-        from app.services.intake_diagnostics import answer_evidence_status
-
-        bindings = {
-            "knowledge": ("current_capability",),
-            "habits": ("learning_habits_support",),
-            "capital": ("constraints_resources",),
-            "network": ("learning_habits_support",),
-            "clarity": ("target_outcome",),
-        }
+        bindings = _answer_bindings_for(learner_baseline)
+        flagged = _missing_evidence_keys(learner_baseline)
         for dimension in dimensions:
-            records = [learner_baseline.get(key) for key in bindings[dimension["id"]]]
-            has_report = any(
-                isinstance(record, dict)
-                and answer_evidence_status(str(record.get("answer") or ""))
-                == "self_reported"
-                for record in records
-            )
-            if dimension["id"] == "habits":
-                from app.services.intake_diagnostics import has_established_habit_evidence
-                has_report = has_report and any(
-                    isinstance(record, dict) and has_established_habit_evidence(str(record.get("answer") or ""))
-                    for record in records
-                )
-            if not has_report:
+            if not _has_user_evidence(
+                learner_baseline, bindings[dimension["id"]], flagged
+            ):
                 dimension.update(
                     status="insufficient_user_evidence",
                     you=None,

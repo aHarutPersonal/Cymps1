@@ -10,6 +10,7 @@ import '../../../core/ui/app_shell.dart';
 import '../../../core/ui/cmpys/cmpys_markdown.dart';
 import '../../../core/ui/cmpys/cmpys_primitives.dart';
 import '../../../core/ui/motion/page_transition.dart';
+import '../../../core/ui/v3/v3.dart' show AccessType;
 import '../data/plan_repository.dart';
 import '../models/plan_models.dart';
 import 'material_web_screen.dart';
@@ -259,8 +260,11 @@ class _MaterialReaderScreenState extends ConsumerState<MaterialReaderScreen> {
               leadingIcon: Icons.open_in_new_rounded,
               onTap: () => Navigator.of(context, rootNavigator: true).push(
                 CmpysPageRoute<void>(
-                  builder: (_) =>
-                      MaterialWebScreen(title: material.title, url: directUrl),
+                  builder: (_) => MaterialWebScreen(
+                    title: material.title,
+                    url: directUrl,
+                    access: AccessType.web,
+                  ),
                 ),
               ),
               child: const Text('Open original resource'),

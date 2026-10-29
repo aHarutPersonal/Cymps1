@@ -47,9 +47,16 @@ from app.services.content_quality import (
 )
 from app.services.content_resources import normalized_material_type
 from app.services.interview_inputs import (
-    INTERVIEW_ANSWER_KEYS,
+    ALL_INTERVIEW_ANSWER_KEYS,
+    baseline_weekly_minutes,
     build_interview_plan_inputs,
     extract_legacy_weekly_hours,
+)
+from app.services.planning.capacity import (
+    effective_weekly_minutes,
+    legacy_weekly_hours,
+    plan_item_minutes,
+    set_weekly_minutes,
 )
 from app.services.planning.artifact_identity import (
     artifact_job_reference_is_valid,
@@ -85,6 +92,7 @@ from app.schemas.plan import (
     StepDetail,
     ToggleCompleteResponse,
     ToggleStepResponse,
+    TutorialIllustration,
     WeekSummaryResponse,
 )
 from app.schemas.idol import IdolImportResponse
@@ -98,6 +106,10 @@ DAILY_TYPES = {PlanItemType.HABIT, PlanItemType.PRACTICE}
 PLAN_JOB_STALE_AFTER = timedelta(minutes=15)
 PLAN_JOB_QUEUE_STALE_AFTER = timedelta(minutes=2)
 DETAIL_JOB_QUEUE_STALE_AFTER = timedelta(minutes=2)
+_DESIRED_COMPLETION_HELP = (
+    "Optional desired state. Absent: toggle. true/false: end in exactly that "
+    "state; when it already holds, return the current state with no write."
+)
 DETAIL_JOB_RUNNING_STALE_AFTER = timedelta(minutes=10)
 ACTIVE_DETAIL_JOB_STATUSES = frozenset({"pending", "queued", "running"})
 CATALOG_ASSIGNMENT_CONFLICT_DETAIL = (
@@ -491,6 +503,26 @@ def _detail_job_is_stale(
     return (now or datetime.now(timezone.utc)) - last_update >= stale_after
 
 
+_PREFETCH_DETAIL_STEPS = frozenset({"prefetch_queued", "background_queued"})
+
+
+def _detail_job_reads_as_stale(job: PlanItemDetailJob, *, peek: bool) -> bool:
+    """The stale rule one detail read applies to an active job.
+
+    A normal read promotes a waiting prefetch first, which refreshes its clock.
+    A peek never promotes, and a prefetch may legitimately wait on the
+    low-priority queue for longer than the queue-stale window, so a peek never
+    reports a still-queued prefetch as stopped.
+    """
+    if (
+        peek
+        and job.status in {"pending", "queued"}
+        and job.step in _PREFETCH_DETAIL_STEPS
+    ):
+        return False
+    return _detail_job_is_stale(job)
+
+
 async def _promote_prefetched_detail_job(
     db: AsyncSession,
     job: PlanItemDetailJob,
@@ -502,7 +534,7 @@ async def _promote_prefetched_detail_job(
     lesson. Returns ``promoted``, ``failed``, or ``None`` when no promotion was
     needed (or another worker already claimed it).
     """
-    prefetch_steps = {"prefetch_queued", "background_queued"}
+    prefetch_steps = set(_PREFETCH_DETAIL_STEPS)
     if job.status not in {"pending", "queued"} or job.step not in prefetch_steps:
         return None
 
@@ -521,8 +553,10 @@ async def _promote_prefetched_detail_job(
         )
     )
     await db.commit()
+    # The bulk update expires the SQL-computed updated_at, and callers read it
+    # synchronously next (stale-job check); async sessions cannot lazy-load.
+    await db.refresh(job)
     if promoted.rowcount != 1:
-        await db.refresh(job)
         return None
 
     job.status = "queued"
@@ -556,6 +590,7 @@ async def _promote_prefetched_detail_job(
             )
         )
         await db.commit()
+        await db.refresh(job)
         job.status = "failed"
         job.step = "error"
         job.error_message = "Could not start lesson generation"
@@ -620,7 +655,9 @@ def _item_to_response(
     description, metric, hours = item.description, item.success_metric, item.estimated_hours
     loaded_details = vars(item).get("details_json")
     details = loaded_details if isinstance(loaded_details, dict) else {}
-    minutes = hours * 60
+    # Exact allocated minutes (a 45-minute short mission); hours stay the
+    # legacy whole-hour value, rounded up.
+    minutes = plan_item_minutes(item)
     workload = details.get("workload") or {}
     if (details.get("_generation") or {}).get("status") == "ready" and workload.get("status") == "reconciled":
         minutes = int(workload["required_minutes"])
@@ -708,6 +745,7 @@ def _plan_to_response(
         targetAge=plan.target_age,
         durationWeeks=plan.duration_weeks,
         weeklyHours=plan.weekly_hours,
+        weeklyMinutes=effective_weekly_minutes(plan),
         cycleNumber=plan.cycle_number,
         items=items,
         createdAt=plan.created_at,
@@ -772,7 +810,9 @@ async def generate_plan_endpoint(
     """
     canonical_idol_id = data.idolId
     canonical_target_age = data.targetAge
-    canonical_weekly_hours = data.weeklyHours
+    canonical_weekly_minutes = (
+        data.weeklyMinutes if data.weeklyMinutes is not None else data.weeklyHours * 60
+    )
     canonical_focus = data.focus
 
     # A linked session is authoritative planning context, not a caller-supplied
@@ -823,7 +863,7 @@ async def generate_plan_endpoint(
         uses_semantic_intake = any(
             message.role == MessageRole.ASSISTANT
             and isinstance(message.response_ui_json, dict)
-            and message.response_ui_json.get("answer_key") in INTERVIEW_ANSWER_KEYS
+            and message.response_ui_json.get("answer_key") in ALL_INTERVIEW_ANSWER_KEYS
             for message in messages
         )
         if uses_semantic_intake:
@@ -835,13 +875,18 @@ async def generate_plan_endpoint(
                         "message": "The intake is missing required planning answers.",
                     },
                 )
-            confirmed_hours = baseline.get("weekly_capacity_hours")
+            confirmed_minutes = (
+                baseline_weekly_minutes(baseline)
+                if baseline.get("weekly_capacity_confirmed")
+                else None
+            )
         else:
             # Legacy clients did not persist semantic answer keys. Keep their
             # recovery path, but trust only the owned server transcript rather
             # than the request's caller-controlled weeklyHours fallback.
-            confirmed_hours = extract_legacy_weekly_hours(messages)
-        if not isinstance(confirmed_hours, int):
+            legacy_hours = extract_legacy_weekly_hours(messages)
+            confirmed_minutes = legacy_hours * 60 if legacy_hours is not None else None
+        if not isinstance(confirmed_minutes, int):
             raise HTTPException(
                 status_code=409,
                 detail={
@@ -860,7 +905,7 @@ async def generate_plan_endpoint(
 
         canonical_idol_id = str(session.idol_id)
         canonical_target_age = session.user_age
-        canonical_weekly_hours = confirmed_hours
+        canonical_weekly_minutes = confirmed_minutes
         target_outcome = baseline.get("target_outcome")
         canonical_focus = (
             str(target_outcome.get("answer") or "").strip()
@@ -913,7 +958,7 @@ async def generate_plan_endpoint(
                 # now that both required artifacts are confirmed above.
                 existing.target_age = canonical_target_age
                 existing.duration_weeks = data.durationWeeks
-                existing.weekly_hours = canonical_weekly_hours
+                set_weekly_minutes(existing, canonical_weekly_minutes)
                 existing.focus = canonical_focus
                 existing.progress_percent = 0
                 existing.step = "analyzing_gaps"
@@ -963,7 +1008,8 @@ async def generate_plan_endpoint(
         session_id=data.sessionId,
         target_age=canonical_target_age,
         duration_weeks=data.durationWeeks,
-        weekly_hours=canonical_weekly_hours,
+        weekly_hours=legacy_weekly_hours(canonical_weekly_minutes),
+        weekly_minutes=canonical_weekly_minutes,
         focus=canonical_focus,
         status="pending",
         progress_percent=0,
@@ -1471,13 +1517,13 @@ async def _compute_item_progress(
     return progress, is_completed
 
 
-async def _reconcile_plan_completion(
+async def _plan_completion_state(
     db: AsyncSession,
     *,
     plan: Plan,
     user_id: str,
 ) -> tuple[bool, int | None]:
-    """Reconcile the authoritative plan stamp while its Plan row is locked."""
+    """Read whether the plan is complete and how many missions remain; no writes."""
 
     items_stmt = select(PlanItem).where(PlanItem.plan_id == plan.id)
     items = (await db.execute(items_stmt)).scalars().all()
@@ -1497,8 +1543,20 @@ async def _reconcile_plan_completion(
     }
     has_missions = any(item.type in MISSION_TYPES for item in items)
     remaining = _count_remaining_missions(items, completed_ids)
+    return has_missions and remaining == 0, remaining if has_missions else None
 
-    plan_complete = has_missions and remaining == 0
+
+async def _reconcile_plan_completion(
+    db: AsyncSession,
+    *,
+    plan: Plan,
+    user_id: str,
+) -> tuple[bool, int | None]:
+    """Reconcile the authoritative plan stamp while its Plan row is locked."""
+
+    plan_complete, remaining = await _plan_completion_state(
+        db, plan=plan, user_id=user_id
+    )
     if plan_complete:
         if plan.completed_at is None:
             plan.completed_at = datetime.now(timezone.utc)
@@ -1513,7 +1571,7 @@ async def _reconcile_plan_completion(
         if _should_clear_completed_at(True, bool(next_exists)):
             plan.completed_at = None
 
-    return plan_complete, remaining if has_missions else None
+    return plan_complete, remaining
 
 
 def _parse_material_detail(material: dict) -> MaterialDetail:
@@ -1574,6 +1632,24 @@ def _parse_material_detail(material: dict) -> MaterialDetail:
     )
 
 
+def _parse_step_illustration(value: Any) -> TutorialIllustration | None:
+    """A stored hero image, or ``None``: decoration must never hide a lesson."""
+    if value is None:
+        return None
+    try:
+        return TutorialIllustration.model_validate(value)
+    except ValidationError:
+        return None
+
+
+def _optional_text(value: Any) -> str | None:
+    """A stored string field, or ``None`` when missing, blank or malformed."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
+
+
 def _parse_item_details(details_json: dict | None) -> ItemDetails | None:
     """Parse details_json into ItemDetails schema."""
     if not isinstance(details_json, dict) or not details_json:
@@ -1604,6 +1680,7 @@ def _parse_item_details(details_json: dict | None) -> ItemDetails | None:
                 resources=s.get("resources"),
                 substeps=s.get("substeps"),
                 lesson_content=s.get("lesson_content"),
+                illustration=_parse_step_illustration(s.get("illustration")),
             )
             for s in steps_payload
         ]
@@ -1621,6 +1698,8 @@ def _parse_item_details(details_json: dict | None) -> ItemDetails | None:
                 "generated_from_prompt_version"
             ),
             generated_at=details_json.get("generated_at"),
+            definition_of_done=_optional_text(details_json.get("definition_of_done")),
+            mental_model=_optional_text(details_json.get("mental_model")),
         )
     except (AttributeError, TypeError, ValidationError):
         return None
@@ -1655,6 +1734,27 @@ def _lesson_details_meet_quality(details_json: dict | None) -> bool:
         len(str(step.get("lesson_content") or "").split()) >= plan_detail_min_words(step)
         for step in steps
     )
+
+
+def _syllabus_details(details_json: dict | None) -> ItemDetails | None:
+    """Outline-only steps while the first tutorial prepares; never lesson text.
+
+    The learner sees the mission's planned tutorials immediately. No step is
+    readable or completable until its lesson is approved and published.
+    """
+    if not isinstance(details_json, dict):
+        return None
+    generation = details_json.get("_generation")
+    steps = details_json.get("steps")
+    if (not isinstance(generation, dict) or generation.get("status") != "generating"
+            or generation.get("ready_step_ids") or not isinstance(steps, list) or not steps):
+        return None
+    outline_only = {**details_json, "steps": [{**step, "lesson_content": None}
+                                             for step in steps if isinstance(step, dict)]}
+    try:
+        return _parse_item_details(outline_only)
+    except (ValueError, TypeError):
+        return None
 
 
 def _partial_lesson_details_available(details_json: dict | None) -> bool:
@@ -1853,13 +1953,27 @@ async def get_plan_item_detailed(
     item_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
+    peek: Annotated[
+        bool,
+        Query(
+            description=(
+                "Read-only: return the current details and job status, but "
+                "never promote a prefetch job, never enqueue generation and "
+                "never write. With no details and no job the response is "
+                "``pending`` with no job id."
+            ),
+        ),
+    ] = False,
 ) -> PlanItemDetailedResponse:
     """
     Get a plan item with details, steps, materials, and progress.
 
     If details don't exist yet, automatically enqueues a generation job.
+    With ``peek=true`` it is a pure read: the same response, but it never
+    promotes a prefetch job, enqueues a job, or marks a stale job failed.
 
-    LLM USAGE: INDIRECT (may enqueue Celery task if details missing)
+    LLM USAGE: INDIRECT (may enqueue Celery task if details missing; never
+    with ``peek=true``)
     """
     item = await _get_item_for_user(db, item_id, current_user.id)
 
@@ -1875,8 +1989,13 @@ async def get_plan_item_detailed(
                 DailyTaskCompletion.completed_date == datetime.now(timezone.utc).date(),
             )
         )
+        from app.api.v1.daily_tasks import _session_minutes
+
+        daily_item = _item_to_response(item)
+        # One session, exactly as Today shows it (estimatedMinutes is weekly).
+        daily_item.session_minutes = _session_minutes(item)
         return PlanItemDetailedResponse(
-            item=_item_to_response(item),
+            item=daily_item,
             details=None,
             progress=ItemProgress(),
             completed=False,
@@ -2038,27 +2157,35 @@ async def get_plan_item_detailed(
                 else None
             ),
         )
-        if existing_job.status in {"pending", "queued"}:
+        if not peek and existing_job.status in {"pending", "queued"}:
             await _promote_prefetched_detail_job(db, existing_job)
         preserved_response.details_progress = existing_job.progress_percent
         preserved_response.details_step = existing_job.step
         successor_status = existing_job.status
-        if existing_job.status in ACTIVE_DETAIL_JOB_STATUSES and _detail_job_is_stale(existing_job):
-            # Do not fail a worker that refreshed its heartbeat after our read.
-            stopped = await db.execute(
-                update(PlanItemDetailJob)
-                .where(
-                    PlanItemDetailJob.id == existing_job.id,
-                    PlanItemDetailJob.status == existing_job.status,
-                    PlanItemDetailJob.updated_at == existing_job.updated_at,
-                )
-                .values(status="failed", step="error",
-                        error_message="Generation worker stopped before completion")
-            )
-            await db.commit()
-            if stopped.rowcount == 1:
+        if existing_job.status in ACTIVE_DETAIL_JOB_STATUSES and _detail_job_reads_as_stale(
+            existing_job, peek=peek
+        ):
+            if peek:
+                # Report the stopped worker without writing it down; the
+                # next normal read does.
                 successor_status = "failed"
                 preserved_response.details_step = "error"
+            else:
+                # Do not fail a worker that refreshed its heartbeat after our read.
+                stopped = await db.execute(
+                    update(PlanItemDetailJob)
+                    .where(
+                        PlanItemDetailJob.id == existing_job.id,
+                        PlanItemDetailJob.status == existing_job.status,
+                        PlanItemDetailJob.updated_at == existing_job.updated_at,
+                    )
+                    .values(status="failed", step="error",
+                            error_message="Generation worker stopped before completion")
+                )
+                await db.commit()
+                if stopped.rowcount == 1:
+                    successor_status = "failed"
+                    preserved_response.details_step = "error"
         if generation.get("status") != "ready" and successor_status in {"failed", "cancelled"}:
             preserved_response.details_error = (
                 "Some lessons are not ready yet. Your ready lessons and progress are saved."
@@ -2097,20 +2224,23 @@ async def get_plan_item_detailed(
         embedded_job_id if partial_details is not None else None
     )
 
-    if existing_job and existing_job.status in {"pending", "queued"}:
+    if not peek and existing_job and existing_job.status in {"pending", "queued"}:
         await _promote_prefetched_detail_job(db, existing_job)
 
     if existing_job and existing_job.status in {"queued", "running", "pending"}:
-        if _detail_job_is_stale(existing_job):
-            existing_job.status = "failed"
-            existing_job.step = "error"
-            existing_job.error_message = "Generation worker stopped before completion"
-            await db.commit()
-            logger.warning(
-                "[PLAN_ITEM] Stopped stale detail job item_id=%s job_id=%s",
-                item_id,
-                existing_job.id,
-            )
+        if _detail_job_reads_as_stale(existing_job, peek=peek):
+            if not peek:
+                existing_job.status = "failed"
+                existing_job.step = "error"
+                existing_job.error_message = (
+                    "Generation worker stopped before completion"
+                )
+                await db.commit()
+                logger.warning(
+                    "[PLAN_ITEM] Stopped stale detail job item_id=%s job_id=%s",
+                    item_id,
+                    existing_job.id,
+                )
             return PlanItemDetailedResponse(
                 item=_detailed_item_response(item, completed=is_completed),
                 details=partial_details,
@@ -2125,7 +2255,7 @@ async def get_plan_item_detailed(
                 job_id=existing_job.id,
                 artifact_job_id=partial_artifact_job_id,
                 details_progress=existing_job.progress_percent,
-                details_step=existing_job.step,
+                details_step="error",
                 details_error=(
                     "Lesson preparation stopped before it finished. Generate it again to retry."
                 ),
@@ -2133,9 +2263,14 @@ async def get_plan_item_detailed(
         logger.info(
             f"[PLAN_ITEM] Active job already exists for item_id={item_id}, job_id={existing_job.id}"
         )
+        syllabus = (
+            _syllabus_details(item.details_json)
+            if partial_details is None and not active_replacement and partial_artifact_owned
+            else None
+        )
         return PlanItemDetailedResponse(
             item=_detailed_item_response(item, completed=is_completed),
-            details=partial_details,
+            details=partial_details or syllabus,
             progress=progress,
             completed=is_completed,
             completed_step_ids=completed_step_ids,
@@ -2179,6 +2314,21 @@ async def get_plan_item_detailed(
                 if existing_job.step == "catalog_not_available"
                 else "This lesson could not be prepared. Generate it again to retry."
             ),
+        )
+
+    if peek:
+        # Nothing written and nothing running: say so, create nothing.
+        return PlanItemDetailedResponse(
+            item=_detailed_item_response(item, completed=False),
+            details=None,
+            progress=ItemProgress(),
+            completed=False,
+            completed_step_ids=[],
+            details_status=DetailsStatus.PENDING,
+            job_id=None,
+            artifact_job_id=None,
+            details_progress=0,
+            details_step=None,
         )
 
     # No details and no active job - enqueue generation job
@@ -2256,12 +2406,15 @@ async def toggle_item_complete(
         str | None,
         Query(alias="artifactJobId"),
     ] = None,
+    complete: Annotated[bool | None, Query(description=_DESIRED_COMPLETION_HELP)] = None,
 ) -> ToggleCompleteResponse:
     """
     Toggle completion status for a plan item.
 
     If marking complete, also marks all steps as complete.
     If uncompleting, does NOT automatically uncheck steps.
+    With ``complete`` set, the item ends in exactly that state; a request whose
+    state already holds returns it unchanged, with no write of any kind.
 
     LLM USAGE: NONE (database update only)
     """
@@ -2293,6 +2446,26 @@ async def toggle_item_complete(
     completion = result.scalar_one_or_none()
 
     currently_completed = bool(completion and completion.completed_at)
+
+    if complete is not None and complete == currently_completed:
+        # A retried request whose state already holds (its first response was
+        # lost): report the current state and write nothing.
+        progress, _ = await _compute_item_progress(
+            db,
+            current_user.id,
+            item,
+            artifact_reference_validated=True,
+        )
+        plan_complete, remaining = await _plan_completion_state(
+            db, plan=plan, user_id=str(current_user.id)
+        )
+        await db.rollback()
+        return ToggleCompleteResponse(
+            completed=currently_completed,
+            progress=progress,
+            planComplete=plan_complete,
+            missionTasksRemaining=remaining,
+        )
 
     # Never create completion state from an outline/partial artifact. Existing
     # completion can still be removed without requiring the lesson to remain
@@ -2446,12 +2619,15 @@ async def toggle_step_complete(
         str | None,
         Query(alias="artifactJobId"),
     ] = None,
+    complete: Annotated[bool | None, Query(description=_DESIRED_COMPLETION_HELP)] = None,
 ) -> ToggleStepResponse:
     """
     Toggle completion status for a specific step.
 
     - Auto-marks item complete if ALL steps are now complete.
     - Auto-uncompletes item if step is being unchecked.
+    - With ``complete`` set, the step ends in exactly that state; a request
+      whose state already holds returns it unchanged, with no write of any kind.
 
     LLM USAGE: NONE (database update only)
     """
@@ -2513,6 +2689,23 @@ async def toggle_step_complete(
     currently_step_completed = bool(
         step_completion and step_completion.completed_at is not None
     )
+
+    if complete is not None and complete == currently_step_completed:
+        # A retried finish whose first response was lost: never un-complete the
+        # step or its mission, never re-schedule look-ahead, write nothing.
+        progress, is_item_completed = await _compute_item_progress(
+            db,
+            current_user.id,
+            item,
+            artifact_reference_validated=True,
+        )
+        await db.rollback()
+        return ToggleStepResponse(
+            step_id=step_id,
+            completed=currently_step_completed,
+            progress=progress,
+            item_completed=is_item_completed,
+        )
 
     if not currently_step_completed:
         await _require_completion_artifact_ready(
@@ -2978,11 +3171,13 @@ async def get_week_summary(
 
 def _next_cycle_fields(prev_plan) -> dict:
     """Fields for the next cycle's PlanGenerationJob, derived from the parent."""
+    weekly_minutes = effective_weekly_minutes(prev_plan)
     return {
         "cycle_number": (prev_plan.cycle_number or 1) + 1,
         "previous_plan_id": str(prev_plan.id),
         "idol_id": prev_plan.idol_id,
-        "weekly_hours": prev_plan.weekly_hours,
+        "weekly_hours": legacy_weekly_hours(weekly_minutes),
+        "weekly_minutes": weekly_minutes,
         "duration_weeks": prev_plan.duration_weeks,
         "target_age": prev_plan.target_age,
     }

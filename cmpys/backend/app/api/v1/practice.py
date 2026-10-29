@@ -18,6 +18,7 @@ from app.services.practice.contracts import (
     DraftRequest,
     SubmitRequest,
     Workbook,
+    canonical_answers,
     combine_review,
     grade_fixed,
     lesson_version,
@@ -42,6 +43,7 @@ router = APIRouter(prefix="/plan-items", tags=["practice"])
 DB = Annotated[AsyncSession, Depends(get_db)]
 CurrentUser = Annotated[User, Depends(get_current_user)]
 Artifact = Annotated[str | None, Query(alias="artifactJobId")]
+FieldKey = Annotated[str | None, Query(max_length=85)]
 PREPARATION_ATTEMPT_LIMIT = 3
 PREPARATION_RETRY_COOLDOWN = timedelta(minutes=30)
 
@@ -340,13 +342,15 @@ async def save_draft(
         validate_answers(workbook, data.answers)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
-    if row.answers_json != data.answers:
+    # A multi-select is stored in choice order, so equal selections are equal answers.
+    answers = canonical_answers(workbook, data.answers)
+    if row.answers_json != answers:
         if view(row).get("complete"):
             raise HTTPException(
                 409,
                 "Completed practice is preserved. Reopen it to review your saved work.",
             )
-        row.answers_json = data.answers
+        row.answers_json = answers
         row.revision += 1
     await db.commit()
     return view(row)
@@ -361,6 +365,7 @@ async def get_hint(
     current_user: CurrentUser,
     artifact_job_id: Artifact = None,
     solution: bool = False,
+    field_id: FieldKey = None,
 ):
     _, _, row, _ = await _load(
         db, str(current_user.id), item_id, step_id, artifact_job_id, lock=True
@@ -368,6 +373,30 @@ async def get_hint(
     workbook = _ready(row)
     _revision(row, data.revision)
     activity = _activity(row, workbook, data.activity_id)
+    if field_id is not None:
+        if solution:
+            raise HTTPException(
+                422, "Ask for one field's hint or the worked solution, not both"
+            )
+        # Keyed like answers: "<activity_id>.<field_id>".
+        field = next(
+            (f for f in activity.fields if f"{activity.id}.{f.id}" == field_id), None
+        )
+        if field is None:
+            raise HTTPException(404, "Field not found")
+        if not any(h.get("field_id") == field_id for h in row.hints_json):
+            row.hints_json = [
+                *row.hints_json,
+                {
+                    "activity_id": activity.id,
+                    "kind": "field_hint",
+                    "field_id": field_id,
+                    "content": field.hint or activity.hint,
+                },
+            ]
+            row.revision += 1
+        await db.commit()
+        return view(row)
     if solution and not any(a["activity_id"] == activity.id for a in row.attempts_json):
         raise HTTPException(409, "Try the exercise before opening its worked solution")
     kind = "solution" if solution else "hint"
@@ -411,6 +440,13 @@ async def submit_practice(
     workbook = _ready(row)
     _revision(row, data.revision)
     activity = _activity(row, workbook, data.activity_id)
+    # Drafts saved before multi-select canonicalisation may be spelled differently.
+    # Attempts and completion compare the stored strings, so normalise them first;
+    # the lease commit below (or the early return) persists the rewrite.
+    canonical = canonical_answers(workbook, row.answers_json)
+    normalised = canonical != row.answers_json
+    if normalised:
+        row.answers_json = canonical
     try:
         fixed = grade_fixed(activity, row.answers_json)
     except ValueError as exc:
@@ -422,6 +458,8 @@ async def submit_practice(
         and a["answers"] == _activity_answers(activity, answers)
         for a in row.attempts_json
     ):
+        if normalised:
+            await db.commit()
         return view(row)
     if row.review_calls >= 40:
         raise HTTPException(429, "This workbook has reached its review limit.")
@@ -444,6 +482,7 @@ async def submit_practice(
             # not a grade of the learner's explanation and can never pass.
             feedback = fixed + [
                 {"field_id": field.id, "passed": False, "pending": True,
+                 "criterion": field.criterion_label,
                  "feedback": "Correct the calculation or choice above first; your explanation is saved and will be reviewed after that."}
                 for field in activity.fields if field.kind == "text"
             ]

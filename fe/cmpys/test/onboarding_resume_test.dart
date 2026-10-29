@@ -99,8 +99,8 @@ void main() {
     expect(repo.resumedId, 'saved-session');
     expect(repo.resumedMentorId, 'mentor');
     expect(repo.resultsStarts, 0);
-    expect(find.text('What should we call you?'), findsNothing);
-    expect(find.text('Continue generation'), findsOneWidget);
+    expect(find.text('First name'), findsNothing);
+    expect(find.text('Retry'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
   });
@@ -111,7 +111,7 @@ void main() {
     final repo = _SavedSessionRepo()..abandoned = true;
     await mount(tester, repo);
     expect(repo.resumedId, isNull);
-    expect(find.text('What should we call you?'), findsOneWidget);
+    expect(find.text('First name'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
   });
 
@@ -125,7 +125,7 @@ void main() {
         find.text('Could not restore your saved onboarding.'),
         findsOneWidget,
       );
-      expect(find.text('What should we call you?'), findsNothing);
+      expect(find.text('First name'), findsNothing);
       repo.fail = false;
       await tester.tap(find.text('Retry'));
       await tester.pumpAndSettle();

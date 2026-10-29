@@ -32,6 +32,7 @@ class _CompletionRepository extends Fake implements PlanRepository {
     String itemId,
     String stepId, {
     String? artifactJobId,
+    bool? complete,
   }) async {
     completedItem = itemId;
     completedStep = stepId;

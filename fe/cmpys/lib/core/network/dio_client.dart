@@ -294,17 +294,22 @@ class DioClient {
     // Try to extract error message from response body
     String? message;
     String? code;
+    var fieldErrors = const <ApiFieldError>[];
 
     if (data is Map<String, dynamic>) {
       final detail = data['detail'];
       if (detail is Map) {
         message = detail['message']?.toString();
         code = detail['code']?.toString();
+      } else if (detail is List) {
+        // A validation failure (FastAPI/Pydantic): keep which fields failed,
+        // never the validator's raw text, which is not for users.
+        fieldErrors = _fieldErrors(detail);
       }
       message ??=
           data['message']?.toString() ??
           data['error']?.toString() ??
-          detail?.toString();
+          (detail is List ? null : detail?.toString());
       code ??= data['code']?.toString();
     }
 
@@ -318,7 +323,32 @@ class DioClient {
       retryAfterSeconds: retryAfter != null && retryAfter > 0
           ? retryAfter
           : null,
+      fieldErrors: fieldErrors,
     );
+  }
+
+  /// The failing fields of a validation `detail` list: each item's last
+  /// `loc` part that names a field (not `body`, `query`, …) and its `type`.
+  static List<ApiFieldError> _fieldErrors(List<dynamic> detail) {
+    const sources = {'body', 'query', 'path', 'header', 'cookie'};
+    final errors = <ApiFieldError>[];
+    for (final item in detail) {
+      if (item is! Map) continue;
+      final loc = item['loc'];
+      String? field;
+      if (loc is List) {
+        for (final part in loc.reversed) {
+          if (part is String && !sources.contains(part)) {
+            field = part;
+            break;
+          }
+        }
+      }
+      errors.add(
+        ApiFieldError(field: field ?? '', type: item['type']?.toString() ?? ''),
+      );
+    }
+    return List.unmodifiable(errors);
   }
 
   // ============================================

@@ -49,3 +49,24 @@ The more you know, the better you can help. But remember — you're learning abo
 - Wants CMPYS design improvements to preserve its existing design system, including when using Open Design.
 - Wants Open Design's anonymous metrics and conversation/tool-content uploads turned off.
 - Wants instructional comparisons and diagrams in the CMPYS reader to use polished, accessible visual layouts instead of ASCII boxes, while preserving narration, highlighting, and notes.
+
+- For the current CMPYS generation reliability continuation, the owner chose offline-only work; do not run paid/provider tests or request another pilot unless the owner changes that instruction.
+
+- On 2026-10-21, for this simulator QA task, the owner explicitly authorized creating a synthetic test account and up to 6 live generation runs including retries, with a shared $3 ceiling. This supersedes offline-only for this bounded test batch; it does not authorize unlimited or mass regeneration.
+
+- On 2026-10-22, the authorized simulator QA batch was exhausted: 6 workflow runs (40 underlying provider calls), estimated $0.41410585 total, no pending/unknown usage. The separate QA runtime was stopped. The $3 ceiling does not authorize further runs; resume offline-only unless the owner provides new authorization. Live plan succeeded; lesson retry and book restoration failed quality/format checks.
+
+- On 2026-10-22, the owner explicitly authorized continuing live CMPYS generations with the run-count limit removed, within the SAME $3 cumulative ceiling including the prior $0.41410585. Retain the existing ledger and all prior charges; no new $3 allocation or reset.
+
+- On 2026-10-22, the owner approved deploying the 14 explicitly enumerated CMPYS source/prompt files, including app/services/planning/package_preflight.py, and subsequent corrections to those same files to the existing CMPYS server; no secrets or .env uploads. The unchanged cumulative $3 generation ceiling still applies.
+
+- On 2026-10-22, the owner raised this simulator QA task’s cumulative generation ceiling to USD 5 total, including all earlier charges and full reserves for unknown usage; no run-count limit, no ledger reset. The existing 14-file upload/deployment authorization remains valid.
+
+- On 2026-10-22, the owner extended the authorized CMPYS source/prompt upload and deployment set to 15 files by adding app/services/practice/generation.py and future corrections to it; cumulative QA limit remains USD 5 including prior charges and reserves.
+
+- On 2026-10-22, the owner explicitly raised this SAME simulator QA task's cumulative provider-testing ceiling to USD 6, including all previous charges and full unknown-usage reserves. No run-count limit, no ledger reset. The same 15 source/prompt file deployment authorization remains in force.
+- Prefers many short tutorials with clear explanations, visuals, and worked examples, with the first usable tutorial ready quickly and subsequent tutorials prepared in the background.
+
+- On 2026-10-24, the owner explicitly raised the SAME cumulative CMPYS simulator QA provider-testing ceiling to USD 10 for fresh registration and full-flow verification, preserving all prior charges and unknown-usage reserves; no ledger reset.
+
+- On 2026-10-24, the owner explicitly raised the SAME cumulative CMPYS simulator QA provider-testing ceiling from USD 10 to USD 12 to finish generating and verifying the 20-tutorial sequence, retaining all prior charges and unknown-usage reserves. No ledger reset.

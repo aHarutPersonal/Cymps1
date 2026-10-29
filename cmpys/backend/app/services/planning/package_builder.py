@@ -19,6 +19,7 @@ from pydantic_core import ErrorType
 
 from app.services.llm.client import LLMResponse
 from app.services.llm.prompt_loader import load_and_render
+from app.services.llm.routing import operation_thinking_level
 from app.services.llm.telemetry import record_llm_response
 from app.services.content_quality import TUTORIAL_LESSON_FORMAT
 from app.services.planning.lesson_package import (
@@ -96,6 +97,9 @@ class LessonPackageActivity(Activity):
         for field in self.fields:
             if field.kind == "number":
                 validate_derivation(field.expression, values)
+                # A wrong answer is derived from the same named facts, never guessed.
+                for misconception in field.misconceptions:
+                    validate_derivation(misconception.expression, values)
         from app.services.practice.solution_compiler import compile_worked_solution
         compile_worked_solution(self)
         return self
@@ -294,6 +298,30 @@ def _parse_initial_seed_response_details(data: Any) -> tuple[LessonPackageSeed, 
         return LessonPackageSeed.model_validate(normalized), len(missing), len(notes)
 
 
+class UndeclaredNumbersError(ValueError):
+    """An activity shows raw numbers but declares no case data for them."""
+
+    def __init__(self, span_count: int):
+        super().__init__("Activity shows numbers without declared case data")
+        self.span_count = span_count
+
+
+def require_declared_numbers(activity: LessonPackageActivity) -> None:
+    """Reject numbers the evidence review could never bind to case data.
+
+    The review rejects any activity whose numeric spans have no raw datum IDs.
+    Catching the empty-data case here costs one component correction instead
+    of a whole package, its preflight and its repair.
+    """
+    if activity.data:
+        return
+    from app.services.planning.lesson_review import numeric_span_occurrences
+    spans = numeric_span_occurrences(
+        {}, {"private_workbook": {"activities": [activity.model_dump(mode="json")]}})
+    if spans:
+        raise UndeclaredNumbersError(len(spans))
+
+
 def _validated_activity(data: Any, seed: LessonPackageSeed, brief: ActivityBrief) -> LessonPackageActivity:
     activity = LessonPackageActivity.model_validate(data)
     if activity.id != brief.id or activity.kind != brief.kind:
@@ -343,6 +371,12 @@ def _diagnostics(exc: ValueError | SyntaxError) -> list[dict[str, Any]]:
             item if isinstance(item, int) or item in known else "<unknown>"
             for item in failure["loc"][:8]], "message": failure["msg"]}
             for failure in exc.errors(include_input=False, include_context=False, include_url=False)[:16]]
+    if isinstance(exc, UndeclaredNumbersError):
+        return [{"type": "undeclared_numbers", "message": (
+            f"{exc.span_count} sentence(s) in the instructions, hint or explanations show numbers, "
+            "but data is []. Declare every raw number shown, quoted material included, as a datum "
+            "in this activity's data, or describe the fictional case without numbers. Derived "
+            "results such as rates, totals and differences stay expressions over those data, never data.")}]
     # Expressions and provider drafts are private; do not echo arbitrary text.
     return [{"type": "component_contract", "message": "Preserve assigned ID/kind, use only own raw operands, and keep transfer inputs distinct from public examples."}]
 
@@ -367,9 +401,10 @@ def _validation_failure_metadata(exc: ValueError | SyntaxError, model) -> dict:
     Exact diagnostics remain private to the one existing correction request.
     """
     if not isinstance(exc, ValidationError):
-        code = "transfer_independence" if isinstance(exc, TransferIndependenceError) else "component_contract"
+        code = ("transfer_independence" if isinstance(exc, TransferIndependenceError)
+                else "undeclared_numbers" if isinstance(exc, UndeclaredNumbersError) else "component_contract")
         return {"errors": [{"type": code, "loc": []}], "total_errors": 1}
-    known = {"number", "choice", "text"}
+    known = {"number", "choice", "multi_choice", "text"}
     def collect(schema):
         if isinstance(schema, dict):
             known.update(schema.get("properties", {}))
@@ -435,7 +470,7 @@ def _reasoning_reserve(client: Any) -> int:
 
     provider = getattr(client, "provider_name", None)
     if provider == "zai":
-        return settings.zai_reasoning_token_reserve
+        return 0 if getattr(client, "thinking_level", None) == "off" else settings.zai_reasoning_token_reserve
     if provider == "openlux" and str(getattr(client, "model", "")).startswith(
             ("gpt-5", "gpt-6", "o1", "o3", "o4")):
         return settings.openlux_reasoning_token_reserve
@@ -578,8 +613,10 @@ async def generate_initial_package(
                     stopped.set()
                     return None
                 timeout = min(_REQUEST_SECONDS, remaining)
+                # Only the seed may opt out of reasoning via an eval-approved override.
+                thinking = operation_thinking_level("lesson_package_seed", "low") if name == "seed" else "low"
                 client = client_factory(tier="balanced", timeout=timeout, max_tokens=tokens,
-                                        thinking_level="low", allow_fallback=False)
+                                        thinking_level=thinking, allow_fallback=False)
                 activity_callbacks = getattr(client, "enforces_activity_callbacks", False) is True
                 if activity_callbacks:
                     client.set_generation_activity_callback(request_activity)
@@ -753,7 +790,9 @@ async def generate_initial_package(
             draft_model = TutorialActivityDraft if tutorial else LessonActivityDraft
             def parse_assigned(data):
                 draft_model.model_validate(data)
-                return _validated_activity(parse_activity_draft(data), seed, brief)
+                activity = _validated_activity(parse_activity_draft(data), seed, brief)
+                require_declared_numbers(activity)
+                return activity
             value = await component("activity_" + brief.id, draft_model, activity_prompt,
                 {"outline": step, "context": context, "capabilities": {**CAPABILITIES, **({"max_fields_per_activity": 2} if tutorial else {})},
                  "execution_contract": copy.deepcopy(_EXECUTION_CONTRACT),

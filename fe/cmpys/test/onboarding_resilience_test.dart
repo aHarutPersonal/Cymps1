@@ -136,15 +136,12 @@ void main() {
       final plans = _Plans();
       final draft = CmpysOnboardingDraft()..sessionId = 'session-1';
       await _mount(tester, sessions, plans, draft: draft);
-      expect(
-        find.text('Generation paused. Your progress is saved.'),
-        findsOneWidget,
-      );
+      expect(find.byKey(const Key('lab-stage-icon-cmp-fail')), findsOneWidget);
       expect(
         find.textContaining('Generation is unavailable right now.'),
         findsOneWidget,
       );
-      expect(find.textContaining('Connection interrupted'), findsNothing);
+      expect(find.textContaining('connection dropped'), findsNothing);
       expect(find.textContaining('PRIVATE'), findsNothing);
       expect(draft.sessionId, 'session-1');
       expect(draft.planJobId, 'job-1');
@@ -160,10 +157,10 @@ void main() {
       expect(sessions.starts, 1);
       sessions.generationError = null;
       plans.status = 'completed';
-      await tester.tap(find.text('Continue generation'));
+      await tester.tap(find.text('Retry'));
       await tester.pumpAndSettle();
       expect(sessions.starts, 2);
-      expect(find.text('Enter CMPYS'), findsOneWidget);
+      expect(find.text('Go to Today'), findsOneWidget);
       await tester.pumpWidget(const SizedBox());
     },
   );
@@ -180,14 +177,10 @@ void main() {
         draft: CmpysOnboardingDraft()..sessionId = 'session-1',
       );
       expect(
-        find.text('Generation paused. Your progress is saved.'),
+        find.text('The comparison didn’t finish. Your answers are saved.'),
         findsOneWidget,
       );
-      expect(
-        find.textContaining('Generation could not finish.'),
-        findsOneWidget,
-      );
-      expect(find.textContaining('Connection interrupted'), findsNothing);
+      expect(find.textContaining('connection dropped'), findsNothing);
       await tester.pumpWidget(const SizedBox());
     },
   );
@@ -200,7 +193,7 @@ void main() {
     await _mount(tester, sessions, plans);
     expect(sessions.starts, 0);
     expect(plans.polls, 1);
-    expect(find.text('Enter CMPYS'), findsOneWidget);
+    expect(find.text('Go to Today'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
   });
 
@@ -210,26 +203,18 @@ void main() {
     final sessions = _Sessions();
     final plans = _Plans()..status = 'failed';
     await _mount(tester, sessions, plans);
-    expect(find.text('Plan paused. Your progress is saved.'), findsOneWidget);
-    expect(find.byKey(const Key('mentor-lab-paused')), findsOneWidget);
+    expect(
+      find.text('The plan backbone didn’t finish. Earlier steps are saved.'),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('lab-stage-icon-plan-fail')), findsOneWidget);
     expect(find.text('62%'), findsNothing);
-    await tester.tap(find.text('Continue generation'));
+    await tester.tap(find.text('Retry'));
     await tester.pumpAndSettle();
     expect(plans.restarts, 1);
     expect(plans.restartedSession, 'session-1');
     expect(sessions.starts, 0);
-    expect(find.text('Enter CMPYS'), findsOneWidget);
-    await tester.pumpWidget(const SizedBox());
-  });
-
-  testWidgets('perspective composition stays compact on tall phones', (
-    tester,
-  ) async {
-    await _mount(tester, _Sessions(), _Plans(), size: const Size(430, 1000));
-    final card = find.byKey(const Key('mentor-lab-perspective-Seneca'));
-    expect(tester.getSize(card).height, lessThanOrEqualTo(538));
-    expect(tester.getTopLeft(card).dy, greaterThan(140));
-    expect(tester.takeException(), isNull);
+    expect(find.text('Go to Today'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
   });
 
@@ -239,7 +224,7 @@ void main() {
     final sessions = _Sessions()..failRead = true;
     final plans = _Plans()..status = 'failed';
     await _mount(tester, sessions, plans);
-    await tester.tap(find.text('Continue generation'));
+    await tester.tap(find.text('Retry'));
     await tester.pumpAndSettle();
     expect(plans.restarts, 0);
     expect(
@@ -249,10 +234,10 @@ void main() {
       findsOneWidget,
     );
     sessions.failRead = false;
-    await tester.tap(find.text('Continue generation'));
+    await tester.tap(find.text('Retry'));
     await tester.pumpAndSettle();
     expect(plans.restarts, 1);
-    expect(find.text('Enter CMPYS'), findsOneWidget);
+    expect(find.text('Go to Today'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
   });
 
@@ -267,11 +252,11 @@ void main() {
       plans,
       draft: _savedDraft()..backendIdolId = 'mentor-1',
     );
-    await tester.tap(find.text('Continue generation'));
+    await tester.tap(find.text('Retry'));
     await tester.pumpAndSettle();
     expect(plans.restarts, 1);
     expect(plans.restartedSession, 'session-1');
-    expect(find.text('Enter CMPYS'), findsOneWidget);
+    expect(find.text('Go to Today'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
   });
 
@@ -290,7 +275,7 @@ void main() {
       );
       expect(plans.restarts, 1);
       expect(sessions.starts, 0);
-      expect(find.text('Enter CMPYS'), findsOneWidget);
+      expect(find.text('Go to Today'), findsOneWidget);
       await tester.pumpWidget(const SizedBox());
     },
   );
@@ -303,15 +288,21 @@ void main() {
     await tester.pump(const Duration(seconds: 3));
     await tester.pump(const Duration(seconds: 3));
     await tester.pumpAndSettle();
-    expect(find.text('Continue generation'), findsOneWidget);
+    expect(find.text('Retry'), findsOneWidget);
+    expect(
+      find.text(
+        'We can’t check your plan right now. Check your connection and retry.',
+      ),
+      findsOneWidget,
+    );
     expect(plans.polls, 3);
     await tester.pump(const Duration(seconds: 30));
     expect(plans.polls, 3);
     plans.offline = false;
     plans.status = 'completed';
-    await tester.tap(find.text('Continue generation'));
+    await tester.tap(find.text('Retry'));
     await tester.pumpAndSettle();
-    expect(find.text('Enter CMPYS'), findsOneWidget);
+    expect(find.text('Go to Today'), findsOneWidget);
     expect(plans.restarts, 0);
     await tester.pumpWidget(const SizedBox());
   });
@@ -327,7 +318,7 @@ void main() {
       size: const Size(320, 568),
     );
     expect(tester.takeException(), isNull);
-    await tester.ensureVisible(find.text('Continue generation'));
+    await tester.ensureVisible(find.text('Retry'));
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
   });

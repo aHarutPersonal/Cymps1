@@ -81,12 +81,7 @@ void main() {
           await tester.runAsync(() async {
             final context = tester.element(find.byType(CmpysMentorLabStep));
             await Future.wait([
-              for (final asset in [
-                'assets/images/mentors/sj.png',
-                'assets/images/voices/seneca.jpg',
-                'assets/images/voices/isaac_newton.jpg',
-                'assets/images/voices/warren_buffett.jpg',
-              ])
+              for (final asset in ['assets/images/mentors/sj.png'])
                 precacheImage(AssetImage(asset), context),
             ]);
           });
@@ -94,18 +89,33 @@ void main() {
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
         expect(find.textContaining('%'), findsNothing);
-        expect(find.byKey(const Key('mentor-voice-Seneca')), findsOneWidget);
+        expect(find.text('Written comparison'), findsOneWidget);
+        expect(find.text('Tutorial 1'), findsOneWidget);
         if (status == 'failed') {
-          expect(find.byKey(const Key('mentor-lab-paused')), findsOneWidget);
-          await tester.ensureVisible(find.text('Continue generation'));
+          // The plan job failed before the backbone: that stage carries the
+          // failure and its Retry; the saved stages before it stay done.
+          expect(
+            find.byKey(const Key('lab-stage-icon-plan-fail')),
+            findsOneWidget,
+          );
+          expect(
+            find.byKey(const Key('lab-stage-icon-cmp-done')),
+            findsOneWidget,
+          );
+          expect(find.text('Retry'), findsOneWidget);
+          expect(find.text('Go to Today'), findsNothing);
         } else if (status == 'completed') {
-          expect(find.text('Enter CMPYS'), findsOneWidget);
+          expect(find.text('Go to Today'), findsOneWidget);
+          expect(find.text('See the full plan'), findsOneWidget);
         } else {
-          expect(find.text('Enter CMPYS'), findsNothing);
-          // Reduced motion leaves the portrait stable even through another poll.
-          await tester.pump(const Duration(seconds: 19));
+          expect(
+            find.byKey(const Key('lab-stage-icon-plan-run')),
+            findsOneWidget,
+          );
+          expect(find.text('Go to Today'), findsNothing);
+          // Reduced motion leaves the screen stable through another poll.
+          await tester.pump(const Duration(seconds: 3));
           await tester.pumpAndSettle();
-          expect(find.text('Seneca'), findsOneWidget);
         }
         await captureDesign(
           tester,
@@ -122,16 +132,7 @@ void main() {
           position.jumpTo(position.maxScrollExtent);
           await tester.pump();
           expect(tester.takeException(), isNull);
-          await captureDesign(tester, 'mentor-lab-$status-200-text-source');
-        } else {
-          await tester.tap(find.byTooltip('Next perspective'));
-          await tester.pumpAndSettle();
-          expect(find.text('Isaac Newton'), findsOneWidget);
-          await captureDesign(tester, 'mentor-lab-$status-newton');
-          await tester.tap(find.byTooltip('Next perspective'));
-          await tester.pumpAndSettle();
-          expect(find.text('Warren Buffett'), findsOneWidget);
-          await captureDesign(tester, 'mentor-lab-$status-buffett');
+          await captureDesign(tester, 'mentor-lab-$status-200-text-end');
         }
         expect(tester.takeException(), isNull);
         await tester.pumpWidget(const SizedBox());

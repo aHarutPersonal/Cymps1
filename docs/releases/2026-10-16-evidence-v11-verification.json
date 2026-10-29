@@ -1,0 +1,46 @@
+{
+  "review_version": 11,
+  "candidate_release": "20261016-082000-evidence-repair",
+  "full_suite": {
+    "passed": 2617,
+    "skipped": 4,
+    "warnings": 1,
+    "seconds": 24.77
+  },
+  "exact_image_suite": {
+    "passed": 788,
+    "skipped": 1,
+    "seconds": 11.01,
+    "network": "disabled"
+  },
+  "staged_file_hashes_verified": 17,
+  "source_unchanged_since_full_suite": true,
+  "deployed": true,
+  "fresh_live_success_verified": false,
+  "image_digest": "sha256:78c8e3356c35c5fb0c14c12f35faddfb620f236d473ccb4f07c3a7e62e466d62",
+  "independent_review": {
+    "blocking_findings": 0,
+    "focused_tests_passed": 297,
+    "final_source_hash": "ff64d51a73f74b731fb497d8f5507d82e171889ec37049f658d8472dac540323"
+  },
+  "exact_private_replay": {
+    "package_unchanged": true,
+    "remaining_source_spans_unchanged": true,
+    "original_span_count": 12,
+    "current_span_count": 10,
+    "removed_pure_ordinal_spans": 2,
+    "original_proof_errors": [
+      9,
+      14
+    ],
+    "corrected_calculations": 12,
+    "corrected_raw_facts": 3,
+    "corrected_grounding_errors": 0,
+    "corrected_arithmetic_errors": 0,
+    "new_provider_requests": 0,
+    "draft_exported": false
+  },
+  "public_https_ready": true,
+  "saved_state_unchanged": true,
+  "new_usage_events_from_smoke": 0
+}

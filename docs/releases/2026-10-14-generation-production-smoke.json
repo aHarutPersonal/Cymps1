@@ -1,0 +1,74 @@
+{
+  "release": "20261014-135206",
+  "tls_verified": true,
+  "checks": [
+    {
+      "method": "GET",
+      "path": "/ready",
+      "status": 200,
+      "elapsed_ms": 612
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "status": 201,
+      "elapsed_ms": 2337
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/login",
+      "status": 200,
+      "elapsed_ms": 457
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/refresh",
+      "status": 200,
+      "elapsed_ms": 182
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/me",
+      "status": 200,
+      "elapsed_ms": 244
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/current",
+      "status": 200,
+      "elapsed_ms": 224
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sessions/latest",
+      "status": 200,
+      "elapsed_ms": 284
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/content-resources/library",
+      "status": 200,
+      "elapsed_ms": 248
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/content-resources/continue-reading",
+      "status": 200,
+      "elapsed_ms": 195
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/auth/password-reset/availability",
+      "status": 200,
+      "elapsed_ms": 180
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/me",
+      "status": 401,
+      "elapsed_ms": 185
+    }
+  ],
+  "synthetic_account": true,
+  "paid_model_calls": 0
+}

@@ -1,0 +1,1 @@
+{"file_hashes_verified_in_every_service": true, "image_digest": "sha256:5aa0cfd877fa11a2bd5925ea44da4eefabd07df638cd411bcd7c58aec4427efc", "release": "20261016-150539-validation-boundaries", "verified_files": 23, "verified_services": ["web", "worker", "worker-high", "worker-low", "catalog-worker", "catalog-control", "curriculum-worker", "curriculum-control", "beat"]}

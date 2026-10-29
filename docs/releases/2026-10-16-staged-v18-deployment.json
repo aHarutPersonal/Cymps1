@@ -1,0 +1,1 @@
+{"file_hashes_verified_in_every_service": true, "image_digest": "sha256:ee8fd49866fabbf7a1a282bd118d73a1c5f8f44ccca9d1724af46ae0a0ddd124", "release": "20261016-144021-contract-recovery", "verified_files": 23, "verified_services": ["web", "worker", "worker-high", "worker-low", "catalog-worker", "catalog-control", "curriculum-worker", "curriculum-control", "beat"]}

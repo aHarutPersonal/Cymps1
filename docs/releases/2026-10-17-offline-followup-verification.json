@@ -1,0 +1,52 @@
+{
+  "status": "verified_offline_not_deployed",
+  "scope": "owner chose offline-only; no new provider authorization",
+  "provider_calls": 0,
+  "additional_spend_usd": 0,
+  "remote_operations": 0,
+  "deployment_performed": false,
+  "production_release_unchanged": "20261017-020500-evidence-context",
+  "review_version_local": 23,
+  "backend": {
+    "passed": 4101,
+    "skipped": 4,
+    "warnings": 1,
+    "seconds": 48.0,
+    "provider": "dummy",
+    "database": "isolated local test container",
+    "log": "2026-10-17-offline-followup-backend-tests.log"
+  },
+  "container": {
+    "passed": 2297,
+    "skipped": 2,
+    "seconds": 29.36,
+    "network": "none",
+    "read_only": true,
+    "scope": "local source mounts on deployed image dependencies; not a new release image",
+    "evidence": "2026-10-17-offline-followup-image-verification.json"
+  },
+  "independent_review": {
+    "status": "no blockers",
+    "coefficient_tests_passed": 386,
+    "final_copy_contract_tests_passed": 73
+  },
+  "changed_runtime_files": {
+    "/app/app/services/planning/lesson_review.py": "39061df2094cbe82da5eb042597342f56dc3a4bf4786296b421e88743b0e04d1",
+    "/app/app/services/planning/package_review.py": "2eb9e3e06198980437ccb49a8a502b4902baa91a3e61617129bcfe6971abaeb3",
+    "/prompts/lesson_activity_generate.txt": "41a25962f7de04d9ddbe01f370d25267074c0dc6c2c64d07468414bfb2adc4f0"
+  },
+  "initial_broad_run": {
+    "backend_passed": 4099,
+    "container_passed": 2295,
+    "failed_each": 2,
+    "cause": "obsolete expectations that rejected legacy source_quote be resent in compact wire template",
+    "resolution": "test-only exact source, diagnostic, compact schema, original preservation, success and wrong-result rejection assertions; runtime unchanged"
+  },
+  "remaining_limits": [
+    "No new live generation pass-rate or latency evidence",
+    "Saved geometry proof remains rejected for unsupported source phrasing and invalid or missing proof",
+    "Authenticated full application flow unverified",
+    "No guarantee of zero future errors"
+  ],
+  "test_request_status": "declined_offline_only"
+}

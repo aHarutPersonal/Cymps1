@@ -108,12 +108,43 @@ class PracticeRepository {
     String step,
     String? artifact,
     int revision,
-    Map<String, String> answers,
-  ) async {
+    Map<String, String> answers, {
+    List<PracticeActivity> activities = const [],
+  }) async {
     final r = await client.put(
       '${_path(item, step)}/draft',
       queryParameters: _query(artifact),
-      data: {'revision': revision, 'answers': answers},
+      // multi_choice answers go in the server's canonical spelling, so the
+      // echoed draft equals this one. Numbers are sent as given: the screen
+      // normalises only what the learner changed, never a stored spelling.
+      data: {
+        'revision': revision,
+        'answers': canonicalMultiChoiceAnswers(activities, answers),
+      },
+    );
+    return LessonPracticeState.fromJson(r.data as Map<String, dynamic>);
+  }
+
+  /// Reveals one field's hint ([fieldId] is "activity.field" and must belong
+  /// to [activity]). The server records it in `hints[]` with that
+  /// `field_id`, so "Hint used" survives a reload.
+  Future<LessonPracticeState> fieldHint(
+    String item,
+    String step,
+    String? artifact, {
+    required int revision,
+    required String activity,
+    required String fieldId,
+    required String requestId,
+  }) async {
+    final r = await client.post(
+      '${_path(item, step)}/hint',
+      queryParameters: {...?_query(artifact), 'field_id': fieldId},
+      data: {
+        'revision': revision,
+        'activity_id': activity,
+        'request_id': requestId,
+      },
     );
     return LessonPracticeState.fromJson(r.data as Map<String, dynamic>);
   }

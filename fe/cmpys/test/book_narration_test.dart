@@ -496,4 +496,65 @@ Choose the smallest useful step.
       document.chunks.length - 1,
     );
   });
+
+  group('v4 plain narration text', () {
+    const markdown =
+        'He said "stop." Next one & more. Third.\n\n'
+        '- An "item" & another\n\nPlain closing line.';
+
+    test('quotes and ampersands are plain, and `."` ends a sentence', () {
+      final v4 = BookNarrationDocument.fromMarkdown(markdown);
+      expect(BookNarrationDocument.textVersion, 4);
+      expect(v4.segments.map((segment) => segment.text), [
+        'He said "stop."',
+        'Next one & more.',
+        'Third.',
+        'An "item" & another',
+        'Plain closing line.',
+      ]);
+      for (final chunk in v4.chunks) {
+        expect(chunk.text, isNot(contains(RegExp('&(quot|amp);'))));
+      }
+      // v3 kept `&quot;`, so `.&quot; Next` never split.
+      final v3 = v4.encodedDocument!;
+      expect(v3.segments.first.text, startsWith('He said &quot;stop.&quot;'));
+      expect(v3.segments.first.text, contains('Next one &amp; more.'));
+      expect(v3.blocks.length, v4.blocks.length);
+      // Parsed once, on first use, and kept.
+      expect(identical(v4.encodedDocument, v3), isTrue);
+    });
+
+    test('a v3 checkpoint in an entity block remaps to the v4 position', () {
+      final v4 = BookNarrationDocument.fromMarkdown(markdown);
+      final v3 = BookNarrationDocument.fromMarkdown(
+        markdown,
+        encodeHtml: true,
+      );
+      for (final word in ['said', 'stop', 'Next', 'more', 'Third', 'item']) {
+        final old = v3.segments.firstWhere((s) => s.text.contains(word));
+        final position = v4.remapLegacyPosition(
+          old.index,
+          old.text.indexOf(word),
+          textVersion: 3,
+        );
+        expect(
+          v4.segments[position.$1].text.substring(position.$2),
+          startsWith(word),
+          reason: word,
+        );
+      }
+      // A cursor saved inside an entity lands on that character.
+      final first = v3.segments.first;
+      final inside = first.text.indexOf('&quot;') + 3;
+      final position = v4.remapLegacyPosition(0, inside, textVersion: 3);
+      expect(
+        v4.segments[position.$1].text.substring(position.$2),
+        startsWith('"stop."'),
+      );
+      // Without an escaped character there is nothing to remap.
+      final plain = BookNarrationDocument.fromMarkdown('## A\n\nOne. Two.');
+      expect(plain.encodedDocument, isNull);
+      expect(plain.remapLegacyPosition(1, 2, textVersion: 3), (1, 2));
+    });
+  });
 }

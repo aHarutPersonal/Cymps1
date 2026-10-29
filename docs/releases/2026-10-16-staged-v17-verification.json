@@ -1,0 +1,104 @@
+{
+  "release": "20261016-141535-source-evidence",
+  "image_digest": "sha256:2a4ee6c169c790916ba308c791e7e729e6ad6f6213678f5c37c10bf4a2bf1e81",
+  "rollback_release": "20261016-124300-evidence-cases",
+  "status": "deployed_live_validation_failed",
+  "full_backend": {
+    "passed": 3346,
+    "skipped": 4,
+    "warnings": 1,
+    "duration_seconds": 33.83
+  },
+  "exact_image_network_disabled": {
+    "passed": 1571,
+    "skipped": 1,
+    "duration_seconds": 18.45
+  },
+  "independent_review": {
+    "blockers": 0,
+    "performance_regression_cases_added": 3,
+    "mixed_source_inventory_equivalence_probes": 484
+  },
+  "source_files_verified": 23,
+  "changed_existing_files_from_v16": 4,
+  "added_files_from_v16": 1,
+  "configuration_unchanged": true,
+  "runtime": {
+    "file_hashes_verified_in_every_service": true,
+    "image_digest": "sha256:2a4ee6c169c790916ba308c791e7e729e6ad6f6213678f5c37c10bf4a2bf1e81",
+    "release": "20261016-141535-source-evidence",
+    "verified_files": 23,
+    "verified_services": [
+      "web",
+      "worker",
+      "worker-high",
+      "worker-low",
+      "catalog-worker",
+      "catalog-control",
+      "curriculum-worker",
+      "curriculum-control",
+      "beat"
+    ]
+  },
+  "https_readiness": {
+    "status": "ready",
+    "checks": {
+      "database": true,
+      "redis": true
+    }
+  },
+  "saved_state_unchanged": true,
+  "saved_state_fingerprint": "9620a6e2d34355178ba2d25cf3e3775269f53b586c6037e1cfc423a5bcc5a42d",
+  "new_usage_events_from_smoke": 0,
+  "registry_latest_promoted": false,
+  "fresh_live_validation": "0_of_3_accepted",
+  "paid_test_authorization_remaining": false,
+  "prior_v16_batch": {
+    "accepted": 0,
+    "count": 3,
+    "reported_cost_usd": 0.4120144,
+    "unknown_reserved_usd": 0.07578025,
+    "accounted_usd": 0.48779465,
+    "pending_calls": 0
+  },
+  "combined_v15_v16_accounted_usd": 1.00313415,
+  "saved_learner_lesson_state": {
+    "ready": 1,
+    "missing": 2
+  },
+  "offline_replay": {
+    "accepted": 0,
+    "count": 3,
+    "accounting_proof_errors_before": 4,
+    "accounting_proof_errors_after": 4,
+    "geometry_initial_proof_errors_before": 9,
+    "geometry_initial_proof_errors_after": 8,
+    "geometry_incomplete_patch_skipped": true,
+    "writing_metadata_errors_before": 10,
+    "writing_metadata_errors_after": 6,
+    "writing_structural_spans_removed": 4,
+    "semantic_negative_verdicts_preserved": true
+  },
+  "requested_batch": {
+    "approved_by_owner": true,
+    "count": 3,
+    "cases": [
+      "accounting",
+      "geometry",
+      "writing"
+    ],
+    "shared_cap_usd": 0.99,
+    "status": "completed",
+    "combined_accounting_ceiling_usd": 1.99313415,
+    "observed_started_at_utc": "2026-10-16T14:20:38.29579029Z",
+    "accepted": 0,
+    "reported_cost_usd": 0.305534,
+    "unknown_reserved_usd": 0,
+    "accounted_usd": 0.305534,
+    "calls": 14,
+    "pending_calls": 0,
+    "finished_at_utc": "2026-10-16T14:26:35.637692227Z"
+  },
+  "combined_v15_v16_v17_accounted_usd": 1.30866815,
+  "postpilot_saved_state_unchanged": true
+}

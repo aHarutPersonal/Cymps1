@@ -7,7 +7,7 @@ import math
 import operator
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 
 
 class StrictModel(BaseModel):
@@ -82,10 +82,26 @@ class Choice(StrictModel):
     label: str = Field(min_length=1, max_length=300)
 
 
+class Misconception(StrictModel):
+    """A plausible wrong numeric answer and the specific feedback it earns."""
+
+    expression: str = Field(min_length=1, max_length=300)
+    feedback: str = Field(min_length=10, max_length=240)
+
+
+# Practice v3 properties are omitted from a dump while they hold their default.
+# A stored workbook therefore serialises exactly as it did before they existed,
+# so the package hash (and the lesson version derived from it) of an approved
+# lesson does not change when the same content is validated again.
+_V3_FIELD_DEFAULTS = {"prefix": "", "hint": None, "correct_choices": [], "misconceptions": []}
+
+
 class AnswerField(StrictModel):
     id: str = Field(pattern=r"^[a-z][a-z0-9_]{0,39}$")
     label: str = Field(min_length=1, max_length=300)
-    kind: Literal["number", "choice", "text"]
+    # multi_choice is graded as an exact set. Its answer is a comma-joined list
+    # of choice ids; see grade_fixed.
+    kind: Literal["number", "choice", "multi_choice", "text"]
     unit: str = Field(default="", max_length=40)
     choices: list[Choice] = Field(default_factory=list, max_length=8)
     expression: str | None = Field(default=None, max_length=300)
@@ -93,6 +109,24 @@ class AnswerField(StrictModel):
     tolerance: float = Field(default=0.01, ge=0, le=1)
     criteria: list[str] = Field(default_factory=list, max_length=5)
     rubric_criterion: str | None = Field(default=None, min_length=5, max_length=500)
+    # Everything below is optional so that stored workbooks still load.
+    prefix: str = Field(default="", max_length=4)
+    hint: str | None = Field(default=None, min_length=10, max_length=400)
+    correct_choices: list[str] = Field(default_factory=list, max_length=8)
+    misconceptions: list[Misconception] = Field(default_factory=list, max_length=3)
+
+    @property
+    def criterion_label(self) -> str:
+        """The name shown for this field in the result panel."""
+        return self.rubric_criterion or self.label
+
+    @model_serializer(mode="wrap")
+    def _omit_default_v3_properties(self, handler):
+        data = handler(self)
+        for key, default in _V3_FIELD_DEFAULTS.items():
+            if key in data and data[key] == default:
+                del data[key]
+        return data
 
     @model_validator(mode="after")
     def check_contract(self):
@@ -103,6 +137,20 @@ class AnswerField(StrictModel):
             raise ValueError("Duplicate choice ids")
         if self.kind == "choice" and (len(ids) < 2 or self.correct_choice not in ids):
             raise ValueError("Choice field needs a valid answer")
+        if self.kind == "multi_choice":
+            if (
+                len(ids) < 2
+                or not self.correct_choices
+                or len(set(self.correct_choices)) != len(self.correct_choices)
+                or not set(self.correct_choices) <= set(ids)
+            ):
+                raise ValueError(
+                    "Multi-choice field needs at least two choices and one or more distinct correct choice ids"
+                )
+        elif self.correct_choices:
+            raise ValueError("Only a multi_choice field has correct_choices")
+        if self.kind != "number" and (self.misconceptions or self.prefix):
+            raise ValueError("Only a numeric field has a prefix or misconceptions")
         if self.kind == "text" and (
             not self.criteria
             or any(not c.strip() or len(c) > 500 for c in self.criteria)
@@ -186,7 +234,13 @@ class Activity(StrictModel):
         values = {d.id: d.value for d in self.data}
         for field in self.fields:
             if field.kind == "number":
-                calculate(field.expression, values)
+                expected = calculate(field.expression, values)
+                for misconception in field.misconceptions:
+                    wrong = calculate(misconception.expression, values)
+                    if abs(wrong - expected) <= field.tolerance:
+                        raise ValueError(
+                            "A misconception must differ from the correct answer by more than the field tolerance"
+                        )
         if isinstance(self.worked_solution, SolutionDocument):
             if [step.field_id for step in self.worked_solution.steps] != [field.id for field in self.fields]:
                 raise ValueError("Solution steps must cover every activity field in its exact order")
@@ -208,6 +262,84 @@ class Workbook(StrictModel):
         ):
             raise ValueError("Start with practice and finish with a new transfer case")
         return self
+
+
+def check_generated_fields(activity_id: str, fields) -> None:
+    """Rules for NEWLY generated activities; stored workbooks never run this.
+
+    Works on canonical answer fields and on generation drafts alike. Prefer
+    numbers and multi-select over free text: every activity needs at least one
+    number or multi_choice field, and at most one short text field. Each scored
+    field names the criterion the result panel shows. The messages are written
+    to be acted on by the model's one correction request.
+    """
+    kinds = [field.kind for field in fields]
+    if not any(kind in ("number", "multi_choice") for kind in kinds):
+        raise ValueError(
+            f"Activity {activity_id} needs at least one number or multi_choice field; "
+            "a text field cannot be its only response. Ask for a number or a multi-select answer, "
+            "plus at most one short text field."
+        )
+    if kinds.count("text") > 1:
+        raise ValueError(
+            f"Activity {activity_id} has {kinds.count('text')} text fields; use at most one text field "
+            "(an answer of at most 40 words) and turn the others into number or multi_choice fields."
+        )
+    for field in fields:
+        if field.kind != "text" and not (field.rubric_criterion or "").strip():
+            raise ValueError(
+                f"Field {activity_id}.{field.id} needs a rubric_criterion: a short label "
+                "(5 to 80 characters) naming what this answer shows, such as 'Uses maintenance capex, not total capex'."
+            )
+
+
+class GeneratedWorkbook(Workbook):
+    """Workbook contract for new generations only.
+
+    Stored and pre-approved workbooks keep validating against Workbook, so a
+    text-only activity or a field without a rubric_criterion still loads.
+    """
+
+    @model_validator(mode="after")
+    def check_new_activities(self):
+        for activity in self.activities:
+            check_generated_fields(activity.id, activity.fields)
+        return self
+
+    @classmethod
+    def model_json_schema(cls, *args, **kwargs) -> dict:
+        """Show the model the rules it will be validated against.
+
+        Generation is not repaired (a paid attempt is spent per failure), so a
+        rule that only a validator knows would turn one omission into a failed
+        generation.
+        """
+        schema = super().model_json_schema(*args, **kwargs)
+        definitions = schema["$defs"]
+        answer = definitions["AnswerField"]
+        answer["properties"]["rubric_criterion"]["description"] = (
+            "Required for number, choice and multi_choice fields: under 80 characters "
+            "naming the skill a correct answer shows, never the answer itself."
+        )
+        answer.setdefault("allOf", []).append({
+            "if": {"properties": {"kind": {"enum": ["number", "choice", "multi_choice"]}},
+                   "required": ["kind"]},
+            # "required" alone accepts an explicit null; the type keeps it a string.
+            "then": {"required": ["rubric_criterion"],
+                     "properties": {"rubric_criterion": {"type": "string", "minLength": 5}}},
+        })
+        activity = definitions["Activity"]
+        activity["properties"]["fields"]["description"] = (
+            "At least one number or multi_choice field, and at most one text field "
+            "(an answer of 40 words or fewer); text is never the only field."
+        )
+        activity.setdefault("allOf", []).append({
+            "properties": {"fields": {"contains": {
+                "properties": {"kind": {"enum": ["number", "multi_choice"]}},
+                "required": ["kind"],
+            }}},
+        })
+        return schema
 
 
 class FieldReview(StrictModel):
@@ -241,8 +373,15 @@ class SubmitRequest(StrictModel):
     activity_id: str = Field(max_length=40)
 
 
+# Fields added to a published step after it was taught and practised. They never
+# change what the learner reads or answers, so they must not change its identity:
+# a late illustration would otherwise orphan the prepared workbook.
+_PRESENTATION_ONLY_STEP_FIELDS = frozenset({"illustration"})
+
+
 def lesson_version(item, step: dict) -> str:
     # Includes immutable job identity AND content, covering old artifacts too.
+    step = {k: v for k, v in step.items() if k not in _PRESENTATION_ONLY_STEP_FIELDS}
     generation = (item.details_json or {}).get("_generation") or {}
     payload = {"job": generation.get("job_id"), "step": step}
     if generation.get("lesson_package_version") == 1:
@@ -263,8 +402,17 @@ def public_workbook(workbook: Workbook) -> dict:
         activity.pop("hint")
         activity.pop("worked_solution")
         for field in activity["fields"]:
-            for key in ("expression", "correct_choice", "tolerance", "criteria"):
-                field.pop(key)
+            # Answer keys, per-field hints (revealed only through the hint
+            # endpoint) and misconception feedback stay on the server.
+            for key in (
+                "expression", "correct_choice", "correct_choices", "tolerance",
+                "criteria", "misconceptions", "hint",
+            ):
+                field.pop(key, None)
+            # A legacy field projects exactly as it did before v3 (its dump omits
+            # an unused prefix, and an unset rubric_criterion stays null): this
+            # projection is hashed into catalog composition cache keys. Clients
+            # fall back to the label when rubric_criterion is null.
     return result
 
 
@@ -274,7 +422,73 @@ def validate_answers(workbook: Workbook, answers: dict[str, str]) -> None:
         raise ValueError("Unknown answer field")
 
 
+def canonical_multi_choice(field: AnswerField, raw: str) -> str:
+    """Choice order, de-duplicated, comma-joined without spaces.
+
+    Ids that name no choice keep their relative order after the known ones, so
+    nothing the learner sent is dropped. The same selection always spells the same.
+    """
+    parts = [part.strip() for part in raw.split(",") if part.strip()]
+    known = [choice.id for choice in field.choices if choice.id in parts]
+    unknown = list(dict.fromkeys(part for part in parts if part not in known))
+    return ",".join([*known, *unknown])
+
+
+def canonical_answers(workbook: Workbook, answers: dict[str, str]) -> dict[str, str]:
+    """Spell every multi_choice answer canonically; other answers are untouched.
+
+    Attempts are matched by the raw stored strings, so a reordered but equal
+    selection must not look like a new answer (and cost another review).
+    """
+    multi = {
+        f"{a.id}.{f.id}": f
+        for a in workbook.activities for f in a.fields if f.kind == "multi_choice"
+    }
+    return {
+        key: canonical_multi_choice(multi[key], value) if key in multi else value
+        for key, value in answers.items()
+    }
+
+
+def _number_feedback(field: AnswerField, data: dict[str, float], raw: str) -> tuple[bool, str]:
+    expected = calculate(field.expression, data)
+    try:
+        # A single decimal comma is accepted; thousands separators are not.
+        number = float(raw.replace(",", "."))
+    except ValueError:
+        return False, "Check the supplied data and your calculation."
+    if not math.isfinite(number):
+        return False, "Check the supplied data and your calculation."
+    if abs(number - expected) <= field.tolerance:
+        return True, "Correct."
+    for misconception in field.misconceptions:
+        # Same safe arithmetic as the answer itself, over the activity's data.
+        if abs(number - calculate(misconception.expression, data)) <= field.tolerance:
+            return False, misconception.feedback
+    return False, "Check the supplied data and your calculation."
+
+
+def selected_choice_ids(raw: str) -> set[str]:
+    """The wire format of a multi_choice answer: comma-joined choice ids.
+
+    Order-insensitive; surrounding whitespace and duplicates are ignored.
+    """
+    return {part.strip() for part in raw.split(",") if part.strip()}
+
+
+def _multi_choice_feedback(field: AnswerField, selected: set[str]) -> tuple[bool, str]:
+    correct = set(field.correct_choices)
+    if selected == correct:
+        return True, "Correct."
+    # Anything outside the correct set is extra, including an id that names no choice.
+    feedback = f"{len(selected & correct)} of {len(correct)} correct"
+    if selected - correct:
+        feedback += f" · {len(selected - correct)} extra"
+    return False, feedback
+
+
 def grade_fixed(activity: Activity, answers: dict[str, str]) -> list[dict]:
+    data = {d.id: d.value for d in activity.data}
     result = []
     for field in activity.fields:
         raw = answers.get(f"{activity.id}.{field.id}", "").strip()
@@ -283,28 +497,21 @@ def grade_fixed(activity: Activity, answers: dict[str, str]) -> list[dict]:
         if field.kind == "text":
             continue
         if field.kind == "number":
-            expected = calculate(
-                field.expression, {d.id: d.value for d in activity.data}
-            )
-            try:
-                # A single decimal comma is accepted; thousands separators are not.
-                number = float(raw.replace(",", "."))
-                passed = (
-                    math.isfinite(number) and abs(number - expected) <= field.tolerance
-                )
-            except ValueError:
-                passed = False
+            passed, feedback = _number_feedback(field, data, raw)
+        elif field.kind == "multi_choice":
+            selected = selected_choice_ids(raw)
+            if not selected:
+                raise ValueError("Complete every field before checking")
+            passed, feedback = _multi_choice_feedback(field, selected)
         else:
             passed = raw == field.correct_choice
+            feedback = "Correct." if passed else "Reconsider this choice using the lesson."
         result.append(
             {
                 "field_id": field.id,
                 "passed": passed,
-                "feedback": "Correct."
-                if passed
-                else "Check the supplied data and your calculation."
-                if field.kind == "number"
-                else "Reconsider this choice using the lesson.",
+                "feedback": feedback,
+                "criterion": field.criterion_label,
             }
         )
     return result
@@ -329,6 +536,7 @@ def combine_review(
                     "field_id": field.field_id,
                     "passed": all(field.criterion_met) and not field.uncertain,
                     "feedback": field.feedback,
+                    "criterion": expected[field.field_id].criterion_label,
                     "uncertain": field.uncertain,
                     "criterion_met": field.criterion_met,
                     "criteria": list(expected[field.field_id].criteria),

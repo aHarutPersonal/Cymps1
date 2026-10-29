@@ -485,7 +485,9 @@ async def test_generation_uses_registered_prompts_without_live_provider(monkeypa
     call = client.generate_and_validate.call_args.kwargs
     assert call["repair_on_failure"] is False
     assert "untrusted" in call["system_prompt"]
-    assert call["output_model"] is Workbook
+    from app.services.practice.contracts import GeneratedWorkbook
+
+    assert call["output_model"] is GeneratedWorkbook  # new workbooks only; stored ones stay lenient
 
 
 @pytest.mark.asyncio
@@ -966,3 +968,511 @@ async def test_review_deadline_cancels_before_api_lease(monkeypatch):
     with pytest.raises(TimeoutError):
         await generation.review_text(activity(text=True), {'case_a.reason': 'Right-angled.'}, 'Lesson')
     assert cancelled.is_set()
+
+
+def test_text_review_prompt_keeps_guardrails_and_bounds_teaching_feedback():
+    from app.services.llm.prompt_loader import load_and_render
+    prompt = " ".join(load_and_render("lesson_practice_review.txt", {}).split())
+    for guardrail in ("untrusted reference data", "preserving its exact field_id",
+                      "one criterion_met boolean per criterion in its original order",
+                      "Do not replace the learner's work with a complete answer on their first mistake",
+                      "uncertainty cannot pass the activity", "not yours to override"):
+        assert guardrail in prompt
+    assert "quoting up to 12 words of the learner's own text" in prompt
+    assert "at most 60 words when a criterion is unmet" in prompt and "at most 35 words when all are met" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Practice v3: multi-select, per-field hints, misconception feedback
+# ---------------------------------------------------------------------------
+
+MISCONCEPTION = "You subtracted total capex. The warehouse grows the business; it isn’t maintenance."
+
+
+def v3_activity(aid="case_c", *, tolerance=0.01):
+    return Activity.model_validate(
+        {
+            "id": aid,
+            "title": "Work through Lindqvist Tools",
+            "kind": "practice",
+            "instructions": "A fictional hardware maker reports the figures below. Find maintenance capex and classify its spending.",
+            "data": [
+                {"id": "total_capex", "label": "Total capex", "value": 70, "unit": "m"},
+                {"id": "warehouse", "label": "New warehouse", "value": 25, "unit": "m"},
+            ],
+            "fields": [
+                {
+                    "id": "maint",
+                    "label": "Subtract: maintenance capex",
+                    "kind": "number",
+                    "prefix": "$",
+                    "unit": "m",
+                    "expression": "total_capex - warehouse",
+                    "tolerance": tolerance,
+                    "hint": "Total capex minus the part that grows the business.",
+                    "rubric_criterion": "Uses maintenance capex, not total capex",
+                    "misconceptions": [
+                        {"expression": "total_capex", "feedback": MISCONCEPTION},
+                        {"expression": "warehouse", "feedback": "That is only the warehouse; maintenance is what is left."},
+                    ],
+                },
+                {
+                    "id": "growth",
+                    "label": "Which items are growth spending?",
+                    "kind": "multi_choice",
+                    "choices": [
+                        {"id": "warehouse", "label": "A new warehouse"},
+                        {"id": "line", "label": "A second production line"},
+                        {"id": "forklift", "label": "Replacing a worn forklift"},
+                        {"id": "stores", "label": "Opening a new store"},
+                    ],
+                    "correct_choices": ["warehouse", "line", "stores"],
+                    "rubric_criterion": "Separates growth spending from upkeep",
+                },
+            ],
+            "hint": "Separate spending that keeps the business as it is from spending that grows it.",
+            "worked_solution": "Maintenance capex is 70 - 25 = 45. The warehouse, line and store grow the business.",
+            "minutes_min": 3,
+            "minutes_max": 6,
+        }
+    )
+
+
+def v3_answers(maint="45", growth="warehouse,line,stores", aid="case_c"):
+    return {f"{aid}.maint": maint, f"{aid}.growth": growth}
+
+
+def graded(act, answers):
+    return {row["field_id"]: row for row in grade_fixed(act, answers)}
+
+
+def test_multi_choice_exact_set_grading():
+    act = v3_activity()
+    assert graded(act, v3_answers())["growth"]["passed"] is True
+    # Order and surrounding whitespace do not matter; duplicates are ignored.
+    for answer in ("stores,warehouse,line", " line , stores,warehouse ", "warehouse,line,line,stores,stores"):
+        assert graded(act, v3_answers(growth=answer))["growth"]["passed"] is True, answer
+    # An exact set: a subset, a superset and a different set all fail.
+    for answer in ("warehouse,line", "warehouse,line,stores,forklift", "forklift", "warehouse,line,forklift"):
+        assert graded(act, v3_answers(growth=answer))["growth"]["passed"] is False, answer
+    # A blank multi-select is still refused before grading.
+    with pytest.raises(ValueError):
+        grade_fixed(act, v3_answers(growth=" "))
+    with pytest.raises(ValueError):
+        grade_fixed(act, v3_answers(growth=" , "))
+
+
+def test_multi_choice_contract_needs_valid_correct_choices():
+    base = v3_activity().model_dump()["fields"][1]
+    for mutate in (
+        lambda f: f.update(correct_choices=[]),
+        lambda f: f.update(correct_choices=["missing"]),
+        lambda f: f.update(correct_choices=["line", "line"]),
+        lambda f: f.update(choices=f["choices"][:1], correct_choices=["warehouse"]),
+        lambda f: f.update(misconceptions=[{"expression": "1", "feedback": "A wrong value for a choice field."}]),
+    ):
+        bad = deepcopy(base)
+        mutate(bad)
+        with pytest.raises(ValidationError):
+            from app.services.practice.contracts import AnswerField
+
+            AnswerField.model_validate(bad)
+
+
+def test_multi_choice_partial_feedback_counts():
+    act = v3_activity()
+    expected = {
+        "warehouse,line": "2 of 3 correct",
+        "warehouse,line,forklift": "2 of 3 correct · 1 extra",
+        "forklift": "0 of 3 correct · 1 extra",
+        "warehouse,line,stores,forklift": "3 of 3 correct · 1 extra",
+        "stores": "1 of 3 correct",
+    }
+    for answer, feedback in expected.items():
+        row = graded(act, v3_answers(growth=answer))["growth"]
+        assert row["passed"] is False and row["feedback"] == feedback, answer
+    assert graded(act, v3_answers())["growth"]["feedback"] == "Correct."
+    # A selection that names no real choice is an extra, not a crash.
+    assert graded(act, v3_answers(growth="warehouse,bogus"))["growth"]["feedback"] == "1 of 3 correct · 1 extra"
+
+
+def test_fixed_feedback_names_the_criterion_with_label_as_the_legacy_default():
+    act = v3_activity()
+    assert graded(act, v3_answers())["maint"]["criterion"] == "Uses maintenance capex, not total capex"
+    assert graded(act, v3_answers())["growth"]["criterion"] == "Separates growth spending from upkeep"
+    # A stored field without rubric_criterion falls back to its label.
+    assert grade_fixed(activity(), {"case_a.length": "5"})[0]["criterion"] == "Hypotenuse"
+
+
+def test_misconception_feedback_overrides_generic():
+    act = v3_activity()
+    wrong_total = graded(act, v3_answers(maint="70"))["maint"]
+    assert wrong_total["passed"] is False and wrong_total["feedback"] == MISCONCEPTION
+    # The same normalisation as numbers: a decimal comma still matches.
+    assert graded(act, v3_answers(maint="70,0"))["maint"]["feedback"] == MISCONCEPTION
+    # Misconceptions are checked in order and each carries its own message.
+    assert graded(act, v3_answers(maint="25"))["maint"]["feedback"].startswith("That is only the warehouse")
+    # No misconception matches: the generic message stays.
+    generic = graded(act, v3_answers(maint="12"))["maint"]
+    assert generic["passed"] is False and generic["feedback"] == "Check the supplied data and your calculation."
+    # A correct answer is never replaced by a misconception message.
+    assert graded(act, v3_answers(maint="45"))["maint"] == {
+        "field_id": "maint", "passed": True, "feedback": "Correct.",
+        "criterion": "Uses maintenance capex, not total capex",
+    }
+    # Matching uses the field's own tolerance.
+    loose = v3_activity(tolerance=0.5)
+    assert graded(loose, v3_answers(maint="70.4"))["maint"]["feedback"] == MISCONCEPTION
+    assert graded(act, v3_answers(maint="70.4"))["maint"]["feedback"] == "Check the supplied data and your calculation."
+    # Non-numeric text never matches a misconception.
+    assert graded(act, v3_answers(maint="seventy"))["maint"]["feedback"] == "Check the supplied data and your calculation."
+
+
+def test_misconception_contract_is_numeric_bounded_and_distinct_from_the_answer():
+    from app.services.practice.contracts import AnswerField
+
+    base = v3_activity().model_dump()
+    field = base["fields"][0]
+    too_many = deepcopy(field)
+    too_many["misconceptions"] = [{"expression": f"total_capex - {n}", "feedback": "A distinct plausible mistake."} for n in range(1, 5)]
+    with pytest.raises(ValidationError):
+        AnswerField.model_validate(too_many)
+    short = deepcopy(field)
+    short["misconceptions"] = [{"expression": "total_capex", "feedback": "Too short"}]
+    with pytest.raises(ValidationError):
+        AnswerField.model_validate(short)
+    # Evaluated like a numeric answer over the activity data: unknown ids fail.
+    unknown = deepcopy(base)
+    unknown["fields"][0]["misconceptions"] = [{"expression": "capex + 1", "feedback": "References an undeclared datum."}]
+    with pytest.raises(ValidationError):
+        Activity.model_validate(unknown)
+    # A "misconception" equal to the right answer could never be reached.
+    same = deepcopy(base)
+    same["fields"][0]["misconceptions"] = [{"expression": "total_capex - warehouse", "feedback": "This is actually correct."}]
+    with pytest.raises(ValidationError):
+        Activity.model_validate(same)
+
+
+def test_public_workbook_strips_misconceptions_and_correct_choices():
+    other = v3_activity("case_d").model_copy(update={"kind": "transfer"})
+    result = public_workbook(Workbook(title="Capex practice", activities=[v3_activity(), other]))
+    for act in result["activities"]:
+        for field in act["fields"]:
+            assert not {"misconceptions", "correct_choices", "correct_choice", "expression", "tolerance", "criteria", "hint"} & set(field)
+    number, multi = result["activities"][0]["fields"]
+    assert (number["prefix"], number["unit"], number["kind"]) == ("$", "m", "number")
+    assert "prefix" not in multi  # only emitted once used
+    assert multi["kind"] == "multi_choice" and [c["id"] for c in multi["choices"]] == ["warehouse", "line", "forklift", "stores"]
+    assert number["rubric_criterion"] == "Uses maintenance capex, not total capex"
+    serialised = str(result)
+    assert MISCONCEPTION not in serialised and "Total capex minus the part" not in serialised
+
+
+def test_legacy_workbook_without_new_fields_parses_and_grades():
+    legacy = {
+        "title": "Triangle practice",
+        "activities": [
+            {
+                "id": "old_a", "title": "Calculate the missing side", "kind": "practice",
+                "instructions": "A right triangle has legs x and y. Calculate its hypotenuse in cm.",
+                "data": [{"id": "x", "label": "First leg", "value": 3}, {"id": "y", "label": "Second leg", "value": 4}],
+                "fields": [
+                    {"id": "length", "label": "Hypotenuse", "kind": "number", "unit": "cm", "expression": "sqrt(x*x+y*y)",
+                     "choices": [], "correct_choice": None, "tolerance": 0.01, "criteria": [], "rubric_criterion": None},
+                    {"id": "side", "label": "Which side is longest?", "kind": "choice",
+                     "choices": [{"id": "hyp", "label": "Hypotenuse"}, {"id": "leg", "label": "A leg"}], "correct_choice": "hyp"},
+                ],
+                "hint": "Think about the relationship between the squared lengths.",
+                "worked_solution": "The sum of squares is 9 + 16 = 25, whose positive square root is 5 cm.",
+                "minutes_min": 3, "minutes_max": 6,
+            },
+            {
+                "id": "old_b", "title": "Explain the method", "kind": "transfer",
+                "instructions": "A different right triangle needs a written explanation of the method used to find it.",
+                "data": [],
+                "fields": [{"id": "why", "label": "Explain", "kind": "text", "criteria": ["Names the squared-lengths relationship"]}],
+                "hint": "Say how the legs relate to the longest side.",
+                "worked_solution": "Square both legs, add them, and take the positive square root of the sum.",
+                "minutes_min": 3, "minutes_max": 6,
+            },
+        ],
+    }
+    parsed = Workbook.model_validate(legacy)  # a text-only stored activity still loads
+    first = parsed.activities[0]
+    assert all(f.prefix == "" and f.hint is None and f.misconceptions == [] and f.correct_choices == [] for f in first.fields)
+    rows = graded(first, {"old_a.length": "5", "old_a.side": "hyp"})
+    assert rows["length"]["passed"] and rows["side"]["passed"]
+    assert rows["length"]["criterion"] == "Hypotenuse"
+    wrong = graded(first, {"old_a.length": "4", "old_a.side": "leg"})
+    assert wrong["length"]["feedback"] == "Check the supplied data and your calculation."
+    assert wrong["side"]["feedback"] == "Reconsider this choice using the lesson."
+    public = public_workbook(parsed)
+    # A legacy field projects exactly as before v3: no prefix key, rubric_criterion null.
+    assert public["activities"][0]["fields"][0] == {
+        "id": "length", "label": "Hypotenuse", "kind": "number", "unit": "cm",
+        "choices": [], "rubric_criterion": None}
+    # Dumps of legacy fields are unchanged, so an approved lesson keeps its package hash
+    # (and the lesson version derived from it) when the same content is validated again.
+    legacy_keys = {"id", "label", "kind", "unit", "choices", "expression", "correct_choice",
+                   "tolerance", "criteria", "rubric_criterion"}
+    assert all(set(f) == legacy_keys for a in parsed.model_dump(mode="json")["activities"] for f in a["fields"])
+    assert Workbook.model_validate(parsed.model_dump()).model_dump() == parsed.model_dump()
+    # New properties appear in a dump only once they are used.
+    used = v3_activity().model_dump(mode="json")["fields"]
+    assert {"prefix", "hint", "misconceptions"} <= set(used[0]) and "correct_choices" not in used[0]
+    assert "correct_choices" in used[1] and not {"prefix", "hint", "misconceptions"} & set(used[1])
+    # The stored text-only transfer is not subject to the new-workbook rule.
+    from app.services.practice.contracts import GeneratedWorkbook
+
+    with pytest.raises(ValidationError):
+        GeneratedWorkbook.model_validate(legacy)
+
+
+def generated_payload(**changes):
+    raw = Workbook(title="Capex practice", activities=[v3_activity(), v3_activity("case_d").model_copy(update={"kind": "transfer"})]).model_dump()
+    raw.update(changes)
+    return raw
+
+
+def test_generation_rejects_text_only_activity():
+    from app.services.practice.contracts import GeneratedWorkbook
+
+    assert GeneratedWorkbook.model_validate(generated_payload()).activities[0].fields[1].kind == "multi_choice"
+    text = {"id": "why", "label": "Explain the method in one sentence", "kind": "text", "criteria": ["Uses the supplied figures"]}
+    text_only = generated_payload()
+    text_only["activities"][1]["fields"] = [text]
+    with pytest.raises(ValidationError) as error:
+        GeneratedWorkbook.model_validate(text_only)
+    message = str(error.value)
+    assert "case_d" in message and "number or multi_choice" in message
+    two_texts = generated_payload()
+    two_texts["activities"][0]["fields"] += [text, {**text, "id": "why2"}]
+    with pytest.raises(ValidationError) as error:
+        GeneratedWorkbook.model_validate(two_texts)
+    assert "at most one text field" in str(error.value)
+    # One number or multi-select plus one short text field is the intended shape.
+    paired = generated_payload()
+    paired["activities"][0]["fields"].append(text)
+    assert [f.kind for f in GeneratedWorkbook.model_validate(paired).activities[0].fields] == ["number", "multi_choice", "text"]
+
+
+def test_generation_requires_a_rubric_criterion_for_new_scored_fields():
+    from app.services.practice.contracts import GeneratedWorkbook
+
+    for index in (0, 1):
+        raw = generated_payload()
+        raw["activities"][0]["fields"][index]["rubric_criterion"] = None
+        with pytest.raises(ValidationError) as error:
+            GeneratedWorkbook.model_validate(raw)
+        assert "rubric_criterion" in str(error.value)
+        Workbook.model_validate(raw)  # stored workbooks stay valid without one
+
+
+@pytest.mark.asyncio
+async def test_generate_workbook_validates_with_the_new_workbook_contract(monkeypatch):
+    from app.services.practice import generation
+    from app.services.practice.contracts import GeneratedWorkbook
+
+    structured = AsyncMock(return_value="result")
+    monkeypatch.setattr(generation, "_structured", structured)
+    assert await generation.generate_workbook({"id": "s1"}, {"mission": "m"}) == "result"
+    assert structured.await_args.args[2] is GeneratedWorkbook
+
+
+def v3_state(state):
+    """The shared fixture, with a workbook that has per-field hints."""
+    second = v3_activity("case_d").model_copy(update={"kind": "transfer"})
+    state.row.workbook_json = Workbook(title="Capex practice", activities=[v3_activity("case_a"), second]).model_dump()
+    state.row.answers_json = {}
+    return state
+
+
+@pytest.mark.asyncio
+async def test_field_hint_endpoint_records_field_key(state):
+    v3_state(state)
+    result = await api.get_hint("item", "s1", submission(), state.db, state.user, field_id="case_a.maint")
+    assert result["hints"] == [
+        {"activity_id": "case_a", "kind": "field_hint", "field_id": "case_a.maint",
+         "content": "Total capex minus the part that grows the business."}
+    ]
+    assert result["revision"] == 1
+    # Asking again is idempotent and costs no revision.
+    again = await api.get_hint("item", "s1", submission(revision=1), state.db, state.user, field_id="case_a.maint")
+    assert again["hints"] == result["hints"] and again["revision"] == 1
+    # A field without its own hint falls back to the activity hint.
+    fallback = await api.get_hint("item", "s1", submission(revision=1), state.db, state.user, field_id="case_a.growth")
+    assert fallback["hints"][1]["field_id"] == "case_a.growth"
+    assert fallback["hints"][1]["content"] == "Separate spending that keeps the business as it is from spending that grows it."
+    # The activity-level hint is unchanged and independent of field hints.
+    activity_hint = await api.get_hint("item", "s1", submission(revision=2), state.db, state.user)
+    assert [h["kind"] for h in activity_hint["hints"]] == ["field_hint", "field_hint", "hint"]
+    assert activity_hint["hints"][2]["content"].startswith("Separate spending")
+    # Any hint marks the next attempt as assisted.
+    state.row.answers_json = v3_answers(aid="case_a")
+    done = await api.submit_practice("item", "s1", submission(revision=3), state.db, state.user)
+    assert done["attempts"][0]["assisted"] is True
+    assert done["attempts"][0]["passed"] is True
+
+
+@pytest.mark.asyncio
+async def test_field_hint_endpoint_alone_marks_the_attempt_assisted(state):
+    v3_state(state)
+    await api.get_hint("item", "s1", submission(), state.db, state.user, field_id="case_a.growth")
+    state.row.answers_json = v3_answers(aid="case_a")
+    done = await api.submit_practice("item", "s1", submission(revision=1), state.db, state.user)
+    assert done["attempts"][0]["assisted"] is True
+    assert [f["criterion"] for f in done["attempts"][0]["feedback"]] == [
+        "Uses maintenance capex, not total capex", "Separates growth spending from upkeep"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field_id", ["case_a.nope", "case_b.maint", "maint", "case_a.", ".maint", "case_d.maint", "a.b.c"])
+async def test_field_hint_endpoint_rejects_unknown_fields(state, field_id):
+    v3_state(state)
+    with pytest.raises(HTTPException) as error:
+        await api.get_hint("item", "s1", submission(), state.db, state.user, field_id=field_id)
+    assert error.value.status_code == 404
+    assert state.row.hints_json == [] and state.row.revision == 0
+
+
+@pytest.mark.asyncio
+async def test_field_hint_endpoint_refuses_to_mix_with_the_solution(state):
+    v3_state(state)
+    with pytest.raises(HTTPException) as error:
+        await api.get_hint("item", "s1", submission(), state.db, state.user, solution=True, field_id="case_a.maint")
+    assert error.value.status_code == 422
+    assert state.row.hints_json == []
+
+
+def pre_v3_public_workbook(workbook):
+    """The public projection exactly as it was before Practice v3 (verbatim logic)."""
+    result = workbook.model_dump()
+    for act in result["activities"]:
+        act.pop("hint")
+        act.pop("worked_solution")
+        for field in act["fields"]:
+            for key in ("expression", "correct_choice", "tolerance", "criteria"):
+                field.pop(key)
+    return result
+
+
+def test_public_projection_of_legacy_workbooks_is_unchanged():
+    # The projection is embedded in the catalog composition prompt and hashed into
+    # its cache key, so any drift would force paid recompositions after a deploy.
+    import json
+
+    for stored in (workbook(text=True), workbook()):
+        assert public_workbook(stored) == pre_v3_public_workbook(stored)
+        assert json.dumps(public_workbook(stored), sort_keys=True) == json.dumps(
+            pre_v3_public_workbook(stored), sort_keys=True)
+    text_field = public_workbook(workbook(text=True))["activities"][0]["fields"][1]
+    assert text_field == {"id": "reason", "label": "Explain the assumption", "kind": "text",
+                          "unit": "", "choices": [], "rubric_criterion": None}
+
+
+def test_generated_workbook_schema_shows_the_rules_the_model_is_checked_against():
+    from app.services.practice.contracts import GeneratedWorkbook
+
+    schema = GeneratedWorkbook.model_json_schema()
+    answer, act = schema["$defs"]["AnswerField"], schema["$defs"]["Activity"]
+    # rubric_criterion is conditionally required, visible to the provider.
+    (rule,) = answer["allOf"]
+    assert set(rule["if"]["properties"]["kind"]["enum"]) == {"number", "choice", "multi_choice"}
+    # R1-M4: required AND a real string; a null criterion satisfies "required"
+    # alone, so the provider schema also states the non-null type.
+    assert rule["then"] == {
+        "required": ["rubric_criterion"],
+        "properties": {"rubric_criterion": {"type": "string", "minLength": 5}},
+    }
+    assert "Required" in answer["properties"]["rubric_criterion"]["description"]
+    assert set(answer["required"]) == {"id", "label", "kind"}  # kind-dependent, so conditional
+    # Every activity needs a number or multi_choice field; one text field at most.
+    (contains,) = act["allOf"]
+    assert set(contains["properties"]["fields"]["contains"]["properties"]["kind"]["enum"]) == {"number", "multi_choice"}
+    assert "at most one text field" in act["properties"]["fields"]["description"]
+    # The lenient stored-workbook schema is untouched.
+    stored = Workbook.model_json_schema()["$defs"]
+    assert "allOf" not in stored["AnswerField"] and "allOf" not in stored["Activity"]
+
+
+def test_generation_prompt_does_not_call_the_required_rubric_optional():
+    from app.services.llm.prompt_loader import load_and_render
+
+    prompt = " ".join(load_and_render("lesson_practice_generate.txt", {}).split())
+    assert "Optional schema properties may be omitted" not in prompt
+    assert "every number, choice and multi_choice field's rubric_criterion" in prompt
+    assert "never omit a rubric_criterion" in prompt
+
+
+@pytest.mark.parametrize("blank", ["", "     ", " \t \n "])
+def test_generation_rejects_blank_rubric_criterion(blank):
+    from app.services.practice.contracts import GeneratedWorkbook
+
+    raw = generated_payload()
+    raw["activities"][0]["fields"][0]["rubric_criterion"] = blank or None
+    with pytest.raises((ValidationError, ValueError)):
+        GeneratedWorkbook.model_validate(raw)
+
+
+def test_canonical_multi_choice_spelling():
+    from app.services.practice.contracts import canonical_answers
+
+    wb = Workbook(title="t", activities=[v3_activity("case_a"), v3_activity("case_d").model_copy(update={"kind": "transfer"})])
+    for raw, expected in {
+        "stores,warehouse,line": "warehouse,line,stores",
+        " line , stores,warehouse ,line": "warehouse,line,stores",
+        "line": "line",
+        "stores,,line,": "line,stores",
+        # Unknown ids are kept, de-duplicated, after the known ones in their own order.
+        "zeta,stores,alpha,warehouse,zeta": "warehouse,stores,zeta,alpha",
+        " , ": "",
+    }.items():
+        assert canonical_answers(wb, {"case_a.growth": raw})["case_a.growth"] == expected, raw
+    # Only multi_choice answers are touched; unknown keys pass through.
+    untouched = {"case_a.maint": " 45 ", "case_a.other": "b,a"}
+    assert canonical_answers(wb, untouched) == untouched
+
+
+@pytest.mark.asyncio
+async def test_draft_save_stores_multi_choice_in_canonical_order(state):
+    v3_state(state)
+    first = await api.save_draft("item", "s1", DraftRequest(revision=0, answers={
+        "case_a.maint": "45", "case_a.growth": "stores, warehouse,line,stores"}), state.db, state.user)
+    assert first["answers"]["case_a.growth"] == "warehouse,line,stores" and first["revision"] == 1
+    # The same selection in another order is the same draft: no new revision.
+    again = await api.save_draft("item", "s1", DraftRequest(revision=1, answers={
+        "case_a.maint": "45", "case_a.growth": "line,stores,warehouse"}), state.db, state.user)
+    assert again["answers"] == first["answers"] and again["revision"] == 1
+
+
+@pytest.mark.asyncio
+async def test_reordered_equal_selection_is_the_same_attempt(state):
+    v3_state(state)
+    # A draft stored before canonicalisation, spelled out of order.
+    state.row.answers_json = {"case_a.maint": "45", "case_a.growth": "stores,warehouse,line,warehouse"}
+    done = await api.submit_practice("item", "s1", submission(), state.db, state.user)
+    assert done["answers"]["case_a.growth"] == "warehouse,line,stores"
+    assert done["attempts"][0]["answers"]["growth"] == "warehouse,line,stores"
+    assert done["passed_activity_ids"] == ["case_a"]
+    again = await api.save_draft("item", "s1", DraftRequest(revision=done["revision"], answers={
+        "case_a.maint": "45", "case_a.growth": "line,warehouse,stores"}), state.db, state.user)
+    assert again["revision"] == done["revision"]
+    repeat = await api.submit_practice("item", "s1", submission(revision=again["revision"], request="request_002"),
+                                       state.db, state.user)
+    assert len(repeat["attempts"]) == 1 and repeat["passed_activity_ids"] == ["case_a"]
+
+
+@pytest.mark.asyncio
+async def test_normalised_answers_survive_the_unchanged_attempt_shortcut(state):
+    v3_state(state)
+    state.row.answers_json = v3_answers(aid="case_a")
+    await api.submit_practice("item", "s1", submission(), state.db, state.user)
+    # Simulate an old reordered draft after a canonical attempt: the shortcut must persist the rewrite.
+    state.row.answers_json = {"case_a.maint": "45", "case_a.growth": "stores,line,warehouse"}
+    state.db.commit.reset_mock()
+    result = await api.submit_practice("item", "s1", submission(revision=state.row.revision, request="request_003"),
+                                       state.db, state.user)
+    assert len(result["attempts"]) == 1
+    assert state.row.answers_json["case_a.growth"] == "warehouse,line,stores"
+    assert state.db.commit.await_count == 1
+    assert result["passed_activity_ids"] == ["case_a"]

@@ -19,7 +19,7 @@ import time
 import uuid
 from contextlib import aclosing
 from datetime import date, datetime, timedelta, timezone
-from typing import Annotated
+from typing import Annotated, get_args
 
 import anyio
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -44,6 +44,7 @@ from app.schemas.session import (
     IdolSuggestionItem,
     IdolSuggestionsResponse,
     InterviewMessageRequest,
+    InterviewOptionIcon,
     InterviewResponseInput,
     LearningMaterialResponse,
     LearningMaterialsResponse,
@@ -63,6 +64,7 @@ from app.services.comparison.scoring import (
     COMPARISON_SCORE_MAX_ATTEMPTS,
     COMPARISON_SCORE_PROVIDER_TIMEOUT_SECONDS,
     COMPARISON_SCORE_TOTAL_TIMEOUT_SECONDS,
+    COMPARISON_SCORE_VERSION,
     comparison_scores_are_current,
     comparison_score_retry_delay,
     generate_comparison_scores,
@@ -71,26 +73,57 @@ from app.services.comparison.mentor_facts import catalog_mentor_facts
 from app.services.content_resources import attach_content_resources_to_materials
 from app.services.llm import get_llm_client
 from app.services.llm.prompt_loader import load_and_render, sanitize_untrusted_input
+from app.services.llm.routing import operation_thinking_level
 from app.services.idol_photos import is_verified_idol_photo, resolve_wikimedia_photo
 from app.services.interview_inputs import (
+    ALL_INTERVIEW_ANSWER_KEYS,
     INTERVIEW_ANSWER_KEY_INSTRUCTIONS,
-    INTERVIEW_ANSWER_KEYS,
+    INTERVIEW_ANSWER_KEYS_V1,
+    INTERVIEW_ANSWER_KEYS_V2,
     INTERVIEW_QUESTION_FALLBACKS,
+    LEARNING_PREFERENCE_OPTIONS,
+    MODEL_CONTROL_KINDS,
+    PREFER_NOT_TO_SAY,
+    WORK_SAMPLE_MISSING_OPTION,
+    baseline_weekly_minutes,
     build_interview_plan_inputs,
     extract_legacy_weekly_hours,
+    interview_control_contract,
+    interview_key_set,
+    is_noncommittal_answer,
     next_interview_answer_key,
-    parse_weekly_hours_answer,
+    parse_weekly_capacity_minutes,
     provider_interview_plan_inputs,
+    weekly_capacity_rejection,
+)
+from app.services.planning.capacity import (
+    capacity_prompt_params,
+    legacy_weekly_hours,
+    set_weekly_minutes,
 )
 from app.services.transcripts import build_chat_history_json
+from app.services.session_context import (
+    build_situation_json,
+    session_situation,
+    situation_profile_fields,
+    situation_sentence,
+)
 
 logger = logging.getLogger("cmpys.api.sessions")
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
-# Eight evidence inputs plus a short closing acknowledgment. Coverage, rather
+# One question per evidence input plus a short closing acknowledgment. The
+# budget follows each session's question set: twelve v3 inputs for new
+# sessions, eight for sessions that began on the legacy set. Coverage, rather
 # than an arbitrary turn ceiling, remains authoritative for resumed sessions.
-MAX_INTERVIEW_TURNS = len(INTERVIEW_ANSWER_KEYS) + 1
+MAX_INTERVIEW_TURNS = len(INTERVIEW_ANSWER_KEYS_V2) + 1
+
+
+def interview_max_turns(messages) -> int:
+    """Turn budget for one session, from the question set it is using."""
+    return len(interview_key_set(messages)) + 1
+
 INTERVIEW_QUESTION_TIMEOUT_SECONDS = 18
 INTERVIEW_QUESTION_MAX_WORDS = 55
 INTERVIEW_QUESTION_MAX_CHARACTERS = 450
@@ -158,43 +191,381 @@ def _response_input_payload(value) -> dict:
     )
 
 
+# Domain-neutral starting points for the opening question (design: text chips).
+_ACHIEVEMENT_SUGGESTIONS = (
+    "I’ve tried it on my own",
+    "I’ve read or watched a lot about it",
+    "Nothing yet",
+)
+# Server defaults for model-proposed controls: used when the model's control is
+# missing, invalid, or of the wrong kind. Wording stays domain-neutral.
+_SELF_CHECK_DEFAULT = (
+    ("I compare with a trusted source", "Books, documentation, primary material"),
+    ("I ask someone more experienced", "A mentor, teacher or peer reviews it"),
+    ("I wait to see if it works", "Results tell me if I was right"),
+    ("I don’t really check", "Honest answers help most"),
+)
+_RESOURCES_DEFAULT = (
+    ("Little or nothing yet", "Free tools and my own time"),
+    ("A small budget", "Books, a course or basic tools"),
+    ("Solid resources", "Good tools, a budget or useful access"),
+    (PREFER_NOT_TO_SAY, "That’s fine; I won’t guess"),
+)
+_CONFIDENCE_LABELS = ("Never tried it", "Do it with ease")
+# Concrete, showable twelve-week results only. The answer becomes the plan's
+# focus, so an unsure chip ("I’m not sure yet") is never offered here.
+_TARGET_SUGGESTIONS = (
+    "A finished piece of work I can show",
+    "A skill I can demonstrate on request",
+    "A result I can measure and share",
+)
+# An honest "don't know / not yet" option, recognised in model wording.
+_HONEST_OPTION_RE = re.compile(
+    r"don[’']?t (?:really )?(?:know|check)|not (?:sure|yet)|no idea|unsure|"
+    r"prefer not|haven[’']?t|never",
+    re.IGNORECASE,
+)
+
+
+def _choice_control(answer_key: str, options) -> InterviewResponseInput:
+    return InterviewResponseInput(
+        kind="single_choice",
+        options=[label for label, _ in options],
+        option_details=[{"description": detail} for _, detail in options],
+        allow_custom=True,
+        answer_key=answer_key,
+    )
+
+
+def _server_owned_control(
+    answer_key: str,
+    key_set: tuple[str, ...],
+) -> InterviewResponseInput | None:
+    """The complete control for a server-owned key, or None if the model owns it."""
+    if answer_key == "weekly_hours":
+        if key_set == INTERVIEW_ANSWER_KEYS_V1:
+            # Legacy intakes keep the control their 3-60 integer parser was
+            # built for, so an in-flight session completes exactly as before.
+            return InterviewResponseInput(
+                kind="number",
+                min=3,
+                max=60,
+                step=1,
+                initial=8,
+                unit="hours per week",
+                allow_custom=True,
+                answer_key=answer_key,
+            )
+        return InterviewResponseInput(
+            kind="number",
+            min=1,
+            max=15,
+            step=0.5,
+            initial=4,
+            presets=[2, 4, 6, 8],
+            unit="hours / week",
+            daily_hint=True,
+            allow_custom=True,
+            answer_key=answer_key,
+        )
+    if answer_key == "achievement_inventory":
+        return InterviewResponseInput(
+            kind="text",
+            placeholder="Describe concrete achievements and evidence…",
+            suggestions=list(_ACHIEVEMENT_SUGGESTIONS),
+            allow_custom=True,
+            answer_key=answer_key,
+        )
+    if answer_key == "current_capability":
+        return InterviewResponseInput(
+            kind="text",
+            placeholder="Describe what you can do today…",
+            allow_custom=True,
+            answer_key=answer_key,
+        )
+    if answer_key == "work_sample":
+        return InterviewResponseInput(
+            kind="text",
+            placeholder="Paste or describe your work…",
+            missing_option=WORK_SAMPLE_MISSING_OPTION,
+            allow_custom=True,
+            answer_key=answer_key,
+        )
+    if answer_key == "practice_volume":
+        return InterviewResponseInput(
+            kind="number",
+            min=0,
+            max=50,
+            step=1,
+            initial=0,
+            unit="pieces of work",
+            allow_custom=True,
+            answer_key=answer_key,
+        )
+    if answer_key == "network_support":
+        return InterviewResponseInput(
+            kind="number",
+            min=0,
+            max=20,
+            step=1,
+            initial=0,
+            unit="people",
+            allow_custom=True,
+            answer_key=answer_key,
+        )
+    if answer_key == "learning_preferences":
+        return InterviewResponseInput(
+            kind="multi_choice",
+            options=[label for label, _ in LEARNING_PREFERENCE_OPTIONS],
+            option_details=[{"icon": icon} for _, icon in LEARNING_PREFERENCE_OPTIONS],
+            min_selected=1,
+            allow_custom=True,
+            answer_key=answer_key,
+        )
+    return None
+
+
+def _default_model_control(answer_key: str) -> InterviewResponseInput:
+    """Server default for a model-proposed key whose control was unusable."""
+    if answer_key == "self_check_method":
+        return _choice_control(answer_key, _SELF_CHECK_DEFAULT)
+    if answer_key == "resources_capital":
+        return _choice_control(answer_key, _RESOURCES_DEFAULT)
+    if answer_key == "skill_confidence":
+        low, high = _CONFIDENCE_LABELS
+        return InterviewResponseInput(
+            kind="scale",
+            low_label=low,
+            high_label=high,
+            allow_custom=True,
+            answer_key=answer_key,
+        )
+    return InterviewResponseInput(
+        kind="text",
+        placeholder="Type your answer…",
+        suggestions=list(_TARGET_SUGGESTIONS) if answer_key == "target_outcome" else [],
+        allow_custom=True,
+        answer_key=answer_key,
+    )
+
+
+def _with_option(
+    control: InterviewResponseInput,
+    label: str,
+    description: str | None,
+    *,
+    required_label: bool,
+) -> InterviewResponseInput:
+    """Make sure a choice control offers ``label`` (or an honest equivalent)."""
+    options = list(control.options)
+    if required_label:
+        present = any(option.casefold() == label.casefold() for option in options)
+    else:
+        present = any(_HONEST_OPTION_RE.search(option) for option in options)
+    if present:
+        return control
+    details = list(control.option_details)
+    if len(options) >= 6:
+        options.pop()
+        if details:
+            details.pop()
+    options.append(label)
+    if details:
+        details.append({"description": description})
+    payload = control.model_dump(mode="json", by_alias=True, exclude_none=True)
+    payload["options"] = options
+    payload["option_details"] = [
+        detail if isinstance(detail, dict) else detail.model_dump(exclude_none=True)
+        for detail in details
+    ]
+    return InterviewResponseInput.model_validate(payload)
+
+
+def _enforced_model_control(
+    control: InterviewResponseInput,
+    answer_key: str,
+) -> InterviewResponseInput:
+    """Keep the model's wording but enforce the kind and honest options."""
+    required_kind = MODEL_CONTROL_KINDS[answer_key]
+    if control.kind != required_kind:
+        return _default_model_control(answer_key)
+    if answer_key == "resources_capital":
+        control = _with_option(
+            control,
+            PREFER_NOT_TO_SAY,
+            "That’s fine; I won’t guess",
+            required_label=True,
+        )
+    elif answer_key == "self_check_method":
+        control = _with_option(
+            control,
+            "I don’t really check",
+            "Honest answers help most",
+            required_label=False,
+        )
+    elif answer_key == "skill_confidence":
+        if not (control.low_label and control.high_label):
+            control.low_label, control.high_label = _CONFIDENCE_LABELS
+    elif answer_key == "target_outcome":
+        # Drop any unsure starting point the model proposed; it would become
+        # the plan's goal if tapped.
+        control.suggestions = [
+            item for item in control.suggestions if not is_noncommittal_answer(item)
+        ] or list(_TARGET_SUGGESTIONS)
+        # Only a work sample records "I don't have one yet" as missing evidence.
+        control.missing_option = None
+    return control
+
+
 def _response_input_for_answer_key(
     value,
     answer_key: str,
+    *,
+    key_set: tuple[str, ...] = INTERVIEW_ANSWER_KEYS_V2,
 ) -> InterviewResponseInput:
-    """Attach a trusted semantic key and enforce controls for critical inputs."""
-    if answer_key not in INTERVIEW_ANSWER_KEYS:
+    """Attach the trusted semantic key and the control that key requires.
+
+    Server-owned keys get their complete control here whatever the model
+    proposed. Model-proposed keys keep the model's wording when it has the
+    required kind and fall back to a server default otherwise. ``key_set``
+    is the session's question set (``interview_key_set``).
+    """
+    if answer_key not in ALL_INTERVIEW_ANSWER_KEYS:
         raise ValueError(f"Unsupported interview answer key: {answer_key}")
 
-    if answer_key == "weekly_hours":
-        # The planner requires one two-hour deep mission plus a one-hour daily
-        # rhythm, so three is the honest end-to-end product minimum.
-        return InterviewResponseInput(
-            kind="number",
-            min=3,
-            max=60,
-            step=1,
-            initial=8,
-            unit="hours per week",
-            allow_custom=True,
-            answer_key=answer_key,
-        )
-
-    if answer_key in {"achievement_inventory", "current_capability"}:
-        return InterviewResponseInput(
-            kind="text",
-            placeholder=(
-                "Describe concrete achievements and evidence…"
-                if answer_key == "achievement_inventory"
-                else "Describe what you can do today…"
-            ),
-            allow_custom=True,
-            answer_key=answer_key,
-        )
+    server_control = _server_owned_control(answer_key, key_set)
+    if server_control is not None:
+        return server_control
 
     response_input = _validated_interview_response_input(value)
     response_input.answer_key = answer_key
+    if answer_key in MODEL_CONTROL_KINDS:
+        try:
+            response_input = _enforced_model_control(response_input, answer_key)
+        except Exception as exc:
+            logger.warning(
+                "[SESSION] Could not enforce %s control; using default: %s",
+                answer_key,
+                exc,
+            )
+            response_input = _default_model_control(answer_key)
+        response_input.answer_key = answer_key
     return response_input
+
+
+_OPTION_ICONS = frozenset(get_args(InterviewOptionIcon))
+
+
+def _bounded_text(value, limit: int) -> str | None:
+    """Collapse whitespace and cut at a word boundary to fit ``limit``."""
+    if not isinstance(value, str):
+        return None
+    text = " ".join(value.split())
+    if len(text) <= limit:
+        return text or None
+    cut = text[: limit - 1].rstrip()
+    space = cut.rfind(" ")
+    if space >= limit // 2:
+        cut = cut[:space]
+    return cut.rstrip(" ,;:.-–—") + "…"
+
+
+def _sanitize_model_control_payload(payload):
+    """Fit a model-proposed control to the schema limits before validation.
+
+    One unknown icon or an over-long description would otherwise fail
+    validation and erase the whole choice control (it degrades to text).
+    Unknown icons become None, lists are cut to their maximum length, text is
+    shortened at a word boundary, and misaligned details are dropped.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    data = dict(payload)
+
+    options = data.get("options")
+    option_count = len(options) if isinstance(options, list) else None
+    if isinstance(options, list):
+        data["options"] = [
+            _bounded_text(option, 80) if isinstance(option, str) else option
+            for option in options[:6]
+        ]
+
+    details = data.get("option_details")
+    if isinstance(details, list):
+        if option_count is not None and len(details) != option_count:
+            data["option_details"] = []
+        else:
+            cleaned = []
+            for item in details[:6]:
+                if isinstance(item, str):
+                    item = {"description": item}
+                if not isinstance(item, dict):
+                    item = {}
+                icon = item.get("icon")
+                cleaned.append(
+                    {
+                        "description": _bounded_text(item.get("description"), 90),
+                        "icon": icon if icon in _OPTION_ICONS else None,
+                    }
+                )
+            data["option_details"] = cleaned
+
+    suggestions = data.get("suggestions")
+    if isinstance(suggestions, list):
+        data["suggestions"] = [
+            text
+            for text in (_bounded_text(item, 60) for item in suggestions)
+            if text
+        ][:4]
+    presets = data.get("presets")
+    if isinstance(presets, list):
+        data["presets"] = presets[:4]
+    for name, limit in (
+        ("placeholder", 100),
+        ("missing_option", 60),
+        ("low_label", 40),
+        ("high_label", 40),
+        ("unit", 40),
+    ):
+        if isinstance(data.get(name), str):
+            data[name] = _bounded_text(data[name], limit)
+    return data
+
+
+# Notes about the private control protocol ("No trailer — server-owned number
+# control (0–50).") are never mentor prose. The model sometimes paraphrases its
+# per-turn control contract into one, after the question.
+_INTERVIEW_META_RE = re.compile(
+    r"\btrailers?\b|\bserver[- ]owned\b|\bserver owns\b|\bresponse[- ]controls?\b",
+    re.IGNORECASE,
+)
+
+
+def _scrub_interview_meta(visible: str) -> str:
+    """Drop a trailing meta note about controls/trailers from visible prose.
+
+    Only two places are considered, so ordinary prose is never touched: whole
+    trailing lines that ask nothing (never the only line), and the tail after
+    the final question mark. Each must name the protocol (trailer,
+    server-owned, response control) to be dropped.
+    """
+    text = visible.rstrip()
+    while True:
+        head, newline, tail = text.rpartition("\n")
+        if (
+            not newline
+            or not head.strip()
+            or re.search(r"[?？]", tail)
+            or not _INTERVIEW_META_RE.search(tail)
+        ):
+            break
+        text = head.rstrip()
+    mark = max(text.rfind("?"), text.rfind("？"))
+    if mark != -1:
+        tail = text[mark + 1 :]
+        if tail.strip() and _INTERVIEW_META_RE.search(tail):
+            text = text[: mark + 1]
+    return text
 
 
 def _split_interview_response(
@@ -204,7 +575,9 @@ def _split_interview_response(
 
     A missing, incomplete, invalid, or unsupported trailer never fails the
     interview turn. Once an opening tag is present, everything after it stays
-    hidden so malformed JSON cannot flash in the chat transcript.
+    hidden so malformed JSON cannot flash in the chat transcript. A trailing
+    note about the control protocol is removed from the visible prose; that
+    text is what is persisted and sent as the turn's only chunk.
     """
     marker_match = _INTERVIEW_RESPONSE_UI_OPEN_RE.search(response)
     completion_match = _INTERVIEW_COMPLETE_RE.search(response)
@@ -215,7 +588,7 @@ def _split_interview_response(
             completion_match.start() if completion_match else len(response),
         )
     )
-    visible = response[:visible_end].rstrip()
+    visible = _scrub_interview_meta(response[:visible_end].rstrip())
     if marker_match is None:
         return visible, _default_interview_response_input()
 
@@ -240,7 +613,9 @@ def _split_interview_response(
     except (TypeError, json_lib.JSONDecodeError) as exc:
         logger.warning("[SESSION] Could not parse interview response UI: %s", exc)
         return visible, _default_interview_response_input()
-    return visible, _validated_interview_response_input(payload)
+    return visible, _validated_interview_response_input(
+        _sanitize_model_control_payload(payload)
+    )
 
 
 def _interview_completion_text(response: str) -> str:
@@ -352,12 +727,13 @@ def _replay_interview_response(
     *,
     current_turn: int,
     phase_transition: bool,
+    max_turns: int = MAX_INTERVIEW_TURNS,
 ) -> StreamingResponse:
     """Replay one committed mentor response with its terminal metadata."""
     done_event = {
         "type": "done",
         "turn": current_turn,
-        "max_turns": MAX_INTERVIEW_TURNS,
+        "max_turns": max_turns,
         "phase_transition": phase_transition,
         "question_id": str(message.id),
     }
@@ -818,13 +1194,23 @@ async def _catalog_idol_suggestions(
     return [entry[2] for entry in selected]
 
 
-def _extract_weekly_hours(messages: list[ChatMessage]) -> int | None:
-    """Return the keyed weekly commitment, with a legacy transcript fallback."""
-    plan_inputs = build_interview_plan_inputs(messages)
-    keyed = plan_inputs.get("weekly_capacity_hours")
-    if isinstance(keyed, int):
+def _extract_weekly_minutes(messages: list[ChatMessage]) -> int | None:
+    """Return the keyed weekly minutes, with a legacy transcript fallback."""
+    keyed = baseline_weekly_minutes(build_interview_plan_inputs(messages))
+    if keyed is not None:
         return keyed
-    return extract_legacy_weekly_hours(messages)
+    legacy_hours = extract_legacy_weekly_hours(messages)
+    return legacy_hours * 60 if legacy_hours is not None else None
+
+
+def _extract_weekly_hours(messages: list[ChatMessage]) -> int | None:
+    """Legacy whole-hour view of :func:`_extract_weekly_minutes` (rounded up)."""
+    minutes = _extract_weekly_minutes(messages)
+    return legacy_weekly_hours(minutes) if minutes is not None else None
+
+
+# Longest single entry in UserProfile.constraints.
+PROFILE_CONSTRAINT_MAX_LENGTH = 300
 
 
 def _merge_profile_values(
@@ -910,9 +1296,9 @@ async def _sync_user_profile_from_interview(
         profile = UserProfile(user_id=user_id)
         db.add(profile)
 
-    weekly_hours = plan_inputs.get("weekly_capacity_hours")
-    if isinstance(weekly_hours, int):
-        profile.weekly_hours = weekly_hours
+    weekly_minutes = baseline_weekly_minutes(plan_inputs)
+    if weekly_minutes is not None:
+        set_weekly_minutes(profile, weekly_minutes)
 
     target_outcome = _plan_input_answer(plan_inputs, "target_outcome")
     profile.goals = _merge_profile_values(
@@ -929,16 +1315,25 @@ async def _sync_user_profile_from_interview(
         max_items=10,
     )
 
-    constraints = _plan_input_answer(plan_inputs, "constraints_resources")
+    if plan_inputs.get("interview_key_set") == "v2":
+        # v3 intakes no longer ask about constraints; the learner's stated
+        # constraints are the onboarding situation chips and note.
+        constraints = situation_sentence(
+            *session_situation(session), max_length=PROFILE_CONSTRAINT_MAX_LENGTH
+        )
+    else:
+        constraints = _plan_input_answer(plan_inputs, "constraints_resources")
     profile.constraints = _merge_profile_values(
         [constraints] if constraints else None,
         profile.constraints,
-        max_length=300,
+        max_length=PROFILE_CONSTRAINT_MAX_LENGTH,
         max_items=10,
     )
     learning_setup = _plan_input_answer(plan_inputs, "learning_habits_support")
     profile.learning_preferences = _merge_profile_values(
         [learning_setup] if learning_setup else None,
+        # v3 intakes record the picked learning modes as a list.
+        plan_inputs.get("learning_preferences") or None,
         profile.learning_preferences,
         max_length=200,
         max_items=10,
@@ -1104,7 +1499,14 @@ async def _maybe_enqueue_scores_backfill(
     """
     if comparison_scores_are_current(session.comparison_scores_json):
         saved = session.comparison_scores_json
-        if saved.get("evidence_policy_version") != 2 and getattr(session, "interview_thread_id", None):
+        if (
+            # Only a payload of the current version is ever re-normalized. A
+            # stored version 2 payload (the old dimension ids) is served exactly
+            # as stored: the v3 normalizer would silently turn it into a v3 one.
+            saved.get("version") == COMPARISON_SCORE_VERSION
+            and saved.get("evidence_policy_version") != 2
+            and getattr(session, "interview_thread_id", None)
+        ):
             # Reclassify cached evidence locally; no paid score regeneration.
             from app.services.comparison.scoring import normalize_comparison_scores
             messages = (await db.execute(
@@ -1340,6 +1742,7 @@ async def create_session(
         user_financial_status=data.financial_status,
         user_interests=data.interests,
         user_goal=data.goal,
+        situation_json=build_situation_json(data.situation, data.situation_note),
         status="draft",  # Legacy field compatibility
     )
     db.add(session)
@@ -1829,6 +2232,7 @@ def _interview_question_params(
     user_message: str,
     required_answer_key: str | None = "achievement_inventory",
     plan_inputs: dict | None = None,
+    max_turns: int = MAX_INTERVIEW_TURNS,
 ) -> dict[str, str]:
     """Params for interview_question.txt. Must cover every key the
     PROMPT_PLACEHOLDERS registry declares for it — a missing key raises
@@ -1841,18 +2245,19 @@ def _interview_question_params(
         "user_goal": session.user_goal or "not specified",
         "chat_history_json": chat_history_json,
         "turn_count": str(current_turn),
-        "max_turns": str(MAX_INTERVIEW_TURNS),
+        "max_turns": str(max_turns),
         "idol_facts_json": json_lib.dumps(session.idol_facts_json or {}),
         "user_message": sanitize_untrusted_input(user_message),
         "required_answer_key": required_answer_key or "complete",
         "required_answer_instruction": (
             INTERVIEW_ANSWER_KEY_INSTRUCTIONS.get(required_answer_key, "")
         ),
+        "required_control_contract": interview_control_contract(required_answer_key),
         "answered_keys_json": json_lib.dumps(
             (plan_inputs or {}).get("answered_keys", [])
         ),
         "missing_keys_json": json_lib.dumps(
-            (plan_inputs or {}).get("missing_keys", list(INTERVIEW_ANSWER_KEYS))
+            (plan_inputs or {}).get("missing_keys", list(INTERVIEW_ANSWER_KEYS_V2))
         ),
     }
 
@@ -1867,6 +2272,7 @@ def _render_interview_prompts(
     user_message: str,
     required_answer_key: str | None = "achievement_inventory",
     plan_inputs: dict | None = None,
+    max_turns: int = MAX_INTERVIEW_TURNS,
 ) -> tuple[str, str]:
     """Render one interview turn with exactly one copy of chat history.
 
@@ -1895,7 +2301,6 @@ def _render_interview_prompts(
             "user_financial_status": session.user_financial_status or "",
             "user_interests_json": json_lib.dumps(session.user_interests or []),
             "user_goal": session.user_goal or "not specified",
-            "chat_history_json": "[]",
         },
     )
     user_prompt = load_and_render(
@@ -1908,6 +2313,7 @@ def _render_interview_prompts(
             user_message=user_message,
             required_answer_key=required_answer_key,
             plan_inputs=plan_inputs,
+            max_turns=max_turns,
         ),
     )
     return system_prompt, user_prompt
@@ -2035,6 +2441,7 @@ async def interview(
             completed_response,
             current_turn=session.interview_turn_count,
             phase_transition=phase_transition,
+            max_turns=interview_max_turns(history_messages),
         )
 
     _require_phase(session, SessionPhase.INTERVIEW)
@@ -2062,6 +2469,7 @@ async def interview(
             previous_question,
             current_turn=current_turn,
             phase_transition=False,
+            max_turns=interview_max_turns(history_messages),
         )
 
     claim_now = datetime.now(timezone.utc)
@@ -2191,6 +2599,11 @@ async def interview(
             reply_to_message_id=data.question_id,
             generation_status="pending",
         )
+        if data.missing_evidence:
+            # Set only when true: leaving the attribute untouched keeps the
+            # column a SQL NULL for ordinary answers, as before (an explicit
+            # None would be stored as JSONB null).
+            user_msg.response_ui_json = {"missing_evidence": True}
         db.add(user_msg)
         await db.flush()
 
@@ -2206,15 +2619,18 @@ async def interview(
         if isinstance(answered_metadata, dict)
         else None
     )
+    # Intake v3 accepts 1-15 hours in half-hour steps (60-900 minutes);
+    # legacy 8-key sessions keep their 3-60 whole-hour contract.
+    capacity_key_set = interview_key_set(history_messages)
     if (
         user_msg is not None
         and answered_key == "weekly_hours"
-        and parse_weekly_hours_answer(user_content) is None
+        and parse_weekly_capacity_minutes(user_content, capacity_key_set) is None
     ):
         await db.rollback()
         _raise_interview_conflict(
             "invalid_interview_answer",
-            "Choose a weekly commitment between 3 and 60 hours.",
+            weekly_capacity_rejection(capacity_key_set),
         )
 
     # Include the just-accepted answer when selecting the next required field;
@@ -2231,6 +2647,9 @@ async def interview(
         require_diagnostics=True,
     )
     required_answer_key = next_interview_answer_key(planning_messages)
+    # The session's own question set: legacy 8-key intakes finish on it.
+    answer_key_set = interview_key_set(planning_messages)
+    max_turns = interview_max_turns(planning_messages)
     from app.services.intake_diagnostics import select_diagnostic
 
     diagnostic = select_diagnostic(
@@ -2333,6 +2752,7 @@ async def interview(
                     user_message=user_content,
                     required_answer_key=required_answer_key,
                     plan_inputs=plan_inputs,
+                    max_turns=max_turns,
                 )
 
                 clean_response, response_input = await _generate_concise_interview_question(
@@ -2378,6 +2798,7 @@ async def interview(
                 else _response_input_for_answer_key(
                     response_input,
                     required_answer_key,
+                    key_set=answer_key_set,
                 )
             )
             if diagnostic is not None:
@@ -2422,7 +2843,7 @@ async def interview(
             done_event = {
                 "type": "done",
                 "turn": current_turn,
-                "max_turns": MAX_INTERVIEW_TURNS,
+                "max_turns": max_turns,
                 "phase_transition": should_transition,
                 "question_id": str(ai_msg.id),
             }
@@ -2463,19 +2884,27 @@ async def _get_or_create_session_plan_job(
     *,
     session: IntakeSession,
     user_id: str,
-    weekly_hours: int,
+    weekly_minutes: int | None = None,
     focus: str | None = None,
+    weekly_hours: int | None = None,
 ) -> PlanGenerationJob | None:
     """Create the staged plan job as soon as result generation begins.
 
-    The job remains at ``waiting_for_strategy`` until comparison + blueprint
-    are persisted. This makes the post-interview pipeline immediate and
-    observable without sacrificing plan quality by generating before its
-    strategic inputs exist. Replays and explicit retries reuse the same row,
+    The job remains at ``waiting_for_strategy`` until the comparison is
+    persisted, then runs alongside blueprint writing (the blueprint is optional
+    plan context). This keeps the post-interview pipeline immediate and
+    observable without generating before the comparison exists. Replays and explicit retries reuse the same row,
     preserving valid checkpoints and any already-persisted plan.
+
+    Capacity is ``weekly_minutes``; ``weekly_hours`` is accepted from older
+    callers as whole hours. The job stores both (hours rounded up).
     """
     if not session.idol_id:
         return None
+    if weekly_minutes is None:
+        if weekly_hours is None:
+            raise TypeError("weekly_minutes is required")
+        weekly_minutes = int(weekly_hours) * 60
 
     existing = (
         await db.execute(
@@ -2505,7 +2934,7 @@ async def _get_or_create_session_plan_job(
             existing.thinking_text = None
         if existing.status == "pending" and existing.step == "waiting_for_strategy":
             if not getattr(existing, "plan_id", None):
-                existing.weekly_hours = weekly_hours
+                set_weekly_minutes(existing, weekly_minutes)
                 existing.focus = focus or session.user_goal
             await db.commit()
         return existing
@@ -2516,7 +2945,8 @@ async def _get_or_create_session_plan_job(
         session_id=session.id,
         target_age=session.user_age or 24,
         duration_weeks=12,
-        weekly_hours=weekly_hours,
+        weekly_hours=legacy_weekly_hours(weekly_minutes),
+        weekly_minutes=weekly_minutes,
         focus=focus or session.user_goal,
         status="pending",
         progress_percent=0,
@@ -2529,7 +2959,7 @@ async def _get_or_create_session_plan_job(
 
 
 async def _dispatch_session_plan_job(db, job: PlanGenerationJob | None) -> None:
-    """Publish a staged plan job once its comparison/blueprint inputs exist."""
+    """Publish a staged plan job once its comparison input exists."""
     if job is None or job.status in {"running", "completed"}:
         return
     if job.status == "pending" and job.step != "waiting_for_strategy":
@@ -2623,7 +3053,7 @@ async def generate_results(
     )
     uses_semantic_intake = any(
         isinstance(getattr(message, "response_ui_json", None), dict)
-        and message.response_ui_json.get("answer_key") in INTERVIEW_ANSWER_KEYS
+        and message.response_ui_json.get("answer_key") in ALL_INTERVIEW_ANSWER_KEYS
         for message in thread.messages
         if message.role == MessageRole.ASSISTANT
     )
@@ -2640,16 +3070,18 @@ async def generate_results(
         "interests": session.user_interests,
         "goal": session.user_goal,
         "learner_baseline": plan_inputs,
+        # Onboarding situation chips and note; absent for older sessions.
+        **situation_profile_fields(session),
     }
 
     # Semantic interviews must carry an exact confirmed value. The 10-hour
     # default remains only for legacy transcripts created before answer keys.
-    weekly_hours = plan_inputs.get("weekly_capacity_hours")
-    if not isinstance(weekly_hours, int):
-        legacy_weekly_hours = _extract_weekly_hours(thread.messages)
-        weekly_hours = legacy_weekly_hours or 10
+    weekly_minutes = plan_inputs.get("weekly_capacity_minutes")
+    if not isinstance(weekly_minutes, int):
+        transcript_minutes = _extract_weekly_minutes(thread.messages)
+        weekly_minutes = transcript_minutes or 600
         plan_inputs["weekly_capacity_source"] = (
-            "legacy_transcript" if legacy_weekly_hours is not None else "legacy_default"
+            "legacy_transcript" if transcript_minutes is not None else "legacy_default"
         )
     else:
         plan_inputs["weekly_capacity_source"] = "confirmed_interview_answer"
@@ -2748,7 +3180,7 @@ async def generate_results(
             db,
             session=session,
             user_id=current_user.id,
-            weekly_hours=weekly_hours,
+            weekly_minutes=weekly_minutes,
             focus=_plan_input_answer(plan_inputs, "target_outcome"),
         )
     except Exception:
@@ -2864,7 +3296,7 @@ async def generate_results(
                         timeout=40 if settings.llm_provider == "zai" else COMPARISON_SCORE_PROVIDER_TIMEOUT_SECONDS,
                         max_tokens=3500,
                         tier="fast",
-                        thinking_level="minimal",
+                        thinking_level=operation_thinking_level("comparison_scores", "minimal"),
                     ),
                     idol_name=idol_name,
                     user_age=pipeline_session.user_age,
@@ -2880,6 +3312,20 @@ async def generate_results(
                     timeout_s=COMPARISON_SCORE_TOTAL_TIMEOUT_SECONDS,
                 )
             )
+
+        # =====================================================================
+        # Part 1.5: Dispatch the staged 12-week plan job. It needs only the
+        # saved comparison and interview (the blueprint is optional plan
+        # context), so it runs alongside blueprint writing. Idempotent.
+        # =====================================================================
+        try:
+            await _dispatch_session_plan_job(db, plan_job)
+        except Exception as e:
+            logger.error(f"[SESSION] Failed to enqueue plan generation: {e}")
+            if scores_task is not None:
+                scores_task.cancel()
+            yield f"data: {json_lib.dumps({'type': 'error', 'section': 'plan', 'message': 'Plan generation could not start. Please try again.', 'retryable': True})}\n\n"
+            return
 
         # =====================================================================
         # Part 2: Blueprint — resume without repeating comparison work.
@@ -2902,7 +3348,7 @@ async def generate_results(
                     "idol_facts_json": json_lib.dumps(
                         pipeline_session.idol_facts_json or {}
                     ),
-                    "weekly_hours": str(weekly_hours),
+                    **capacity_prompt_params(weekly_minutes),
                 },
             )
             try:
@@ -2960,19 +3406,7 @@ async def generate_results(
                 return
 
         # =====================================================================
-        # Part 3: Dispatch the staged 12-week plan job.
-        # =====================================================================
-        try:
-            await _dispatch_session_plan_job(db, plan_job)
-        except Exception as e:
-            logger.error(f"[SESSION] Failed to enqueue plan generation: {e}")
-            if scores_task is not None:
-                scores_task.cancel()
-            yield f"data: {json_lib.dumps({'type': 'error', 'section': 'plan', 'message': 'Plan generation could not start. Please try again.', 'retryable': True})}\n\n"
-            return
-
-        # =====================================================================
-        # Part 3.5: Structured comparison scores (best-effort)
+        # Part 3: Structured comparison scores (best-effort)
         # =====================================================================
         # Started concurrently with the blueprint (see Part 1) — by now the
         # task is usually already finished, so this await is ~free. The prose

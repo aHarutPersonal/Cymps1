@@ -9,7 +9,7 @@ import datetime
 from enum import Enum
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 # =============================================================================
@@ -315,8 +315,9 @@ class PlanBackboneWeek(BaseModel):
     primary_mission: str = Field(max_length=500)
     outcome: str = Field(max_length=500)
     tasks: list[PlanBackboneTask] = Field(min_length=2, max_length=5)
-    predicted_friction: str = Field(max_length=500)
-    friction_solution: str = Field(max_length=500)
+    # No screen renders friction; the prompt no longer requests it.
+    predicted_friction: str = Field(default="", max_length=500)
+    friction_solution: str = Field(default="", max_length=500)
 
     @model_validator(mode="after")
     def require_mission_and_daily_rhythm(self) -> "PlanBackboneWeek":
@@ -465,29 +466,37 @@ class PlanDetailStepOutput(BaseModel):
 # New short lessons opt into a separate contract. The legacy schema and its
 # serialized shape stay unchanged so saved approval hashes remain valid.
 MAX_TUTORIAL_LESSONS = 128
+# New tutorial_v1 lessons have no Guided Practice section: the guided and
+# transfer activities live in the workbook. Their native blocks (formula,
+# steps, chart, check) are counted as words like any other line.
 TUTORIAL_SECTION_MIN_WORDS = {
     "why_this_matters": 15, "core_framework": 100, "worked_example": 90,
-    "failure_modes": 20, "guided_practice": 55,
-    "check_your_understanding": 20, "references": 10,
+    "failure_modes": 20, "check_your_understanding": 30, "references": 10,
 }
 TUTORIAL_SECTION_TARGET_WORDS = {
-    "why_this_matters": 30, "core_framework": 160, "worked_example": 140,
-    "failure_modes": 35, "guided_practice": 85,
-    "check_your_understanding": 40, "references": 20,
+    "why_this_matters": 30, "core_framework": 170, "worked_example": 165,
+    "failure_modes": 40, "check_your_understanding": 55, "references": 20,
 }
+# Whole-reading words, including the title, headings and fence lines. Stored
+# lessons that still contain "## Guided Practice" keep the legacy range.
+TUTORIAL_WORD_RANGE = (380, 740)
+LEGACY_TUTORIAL_WORD_RANGE = (450, 800)
 
 
 class PlanTutorialStepOutlineOutput(PlanDetailStepOutlineOutput):
-    lesson_format: Literal["tutorial_v1"]
+    # Server-filled: the model is not asked to repeat a constant per step.
+    lesson_format: Literal["tutorial_v1"] = "tutorial_v1"
 
 
 class PlanTutorialOutlineOutput(PlanItemDetailsOutlineOutput):
-    lesson_format: Literal["tutorial_v1"]
+    lesson_format: Literal["tutorial_v1"] = "tutorial_v1"
     steps: list[PlanTutorialStepOutlineOutput] = Field(min_length=1, max_length=MAX_TUTORIAL_LESSONS)
 
 
 class PlanTutorialStepOutput(PlanDetailStepOutput):
     lesson_format: Literal["tutorial_v1"]
+    # New tutorials store []; tutorials published with substeps stay valid.
+    substeps: list[str] = Field(default_factory=list)
     estimate_minutes: int = Field(ge=5, le=8)
     reading_minutes: int = Field(ge=3, le=4)
     practice_minutes: int = Field(ge=2, le=4)
@@ -526,6 +535,8 @@ PLAN_DETAIL_REQUIRED_HEADINGS = (
     "## Check Your Understanding",
     "## References",
 )
+TUTORIAL_REQUIRED_HEADINGS = tuple(
+    heading for heading in PLAN_DETAIL_REQUIRED_HEADINGS if heading != "## Guided Practice")
 
 
 def plan_detail_step_quality_issues(
@@ -537,18 +548,24 @@ def plan_detail_step_quality_issues(
     issues: list[str] = []
     lesson_words = len(step.lesson_content.split())
     tutorial = getattr(step, "lesson_format", None) == "tutorial_v1"
-    minimum, maximum = (450, 800) if tutorial else (1900, 4200)
+    headings = PLAN_DETAIL_REQUIRED_HEADINGS
+    minimum, maximum = (1900, 4200)
+    if tutorial:
+        from app.services.planning.tutorial_visuals import has_guided_practice, tutorial_visual_issues
+        legacy = has_guided_practice(step.lesson_content)
+        minimum, maximum = LEGACY_TUTORIAL_WORD_RANGE if legacy else TUTORIAL_WORD_RANGE
+        if not legacy:
+            headings = TUTORIAL_REQUIRED_HEADINGS
     if not minimum <= lesson_words <= maximum:
         issues.append(
             f"{step.id} lesson_content has {lesson_words} words; "
             f"accepted range is {minimum}-{maximum}"
         )
     if tutorial:
-        from app.services.planning.tutorial_visuals import tutorial_visual_issues
         issues.extend(tutorial_visual_issues(step.lesson_content))
     missing = [
         heading
-        for heading in PLAN_DETAIL_REQUIRED_HEADINGS
+        for heading in headings
         if heading not in step.lesson_content
     ]
     if missing:
@@ -680,13 +697,31 @@ class PlanDetailLessonSectionsOutput(BaseModel):
 class PlanTutorialLessonSectionsOutput(PlanDetailLessonSectionsOutput):
     model_config = ConfigDict(extra="forbid", strict=True)
     why_this_matters: str = Field(min_length=1, description="25-35 words: one clear purpose.")
-    core_framework: str = Field(min_length=1, description="140-180 words: explain ONE concept and include a meaningful native diagram or comparison fence.")
-    worked_example: str = Field(min_length=1, description="120-160 words: one supplied worked example with reasoning and every result binding.")
-    failure_modes: str = Field(min_length=1, description="25-45 words: one common mistake and its correction.")
-    guided_practice: str = Field(min_length=1, description="70-100 words: one small in-app exercise with its two approved phases and every practice binding; no private answers.")
-    check_your_understanding: str = Field(min_length=1, description="30-50 words: one diagnostic check with qualitative feedback, no private transfer solution.")
+    core_framework: str = Field(min_length=1, description="150-190 words: explain ONE concept and include exactly one primary native visual fence: formula, diagram or comparison.")
+    worked_example: str = Field(min_length=1, description="140-190 words: walk the supplied case in one steps fence with its reasoning, plus at most one chart fence; include every result binding.")
+    failure_modes: str = Field(min_length=1, description="30-50 words: one common mistake and its correction.")
+    check_your_understanding: str = Field(min_length=1, description="40-70 words: one check fence with a quick question and its Why line; no private transfer solution.")
     references: str = Field(min_length=1, description="15-25 words: name approved optional reading.")
-    substeps: list[Annotated[str, Field(min_length=1)]] = Field(min_length=1, max_length=3, description="One or two clear executable actions, each at least 12 words including output and success criterion.")
+    # New tutorials leave guided work to the workbook and are not asked for it.
+    # Stored legacy section drafts may still carry it.
+    guided_practice: str | None = Field(default=None, min_length=1)
+    # No screen renders tutorial substeps (D7): they are not requested, and a
+    # stray value is dropped rather than failing the draft.
+    substeps: list[str] = Field(default_factory=list)
+
+    @field_validator("substeps", mode="before")
+    @classmethod
+    def drop_unrequested_substeps(cls, value):
+        return []
+
+    @classmethod
+    def model_json_schema(cls, *args, **kwargs) -> dict:
+        schema = super().model_json_schema(*args, **kwargs)
+        for name in ("substeps", "guided_practice"):
+            schema.get("properties", {}).pop(name, None)
+        schema["required"] = [name for name in schema.get("required", [])
+                              if name not in {"substeps", "guided_practice"}]
+        return schema
 
 
 PLAN_DETAIL_SECTION_MIN_WORDS = {
@@ -777,7 +812,10 @@ class PlanTutorialSectionsRepairOutput(BaseModel):
         if len(names) != len(set(names)):
             raise ValueError("section repair field names must be unique")
         for section in self.sections:
-            if len(section.content.split()) < TUTORIAL_SECTION_MIN_WORDS[section.field_name]:
+            minimum = TUTORIAL_SECTION_MIN_WORDS.get(section.field_name)
+            if minimum is None:
+                raise ValueError(f"{section.field_name} is not a tutorial section")
+            if len(section.content.split()) < minimum:
                 raise ValueError(f"{section.field_name} tutorial repair is incomplete")
         return self
 

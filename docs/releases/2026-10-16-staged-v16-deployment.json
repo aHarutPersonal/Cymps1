@@ -1,0 +1,17 @@
+{
+  "file_hashes_verified_in_every_service": true,
+  "image_digest": "sha256:d1073b0aa37de6a74e20fbd5919ff3615b8d4590f9317bf1386b44a235a9cdc4",
+  "release": "20261016-124300-evidence-cases",
+  "verified_files": 22,
+  "verified_services": [
+    "web",
+    "worker",
+    "worker-high",
+    "worker-low",
+    "catalog-worker",
+    "catalog-control",
+    "curriculum-worker",
+    "curriculum-control",
+    "beat"
+  ]
+}

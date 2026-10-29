@@ -1,25 +1,37 @@
 import 'dart:async';
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:phosphor_flutter/phosphor_flutter.dart';
 
 import '../../../../app/design_tokens.dart';
-import '../../../../core/ui/cmpys/cmpys_primitives.dart';
+import '../../../../core/network/api_error.dart';
+import '../../../../core/ui/v3/v3.dart';
 import '../../../session/data/session_repository.dart';
 import '../../../session/models/session_models.dart';
 import '../../data/cmpys_seed.dart';
+import 'idol_preview_step.dart';
+import 'mentor_image.dart';
 
-/// Idol discovery — LLM-driven, interest-aware.
+/// Mentor discovery (`v3/onboard2.jsx` Discovery) — LLM-driven, interest-aware.
 ///
 /// On entry, the screen creates a backend agentic session carrying the user's
-/// age + interests, then calls the Gemini-powered
-/// `/sessions/{id}/suggest-idols` endpoint. While that's in flight, a "thinking"
-/// overlay ([CmpysThinkFeed]) narrates the match. The LLM's `confidence`
-/// becomes the "% fit" badge and `relevance_summary` becomes the "why" copy —
-/// every suggestion is genuinely model-generated from the user's answers.
+/// age + interests, then calls the model-backed `/sessions/{id}/suggest-idols`
+/// endpoint. While that is in flight a short narration of the match shows. The
+/// LLM's `relevance_summary` becomes the "why" copy under the mentor's name.
 ///
 /// There is **no client-side fallback**: if the backend is unreachable the
 /// screen shows an explicit error with retry, never synthetic suggestions.
+///
+/// - the top result is the 330 pt "Best match" portrait card, the rest sit
+///   under "ALSO RELEVANT" with 56 pt grey avatars
+/// - tapping a card opens the mentor preview with a clip-path expand out of
+///   that card ([V3ExpandRoute]); closing it returns here, still loaded
+/// - a search that finds nobody offers "Prepare profile", which queues the
+///   person through `POST /idols/import`
+///
+/// [onPick] fires when the user chooses "Begin intake with {mentor}" in the
+/// preview.
 class CmpysDiscoveryStep extends ConsumerStatefulWidget {
   const CmpysDiscoveryStep({
     super.key,
@@ -27,20 +39,34 @@ class CmpysDiscoveryStep extends ConsumerStatefulWidget {
     required this.interests,
     required this.age,
     this.goalId,
+    this.goal = '',
+    this.situation = const <String>{},
+    this.situationNote = '',
     this.existingSessionId,
     this.onSessionCreated,
   });
 
+  /// The mentor the user chose to begin intake with.
   final ValueChanged<CmpysIdol> onPick;
   final Set<String> interests;
   final int age;
   final String? goalId;
+
+  /// The goal in the user's own words; empty falls back to [goalId]'s label.
+  final String goal;
+
+  /// Situation chips and the optional note, sent with the new session.
+  final Set<String> situation;
+  final String situationNote;
   final String? existingSessionId;
   final ValueChanged<String>? onSessionCreated;
 
   @override
   ConsumerState<CmpysDiscoveryStep> createState() => _CmpysDiscoveryStepState();
 }
+
+/// Where the "Prepare profile" card is.
+enum _Import { idle, researching, queued }
 
 class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
   String _query = '';
@@ -51,9 +77,31 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
   String? _searchError;
   List<CmpysIdolSuggestion> _searchResults = [];
 
+  _Import _import = _Import.idle;
+  String _importName = '';
+  String? _importError;
+  double _importProgress = 0;
+  Timer? _importTimer;
+  int _importRevision = 0;
+
+  /// Names (see [_importKey]) this screen has already queued: retyping one
+  /// shows "Queued for review" instead of starting another paid research
+  /// job.
+  final Set<String> _queuedNames = {};
+
+  /// Requests still running, by name: a second tap on the same name (after
+  /// typing away and back) joins the first instead of sending another.
+  final Map<String, Future<IdolImportResult>> _importFlights = {};
+
+  static String _importKey(String name) =>
+      name.trim().replaceAll(RegExp(r'\s+'), ' ').toLowerCase();
+
+  bool _previewing = false;
+
   @override
   void dispose() {
     _searchTimer?.cancel();
+    _importTimer?.cancel();
     _searchController.dispose();
     super.dispose();
   }
@@ -61,6 +109,7 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
   void _search(String value) {
     _searchTimer?.cancel();
     final revision = ++_searchRevision;
+    _resetImport();
     setState(() {
       _query = value;
       _searchError = null;
@@ -103,6 +152,109 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
     });
   }
 
+  // ─── Prepare profile (POST /idols/import) ───────────────────────────────
+
+  /// Drop the import card back to its offer. A request still in flight is
+  /// ignored when it lands: the user has moved on to another query.
+  void _resetImport() {
+    _importRevision++;
+    _importTimer?.cancel();
+    _import = _Import.idle;
+    _importError = null;
+  }
+
+  Future<void> _prepareProfile() async {
+    final name = _query.trim();
+    if (name.length < 2 || _import == _Import.researching) return;
+    final key = _importKey(name);
+    final revision = ++_importRevision;
+    if (_queuedNames.contains(key)) {
+      setState(() {
+        _import = _Import.queued;
+        _importName = name;
+        _importError = null;
+        _importProgress = 1;
+      });
+      return;
+    }
+    setState(() {
+      _import = _Import.researching;
+      _importName = name;
+      _importError = null;
+      _importProgress = 0.08;
+    });
+    // The request reports no progress, so the bar only eases towards (never
+    // reaches) full while it runs, and completes when the answer arrives.
+    _importTimer?.cancel();
+    _importTimer = Timer.periodic(const Duration(milliseconds: 380), (_) {
+      if (!mounted) return;
+      setState(() => _importProgress += (0.9 - _importProgress) * 0.22);
+    });
+    try {
+      final flight = _importFlights[key] ??= ref
+          .read(sessionRepositoryProvider)
+          .importIdol(name)
+          .whenComplete(() {
+            _importFlights.remove(key);
+          });
+      final result = await flight;
+      // Queued is remembered even if the learner has moved on meanwhile; a
+      // failed job never is, so the name can be prepared again.
+      if (!result.isPublished && !result.isFailed) _queuedNames.add(key);
+      if (!mounted || revision != _importRevision) return;
+      _importTimer?.cancel();
+      setState(() {
+        if (result.isFailed) {
+          // Honest: nothing was prepared. The offer comes back for a retry.
+          _import = _Import.idle;
+          _importError = 'Couldn’t prepare this profile. Try again later.';
+        } else if (result.isPublished) {
+          // Ready already: it joins the list like any other result.
+          _import = _Import.idle;
+          _searchResults = [
+            CmpysIdolSuggestion(
+              idol: cmpysIdolFromSuggestion(
+                name: name,
+                era: '',
+                summary: '',
+                domains: const [],
+              ),
+              score: 0,
+              reason: 'Prepared from documented sources.',
+            ),
+          ];
+        } else {
+          _import = _Import.queued;
+          _importProgress = 1;
+        }
+      });
+    } catch (error) {
+      if (!mounted || revision != _importRevision) return;
+      _importTimer?.cancel();
+      setState(() {
+        _import = _Import.idle;
+        _importError = _importMessage(error);
+      });
+    }
+  }
+
+  String _importMessage(Object error) {
+    if (error is ApiError) {
+      final status = error.statusCode;
+      // The per-user daily cap on new profiles.
+      if (status == 429) {
+        return 'You’ve prepared today’s limit of new profiles. Pick a '
+            'prepared mentor or try again tomorrow.';
+      }
+      if (status != null && status >= 400 && status < 500) {
+        return 'We couldn’t prepare that profile. Check the name and try again.';
+      }
+    }
+    return 'Couldn’t reach the library. Check your connection and try again.';
+  }
+
+  // ─── suggestions ────────────────────────────────────────────────────────
+
   bool _loading = true;
   String? _error;
   List<CmpysIdolSuggestion> _suggestions = const [];
@@ -140,7 +292,11 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
             age: widget.age,
             financialStatus: _financialStatusForGoal(widget.goalId),
             interests: widget.interests.toList(),
-            goal: _goalLabelForId(widget.goalId),
+            goal: widget.goal.trim().isNotEmpty
+                ? widget.goal
+                : _goalLabelForId(widget.goalId),
+            situation: widget.situation.toList(),
+            situationNote: widget.situationNote,
           ),
         );
         sessionId = session.id;
@@ -225,352 +381,416 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
     ];
   }
 
-  @override
-  Widget build(BuildContext context) {
-    if (_loading) return _thinkingOverlay();
-    if (_error != null) return _errorScreen();
-    return _discoveryList();
+  // ─── preview (the clip-path expand) ─────────────────────────────────────
+
+  /// Open the mentor preview out of the tapped card. [cardContext] is the
+  /// card's own context, so the expand starts exactly at its rect and a close
+  /// returns into it. Choosing a mentor hands them to [CmpysDiscoveryStep.onPick]
+  /// and removes the preview at once: the flow moves on behind it.
+  void _preview(BuildContext cardContext, CmpysIdol idol) {
+    if (_previewing) return;
+    _previewing = true;
+    FocusManager.instance.primaryFocus?.unfocus();
+    final navigator = Navigator.of(context);
+    late final V3ExpandRoute<void> route;
+    route = V3ExpandRoute<void>(
+      from: V3ExpandRoute.rectOf(cardContext),
+      builder: (_) => CmpysIdolPreviewStep(
+        idol: idol,
+        age: widget.age,
+        onBack: () => navigator.pop(),
+        onChoose: (chosen) {
+          widget.onPick(chosen);
+          if (route.isActive) navigator.removeRoute(route);
+        },
+      ),
+    );
+    unawaited(navigator.push(route).whenComplete(() => _previewing = false));
   }
 
+  // ─── build ──────────────────────────────────────────────────────────────
+
+  @override
+  Widget build(BuildContext context) {
+    return DefaultTextStyle(
+      style: AppTypography.sans(16).copyWith(color: AppColors.ink),
+      child: Column(
+        children: [
+          const V3TopBar(),
+          Expanded(
+            child: _loading
+                ? _thinking()
+                : _error != null
+                ? _errorView()
+                : _discoveryList(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  double _gutter(double width) => math.max(20.0, (width - 520) / 2);
+
   // ─── error + retry (no synthetic fallback) ──────────────────────────────
-  Widget _errorScreen() {
-    return SafeArea(
-      child: Center(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 64,
-                height: 64,
-                decoration: BoxDecoration(
-                  color: AppColors.claySoft,
-                  borderRadius: BorderRadius.circular(18),
-                ),
-                child: const Icon(
-                  Icons.wifi_off_rounded,
+
+  Widget _errorView() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 64,
+              height: 64,
+              decoration: BoxDecoration(
+                color: AppColors.dangerSoft,
+                borderRadius: BorderRadius.circular(18),
+              ),
+              child: const Center(
+                child: V3Icon(
+                  V3Icons.wifiOff,
                   size: 28,
                   color: AppColors.danger,
                 ),
               ),
-              const SizedBox(height: 18),
-              Text(
-                'Your mentor AI is unreachable',
-                textAlign: TextAlign.center,
-                style: AppTypography.h3.copyWith(fontSize: 21, height: 1.3),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                _error!,
-                textAlign: TextAlign.center,
-                style: AppTypography.bodyDim.copyWith(fontSize: 14.5),
-              ),
-              const SizedBox(height: 22),
-              CmpysButton(
-                variant: CmpysBtnVariant.primary,
-                size: CmpysBtnSize.lg,
-                leadingIcon: Icons.refresh_rounded,
-                onTap: _loadSuggestions,
-                child: const Text('Try again'),
-              ),
-            ],
-          ),
+            ),
+            const SizedBox(height: 18),
+            Text(
+              'Your mentor AI is unreachable',
+              textAlign: TextAlign.center,
+              style: AppTypography.display(28),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _error!,
+              textAlign: TextAlign.center,
+              style: AppTypography.sans(
+                14.5,
+              ).copyWith(color: AppColors.ink2, height: 1.45),
+            ),
+            const SizedBox(height: 22),
+            V3Button(
+              icon: V3Icons.refresh,
+              onPressed: _loadSuggestions,
+              child: const Text('Try again'),
+            ),
+          ],
         ),
       ),
     );
   }
 
-  // ─── thinking overlay (LLM-style) ───────────────────────────────────────
-  Widget _thinkingOverlay() {
-    return Container(
-      decoration: const BoxDecoration(gradient: AppColors.gradGreen),
-      child: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 26, vertical: 24),
+  // ─── thinking (while the model suggests) ────────────────────────────────
+
+  Widget _thinking() {
+    final lines = cmpysSuggestionThoughts(
+      interests: widget.interests,
+      goalId: widget.goalId,
+    );
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final gutter = _gutter(constraints.maxWidth);
+        return SingleChildScrollView(
+          padding: EdgeInsets.fromLTRB(gutter, 0, gutter, 40),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const SizedBox(height: 24),
-              Text(
-                'MATCHING YOU WITH A MENTOR',
-                style: AppTypography.kicker.copyWith(
-                  color: Colors.white.withValues(alpha: 0.75),
+              V3Rise(
+                child: Text(
+                  'MATCHING YOU WITH A MENTOR',
+                  style: AppTypography.kick,
                 ),
               ),
               const SizedBox(height: 10),
-              Text(
-                'Finding your matches…',
-                style: AppTypography.display.copyWith(
-                  color: Colors.white,
-                  fontSize: 34,
-                  letterSpacing: -0.4,
-                  height: 1.3,
+              V3Rise(
+                delay: const Duration(milliseconds: 60),
+                child: Text(
+                  'Finding your matches…',
+                  style: AppTypography.display(40),
                 ),
               ),
               const SizedBox(height: 24),
               Container(
-                padding: const EdgeInsets.fromLTRB(16, 18, 16, 18),
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.18),
-                  borderRadius: BorderRadius.circular(20),
-                ),
                 width: double.infinity,
-                constraints: const BoxConstraints(minHeight: 220),
-                child: CmpysThinkFeed(
-                  lines: cmpysSuggestionThoughts(
-                    interests: widget.interests,
-                    goalId: widget.goalId,
-                  ),
-                  // Slow enough that real network latency is usually covered;
-                  // the feed loops gently if the call is slower.
-                  intervalMs: 700,
+                padding: const EdgeInsets.all(18),
+                decoration: BoxDecoration(
+                  color: AppColors.night2,
+                  borderRadius: BorderRadius.circular(24),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (var i = 0; i < lines.length; i++)
+                      V3Rise(
+                        // Slow enough that real network latency is usually
+                        // covered.
+                        delay: Duration(milliseconds: 300 + i * 700),
+                        child: Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: Text(
+                            lines[i],
+                            style: AppTypography.sans(
+                              14.5,
+                            ).copyWith(color: AppColors.nink2, height: 1.45),
+                          ),
+                        ),
+                      ),
+                    const V3Spinner(color: AppColors.nink3, size: 16),
+                  ],
                 ),
               ),
             ],
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
-  // ─── ranked list ────────────────────────────────────────────────────────
+  // ─── discovery ──────────────────────────────────────────────────────────
+
   Widget _discoveryList() {
     final list = _filtered;
-    final featured = _suggestions.isNotEmpty ? _suggestions.first : null;
-    final rest = list
-        .where(
-          (s) =>
-              _query.trim().isNotEmpty ||
-              featured == null ||
-              s.idol.id != featured.idol.id,
-        )
-        .toList();
-    return SafeArea(
-      child: ListView(
-        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-        padding: const EdgeInsets.only(bottom: 30),
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(22, 16, 22, 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const CmpysKicker('Choose your mentor', color: AppColors.green),
-                const SizedBox(height: 8),
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: Text(
-                    'Who inspires your next step?',
-                    style: AppTypography.display.copyWith(
-                      fontSize: 28,
-                      fontWeight: FontWeight.w500,
-                      letterSpacing: -0.3,
-                      height: 1.32,
-                    ),
-                  ),
-                ),
-                _aiAttribution(),
-                const SizedBox(height: 12),
-                _searchField(),
-                if (_searching) const LinearProgressIndicator(),
-                if (_searchError != null) Text(_searchError!),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(18, 10, 18, 30),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (_query.trim().isEmpty && featured != null) ...[
-                  _featuredCard(featured),
-                  const SizedBox(height: 14),
-                ],
-                Padding(
-                  padding: const EdgeInsets.only(left: 4, bottom: 12),
-                  child: CmpysKicker(
-                    _query.trim().isEmpty
-                        ? 'More matches'
-                        : '${list.length} result${list.length == 1 ? "" : "s"}',
-                  ),
-                ),
-                if (rest.isEmpty)
-                  _emptyResults()
-                else
-                  for (final s in rest) ...[
-                    _suggestionRow(s),
-                    const SizedBox(height: 10),
-                  ],
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+    final top = list.isEmpty ? null : list.first;
+    final rest = list.length > 1
+        ? list.sublist(1)
+        : const <CmpysIdolSuggestion>[];
+    final noResults =
+        _query.trim().length >= 2 &&
+        !_searching &&
+        _searchError == null &&
+        list.isEmpty;
+    final interests = widget.interests.take(2).join(' and ');
 
-  Widget _aiAttribution() {
-    return Row(
-      children: [
-        const Icon(PhosphorIconsFill.sparkle, size: 14, color: AppColors.green),
-        const SizedBox(width: 6),
-        Expanded(
-          child: Text(
-            'Chosen by AI from your interests',
-            style: AppTypography.captionMedium.copyWith(
-              color: AppColors.green2,
-              fontSize: 12.5,
-            ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final gutter = _gutter(constraints.maxWidth);
+        return SingleChildScrollView(
+          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+          padding: const EdgeInsets.only(bottom: 120),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: EdgeInsets.symmetric(horizontal: gutter),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    V3Rise(
+                      child: Text(
+                        'MENTOR DISCOVERY',
+                        style: AppTypography.kick,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    V3Rise(
+                      delay: const Duration(milliseconds: 60),
+                      child: Semantics(
+                        header: true,
+                        label: 'Who would you like to learn from?',
+                        excludeSemantics: true,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Who would you',
+                              style: AppTypography.display(40),
+                            ),
+                            Text(
+                              'like to learn from?',
+                              style: AppTypography.displayItalic(
+                                40,
+                              ).copyWith(color: AppColors.ink),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    V3Rise(
+                      delay: const Duration(milliseconds: 120),
+                      child: Text(
+                        'Suggested from ${interests.isEmpty ? 'your interests' : interests}.',
+                        style: AppTypography.sans(
+                          14,
+                        ).copyWith(color: AppColors.ink2),
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    V3Rise(
+                      delay: const Duration(milliseconds: 160),
+                      child: _searchField(),
+                    ),
+                    if (_searching)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 14),
+                        child: V3Spinner(
+                          size: 16,
+                          color: AppColors.ink3,
+                          semanticLabel: 'Searching',
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              if (top != null)
+                Padding(
+                  padding: EdgeInsets.fromLTRB(gutter, 18, gutter, 0),
+                  child: V3Rise(
+                    delay: const Duration(milliseconds: 220),
+                    child: _bestMatch(top),
+                  ),
+                ),
+              if (rest.isNotEmpty)
+                Padding(
+                  padding: EdgeInsets.fromLTRB(gutter, 22, gutter, 0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: Text('ALSO RELEVANT', style: AppTypography.kick),
+                      ),
+                      for (var i = 0; i < rest.length; i++)
+                        Padding(
+                          padding: EdgeInsets.only(top: i == 0 ? 0 : 10),
+                          child: V3Rise(
+                            delay: Duration(milliseconds: 280 + i * 60),
+                            child: _row(rest[i]),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              if (noResults)
+                Padding(
+                  padding: EdgeInsets.fromLTRB(gutter, 22, gutter, 22),
+                  child: V3Rise(child: _prepareCard()),
+                ),
+            ],
           ),
-        ),
-      ],
+        );
+      },
     );
   }
 
   Widget _searchField() {
-    return Container(
-      constraints: const BoxConstraints(minHeight: 48),
-      padding: const EdgeInsets.symmetric(horizontal: 14),
-      decoration: BoxDecoration(
-        color: AppColors.card,
-        borderRadius: BorderRadius.circular(13),
-        border: Border.all(color: AppColors.hair2, width: 1.5),
-      ),
-      child: Row(
-        children: [
-          const Icon(
-            PhosphorIconsRegular.magnifyingGlass,
-            size: 19,
-            color: AppColors.ink3,
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: TextField(
-              controller: _searchController,
-              onChanged: _search,
-              textAlignVertical: TextAlignVertical.center,
-              onTapOutside: (_) =>
-                  FocusManager.instance.primaryFocus?.unfocus(),
-              style: AppTypography.body.copyWith(fontSize: 15.5),
-              cursorColor: AppColors.green,
-              decoration: const InputDecoration(
-                hintText: 'Search people or fields…',
-                border: InputBorder.none,
-                enabledBorder: InputBorder.none,
-                focusedBorder: InputBorder.none,
-                isDense: true,
-                contentPadding: EdgeInsets.zero,
-              ),
-            ),
-          ),
-          if (_query.isNotEmpty)
-            IconButton(
-              tooltip: 'Clear search',
-              onPressed: () {
+    return V3Field(
+      controller: _searchController,
+      onChanged: _search,
+      placeholder: 'Search people or fields',
+      textInputAction: TextInputAction.search,
+      error: _searchError,
+      right: _query.isEmpty
+          ? const V3Icon(V3Icons.search, size: 18, color: AppColors.ink3)
+          : V3Pressable(
+              semanticLabel: 'Clear search',
+              onTap: () {
                 _searchController.clear();
                 _search('');
               },
-              icon: const Icon(
-                PhosphorIconsRegular.x,
-                size: 17,
-                color: AppColors.ink3,
-              ),
+              child: const V3Icon(V3Icons.x, size: 18, color: AppColors.ink3),
             ),
-        ],
-      ),
     );
   }
 
-  Widget _featuredCard(CmpysIdolSuggestion suggestion) {
+  /// The top result: a 330 pt portrait card, "Best match" tag top-left and the
+  /// mentor's field, name, why and "Preview mentor" over the bottom shade.
+  Widget _bestMatch(CmpysIdolSuggestion suggestion) {
     final idol = suggestion.idol;
-    return CmpysPressable(
-      onTap: () => widget.onPick(idol),
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(22, 20, 22, 22),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              idol.color,
-              Color.alphaBlend(
-                Colors.black.withValues(alpha: 0.16),
-                idol.color,
+    return Builder(
+      builder: (cardContext) => V3Pressable(
+        onTap: () => _preview(cardContext, idol),
+        focusRadius: AppRadii.brR2,
+        semanticLabel:
+            'Best match: ${idol.name}, ${idol.field}. ${suggestion.reason} Preview mentor',
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: AppRadii.brR2,
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x990E0C14),
+                blurRadius: 40,
+                offset: Offset(0, 24),
+                spreadRadius: -24,
               ),
             ],
           ),
-          borderRadius: AppRadii.lg,
-          boxShadow: [
-            BoxShadow(
-              color: idol.color.withValues(alpha: 0.28),
-              blurRadius: 20,
-              offset: const Offset(0, 10),
-            ),
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+          child: V3Portrait(
+            image: cmpysIdolImage(idol),
+            height: 330,
+            radius: AppRadii.r2,
+            child: Stack(
+              fit: StackFit.expand,
               children: [
-                Text(
-                  'TOP MATCH FOR YOU',
-                  style: AppTypography.kicker.copyWith(
-                    color: Colors.white.withValues(alpha: 0.78),
+                const Positioned(
+                  top: 16,
+                  left: 16,
+                  child: V3Tag(
+                    background: Color(0x24FFFFFF),
+                    color: Colors.white,
+                    icon: V3Icons.sparkle,
+                    child: Text('Best match'),
                   ),
                 ),
-                const Spacer(),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.2),
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: Text(
-                    'Suggested mentor',
-                    style: AppTypography.kicker.copyWith(
-                      color: Colors.white,
-                      fontSize: 10.5,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 14),
-            Row(
-              children: [
-                CmpysMentorAvatar(
-                  slug: idol.slug,
-                  initials: idol.initials,
-                  color: idol.color,
-                  tint: Colors.white,
-                  size: 56,
-                  border: Border.all(color: Colors.white, width: 2),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
+                Positioned(
+                  left: 20,
+                  right: 20,
+                  bottom: 20,
                   child: Column(
+                    mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        idol.name,
-                        style: AppTypography.h2.copyWith(
-                          color: Colors.white,
-                          fontSize: 23,
-                          letterSpacing: -0.4,
-                          height: 1.16,
+                        idol.field,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTypography.sans(
+                          12,
+                          FontWeight.w500,
+                        ).copyWith(color: AppColors.nink2),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          idol.name,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppTypography.display(
+                            40,
+                          ).copyWith(color: Colors.white),
                         ),
                       ),
-                      const SizedBox(height: 2),
-                      Text(
-                        '${idol.title} · ${idol.tag}',
-                        style: AppTypography.caption.copyWith(
-                          color: Colors.white.withValues(alpha: 0.85),
-                          fontSize: 13,
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Text(
+                          suggestion.reason,
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppTypography.sans(
+                            13.5,
+                          ).copyWith(color: AppColors.nink2, height: 1.45),
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.only(top: 14),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              'Preview mentor',
+                              style: AppTypography.sans(
+                                13.5,
+                                FontWeight.w600,
+                              ).copyWith(color: Colors.white),
+                            ),
+                            const SizedBox(width: 6),
+                            const V3Icon(
+                              V3Icons.arrowR,
+                              size: 16,
+                              color: Colors.white,
+                            ),
+                          ],
                         ),
                       ),
                     ],
@@ -578,175 +798,176 @@ class _CmpysDiscoveryStepState extends ConsumerState<CmpysDiscoveryStep> {
                 ),
               ],
             ),
-            const SizedBox(height: 16),
-            Text(
-              '"${idol.quote}"',
-              style: AppTypography.readingQuote.copyWith(
-                color: Colors.white,
-                fontSize: 16.5,
-                height: 1.4,
-              ),
-            ),
-            const SizedBox(height: 14),
-            Container(
-              padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Padding(
-                    padding: EdgeInsets.only(top: 1),
-                    child: Icon(
-                      Icons.auto_awesome_rounded,
-                      size: 14,
-                      color: Colors.white,
-                    ),
-                  ),
-                  const SizedBox(width: 7),
-                  Expanded(
-                    child: Text(
-                      suggestion.reason,
-                      style: AppTypography.caption.copyWith(
-                        color: Colors.white.withValues(alpha: 0.95),
-                        fontSize: 12.5,
-                        height: 1.4,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 14),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  'View profile',
-                  style: AppTypography.bodyMedium.copyWith(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14,
-                  ),
-                ),
-                const SizedBox(width: 4),
-                const Icon(
-                  Icons.arrow_forward_rounded,
-                  size: 16,
-                  color: Colors.white,
-                ),
-              ],
-            ),
-          ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _suggestionRow(CmpysIdolSuggestion s) {
-    final idol = s.idol;
-    return CmpysCardSurface(
-      pad: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-      onTap: () => widget.onPick(idol),
-      child: Row(
-        children: [
-          CmpysMentorAvatar(
-            slug: idol.slug,
-            initials: idol.initials,
-            color: idol.color,
-            tint: idol.tint,
-            size: 48,
-          ),
-          const SizedBox(width: 13),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
+  Widget _row(CmpysIdolSuggestion suggestion) {
+    final idol = suggestion.idol;
+    return Builder(
+      builder: (cardContext) => V3Pressable(
+        onTap: () => _preview(cardContext, idol),
+        focusRadius: AppRadii.brR,
+        semanticLabel: '${idol.name}, ${idol.field}',
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: v3Card(),
+          child: Row(
+            children: [
+              V3Avatar(
+                image: cmpysIdolImage(idol),
+                initials: idol.initials,
+                tint: idol.tint,
+                size: 56,
+                gray: true,
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(
+                    Text(
+                      idol.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTypography.sans(15.5, FontWeight.w600),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
                       child: Text(
-                        idol.name,
-                        style: AppTypography.h4.copyWith(fontSize: 16.5),
+                        idol.field,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 7,
-                        vertical: 3,
-                      ),
-                      decoration: BoxDecoration(
-                        color: idol.tint,
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Text(
-                        'Explore',
-                        style: AppTypography.kicker.copyWith(
-                          color: idol.color,
-                          fontSize: 10,
-                        ),
+                        style: AppTypography.sans(
+                          12.5,
+                        ).copyWith(color: AppColors.ink3),
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  '${idol.title} · ${idol.era}',
-                  style: AppTypography.caption.copyWith(
-                    color: AppColors.ink2,
-                    fontSize: 13,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
-            ),
+              ),
+              const SizedBox(width: 14),
+              const V3Icon(V3Icons.right, size: 18, color: AppColors.ink3),
+            ],
           ),
-          const SizedBox(width: 8),
-          const Icon(
-            Icons.chevron_right_rounded,
-            size: 19,
-            color: AppColors.ink3,
-          ),
-        ],
+        ),
       ),
     );
   }
 
-  Widget _emptyResults() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 50, horizontal: 20),
-      child: Column(
-        children: [
-          const Icon(
-            PhosphorIconsRegular.magnifyingGlass,
-            size: 34,
-            color: AppColors.hair2,
+  /// "“q” isn’t in the library yet" → Prepare profile → Researching →
+  /// Queued for review.
+  Widget _prepareCard() {
+    // A name this screen already queued shows as queued straight away.
+    final alreadyQueued =
+        _import == _Import.idle &&
+        _importError == null &&
+        _queuedNames.contains(_importKey(_query));
+    final working = _import != _Import.idle || alreadyQueued;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: v3Card(),
+      child: working
+          ? _importProgressBody(queued: alreadyQueued)
+          : _importOffer(),
+    );
+  }
+
+  Widget _importOffer() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '“${_query.trim()}” isn’t in the library yet',
+          style: AppTypography.sans(15.5, FontWeight.w600),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(0, 6, 0, 14),
+          child: Text(
+            'We can research this person and prepare a profile from documented sources.',
+            style: AppTypography.sans(
+              13.5,
+            ).copyWith(color: AppColors.ink2, height: 1.5),
           ),
-          const SizedBox(height: 12),
-          Text(
-            'No one by that name yet.',
-            style: AppTypography.bodyMedium.copyWith(
-              color: AppColors.ink3,
-              fontSize: 15,
+        ),
+        if (_importError != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 14),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.only(top: 1),
+                  child: V3Icon(
+                    V3Icons.alert,
+                    size: 14,
+                    color: AppColors.danger,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    _importError!,
+                    style: AppTypography.sans(
+                      12.5,
+                    ).copyWith(color: AppColors.danger, height: 1.4),
+                  ),
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: 4),
-          Text(
-            'Try "investor", "writer", or "science".',
-            style: AppTypography.caption.copyWith(
-              color: AppColors.ink3,
-              fontSize: 13,
+        V3Button(
+          size: V3Size.md,
+          kind: V3ButtonKind.dark,
+          icon: V3Icons.plus,
+          onPressed: _prepareProfile,
+          child: const Text('Prepare profile'),
+        ),
+      ],
+    );
+  }
+
+  Widget _importProgressBody({bool queued = false}) {
+    final done = queued || _import == _Import.queued;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            if (done)
+              const V3Icon(
+                V3Icons.check,
+                size: 16,
+                strokeWidth: 2.5,
+                color: AppColors.sage2,
+              )
+            else
+              const V3Spinner(size: 16, semanticLabel: 'Researching'),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                done ? 'Queued for review' : 'Researching $_importName',
+                style: AppTypography.sans(15, FontWeight.w600),
+              ),
             ),
-            textAlign: TextAlign.center,
+          ],
+        ),
+        const SizedBox(height: 12),
+        V3Bar(value: done ? 1 : _importProgress, color: AppColors.iris),
+        Padding(
+          padding: const EdgeInsets.only(top: 10),
+          child: Text(
+            done
+                ? 'Profiles are checked before publishing. Pick a suggested mentor to continue now.'
+                : 'Finding sources · checking timeline · drafting domains',
+            style: AppTypography.sans(12.5).copyWith(color: AppColors.ink3),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }

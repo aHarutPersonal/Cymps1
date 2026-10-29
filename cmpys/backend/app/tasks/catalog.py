@@ -235,18 +235,44 @@ async def _enqueue_catalog_book_async(
     }
 
 
+def _obsolete_book_quality_clause():
+    """Recover legacy publications missing the independent fidelity contract.
+
+    Only published rows qualify for the additional fidelity check. Quarantining
+    one makes the sweep idempotent even if its later review fails; normal job
+    retry limits remain authoritative.
+    """
+    from sqlalchemy import and_
+    from app.services.book_fidelity import FIDELITY_VERSION
+
+    quality = ContentResource.metadata_json["quality_report"]
+    gate = quality["gate_version"].as_integer()
+    fidelity = quality["fidelity"]
+    version = fidelity["version"].as_integer()
+    return or_(
+        gate.is_(None),
+        gate != BOOK_MODULE_QUALITY_GATE_VERSION,
+        and_(
+            ContentResource.status == CatalogStatus.PUBLISHED,
+            or_(
+                version.is_(None),
+                version != FIDELITY_VERSION,
+                fidelity["passed"].as_boolean().is_not(True),
+                fidelity["content_hash"].as_string().is_(None),
+            ),
+        ),
+    )
+
+
 async def _recover_obsolete_book_quality_jobs(
     db,
     *,
     now: datetime,
     limit: int,
 ) -> int:
-    """Quarantine and requeue books evaluated by an obsolete gate version."""
+    """Quarantine and requeue books with an obsolete publication contract."""
     if limit <= 0:
         return 0
-    quality_gate = ContentResource.metadata_json["quality_report"][
-        "gate_version"
-    ].as_integer()
     stale_book_result = await db.execute(
         select(ContentResource)
         .where(
@@ -263,10 +289,7 @@ async def _recover_obsolete_book_quality_jobs(
                     CatalogStatus.FLAGGED,
                 ]
             ),
-            or_(
-                quality_gate.is_(None),
-                quality_gate != BOOK_MODULE_QUALITY_GATE_VERSION,
-            ),
+            _obsolete_book_quality_clause(),
         )
         .order_by(ContentResource.updated_at.asc())
         .limit(limit)

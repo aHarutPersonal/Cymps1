@@ -1,0 +1,84 @@
+{
+  "release": "20261016-124300-evidence-cases",
+  "status": "deployed_live_validation_failed",
+  "full_backend": {
+    "passed": 3160,
+    "skipped": 4,
+    "warnings": 1
+  },
+  "exact_image_network_disabled": {
+    "passed": 1385,
+    "skipped": 1
+  },
+  "independent_review": {
+    "blockers": 0,
+    "final_alias_focused_tests_passed": 127,
+    "independent_alias_boundary_probes": 16,
+    "independent_review_path_probes": 24,
+    "earlier_v16_final_focused_tests_passed": 94
+  },
+  "source_files_verified": 22,
+  "changed_files": 8,
+  "configuration_unchanged": true,
+  "live_validation": "0_of_3_accepted",
+  "paid_test_authorization_remaining": false,
+  "prior_v15_batch": {
+    "accepted": 0,
+    "count": 3,
+    "reported_cost_usd": 0.412216,
+    "unknown_reserved_usd": 0.1031235,
+    "accounted_usd": 0.5153395
+  },
+  "saved_state_fingerprint": "9620a6e2d34355178ba2d25cf3e3775269f53b586c6037e1cfc423a5bcc5a42d",
+  "rollback_release": "20261016-122235-scoped-repairs",
+  "image_digest": "sha256:d1073b0aa37de6a74e20fbd5919ff3615b8d4590f9317bf1386b44a235a9cdc4",
+  "runtime": {
+    "file_hashes_verified_in_every_service": true,
+    "image_digest": "sha256:d1073b0aa37de6a74e20fbd5919ff3615b8d4590f9317bf1386b44a235a9cdc4",
+    "release": "20261016-124300-evidence-cases",
+    "verified_files": 22,
+    "verified_services": [
+      "web",
+      "worker",
+      "worker-high",
+      "worker-low",
+      "catalog-worker",
+      "catalog-control",
+      "curriculum-worker",
+      "curriculum-control",
+      "beat"
+    ]
+  },
+  "https_readiness": {
+    "status": "ready",
+    "checks": {
+      "database": true,
+      "redis": true
+    }
+  },
+  "saved_state_unchanged": true,
+  "new_usage_events_from_smoke": 0,
+  "registry_latest_promoted": false,
+  "requested_batch": {
+    "cases": [
+      "accounting",
+      "geometry",
+      "writing"
+    ],
+    "count": 3,
+    "shared_cap_usd": 1.48,
+    "status": "completed",
+    "combined_accounted_ceiling_with_v15_usd": 1.9953395,
+    "approved_by_owner": true,
+    "observed_started_at_utc": "2026-10-16T13:10:12Z",
+    "accepted": 0,
+    "reported_cost_usd": 0.4120144,
+    "unknown_reserved_usd": 0.07578025,
+    "accounted_usd": 0.48779465,
+    "calls": 19,
+    "finished_at_utc": "2026-10-16T13:19:24.410337404Z",
+    "pending_calls": 0
+  },
+  "combined_v15_v16_accounted_usd": 1.00313415,
+  "postpilot_saved_state_unchanged": true
+}

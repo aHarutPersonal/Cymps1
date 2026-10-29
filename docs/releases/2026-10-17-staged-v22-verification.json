@@ -1,0 +1,258 @@
+{
+  "release": "20261017-013000-field-drafts",
+  "rollback_release": "20261017-001200-structured-solutions",
+  "image_digest": "sha256:9b30b39bfb0f6dc5b4e82114c2dace33eef546c78c5bbba1af8225006bb68fdb",
+  "manifest_sha256": "28f7b62ced61c44f2f1d6159018b3e55f5b40bbab6519af9c3a67a547741b518",
+  "status": "deployed_live_failures_followup_in_progress",
+  "full_backend": {
+    "passed": 3738,
+    "skipped": 4,
+    "warnings": 1,
+    "duration_seconds": 39.89,
+    "provider": "dummy",
+    "database": "isolated_local_test_container"
+  },
+  "exact_image_network_disabled": {
+    "passed": 1934,
+    "skipped": 2,
+    "duration_seconds": 27.21,
+    "test_modules": 65
+  },
+  "independent_review": {
+    "blockers": 0,
+    "focused_passes": 300,
+    "launcher_mock_tests": 24,
+    "audit_selftest": "passed"
+  },
+  "runtime_files": 29,
+  "changed_existing_files_from_v21": 4,
+  "new_files_from_v21": 1,
+  "configuration_unchanged": true,
+  "production_request_limits_unchanged": true,
+  "review_version": 21,
+  "fresh_live_validation": "0_of_3_accepted",
+  "live_authorization": {
+    "max_tests": 6,
+    "shared_cap_usd": 1.97,
+    "tests_completed": 6,
+    "tests_remaining": 0,
+    "reported_usd": 0.565886,
+    "unknown_reserved_usd": 0,
+    "remaining_usd": 1.404114,
+    "earlier_completed_reported_usd": 1.0208688,
+    "combined_ceiling_usd": 3,
+    "progress_changes": false,
+    "tests_reserved": 6,
+    "tests_unreserved": 0,
+    "tests_in_progress": 0,
+    "status": "complete_test_count_exhausted"
+  },
+  "predeploy_saved_state": {
+    "existing_qa_copy": {
+      "details_http": 200,
+      "details_status": "available",
+      "plan_http": 200,
+      "practice_http": 200,
+      "practice_state": "ready",
+      "private_keys_absent": true,
+      "ready_lessons": 1
+    },
+    "learner": {
+      "details_http": 200,
+      "details_status": "partial",
+      "plan_http": 200,
+      "practice_http": 200,
+      "practice_state": "ready",
+      "private_keys_absent": true,
+      "ready_lessons": 1
+    },
+    "new_usage_events": 0,
+    "saved_state_fingerprint": "9620a6e2d34355178ba2d25cf3e3775269f53b586c6037e1cfc423a5bcc5a42d",
+    "saved_state_unchanged": true
+  },
+  "limits": [
+    "Live success remains unproven.",
+    "One saved lesson ready, two missing; authenticated full app flow remains unverified."
+  ],
+  "test_only_timing_adjustment": "Queue deadline test scaled delays, deadlines and wall-time assertion 10x; original concurrency and call-count assertions preserved. Runtime budgets unchanged.",
+  "runtime": {
+    "release": "20261017-013000-field-drafts",
+    "image_digest": "sha256:9b30b39bfb0f6dc5b4e82114c2dace33eef546c78c5bbba1af8225006bb68fdb",
+    "verified_services": [
+      "web",
+      "worker",
+      "worker-high",
+      "worker-low",
+      "catalog-worker",
+      "catalog-control",
+      "curriculum-worker",
+      "curriculum-control",
+      "beat"
+    ],
+    "verified_files": 29,
+    "file_hashes_verified_in_every_service": true
+  },
+  "https_readiness": {
+    "status": "ready",
+    "checks": {
+      "database": true,
+      "redis": true
+    }
+  },
+  "postdeploy_saved_state": {
+    "existing_qa_copy": {
+      "details_http": 200,
+      "details_status": "available",
+      "plan_http": 200,
+      "practice_http": 200,
+      "practice_state": "ready",
+      "private_keys_absent": true,
+      "ready_lessons": 1
+    },
+    "learner": {
+      "details_http": 200,
+      "details_status": "partial",
+      "plan_http": 200,
+      "practice_http": 200,
+      "practice_state": "ready",
+      "private_keys_absent": true,
+      "ready_lessons": 1
+    },
+    "new_usage_events": 0,
+    "saved_state_fingerprint": "9620a6e2d34355178ba2d25cf3e3775269f53b586c6037e1cfc423a5bcc5a42d",
+    "saved_state_unchanged": true
+  },
+  "pilot_launch": {
+    "combined_max_usd": 2.9908688,
+    "image_digest": "sha256:9b30b39bfb0f6dc5b4e82114c2dace33eef546c78c5bbba1af8225006bb68fdb",
+    "manifest_sha256": "28f7b62ced61c44f2f1d6159018b3e55f5b40bbab6519af9c3a67a547741b518",
+    "max_tests": 6,
+    "new_tests": 3,
+    "previous_authorization_reported_usd": 1.0208688,
+    "prior_accounted_usd": 0.2193908,
+    "prior_request_count": 10,
+    "release": "20261017-013000-field-drafts",
+    "remaining_usd_before_launch": 1.7506092,
+    "shared_cap_usd": 1.97,
+    "status": "launched",
+    "tests_reserved": 6
+  },
+  "live_batch": {
+    "batch_costs": {
+      "accounted_usd": 0.3464952,
+      "pending_reserved_usd": 0,
+      "reported_usd": 0.3464952,
+      "unknown_reserved_usd": 0
+    },
+    "cap_usd": 1.97,
+    "cases": [
+      {
+        "accounted_usd": 0.0987734,
+        "adjudicated": false,
+        "calls": 4,
+        "elapsed_seconds": 134.52,
+        "failure_count": 1,
+        "pending_reserved_usd": 0,
+        "reported_usd": 0.0987734,
+        "scenario_id": "accounting_novice_missing",
+        "status": "failed",
+        "unknown_reserved_usd": 0
+      },
+      {
+        "accounted_usd": 0.1368556,
+        "adjudicated": false,
+        "calls": 7,
+        "elapsed_seconds": 124.522,
+        "failure_count": 1,
+        "pending_reserved_usd": 0,
+        "reported_usd": 0.1368556,
+        "scenario_id": "geometry_novice_missing",
+        "status": "failed",
+        "unknown_reserved_usd": 0
+      },
+      {
+        "accounted_usd": 0.1108662,
+        "adjudicated": false,
+        "calls": 4,
+        "elapsed_seconds": 150.263,
+        "failure_count": 1,
+        "pending_reserved_usd": 0,
+        "reported_usd": 0.1108662,
+        "scenario_id": "writing_novice_missing",
+        "status": "failed",
+        "unknown_reserved_usd": 0
+      }
+    ],
+    "combined_accounted_usd": 1.5867548,
+    "exit_code": 0,
+    "finished_calls": 15,
+    "pending_calls": 0,
+    "prior_completed_accounted_usd": 1.0208688,
+    "recent_responses": [
+      {
+        "completion_tokens": 5533,
+        "duration_ms": 60936.0787839978,
+        "finish_reason": "stop",
+        "response_received": true,
+        "scenario_id": "writing_novice_missing",
+        "schema": "LessonActivityDraft",
+        "thoughts_tokens": 84,
+        "usage_unknown": false
+      },
+      {
+        "completion_tokens": 6048,
+        "duration_ms": 63837.27957299561,
+        "finish_reason": "length",
+        "response_received": true,
+        "scenario_id": "writing_novice_missing",
+        "schema": "LessonActivityDraft",
+        "thoughts_tokens": 158,
+        "usage_unknown": false
+      },
+      {
+        "completion_tokens": 5955,
+        "duration_ms": 66187.49304601806,
+        "finish_reason": "stop",
+        "response_received": true,
+        "scenario_id": "writing_novice_missing",
+        "schema": "LessonActivityDraft",
+        "thoughts_tokens": 612,
+        "usage_unknown": false
+      }
+    ],
+    "release": "20261017-013000-field-drafts",
+    "running": false,
+    "tests_reserved": 6,
+    "total_costs": {
+      "accounted_usd": 0.565886,
+      "pending_reserved_usd": 0,
+      "reported_usd": 0.565886,
+      "unknown_reserved_usd": 0
+    }
+  },
+  "postpilot_saved_state": {
+    "existing_qa_copy": {
+      "details_http": 200,
+      "details_status": "available",
+      "plan_http": 200,
+      "practice_http": 200,
+      "practice_state": "ready",
+      "private_keys_absent": true,
+      "ready_lessons": 1
+    },
+    "learner": {
+      "details_http": 200,
+      "details_status": "partial",
+      "plan_http": 200,
+      "practice_http": 200,
+      "practice_state": "ready",
+      "private_keys_absent": true,
+      "ready_lessons": 1
+    },
+    "new_usage_events": 0,
+    "saved_state_fingerprint": "9620a6e2d34355178ba2d25cf3e3775269f53b586c6037e1cfc423a5bcc5a42d",
+    "saved_state_unchanged": true
+  },
+  "https_certificate_verification": true,
+  "final_audit": "2026-10-17-staged-v22-final-audit.jsonl"
+}

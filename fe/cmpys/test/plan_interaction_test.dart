@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:cmpys/features/cmpys/presentation/plan_screen.dart';
+import 'package:cmpys/features/cmpys/state/today_data.dart';
 import 'package:cmpys/features/plan/data/plan_repository.dart';
 import 'package:cmpys/features/plan/models/plan_models.dart';
 import 'package:cmpys/features/plan/state/current_plan_provider.dart';
@@ -66,6 +67,7 @@ void main() {
         ProviderScope(
           overrides: [
             currentPlanProvider.overrideWith((_) => _Plan(repo)),
+            todayStreakProvider.overrideWith((_) async => null),
             todayViewProvider.overrideWith((_) async {
               if (++loads == 1) throw StateError('offline');
               return today;
@@ -94,6 +96,7 @@ void main() {
         overrides: [
           planRepositoryProvider.overrideWithValue(repo),
           currentPlanProvider.overrideWith((_) => _Plan(repo)),
+          todayStreakProvider.overrideWith((_) async => null),
           todayViewProvider.overrideWith((_) async => today),
         ],
         child: const MaterialApp(home: CmpysPlanScreen()),
@@ -110,7 +113,10 @@ void main() {
     await tester.pump();
     expect(repo.calls, 1);
     repo.pending.complete(true);
-    await tester.pumpAndSettle();
+    // The last habit celebrates the day; its overlay pulses forever, so
+    // pump instead of settling.
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
     expect(tester.takeException(), isNull);
   });
 }

@@ -1,0 +1,19 @@
+{
+  "/app/app/api/v1/plans.py": "814b226f2af39ea6ba6bf23edd908bca096eb3dc1b3884ab273f0d29bb232695",
+  "/app/app/tasks/plans.py": "3a119a98d0f2a66a53432a59a9454a8048a42423672bcc5682d31cc28cc79b54",
+  "/app/app/models/item_detail_job.py": "70c51117bb4bf9948d9b4c46f1729525bb21fade27f6950157bc2b3b9666cece",
+  "/app/app/services/llm/client.py": "24ae8010a3bf5f5dbfb5ab00d53ce430eece3131431a13d4d375a3267b03c6d8",
+  "/app/app/services/llm/openlux.py": "993267b9d3a0f0ad3738fb4b29fefd9788add49068ef55d8ef0314f24a6130fa",
+  "/app/app/services/planning/lesson_package.py": "0f586a17ab26649375d280d3c3bf872f18fe5c5b6b22e0f608d0eb79bdee81ba",
+  "/app/app/services/planning/lesson_review.py": "ac3f66d1c0eda098fc9bf0054edbb42c044a10ddb3c095ca4f1c9ff3620d957d",
+  "/app/app/services/planning/lesson_writer.py": "c9228324c135669784a1a130e503b5240c1a72180f1e53055bbafaa0313a22e5",
+  "/app/app/services/planning/package_review.py": "e4d41e2f21ba5d7027d7368438433141fe2722ce3d8572870cd13b8e0f64bb6d",
+  "/app/app/services/planning/private_checkpoint.py": "a18061166790fee5c3e1928ff9ed44715c2a174ec33909a591484277dc4f7d1a",
+  "/app/migrations/versions/n5o6p7q8r9s0_private_detail_checkpoints.py": "e88071cc074beac4dcc8e68c7160ac42eab475e9842c4159ddd9ae0f25b918b7",
+  "/app/scripts/restore_approved_lesson_snapshot.py": "542bd91feb8cbd6707ff575314d6dbaa142244cc2855e10ec0d436a50a9740e5",
+  "/prompts/planner_system.txt": "a383e12915847157b99e63eed4ba104d4071ff5e3d6ddec1dd4b98418d67e947",
+  "/prompts/plan_item_details_outline.txt": "fb5f342401966eeb1598ab45a88d5fdd9efc9f5882edb24f0419942e0ebecb4c",
+  "/prompts/plan_item_detail_lesson.txt": "64fef4af6c06ee62398ed5b4c3782bc5ef312be546567b5f87d745c2e8b49d84",
+  "/prompts/lesson_package_generate.txt": "166745bcbe733f921059487f527d1f3968159401bda83691e2f443ab5ac172c3",
+  "/app/app/services/planning/workload_contract.py": "1f5b36a176a8242af09e9cb4d8f0daeccbb5768692f83b9969dbfe5397857ed2"
+}

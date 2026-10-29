@@ -1,0 +1,697 @@
+[
+  {
+    "accepted": false,
+    "captured_substeps_count": 0,
+    "choice_definition_repair_signals": 0,
+    "choice_definition_repairs_applied": 0,
+    "complete_report": true,
+    "component_schema_failures": [],
+    "draft_available": false,
+    "draft_reconstructed": false,
+    "elapsed_ms": 244654.9013539916,
+    "estimated_cost_usd": 0.21563419999999997,
+    "failure_categories": {
+      "review_unavailable": 1
+    },
+    "final_reviews": [],
+    "package": {
+      "activities": [
+        {
+          "criteria_count": 3,
+          "duration_range": [
+            18,
+            28
+          ],
+          "field_count": 7,
+          "has_diagram": false,
+          "input_count": 7,
+          "instructions_words": 91,
+          "kind": "practice",
+          "public_language_armenian_fraction": 0.991,
+          "solution_words": 220
+        },
+        {
+          "criteria_count": 4,
+          "duration_range": [
+            14,
+            22
+          ],
+          "field_count": 5,
+          "has_diagram": false,
+          "input_count": 8,
+          "instructions_words": 86,
+          "kind": "transfer",
+          "public_language_armenian_fraction": 0.982,
+          "solution_words": 275
+        }
+      ],
+      "deliberately_wrong_fixed_answers": 10,
+      "deliberately_wrong_rejected": 10,
+      "exact_dataset_reuse": false,
+      "exact_dataset_reuse_scope": "teaching_cases_and_guided_activities",
+      "field_kinds": {
+        "choice": 1,
+        "number": 9,
+        "text": 2
+      },
+      "fixed_grade_answer_key_checks": 10,
+      "fixed_grade_passed": 10,
+      "formula_count": 15,
+      "independent_decimal_matches": 15,
+      "independent_decimal_unchecked": 0,
+      "independently_proven_source_error_categories": {},
+      "independently_proven_source_error_count": 0,
+      "numeric_transfer_activity_count": 1,
+      "private_keys_in_public_workbook": [],
+      "teaching_case_count": 1,
+      "transfer_input_subset_of_guided_activity": false,
+      "transfer_input_subset_of_teaching_case": false,
+      "worked_solution_verbatim_in_public": 0,
+      "workload_feasible_before_prose": true,
+      "workload_ledger": {
+        "activities": [
+          {
+            "activity_id": "practice_cafe_accrual_vs_cash",
+            "minutes_max": 28,
+            "minutes_min": 18
+          },
+          {
+            "activity_id": "transfer_new_cafe_june",
+            "minutes_max": 22,
+            "minutes_min": 14
+          }
+        ],
+        "allowed_total_minutes_range": [
+          40,
+          180
+        ],
+        "counting_rules": [
+          "Count each activity once, including doing, explaining, checking and revision.",
+          "Practice phases and substeps describe parts of these activities; they add no separate time.",
+          "Map each phase to its exact activity ID and existing answer fields; add no required tasks.",
+          "Reading and worked examples belong to reading time, not an extra practice activity.",
+          "Activity ranges are estimates to assess honestly, not durations to force or inflate.",
+          "Reject an unrealistic range with its activity ID; never clamp an honest estimate to fit."
+        ],
+        "feasible_practice_minutes_range": [
+          32,
+          50
+        ],
+        "practice_minutes_range": [
+          32,
+          50
+        ],
+        "reading_basis": "accepted_word_bounds",
+        "reading_minutes_range": [
+          10,
+          21
+        ],
+        "total_supported_minutes_range": [
+          42,
+          71
+        ]
+      }
+    },
+    "package_available": true,
+    "planned_components": 3,
+    "preflights": [
+      {
+        "calculation_count": 24,
+        "deterministic_replay": {
+          "advisory_count": 0,
+          "failure_categories": {
+            "other_or_semantic": 2
+          },
+          "failure_count": 2,
+          "math_role_count": 0,
+          "package_issue_count": 0,
+          "recorded_calls_consumed": 1,
+          "semantic_acceptable": false,
+          "semantic_issue_count": 2,
+          "unavailable": false
+        },
+        "literal_fact_id_count": 2,
+        "math_role_count": 0,
+        "numeric_span_count": 21,
+        "proof_error_categories": {
+          "numeric span contains additional unverified values": 7,
+          "reviewer_arithmetic_mismatch": 2
+        },
+        "proof_error_count": 9,
+        "semantic_acceptable": false,
+        "semantic_issue_count": 2,
+        "source_error_categories": {},
+        "source_error_count": 0,
+        "typed_fact_count": 2
+      },
+      {
+        "calculation_count": 26,
+        "deterministic_replay": {
+          "advisory_count": 0,
+          "failure_categories": {
+            "review_unavailable": 1
+          },
+          "failure_count": 1,
+          "math_role_count": 0,
+          "package_issue_count": 0,
+          "recorded_calls_consumed": 2,
+          "semantic_acceptable": null,
+          "semantic_issue_count": 0,
+          "unavailable": true
+        },
+        "literal_fact_id_count": 5,
+        "math_role_count": 0,
+        "numeric_span_count": 20,
+        "proof_error_categories": {
+          "calculation is not bound to an exact source span": 1,
+          "claimed result is absent from its source quote": 1,
+          "derived result cannot be classified as a literal fact": 2,
+          "formula is not derived from the bound case inputs": 10,
+          "literal facts reference an unknown span, case or datum": 3,
+          "literal numeric facts are not bound to supplied data or workload metadata": 1,
+          "numeric span contains additional unverified values": 11,
+          "other_or_semantic": 10
+        },
+        "proof_error_count": 39,
+        "semantic_acceptable": true,
+        "semantic_issue_count": 0,
+        "source_error_categories": {},
+        "source_error_count": 0,
+        "typed_fact_count": 5
+      }
+    ],
+    "request_schema_counts": {
+      "LessonPackageActivity": 2,
+      "LessonPackageSeed": 1,
+      "PackageReview": 2,
+      "PrivatePackageRepair": 1,
+      "ReviewEvidencePatch": 1
+    },
+    "response_capture_count": 7,
+    "scenario_id": "accounting_novice_missing",
+    "section_count": 0,
+    "seed_available": true,
+    "seed_private_keys_in_followup_context": [],
+    "seed_public_teaching_formula_count": 6,
+    "semantic_correctness_status": "Automated structural and arithmetic evidence only; independent content adjudication still required",
+    "transport": [
+      {
+        "charged_usd": 0.0165456,
+        "duration_ms": 35668.43795601744,
+        "finish_reason": "stop",
+        "first_content_ms": 10790.675629017642,
+        "first_event_ms": 4819.45488799829,
+        "has_error": false,
+        "response_capture_present": true,
+        "response_chars": 3941,
+        "schema": "LessonPackageSeed",
+        "usage_unknown": false
+      },
+      {
+        "charged_usd": 0.0239128,
+        "duration_ms": 28485.506655997597,
+        "finish_reason": "stop",
+        "first_content_ms": 2122.655395010952,
+        "first_event_ms": 2115.2967539965175,
+        "has_error": false,
+        "response_capture_present": true,
+        "response_chars": 4779,
+        "schema": "LessonPackageActivity",
+        "usage_unknown": false
+      },
+      {
+        "charged_usd": 0.027554,
+        "duration_ms": 36193.88447800884,
+        "finish_reason": "stop",
+        "first_content_ms": 4912.565362988971,
+        "first_event_ms": 2377.670769987162,
+        "has_error": false,
+        "response_capture_present": true,
+        "response_chars": 5282,
+        "schema": "LessonPackageActivity",
+        "usage_unknown": false
+      },
+      {
+        "charged_usd": 0.039571,
+        "duration_ms": 50401.98314198642,
+        "finish_reason": "stop",
+        "first_content_ms": 36155.21619099309,
+        "first_event_ms": 3930.456467991462,
+        "has_error": false,
+        "response_capture_present": true,
+        "response_chars": 6145,
+        "schema": "PackageReview",
+        "usage_unknown": false
+      },
+      {
+        "charged_usd": 0.0293096,
+        "duration_ms": 29374.69469298958,
+        "finish_reason": "stop",
+        "first_content_ms": 6175.356349005597,
+        "first_event_ms": 2883.9442699973006,
+        "has_error": false,
+        "response_capture_present": true,
+        "response_chars": 3520,
+        "schema": "PrivatePackageRepair",
+        "usage_unknown": false
+      },
+      {
+        "charged_usd": 0.0363382,
+        "duration_ms": 35052.651848003734,
+        "finish_reason": "stop",
+        "first_content_ms": 22738.525802997174,
+        "first_event_ms": 2662.7855130063836,
+        "has_error": false,
+        "response_capture_present": true,
+        "response_chars": 6084,
+        "schema": "PackageReview",
+        "usage_unknown": false
+      },
+      {
+        "charged_usd": 0.042403,
+        "duration_ms": 57598.00158199505,
+        "finish_reason": "length",
+        "first_content_ms": 50981.081894016825,
+        "first_event_ms": 3104.840679996414,
+        "has_error": true,
+        "response_capture_present": true,
+        "response_chars": 4277,
+        "schema": "ReviewEvidencePatch",
+        "usage_unknown": false
+      }
+    ],
+    "validated_followup_activity_count": 2
+  },
+  {
+    "accepted": false,
+    "captured_substeps_count": 0,
+    "choice_definition_repair_signals": 0,
+    "choice_definition_repairs_applied": 0,
+    "complete_report": true,
+    "component_schema_failures": [
+      {
+        "errors": [
+          {
+            "type": "component_contract"
+          }
+        ],
+        "schema": "PrivatePackageRepair"
+      }
+    ],
+    "draft_available": false,
+    "draft_reconstructed": false,
+    "elapsed_ms": 226451.58597599948,
+    "estimated_cost_usd": 0.23146809999999998,
+    "failure_categories": {
+      "review_unavailable": 1
+    },
+    "final_reviews": [],
+    "package": {
+      "activities": [
+        {
+          "criteria_count": 3,
+          "duration_range": [
+            10,
+            16
+          ],
+          "field_count": 3,
+          "has_diagram": true,
+          "input_count": 2,
+          "instructions_words": 56,
+          "kind": "practice",
+          "public_language_armenian_fraction": 0.996,
+          "solution_words": 154
+        },
+        {
+          "criteria_count": 3,
+          "duration_range": [
+            12,
+            18
+          ],
+          "field_count": 3,
+          "has_diagram": false,
+          "input_count": 2,
+          "instructions_words": 75,
+          "kind": "transfer",
+          "public_language_armenian_fraction": 0.994,
+          "solution_words": 117
+        },
+        {
+          "criteria_count": 3,
+          "duration_range": [
+            18,
+            24
+          ],
+          "field_count": 4,
+          "has_diagram": false,
+          "input_count": 4,
+          "instructions_words": 82,
+          "kind": "transfer",
+          "public_language_armenian_fraction": 0.993,
+          "solution_words": 114
+        }
+      ],
+      "deliberately_wrong_fixed_answers": 7,
+      "deliberately_wrong_rejected": 7,
+      "exact_dataset_reuse": false,
+      "exact_dataset_reuse_scope": "teaching_cases_and_guided_activities",
+      "field_kinds": {
+        "choice": 2,
+        "number": 5,
+        "text": 3
+      },
+      "fixed_grade_answer_key_checks": 7,
+      "fixed_grade_passed": 7,
+      "formula_count": 6,
+      "independent_decimal_matches": 6,
+      "independent_decimal_unchecked": 0,
+      "independently_proven_source_error_categories": {},
+      "independently_proven_source_error_count": 0,
+      "numeric_transfer_activity_count": 2,
+      "private_keys_in_public_workbook": [],
+      "teaching_case_count": 1,
+      "transfer_input_subset_of_guided_activity": false,
+      "transfer_input_subset_of_teaching_case": false,
+      "worked_solution_verbatim_in_public": 0,
+      "workload_feasible_before_prose": true,
+      "workload_ledger": {
+        "activities": [
+          {
+            "activity_id": "practice_triangle_area",
+            "minutes_max": 16,
+            "minutes_min": 10
+          },
+          {
+            "activity_id": "transfer_triangle_area",
+            "minutes_max": 18,
+            "minutes_min": 12
+          },
+          {
+            "activity_id": "reverse_find_base",
+            "minutes_max": 24,
+            "minutes_min": 18
+          }
+        ],
+        "allowed_total_minutes_range": [
+          40,
+          180
+        ],
+        "counting_rules": [
+          "Count each activity once, including doing, explaining, checking and revision.",
+          "Practice phases and substeps describe parts of these activities; they add no separate time.",
+          "Map each phase to its exact activity ID and existing answer fields; add no required tasks.",
+          "Reading and worked examples belong to reading time, not an extra practice activity.",
+          "Activity ranges are estimates to assess honestly, not durations to force or inflate.",
+          "Reject an unrealistic range with its activity ID; never clamp an honest estimate to fit."
+        ],
+        "feasible_practice_minutes_range": [
+          40,
+          58
+        ],
+        "practice_minutes_range": [
+          40,
+          58
+        ],
+        "reading_basis": "accepted_word_bounds",
+        "reading_minutes_range": [
+          10,
+          21
+        ],
+        "total_supported_minutes_range": [
+          50,
+          79
+        ]
+      }
+    },
+    "package_available": true,
+    "planned_components": 3,
+    "preflights": [
+      {
+        "calculation_count": 11,
+        "deterministic_replay": {
+          "offline_reconstruction_error": "RuntimeError",
+          "recorded_calls_consumed": 1
+        },
+        "literal_fact_id_count": 7,
+        "math_role_count": 4,
+        "numeric_span_count": 26,
+        "proof_error_categories": {
+          "Numeric verification coverage is incomplete or contains fabricated span IDs": 1,
+          "bound datum values are absent from the source span": 4,
+          "calculation is not bound to an exact source span": 1,
+          "claimed result is absent from its source quote": 1,
+          "literal numeric facts are not bound to supplied data or workload metadata": 3,
+          "mathematical role invalid:": 3,
+          "numeric span contains additional unverified values": 6
+        },
+        "proof_error_count": 19,
+        "semantic_acceptable": true,
+        "semantic_issue_count": 0,
+        "source_error_categories": {},
+        "source_error_count": 0,
+        "typed_fact_count": 7
+      }
+    ],
+    "request_schema_counts": {
+      "LessonPackage": 1,
+      "LessonPackageActivity": 2,
+      "LessonPackageSeed": 1,
+      "PackageReview": 1,
+      "PrivatePackageRepair": 1,
+      "ReviewEvidencePatch": 1
+    },
+    "response_capture_count": 6,
+    "scenario_id": "geometry_novice_missing",
+    "section_count": 0,
+    "seed_available": true,
+    "seed_private_keys_in_followup_context": [],
+    "seed_public_teaching_formula_count": 1,
+    "semantic_correctness_status": "Automated structural and arithmetic evidence only; independent content adjudication still required",
+    "transport": [
+      {
+        "charged_usd": 0.009009,
+        "duration_ms": 17775.55373701034,
+        "finish_reason": "stop",
+        "first_content_ms": 3163.3892850077245,
+        "first_event_ms": 3157.995857996866,
+        "has_error": false,
+        "response_capture_present": true,
+        "response_chars": 1804,
+        "schema": "LessonPackageSeed",
+        "usage_unknown": false
+      },
+      {
+        "charged_usd": 0.015177,
+        "duration_ms": 18999.62984197191,
+        "finish_reason": "stop",
+        "first_content_ms": 2397.7268549788278,
+        "first_event_ms": 2390.0644639797974,
+        "has_error": false,
+        "response_capture_present": true,
+        "response_chars": 2360,
+        "schema": "LessonPackageActivity",
+        "usage_unknown": false
+      },
+      {
+        "charged_usd": 0.0170766,
+        "duration_ms": 24437.026024999795,
+        "finish_reason": "stop",
+        "first_content_ms": 3104.122881020885,
+        "first_event_ms": 3099.2218159954064,
+        "has_error": false,
+        "response_capture_present": true,
+        "response_chars": 2969,
+        "schema": "LessonPackageActivity",
+        "usage_unknown": false
+      },
+      {
+        "charged_usd": 0.0096884,
+        "duration_ms": 4898.07910399395,
+        "finish_reason": "stop",
+        "first_content_ms": 4349.331411998719,
+        "first_event_ms": 2991.216855996754,
+        "has_error": false,
+        "response_capture_present": true,
+        "response_chars": 326,
+        "schema": "PrivatePackageRepair",
+        "usage_unknown": false
+      },
+      {
+        "charged_usd": 0.0475216,
+        "duration_ms": 76367.43580998154,
+        "finish_reason": "stop",
+        "first_content_ms": 10395.441647997359,
+        "first_event_ms": 2788.5587649943773,
+        "has_error": false,
+        "response_capture_present": true,
+        "response_chars": 9334,
+        "schema": "LessonPackage",
+        "usage_unknown": false
+      },
+      {
+        "charged_usd": 0.029872,
+        "duration_ms": 42836.85036198585,
+        "finish_reason": "stop",
+        "first_content_ms": 32537.049930979265,
+        "first_event_ms": 4001.6504609957337,
+        "has_error": false,
+        "response_capture_present": true,
+        "response_chars": 3014,
+        "schema": "PackageReview",
+        "usage_unknown": false
+      },
+      {
+        "charged_usd": 0.10312349999999999,
+        "duration_ms": 59993.48797198036,
+        "finish_reason": null,
+        "first_content_ms": null,
+        "first_event_ms": 2806.727235991275,
+        "has_error": true,
+        "response_capture_present": false,
+        "response_chars": 0,
+        "schema": "ReviewEvidencePatch",
+        "usage_unknown": true
+      }
+    ],
+    "validated_followup_activity_count": 3
+  },
+  {
+    "accepted": false,
+    "captured_substeps_count": 0,
+    "choice_definition_repair_signals": 0,
+    "choice_definition_repairs_applied": 0,
+    "complete_report": true,
+    "component_schema_failures": [
+      {
+        "errors": [
+          {
+            "path": [
+              "activity_briefs",
+              1,
+              "<unknown>"
+            ],
+            "type": "extra_forbidden"
+          }
+        ],
+        "schema": "LessonPackageSeed"
+      },
+      {
+        "errors": [
+          {
+            "path": [
+              "fields",
+              0,
+              "label"
+            ],
+            "type": "missing"
+          },
+          {
+            "path": [
+              "fields",
+              1,
+              "label"
+            ],
+            "type": "missing"
+          },
+          {
+            "path": [
+              "fields",
+              2,
+              "label"
+            ],
+            "type": "missing"
+          },
+          {
+            "path": [
+              "fields",
+              3,
+              "label"
+            ],
+            "type": "missing"
+          }
+        ],
+        "schema": "LessonPackageActivity"
+      }
+    ],
+    "draft_available": false,
+    "draft_reconstructed": false,
+    "elapsed_ms": 81977.40567300934,
+    "estimated_cost_usd": 0.0682372,
+    "failure_categories": {
+      "activity_unavailable": 1
+    },
+    "final_reviews": [],
+    "package_available": false,
+    "planned_components": 3,
+    "preflights": [],
+    "request_schema_counts": {
+      "LessonPackageActivity": 2,
+      "LessonPackageSeed": 2
+    },
+    "response_capture_count": 4,
+    "scenario_id": "writing_novice_missing",
+    "section_count": 0,
+    "seed_available": true,
+    "seed_private_keys_in_followup_context": [],
+    "seed_public_teaching_formula_count": 0,
+    "semantic_correctness_status": "Automated structural and arithmetic evidence only; independent content adjudication still required",
+    "transport": [
+      {
+        "charged_usd": 0.0090586,
+        "duration_ms": 17965.513816016028,
+        "finish_reason": "stop",
+        "first_content_ms": 2184.9419130012393,
+        "first_event_ms": 2181.231366994325,
+        "has_error": false,
+        "response_capture_present": true,
+        "response_chars": 1629,
+        "schema": "LessonPackageSeed",
+        "usage_unknown": false
+      },
+      {
+        "charged_usd": 0.0078792,
+        "duration_ms": 15935.73126802221,
+        "finish_reason": "stop",
+        "first_content_ms": 2392.511555022793,
+        "first_event_ms": 2389.365462004207,
+        "has_error": false,
+        "response_capture_present": true,
+        "response_chars": 1330,
+        "schema": "LessonPackageSeed",
+        "usage_unknown": false
+      },
+      {
+        "charged_usd": 0.0258656,
+        "duration_ms": 45739.023656991776,
+        "finish_reason": "stop",
+        "first_content_ms": 2657.198528992012,
+        "first_event_ms": 2651.3557019934524,
+        "has_error": false,
+        "response_capture_present": true,
+        "response_chars": 4937,
+        "schema": "LessonPackageActivity",
+        "usage_unknown": false
+      },
+      {
+        "charged_usd": 0.0254338,
+        "duration_ms": 47985.466035985155,
+        "finish_reason": "stop",
+        "first_content_ms": 2945.637438009726,
+        "first_event_ms": 2936.946080008056,
+        "has_error": false,
+        "response_capture_present": true,
+        "response_chars": 4640,
+        "schema": "LessonPackageActivity",
+        "usage_unknown": false
+      }
+    ],
+    "validated_followup_activity_count": 1
+  },
+  {
+    "completed_reports_audited": 3,
+    "provider": "dummy",
+    "network": "disabled",
+    "captures": "read_only",
+    "publication": "none"
+  }
+]

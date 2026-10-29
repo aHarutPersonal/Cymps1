@@ -1,0 +1,1 @@
+{"image_digest": "sha256:78c8e3356c35c5fb0c14c12f35faddfb620f236d473ccb4f07c3a7e62e466d62", "release": "20261016-082000-evidence-repair", "verified_files": 17, "verified_services": ["web", "worker", "worker-high", "worker-low", "catalog-worker", "catalog-control", "curriculum-worker", "curriculum-control", "beat"]}

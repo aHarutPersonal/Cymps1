@@ -101,13 +101,7 @@ void main() {
               body: Center(
                 child: TextButton(
                   onPressed: () async {
-                    returnedToSignIn =
-                        await Navigator.of(context).push<bool>(
-                          MaterialPageRoute(
-                            builder: (_) => const ForgotPasswordScreen(),
-                          ),
-                        ) ==
-                        true;
+                    returnedToSignIn = await showRecoverySheet(context);
                   },
                   child: const Text('Sign in'),
                 ),
@@ -132,10 +126,14 @@ void main() {
       () => find.byKey(const ValueKey('recovery-email')).evaluate().isNotEmpty,
     );
     await tester.enterText(
-      find.byKey(const ValueKey('recovery-email')),
+      find.descendant(
+        of: find.byKey(const ValueKey('recovery-email')),
+        matching: find.byType(TextField),
+      ),
       'fixture@example.com',
     );
-    await _tap(tester, 'Request recovery code');
+    await tester.pump();
+    await _tap(tester, 'Send recovery code');
     await _until(
       tester,
       () => find.byKey(const ValueKey('recovery-code')).evaluate().isNotEmpty,
@@ -145,7 +143,10 @@ void main() {
       'recovery-password': password,
       'recovery-confirmation': password,
     }.entries) {
-      final field = find.byKey(ValueKey(entry.key));
+      final field = find.descendant(
+        of: find.byKey(ValueKey(entry.key)),
+        matching: find.byType(TextField),
+      );
       await tester.ensureVisible(field);
       await tester.pumpAndSettle();
       await tester.enterText(field, entry.value);
@@ -154,7 +155,7 @@ void main() {
     await _until(
       tester,
       () => find
-          .text('This recovery code is invalid or expired. Request a new code.')
+          .text('That code has expired. Request a new one.')
           .evaluate()
           .isNotEmpty,
     );

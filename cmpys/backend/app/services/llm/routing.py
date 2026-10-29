@@ -70,6 +70,13 @@ def _model_for_tier(tier: str) -> str | None:
     return None
 
 
+def operation_thinking_level(operation: str, default: str | None) -> str | None:
+    """Apply an eval-approved per-operation Z.ai reasoning override, if any."""
+    if settings.llm_provider != "zai":
+        return default
+    return settings.zai_reasoning_overrides.get(operation, default)
+
+
 def exploration_bucket(operation: str, routing_key: str) -> int:
     """Stable within an ISO week, but rotates to gather representative samples."""
     year, week, _ = datetime.now(timezone.utc).isocalendar()

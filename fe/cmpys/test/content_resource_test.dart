@@ -78,4 +78,54 @@ void main() {
     expect(note.displayText, 'Rewatch the example at 04:20.');
     expect(quoteOnly.displayText, 'Use constraints as a forcing function.');
   });
+
+  group('ContentResource.originalReadingUrl', () {
+    ContentResource book(Map<String, dynamic>? summary) =>
+        ContentResource.fromJson({
+          'id': 'resource-5',
+          'kind': 'llm_book_summary',
+          'title': 'Meditations',
+          if (summary != null) 'summaryJson': summary,
+        });
+
+    test('prefers reading_url over text_url', () {
+      expect(
+        book({
+          'reading_url': 'https://www.gutenberg.org/ebooks/2680',
+          'text_url': 'https://www.gutenberg.org/cache/epub/2680/pg2680.txt',
+        }).originalReadingUrl,
+        'https://www.gutenberg.org/ebooks/2680',
+      );
+    });
+
+    test('falls back to text_url', () {
+      expect(
+        book({
+          'text_url': 'https://www.gutenberg.org/cache/epub/2680/pg2680.txt',
+        }).originalReadingUrl,
+        'https://www.gutenberg.org/cache/epub/2680/pg2680.txt',
+      );
+    });
+
+    test('is null without a summary or a usable URL', () {
+      expect(book(null).originalReadingUrl, isNull);
+      expect(book(const {}).originalReadingUrl, isNull);
+      expect(book({'reading_url': '  '}).originalReadingUrl, isNull);
+    });
+
+    test('rejects unsafe URLs through safeDirectMaterialUrl', () {
+      for (final url in [
+        'javascript:alert(1)',
+        'http://localhost:8000/book',
+        'https://user:pass@example.com/book',
+        'https://www.google.com/search?q=meditations',
+      ]) {
+        expect(
+          book({'reading_url': url}).originalReadingUrl,
+          isNull,
+          reason: url,
+        );
+      }
+    });
+  });
 }

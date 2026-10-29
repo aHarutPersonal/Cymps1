@@ -30,6 +30,15 @@ class App extends ConsumerWidget {
                 .catchError((_) {}),
           );
         }
+        // A cold start that resolves signed out stays on the splash, which
+        // offers "Get started" and "I already have an account". Every other
+        // way of becoming signed out (signing out, an expired session, a link
+        // opened straight onto a signed-in page) goes to auth.
+        if (previous is SessionInitializing &&
+            router.routerDelegate.currentConfiguration.uri.path ==
+                AppRoutes.splash) {
+          return;
+        }
         WidgetsBinding.instance.addPostFrameCallback((_) {
           router.go(AppRoutes.auth);
         });

@@ -3,7 +3,8 @@ This is not the place to write lessons or long task descriptions. Build one
 coherent progression that the server will expand one week at a time.
 
 USER GOAL: {user_goal}
-WEEKLY CAPACITY: {hours_per_week} hours
+WEEKLY CAPACITY: {weekly_capacity_label} = {weekly_minutes} minutes = {hours_per_week} hours
+CAPACITY RULE: {capacity_rule}
 USER AGE: {target_age}
 USER CONTEXT:
 {user_context}
@@ -35,7 +36,7 @@ STRATEGIC BLUEPRINT:
 
 BACKBONE CONTRACT:
 - This is a compact roadmap, not expanded lesson copy. Task titles use 3-8 words.
-  Mission, outcome, success metric, friction and solution each use one sentence
+  Mission, outcome and success metric each use one sentence
   of about 8-18 words. Preserve the concrete skill and evidence in those sentences.
   Detailed explanations and practice are generated when a week is expanded.
 - Return exactly weeks 1 through {duration_weeks} in ascending order.
@@ -47,6 +48,9 @@ BACKBONE CONTRACT:
   Never duplicate tasks within the same week.
 - Under 6 hours/week, use exactly one mission task and one daily rhythm task.
 - At 6 hours/week or more, use 2-3 mission tasks and 1-2 daily rhythm tasks.
+- Under 3 hours/week, the CAPACITY RULE sets the exact mission and daily
+  minutes, and the hour minimums below do not apply. A short week is the
+  learner's honest capacity: plan a smaller weekly outcome, never more work.
 - Choose feasible task counts BEFORE allocating hours: each mission needs at
   least 2 hours and each daily rhythm at least 1 hour. Thus 2 * mission_count +
   daily_count cannot exceed the weekly capacity. At exactly 6 hours use exactly
@@ -64,8 +68,9 @@ BACKBONE CONTRACT:
 - The sum of estimated_hours must equal exactly {hours_per_week}. Use the
   learner's full declared capacity rather than returning a thin week. For daily
   work, estimated_hours is the entire week's repeated practice time.
-  Use whole integer hours only: fractional hours are rounded for storage and
-  cannot be used to squeeze extra tasks into the learner's weekly capacity.
+  Use whole integer hours unless the CAPACITY RULE allows half or quarter
+  hours: other fractions are rounded for storage and cannot be used to
+  squeeze extra tasks into the learner's weekly capacity.
 - Titles name the exact domain skill, artifact, book, course, or practice.
   Do not use generic self-help language.
 - success_metric is binary and names the artifact, quantity, or demonstrated
@@ -97,9 +102,7 @@ Return strict JSON only:
           "estimated_hours": 2,
           "success_metric": "Binary evidence of completion."
         }
-      ],
-      "predicted_friction": "The likely domain-specific obstacle.",
-      "friction_solution": "A concrete response to that obstacle."
+      ]
     }
   ]
 }

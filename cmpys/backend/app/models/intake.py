@@ -156,6 +156,14 @@ class IntakeSession(Base, UUIDMixin, TimestampUpdateMixin):
         nullable=True,
         default=None,
     )
+    # Onboarding "Your situation" step: {"situation": ["I commute", ...],
+    # "note": "free text" | null}. Null for sessions created by app builds from
+    # before v3. Threaded into the comparison, blueprint and plan prompts.
+    situation_json: Mapped[dict | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        default=None,
+    )
 
     # Interview tracking (Phase 3)
     interview_thread_id: Mapped[str | None] = mapped_column(

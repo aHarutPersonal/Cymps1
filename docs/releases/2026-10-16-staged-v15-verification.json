@@ -1,0 +1,71 @@
+{
+  "release": "20261016-122235-scoped-repairs",
+  "image_digest": "sha256:00a2da8f45cfa39c7461c9515c39b14c872a2958437ce44f6343b9549412ee43",
+  "status": "deployed_live_validation_failed_0_of_3",
+  "full_backend": {
+    "passed": 3055,
+    "skipped": 4,
+    "warnings": 1
+  },
+  "exact_image_network_disabled": {
+    "passed": 1280,
+    "skipped": 1
+  },
+  "independent_review": {
+    "blockers": 0,
+    "targeted_tests_passed": 137,
+    "direct_adversarial_probes_passed": 7
+  },
+  "source_files_verified": 22,
+  "changed_files": 7,
+  "configuration_unchanged": true,
+  "runtime": {
+    "file_hashes_verified_in_every_service": true,
+    "image_digest": "sha256:00a2da8f45cfa39c7461c9515c39b14c872a2958437ce44f6343b9549412ee43",
+    "release": "20261016-122235-scoped-repairs",
+    "verified_files": 22,
+    "verified_services": [
+      "web",
+      "worker",
+      "worker-high",
+      "worker-low",
+      "catalog-worker",
+      "catalog-control",
+      "curriculum-worker",
+      "curriculum-control",
+      "beat"
+    ]
+  },
+  "https_readiness": {
+    "status": "ready",
+    "checks": {
+      "database": true,
+      "redis": true
+    }
+  },
+  "saved_state_unchanged": true,
+  "saved_state_fingerprint": "9620a6e2d34355178ba2d25cf3e3775269f53b586c6037e1cfc423a5bcc5a42d",
+  "simulator": "saved reader -> loaded practice form -> same reader; no answers, hint, completion or generation submitted",
+  "rollback_release": "20261016-110500-typed-math",
+  "registry_latest_promoted": false,
+  "approved_batch": {
+    "cases": [
+      "accounting",
+      "geometry",
+      "writing"
+    ],
+    "count": 3,
+    "shared_cap_usd": 2.0,
+    "status": "complete",
+    "scope": "synthetic prepared outline through package/preflight/section writing/final review; private drafts; no progress changes",
+    "accepted": 0,
+    "reported_cost_usd": 0.412216,
+    "unknown_reserved_usd": 0.1031235,
+    "accounted_usd": 0.5153395
+  },
+  "prior_v13_v14_reported_cost_usd": 0.9220406,
+  "prior_unknown_charges": 0,
+  "new_paid_calls": 18,
+  "paid_test_authorization_remaining": false,
+  "postpilot_saved_state_unchanged": true
+}

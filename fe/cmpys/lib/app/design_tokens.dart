@@ -1,33 +1,79 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-/// Design tokens for CMPYS app.
-/// Prototype system: light grid surfaces, charcoal text, coral actions, mint signals.
+/// Design tokens for the CMPYS app.
+///
+/// v3 system: warm paper canvas, ember accent, iris / sage / gold supports and
+/// a night surface for dark moments. Source of truth: `CMPYS v3.html` `:root`.
+/// The accent families (ember, iris, sage, gold, danger) are the design's OKLCH
+/// values converted once to gamut-clamped sRGB hex. The old v2 names (`green`,
+/// `brandAccent`, `primary`, ...) stay as aliases onto the v3 tokens so every
+/// existing call site keeps compiling; new code should use the v3 names.
 abstract final class AppColors {
-  // ── Brand (CMPYS 2026: vibrant green on cool paper) ──
-  // Brand maps onto the green/paper system so the whole app — including any
-  // Material widget that reads ColorScheme.primary — shares one accent. The
-  // old coral system is intentionally unreachable through brand tokens now.
+  // ═══════════════════════════════════════════════
+  // CMPYS v3 palette
+  // ═══════════════════════════════════════════════
+
+  // ── Paper, ink and hairlines ──
+  static const Color paper = Color(0xFFF5F2EC);
+  static const Color paper2 = Color(0xFFEDE8DF);
+  static const Color card = Color(0xFFFFFDF9);
+  static const Color ink = Color(0xFF17151A);
+  static const Color ink2 = Color(0xFF5D5962);
+  static const Color ink3 = Color(0xFF7E7983);
+  static const Color hair = Color(0xFFE6E0D6);
+  static const Color hair2 = Color(0xFFD8D1C5);
+
+  // ── Night (dark surfaces) ──
+  static const Color night = Color(0xFF0E0C14);
+  static const Color night2 = Color(0xFF191622);
+  static const Color night3 = Color(0xFF252131);
+  static const Color nink2 = Color(0xB8FFFFFF); // rgba(255,255,255,.72)
+  static const Color nink3 = Color(0x80FFFFFF); // rgba(255,255,255,.5)
+
+  // ── Accents (oklch -> sRGB; `2` is the accessible text/action tone) ──
+  static const Color ember = Color(0xFFEC6E38); //     oklch(0.68 0.17 42)
+  static const Color ember2 = Color(0xFFC94E0C); //    oklch(0.58 0.17 42)
+  static const Color emberSoft = Color(0xFFFFE4D3); // oklch(0.94 0.04 52)
+  static const Color iris = Color(0xFF8A81EF); //      oklch(0.66 0.16 285)
+  static const Color iris2 = Color(0xFF6B5DCF); //     oklch(0.55 0.17 285)
+  static const Color irisSoft = Color(0xFFE8E8FF); //  oklch(0.94 0.035 285)
+  static const Color sage = Color(0xFF43A96E); //      oklch(0.66 0.13 155)
+  static const Color sage2 = Color(0xFF187C49); //     oklch(0.52 0.12 155)
+  static const Color sageSoft = Color(0xFFD7F4E0); //  oklch(0.94 0.04 155)
+  static const Color gold = Color(0xFFE4B750); //      oklch(0.8 0.13 85)
+  static const Color gold2 = Color(0xFFA97416); //     oklch(0.6 0.12 75)
+  static const Color goldSoft = Color(0xFFFAEECD); //  oklch(0.95 0.045 90)
+  static const Color danger = Color(0xFFD33C33); //    oklch(0.58 0.19 28)
+  static const Color dangerSoft = Color(0xFFFFE7E3); // oklch(0.95 0.03 28)
+
+  // ═══════════════════════════════════════════════
+  // Legacy aliases (v2 names, re-pointed onto the v3 tokens)
+  // ═══════════════════════════════════════════════
+
+  // ── Brand (v3: ember on warm paper) ──
+  // Brand maps onto the ember/paper system so the whole app — including any
+  // Material widget that reads ColorScheme.primary — shares one accent.
   static const Color brandBg = paper;
-  static const Color brandAccent = green;
-  static const Color brandAccentDark = green2;
-  static const Color brandAccentLight = Color(0xFF3FC489);
+  static const Color brandAccent = ember;
+  static const Color brandAccentDark = ember2;
+  static const Color brandAccentLight = emberSoft;
   static final Color brandAccentMuted = brandAccent.withValues(alpha: 0.12);
   static const Color peach = Color(0xFFFFC27A);
-  static const Color mint = Color(0xFF10B981);
+  static const Color mint = sage;
 
   // ── Backgrounds ──
   static const Color bg = brandBg;
   static const Color bgTrue = Color(0xFFF9FAFB);
-  static const Color surface = Color(0xFFFFFFFF);
-  static const Color surfaceHighlight = Color(0xFFECECEF); // --hair (tracks)
+  static const Color surface = card;
+  static const Color surfaceHighlight = hair; // tracks
   static const Color surface2 = surfaceHighlight;
   static const Color surfaceGlass = Color(0xEFFFFFFF);
 
   // ── Dark Surfaces (Auth/Splash/Card variants) ──
-  static const Color charcoal = Color(0xFF0F172A);
-  static const Color charcoalSurface = Color(0xFF1E293B);
-  static const Color cardDark = Color(0xFF1E293B);
+  static const Color charcoal = night;
+  static const Color charcoalSurface = night2;
+  static const Color cardDark = night2;
 
   // ── Dark Gradient (Ideas/Feed cards) ──
   static const Color darkGradientStart = Color(0xFF07080B);
@@ -40,15 +86,15 @@ abstract final class AppColors {
 
   // ── Timeline node states ──
   static const Color timelineActive = brandAccent;
-  static const Color timelineComplete = Color(0xFF16A34A);
+  static const Color timelineComplete = sage2;
   static const Color timelineLocked = Color(0x331F1B16);
   static const Color timelineLine = Color(0x1A1F1B16);
   static const Color timelineLineActive = brandAccent;
 
-  // ── Typography Colors — reference ink scale (Cmpys.zip) ──
-  static const Color textPrimary = ink; //               --ink   #16161C
-  static const Color textSecondary = Color(0xFF5B5C66); // --ink-2
-  static const Color textTertiary = ink3; //  --ink-3
+  // ── Typography Colors ──
+  static const Color textPrimary = ink;
+  static const Color textSecondary = ink2;
+  static const Color textTertiary = ink3;
 
   // ── Typography Colors (dark backgrounds — auth/splash) ──
   static const Color textOnDarkPrimary = Color(0xFFFFFFFF);
@@ -57,10 +103,10 @@ abstract final class AppColors {
   // ── Functional Accents ──
   static const Color emerald = mint;
   static const Color blue = Color(0xFF78C7FF);
-  // Semantic red is decoupled from brand: brand is green, so red must stay red
-  // (it was aliased to the old coral brand accent — fatal for Compare/destructive).
+  // Semantic red is decoupled from brand: brand is ember (a warm orange), so
+  // red must stay a distinct red for Compare / destructive states.
   static const Color red = danger;
-  static const Color alert = Color(0xFFFF3B30);
+  static const Color alert = danger;
 
   // ── Semantic Aliases ──
   static const Color primary = brandAccent;
@@ -71,14 +117,14 @@ abstract final class AppColors {
   static final Color accentMuted = brandAccentMuted;
 
   static const Color error = alert;
-  static const Color success = emerald;
+  static const Color success = sage2;
   static const Color warning = Color(0xFFFFC107);
   static const Color info = blue;
 
-  static const Color border = Color(0xFFECECEF); //      --hair
-  static const Color borderLight = Color(0xFFECECEF); //  --hair
-  static const Color borderFocus = Color(0xFFDDDDE3); //  --hair-2
-  static const Color cardBorder = Color(0xFFECECEF); //   --hair
+  static const Color border = hair;
+  static const Color borderLight = hair;
+  static const Color borderFocus = hair2;
+  static const Color cardBorder = hair;
 
   // ── Dark-mode borders (auth/splash) ──
   static const Color borderOnDark = Color(0x1AFFFFFF);
@@ -87,10 +133,10 @@ abstract final class AppColors {
   // ── Highlight (markdown bold bg in IdeaCards) ──
   static final Color highlightBg = brandAccent.withValues(alpha: 0.10);
 
-  // Legacy aliases (for backwards compat during migration)
-  static const Color gold = brandAccent;
-  static const Color goldDark = brandAccentDark;
-  static const Color goldLight = brandAccentLight;
+  // Legacy aliases (for backwards compat during migration). `gold` itself is
+  // now the real v3 gold; its old Dark/Light siblings follow it.
+  static const Color goldDark = gold2;
+  static const Color goldLight = goldSoft;
   static const Color coral = brandAccent;
   static const Color coralDark = brandAccentDark;
   static const Color coralLight = brandAccentLight;
@@ -108,19 +154,11 @@ abstract final class AppColors {
   static const Color cardTextPrimary = textPrimary;
   static const Color cardTextSecondary = textSecondary;
 
-  // ── CMPYS 2026 palette (Deepstash/Wiser design system) ──
-  static const Color paper = Color(0xFFF2F3F5);
-  static const Color paper2 = Color(0xFFE9EAEE);
-  static const Color card = Color(0xFFFFFFFF);
-  static const Color ink = Color(0xFF16161C);
-  static const Color ink2 = Color(0xFF5B5C66);
-  static const Color ink3 = Color(0xFF676975);
-  static const Color hair = Color(0xFFECECEF);
-  static const Color hair2 = Color(0xFFDDDDE3);
-  static const Color green = Color(0xFF10B36B);
-  // Accessible foreground/action green; bright green remains a visual accent.
-  static const Color green2 = Color(0xFF087547);
-  static const Color greenSoft = Color(0xFFD9F5E7);
+  // ── CMPYS 2026 (v2) names — brand/success families follow v3 ──
+  static const Color green = ember;
+  // Accessible foreground/action tone; the lighter ember is a visual accent.
+  static const Color green2 = ember2;
+  static const Color greenSoft = emberSoft;
   static const Color ochre = Color(0xFFF59E0B);
   static const Color ochre2 = Color(0xFFB45309);
   static const Color ochreSoft = Color(0xFFFCEBC9);
@@ -131,24 +169,28 @@ abstract final class AppColors {
   static const Color lilacSoft = Color(0xFFE6E3FE);
   static const Color pink = Color(0xFFFF5DA2);
   static const Color pinkSoft = Color(0xFFFFDEEC);
-  static const Color mintSoft = Color(0xFFD2F6EC);
-  static const Color blkInk = Color(0xFF18181F);
-  static const Color danger = Color(0xFFE23B2E);
+  static const Color mintSoft = sageSoft;
+  static const Color blkInk = ink;
 
+  // Deep end of [gradGreen]: oklch(0.50 0.15 42), derived (not a design
+  // token) so white text on the gradient stays above 4.5:1.
+  static const Color _emberDeep = Color(0xFFA63D02);
+
+  /// Brand gradient (name kept from v2; it is ember now).
   static const LinearGradient gradGreen = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [Color(0xFF087547), Color(0xFF075C3B)],
+    colors: [ember2, _emberDeep],
   );
   static const LinearGradient gradViolet = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [Color(0xFF7C6CFF), Color(0xFF5A4AEE)],
+    colors: [iris, iris2],
   );
   static const LinearGradient gradInk = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [Color(0xFF26262F), Color(0xFF16161C)],
+    colors: [night3, night2],
   );
 }
 
@@ -170,7 +212,17 @@ abstract final class AppRadii {
   static const BorderRadius br32 = BorderRadius.all(Radius.circular(r32));
   static const BorderRadius brFull = BorderRadius.all(Radius.circular(rFull));
 
-  // ── CMPYS 2026 radii (--r-btn / --r-card / --r-lg) ──
+  // ── CMPYS v3 radii (--r / --r2) ──
+  /// Cards, tiles and inputs.
+  static const double r = 22.0;
+
+  /// Hero cards, sheets and large surfaces.
+  static const double r2 = 28.0;
+
+  static const BorderRadius brR = BorderRadius.all(Radius.circular(r));
+  static const BorderRadius brR2 = BorderRadius.all(Radius.circular(r2));
+
+  // ── CMPYS 2026 (v2) radii (--r-btn / --r-card / --r-lg) ──
   static const BorderRadius button = BorderRadius.all(Radius.circular(999));
   static const BorderRadius card = BorderRadius.all(Radius.circular(26));
   static const BorderRadius lg = BorderRadius.all(Radius.circular(32));
@@ -228,25 +280,121 @@ abstract final class AppSpacing {
   );
 }
 
-/// Typography tokens — prototype font system.
+/// A [TextStyle] that can also be called with a size: `AppTypography.display`
+/// is the legacy 34 pt headline style (about 30 call sites use
+/// `AppTypography.display.copyWith(...)`), and `AppTypography.display(26)` is
+/// the v3 `display(size)` helper. Everything else behaves as a plain [TextStyle].
+class AppDisplayStyle extends TextStyle {
+  AppDisplayStyle._(TextStyle base)
+    : super(
+        inherit: base.inherit,
+        color: base.color,
+        backgroundColor: base.backgroundColor,
+        fontSize: base.fontSize,
+        fontWeight: base.fontWeight,
+        fontStyle: base.fontStyle,
+        letterSpacing: base.letterSpacing,
+        wordSpacing: base.wordSpacing,
+        textBaseline: base.textBaseline,
+        height: base.height,
+        leadingDistribution: base.leadingDistribution,
+        locale: base.locale,
+        foreground: base.foreground,
+        background: base.background,
+        shadows: base.shadows,
+        fontFeatures: base.fontFeatures,
+        fontVariations: base.fontVariations,
+        decoration: base.decoration,
+        decorationColor: base.decorationColor,
+        decorationStyle: base.decorationStyle,
+        decorationThickness: base.decorationThickness,
+        debugLabel: base.debugLabel,
+        fontFamily: base.fontFamily,
+        fontFamilyFallback: base.fontFamilyFallback,
+        overflow: base.overflow,
+      );
+
+  /// v3 `display(size)`: Instrument Serif, -0.01em, line height 1.02.
+  TextStyle call(double size) => AppTypography._instrumentSerif(size);
+}
+
+/// Typography tokens — CMPYS v3 type system.
 ///
-/// UI font: Inter. Data labels: JetBrains Mono.
-/// Reading font: Playfair Display — elegant serif for IdeaCard content.
+/// UI font: Geist (bundled, `assets/fonts/geist`). Display: Instrument Serif.
+/// Reading: Literata. The last two come from google_fonts. v3 helpers
+/// ([display], [displayItalic], [read], [sans], [kick], [tnum]) carry no colour
+/// (except [kick]) so they follow the surrounding text colour, as the design's
+/// CSS does. The members below the "legacy" headings keep their v2 names and
+/// now map onto Geist / Instrument Serif; the Playfair Display and JetBrains
+/// Mono members have no v3 counterpart yet and are unchanged.
 abstract final class AppTypography {
+  /// Bundled UI family (pubspec `fonts:`); weights 400, 500, 600 and 700.
+  static const String geist = 'Geist';
+
   // ═══════════════════════════════════════════════
-  // UI FONT — Inter (Nav, Headers, Labels, Buttons)
+  // v3 helpers
+  // ═══════════════════════════════════════════════
+
+  static TextStyle _instrumentSerif(
+    double size, {
+    FontStyle fontStyle = FontStyle.normal,
+  }) => GoogleFonts.instrumentSerif(
+    fontSize: size,
+    fontWeight: FontWeight.w400,
+    fontStyle: fontStyle,
+    letterSpacing: -0.01 * size,
+    height: 1.02,
+  );
+
+  /// Instrument Serif at [size], letter-spacing -0.01em, line height 1.02
+  /// (`.disp`). Also the legacy 34 pt headline style: see [AppDisplayStyle].
+  static final AppDisplayStyle display = AppDisplayStyle._(
+    _instrumentSerif(34).copyWith(color: AppColors.ink),
+  );
+
+  /// Italic Instrument Serif at [size] (`.disp` + italic).
+  static TextStyle displayItalic(double size) =>
+      _instrumentSerif(size, fontStyle: FontStyle.italic);
+
+  /// Literata at [size] for long-form reading (`.serif`).
+  static TextStyle read(double size) => GoogleFonts.literata(fontSize: size);
+
+  /// Geist at [size] and [weight] (the design's `--sans`).
+  static TextStyle sans(double size, [FontWeight weight = FontWeight.w400]) =>
+      TextStyle(fontFamily: geist, fontSize: size, fontWeight: weight);
+
+  /// `.kick`: 11 / w600 / 0.12em / ink3. CSS also uppercases it; Flutter text
+  /// styles cannot, so callers pass `label.toUpperCase()`.
+  static const TextStyle kick = TextStyle(
+    fontFamily: geist,
+    fontSize: 11,
+    fontWeight: FontWeight.w600,
+    letterSpacing: 11 * 0.12,
+    color: AppColors.ink3,
+  );
+
+  /// `.tnum`: tabular figures. Merge it onto a number's style:
+  /// `AppTypography.sans(15).merge(AppTypography.tnum)`.
+  static const TextStyle tnum = TextStyle(
+    fontFeatures: [FontFeature.tabularFigures()],
+  );
+
+  // ═══════════════════════════════════════════════
+  // Legacy UI styles — now Geist (were Inter)
   // ═══════════════════════════════════════════════
 
   // -- HEADERS --
-  static final TextStyle h1 = GoogleFonts.inter(
+  static const TextStyle h1 = TextStyle(
+    fontFamily: geist,
     fontSize: 32,
-    fontWeight: FontWeight.w800,
+    fontWeight: FontWeight.w700, // Geist tops out at w700 (Inter was w800)
     height: 1.1,
     letterSpacing: 0,
     color: AppColors.textPrimary,
   );
 
-  static final TextStyle h2 = GoogleFonts.inter(
+  static const TextStyle h2 = TextStyle(
+    fontFamily: geist,
     fontSize: 24,
     fontWeight: FontWeight.w700,
     height: 1.2,
@@ -254,14 +402,16 @@ abstract final class AppTypography {
     color: AppColors.textPrimary,
   );
 
-  static final TextStyle h3 = GoogleFonts.inter(
+  static const TextStyle h3 = TextStyle(
+    fontFamily: geist,
     fontSize: 18,
     fontWeight: FontWeight.w700,
     height: 1.3,
     color: AppColors.textPrimary,
   );
 
-  static final TextStyle h4 = GoogleFonts.inter(
+  static const TextStyle h4 = TextStyle(
+    fontFamily: geist,
     fontSize: 16,
     fontWeight: FontWeight.w700,
     height: 1.3,
@@ -269,42 +419,47 @@ abstract final class AppTypography {
   );
 
   // -- BODY (UI context — descriptions, secondary text) --
-  static final TextStyle bodyLarge = GoogleFonts.inter(
+  static const TextStyle bodyLarge = TextStyle(
+    fontFamily: geist,
     fontSize: 16,
     fontWeight: FontWeight.w500,
     height: 1.5,
     color: AppColors.textPrimary,
   );
 
-  static final TextStyle body = GoogleFonts.inter(
+  static const TextStyle body = TextStyle(
+    fontFamily: geist,
     fontSize: 15,
     fontWeight: FontWeight.w400,
     height: 1.5,
     color: AppColors.textPrimary,
   );
 
-  static final TextStyle bodyMedium = GoogleFonts.inter(
+  static const TextStyle bodyMedium = TextStyle(
+    fontFamily: geist,
     fontSize: 15,
     fontWeight: FontWeight.w500,
     height: 1.5,
     color: AppColors.textPrimary,
   );
 
-  static final TextStyle caption = GoogleFonts.inter(
+  static const TextStyle caption = TextStyle(
+    fontFamily: geist,
     fontSize: 13,
     fontWeight: FontWeight.w400,
     height: 1.4,
     color: AppColors.textSecondary,
   );
 
-  static final TextStyle captionMedium = GoogleFonts.inter(
+  static const TextStyle captionMedium = TextStyle(
+    fontFamily: geist,
     fontSize: 13,
     fontWeight: FontWeight.w500,
     height: 1.4,
     color: AppColors.textSecondary,
   );
 
-  static final TextStyle bodySmall = caption;
+  static const TextStyle bodySmall = caption;
 
   static final TextStyle captionUpper = GoogleFonts.jetBrainsMono(
     fontSize: 11,
@@ -332,32 +487,37 @@ abstract final class AppTypography {
   );
 
   // -- UI ELEMENTS --
-  static final TextStyle button = GoogleFonts.inter(
+  static const TextStyle button = TextStyle(
+    fontFamily: geist,
     fontSize: 15,
     fontWeight: FontWeight.w700,
     color: Colors.white,
   );
 
-  static final TextStyle buttonSmall = GoogleFonts.inter(
+  static const TextStyle buttonSmall = TextStyle(
+    fontFamily: geist,
     fontSize: 14,
     fontWeight: FontWeight.w600,
     color: Colors.white,
   );
 
-  static final TextStyle label = GoogleFonts.inter(
+  static const TextStyle label = TextStyle(
+    fontFamily: geist,
     fontSize: 14,
     fontWeight: FontWeight.w600,
     color: AppColors.textPrimary,
   );
 
-  static final TextStyle labelSmall = GoogleFonts.inter(
+  static const TextStyle labelSmall = TextStyle(
+    fontFamily: geist,
     fontSize: 12,
     fontWeight: FontWeight.w500,
     color: AppColors.textSecondary,
   );
 
   // ═══════════════════════════════════════════════
-  // READING FONT — Playfair Display (IdeaCards, Lessons, Long Text)
+  // Legacy READING FONT — Playfair Display (IdeaCards, Lessons, Long Text).
+  // Unchanged until the v3 reader screens move to [read].
   // ═══════════════════════════════════════════════
 
   /// Primary reading style for IdeaCard content.
@@ -412,20 +572,11 @@ abstract final class AppTypography {
   );
 
   // ═══════════════════════════════════════════════
-  // CMPYS 2026 — Bricolage Grotesque display, Plus Jakarta body,
-  // JetBrains Mono kicker (per the design system).
+  // Legacy CMPYS 2026 members
   // ═══════════════════════════════════════════════
 
-  /// Big editorial headline ("Who were they, at your age?").
-  static final TextStyle display = GoogleFonts.bricolageGrotesque(
-    fontSize: 34,
-    fontWeight: FontWeight.w800,
-    height: 1.05,
-    letterSpacing: -0.5,
-    color: AppColors.ink,
-  );
-
   /// Small uppercase mono label above sections (letter-spacing 0.14em).
+  /// The v3 equivalent is [kick] (Geist).
   static final TextStyle kicker = GoogleFonts.jetBrainsMono(
     fontSize: 11,
     fontWeight: FontWeight.w500,
@@ -434,8 +585,9 @@ abstract final class AppTypography {
     color: AppColors.ink3,
   );
 
-  /// Dimmed body copy (secondary ink).
-  static final TextStyle bodyDim = GoogleFonts.plusJakartaSans(
+  /// Dimmed body copy (secondary ink); was Plus Jakarta Sans, now Geist.
+  static const TextStyle bodyDim = TextStyle(
+    fontFamily: geist,
     fontSize: 15,
     fontWeight: FontWeight.w500,
     height: 1.5,
@@ -459,15 +611,28 @@ abstract final class AppDurations {
   static const Duration stagger = Duration(milliseconds: 50);
 }
 
+/// CMPYS v3 motion curves (`--out`, `--spring`, `--io` in `CMPYS v3.html`).
+abstract final class AppMotion {
+  /// Calm ease-out for entrances and most transitions.
+  static const Cubic out = Cubic(0.16, 1, 0.3, 1);
+
+  /// Springy overshoot. Use only where the design uses `--spring`.
+  static const Cubic spring = Cubic(0.34, 1.42, 0.5, 1);
+
+  /// Symmetric ease-in-out.
+  static const Cubic io = Cubic(0.65, 0, 0.35, 1);
+}
+
+/// Earlier curve names; the values now come from [AppMotion].
 abstract final class AppCurves {
   /// Premium ease-out for modals and cards
-  static const Curve easeOut = Cubic(0.16, 1, 0.3, 1);
+  static const Curve easeOut = AppMotion.out;
 
   /// Smooth editorial entrance
-  static const Curve editorialIn = Cubic(0.65, 0, 0.35, 1);
+  static const Curve editorialIn = AppMotion.io;
 
-  /// Springy overshoot for the active nav pill (--ease cubic-bezier(.34,1.5,.5,1)).
-  static const Curve spring = Cubic(0.34, 1.5, 0.5, 1);
+  /// Springy overshoot for the active nav pill (v3 `--spring`).
+  static const Curve spring = AppMotion.spring;
 }
 
 /// Common shadows — Ultra-soft editorial style.
@@ -541,4 +706,65 @@ abstract final class AppShadows {
       offset: const Offset(0, 2),
     ),
   ];
+}
+
+/// Reading surfaces for the lesson and book readers (`THEMES` in
+/// `v3/tutorial.jsx`). `light` resolves to the v3 paper / ink tokens.
+enum ReaderTheme {
+  light(
+    bg: AppColors.paper,
+    fg: AppColors.ink,
+    fg2: AppColors.ink2,
+    card: AppColors.card,
+    hair: AppColors.hair,
+  ),
+  sepia(
+    bg: Color(0xFFF1E7D3),
+    fg: Color(0xFF3B2F22),
+    fg2: Color(0xFF6B5A45),
+    card: Color(0xFFF8F0E0),
+    hair: Color(0xFFE2D4BA),
+  ),
+  dark(
+    bg: Color(0xFF141219),
+    fg: Color(0xFFECE8F0),
+    fg2: Color(0xFFA9A3B0),
+    card: Color(0xFF1E1B25),
+    hair: Color(0xFF2C2834),
+  );
+
+  const ReaderTheme({
+    required this.bg,
+    required this.fg,
+    required this.fg2,
+    required this.card,
+    required this.hair,
+  });
+
+  /// Page background.
+  final Color bg;
+
+  /// Body text.
+  final Color fg;
+
+  /// Secondary text.
+  final Color fg2;
+
+  /// Raised surface (callouts, cards).
+  final Color card;
+
+  /// Hairline dividers and borders.
+  final Color hair;
+
+  /// Display name, as the design's picker shows it ("Light", "Sepia", "Dark").
+  String get label => '${name[0].toUpperCase()}${name.substring(1)}';
+
+  /// Parses a stored name; unknown or missing names fall back to [light]
+  /// (the design's `st.readTheme || 'light'`).
+  static ReaderTheme fromName(String? value) {
+    for (final theme in values) {
+      if (theme.name == value) return theme;
+    }
+    return light;
+  }
 }

@@ -1,12 +1,19 @@
 import 'dart:async';
 
-import 'package:cmpys/features/plan/presentation/book_narration.dart';
 import 'package:cmpys/features/plan/presentation/book_narration_dock.dart';
 import 'package:cmpys/features/plan/state/book_narration_remote_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('the player names the tab the reader was opened in (R3-M9)', () {
+    expect(bookNarrationOrigin(0), 'Today');
+    expect(bookNarrationOrigin(1), 'Plan');
+    expect(bookNarrationOrigin(4), 'You');
+    // Unknown (an older session): the Plan, as before.
+    expect(bookNarrationOrigin(null), 'Plan');
+  });
+
   test(
     'remote ownership prevents stale readers from mutating a new session',
     () async {
@@ -72,104 +79,81 @@ void main() {
     },
   );
 
-  testWidgets(
-    'dock is text-free, accessible, tappable, and uses 44px targets',
-    (tester) async {
-      tester.view.physicalSize = const Size(320, 568);
-      tester.view.devicePixelRatio = 1;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
-      final semantics = tester.ensureSemantics();
+  testWidgets('dock shows the book, stays accessible and keeps 44 pt '
+      'targets on a narrow phone', (tester) async {
+    tester.view.physicalSize = const Size(320, 568);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final semantics = tester.ensureSemantics();
 
-      final controller = BookNarrationRemoteController();
-      addTearDown(controller.dispose);
-      final owner = Object();
-      double? soughtProgress;
-      BookNarrationStyle? selectedStyle;
-      controller.attach(
-        ownerToken: owner,
-        onToggle: () async {},
-        onPrevious: () async {},
-        onNext: () async {},
-        onSeek: (progress) async => soughtProgress = progress,
-        onStyleChanged: (style) async => selectedStyle = style,
-        onSpeedChanged: (_) async {},
-        onStop: () async {},
-        progress: .35,
-        semanticText: 'Chapter one, sentence four',
-      );
+    final controller = BookNarrationRemoteController();
+    addTearDown(controller.dispose);
+    final owner = Object();
+    var toggles = 0;
+    var opened = 0;
+    controller.attach(
+      ownerToken: owner,
+      onToggle: () async => toggles++,
+      onPrevious: () async {},
+      onNext: () async {},
+      onSeek: (_) async {},
+      onStyleChanged: (_) async {},
+      onSpeedChanged: (_) async {},
+      onStop: () async {},
+      progress: .35,
+      semanticText: 'Chapter one, sentence four',
+      resourceId: 'book-1',
+      title: 'A very long book title that has to be cut to fit the dock',
+      author: 'A. Author',
+      chapterIndex: 0,
+      duration: const Duration(minutes: 3),
+    );
 
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: Align(
-              alignment: Alignment.bottomCenter,
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Align(
+            alignment: Alignment.bottomCenter,
+            child: Padding(
+              padding: const EdgeInsets.all(12),
               child: BookNarrationDock(
                 controller: controller,
-                margin: EdgeInsets.zero,
+                onOpen: () => opened++,
               ),
             ),
           ),
         ),
-      );
-      await tester.pumpAndSettle();
+      ),
+    );
+    await tester.pumpAndSettle();
 
-      final player = find.byKey(const Key('book-narration-player'));
-      expect(player, findsOneWidget);
-      expect(
-        find.descendant(of: player, matching: find.byType(Text)),
-        findsNothing,
-      );
-      expect(find.byTooltip('Previous sentence'), findsOneWidget);
-      expect(find.byTooltip('Play narration'), findsOneWidget);
-      expect(find.byTooltip('Next sentence'), findsOneWidget);
-      expect(find.bySemanticsLabel('Audiobook controls'), findsOneWidget);
+    final player = find.byKey(BookNarrationDock.dockKey);
+    expect(player, findsOneWidget);
+    expect(tester.getSize(player).height, BookNarrationDock.preferredHeight);
+    expect(find.text('Ch. 1 · 1:03 / 3:00 · 1×'), findsOneWidget);
+    expect(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is Semantics &&
+            widget.properties.label == 'Audiobook controls' &&
+            (widget.properties.value ?? '').contains('Chapter one'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.bySemanticsLabel('Play'), findsOneWidget);
+    final play = find.byKey(const Key('book-narration-play-pause'));
+    expect(tester.getSize(play).width, greaterThanOrEqualTo(44));
+    expect(tester.getSize(play).height, greaterThanOrEqualTo(44));
 
-      for (final key in const [
-        'book-narration-previous',
-        'book-narration-play-pause',
-        'book-narration-next',
-        'book-narration-style',
-        'book-narration-speed',
-        'book-narration-options',
-      ]) {
-        final size = tester.getSize(find.byKey(Key(key)));
-        expect(size.width, greaterThanOrEqualTo(44), reason: key);
-        expect(size.height, greaterThanOrEqualTo(44), reason: key);
-      }
-
-      final progress = find.byKey(const Key('book-narration-progress'));
-      final progressRect = tester.getRect(progress);
-      expect(progressRect.height, greaterThanOrEqualTo(44));
-      final progressFill = find.byKey(
-        const Key('book-narration-progress-fill'),
-      );
-      expect(tester.getSize(progressFill).height, 4);
-      expect(
-        tester.getSize(progressFill).width,
-        closeTo((progressRect.width - 32) * .35, .01),
-      );
-      await tester.tapAt(
-        Offset(
-          progressRect.left + progressRect.width * .75,
-          progressRect.top + 8,
-        ),
-      );
-      await tester.pumpAndSettle();
-      expect(soughtProgress, closeTo(.75, .01));
-
-      await tester.tap(find.byKey(const Key('book-narration-style')));
-      await tester.pumpAndSettle();
-      expect(find.text('Warm'), findsOneWidget);
-      expect(
-        find.descendant(of: player, matching: find.byType(Text)),
-        findsNothing,
-      );
-      await tester.tap(find.text('Warm'));
-      await tester.pumpAndSettle();
-      expect(selectedStyle, BookNarrationStyle.warm);
-      expect(tester.takeException(), isNull);
-      semantics.dispose();
-    },
-  );
+    await tester.tap(play);
+    await tester.pump();
+    expect(toggles, 1);
+    expect(opened, 0);
+    await tester.tap(player);
+    await tester.pump();
+    expect(opened, 1);
+    expect(tester.takeException(), isNull);
+    semantics.dispose();
+  });
 }

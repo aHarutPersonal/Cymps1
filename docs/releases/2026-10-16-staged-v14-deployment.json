@@ -1,0 +1,17 @@
+{
+  "file_hashes_verified_in_every_service": true,
+  "image_digest": "sha256:a7b48b4f9be7c098098e6d81b5e7bbfa0335fe8a7c5d4ccff558bb551c0260a3",
+  "release": "20261016-110500-typed-math",
+  "verified_files": 22,
+  "verified_services": [
+    "web",
+    "worker",
+    "worker-high",
+    "worker-low",
+    "catalog-worker",
+    "catalog-control",
+    "curriculum-worker",
+    "curriculum-control",
+    "beat"
+  ]
+}

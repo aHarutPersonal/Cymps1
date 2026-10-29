@@ -1,0 +1,21 @@
+{
+  "applied_count": 1,
+  "approved_content_sha256": "8c3758a53bad2377c6ec63b3579509d0585467321ebc170b15cb743f6a694e4f",
+  "approved_identity_sha256": "ad0ab6d7f70c6b2a1e5a39fead3c9f01502e3d3fbb5d2be60825a2f57927a07b",
+  "approved_lesson_version_sha256": "d602a9a074d0e46943534800396d7f2e854a330b525ca10918a2543d493d3128",
+  "approved_package_sha256": "fc03f3d23778d55a4b4da132b7354979cd2ddddd5d8a60ff315cdbd673cb2b02",
+  "backup_sha256": "d171d32ccd5af56645d2e6203a5e1ac7cfb6fe844c7e7586831267473fe4bfaf",
+  "candidate_details_sha256": "1960d7878d4d6c0251b30b08dcf10e8c1bc99611b98b228674de731be7da116a",
+  "item_completion_row_count": 0,
+  "latest_job_sha256": "233c54531b2644db0008d87ce3939006185cfdc1dffb8a4b1870c97803e91570",
+  "practice_row_count": 3,
+  "protected_state_sha256": "de080e0e50d229e3c29382b961d8684703f2b411aa80671ce37299a620cefe5b",
+  "ready_after_count": 1,
+  "ready_before_count": 0,
+  "remaining_missing_count": 2,
+  "source_details_sha256": "979282e07ea06a56e57766ded523f93dd648ce82cf988bb0995ae086e34725f8",
+  "source_owner_sha256": "69680f3be40964f8bea58c7e12d9e8214382ab8ea2e7ed6d9650bdebfdff67da",
+  "step_completion_row_count": 0,
+  "target_details_sha256": "9de9ea97cfe349f3f6d1d276b4a2489a77f464df9576ab9347b4923f8ea8a3ec",
+  "target_owner_sha256": "1a30634448008747dde4ded4bcd900a0f51890d30d59e322f2201a6ae5cfe628"
+}

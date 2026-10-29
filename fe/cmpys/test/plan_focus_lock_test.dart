@@ -1,7 +1,14 @@
+import 'package:cmpys/app/theme.dart';
+import 'package:cmpys/features/cmpys/presentation/plan_screen.dart';
+import 'package:cmpys/features/cmpys/state/cmpys_backend_sync.dart';
+import 'package:cmpys/features/cmpys/state/today_data.dart';
+import 'package:cmpys/features/plan/data/plan_repository.dart';
 import 'package:cmpys/features/plan/models/plan_models.dart';
-import 'package:cmpys/features/plan/presentation/backend_plan_widgets.dart';
+import 'package:cmpys/features/plan/state/current_plan_provider.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 BackendPlan _gatedPlan() => BackendPlan(
   id: 'plan-gated',
@@ -50,49 +57,88 @@ BackendPlan _gatedPlan() => BackendPlan(
   ],
 );
 
+class _Controller extends CurrentPlanController {
+  _Controller(PlanRepository repo)
+    : super(repo: repo, readJobId: () => null) {
+    state = CurrentPlanState(
+      status: CurrentPlanStatus.ready,
+      plan: _gatedPlan(),
+    );
+  }
+
+  @override
+  Future<void> refresh() async {}
+}
+
+class _Repo implements PlanRepository {
+  @override
+  Future<PlanItemDetailed> getPlanItemDetailed(String itemId) async =>
+      PlanItemDetailed(
+        item: _gatedPlan().items.firstWhere((i) => i.id == itemId),
+        detailsStatus: 'available',
+      );
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
 void main() {
+  setUp(() => SharedPreferences.setMockInitialValues({}));
+
   testWidgets('plan focuses the active week and blocks future week details', (
     tester,
   ) async {
-    await tester.binding.setSurfaceSize(const Size(390, 844));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
+    tester.view.physicalSize = const Size(390, 2400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
 
-    final plan = _gatedPlan();
+    final semantics = tester.ensureSemantics();
+    final repo = _Repo();
     await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: ListView(
-            padding: const EdgeInsets.all(18),
-            children: backendPlanRoadmapBlocks(plan),
-          ),
+      ProviderScope(
+        overrides: [
+          cmpysBackendSyncProvider.overrideWith((ref) async {}),
+          planRepositoryProvider.overrideWithValue(repo),
+          currentPlanProvider.overrideWith((ref) => _Controller(repo)),
+          todayViewProvider.overrideWith((ref) async => null),
+          todayStreakProvider.overrideWith((ref) async => null),
+        ],
+        child: MaterialApp(
+          theme: AppTheme.light,
+          home: const CmpysPlanScreen(),
         ),
       ),
     );
-    await tester.pumpAndSettle();
+    // Step through the entrance: rises are hidden to semantics until they
+    // start, so one long pump would leave most of the page unannounced.
+    for (var i = 0; i < 20; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
 
-    expect(find.byKey(const Key('current-week-focus')), findsOneWidget);
-    expect(find.text('WEEK 1 · CURRENT FOCUS'), findsOneWidget);
+    // The active week's mission is the one open card.
+    expect(find.byKey(const Key('plan-mission-week-1-mission')), findsOneWidget);
     expect(find.text('Ship the first proof of concept'), findsWidgets);
-    expect(find.byKey(const Key('week-1-current')), findsOneWidget);
-
-    await tester.scrollUntilVisible(
-      find.byKey(const Key('week-2-locked')),
-      240,
-    );
-    expect(find.byKey(const Key('week-2-locked')), findsOneWidget);
-    expect(find.byKey(const Key('week-3-locked')), findsOneWidget);
-
-    await tester.tap(find.byKey(const Key('week-2-locked')));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Week 2 is locked'), findsOneWidget);
     expect(
-      find.text(
-        'Finish the remaining mission in Week 1. Then this week opens automatically.',
-      ),
-      findsOneWidget,
+      find.byKey(const Key('plan-mission-week-2-mission')),
+      findsNothing,
     );
-    expect(find.text('Interview five early users'), findsNothing);
+
+    // Future weeks are locked chips; their missions show only as titles in
+    // the all-weeks list, never their details.
+    expect(find.bySemanticsLabel('Week 2, locked'), findsOneWidget);
+    expect(find.bySemanticsLabel('Week 3, locked'), findsOneWidget);
+    expect(find.text('Interview five early users'), findsOneWidget);
+    expect(find.text('Test the proof of concept with real users.'), findsNothing);
+
+    await tester.tap(find.byKey(const Key('plan-week-chip-2')));
+    await tester.pump();
+    expect(find.text('Week 2 unlocks after week 1'), findsOneWidget);
+    expect(find.text('Test the proof of concept with real users.'), findsNothing);
     expect(tester.takeException(), isNull);
+    for (var i = 0; i < 4; i++) {
+      await tester.pump(const Duration(seconds: 1));
+    }
+    semantics.dispose();
   });
 }

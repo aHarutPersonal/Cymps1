@@ -4,7 +4,10 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import logging
+import re
 from contextlib import nullcontext
+from dataclasses import dataclass
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr, ValidationError, model_validator
@@ -22,6 +25,8 @@ from app.services.planning.package_review import (
     _merge_evidence_patch, _numeric_preflight_failures, _retryable_error, package_review_payload,
 )
 from app.services.planning.workload_contract import workload_feasibility_issues
+
+logger = logging.getLogger(__name__)
 
 STAGE_SECONDS = 180
 REQUEST_SECONDS = 60
@@ -70,6 +75,17 @@ class _TimingChange(_Strict):
         return self
 
 
+_CODE = Annotated[StrictStr, Field(pattern=r"^[a-z][a-z0-9_]{0,59}$")]
+_PATH = Annotated[StrictStr, Field(pattern=r"^[A-Za-z0-9_.?]{1,160}$")]
+
+
+class _EvidenceFailure(_Strict):
+    """Why one owner's numeric evidence failed: span ids, codes, paths; no text."""
+    claim_ids: list[_CLAIM] = Field(max_length=160)
+    codes: list[_CODE] = Field(min_length=1, max_length=40)
+    paths: list[_PATH] = Field(default_factory=list, max_length=40)
+
+
 class _PreflightState(_Strict):
     version: Literal[1] = 1
     package_hash: _HEX
@@ -81,6 +97,13 @@ class _PreflightState(_Strict):
     rejection: _Rejection | None = None
     correction_used: StrictBool = False
     activity_timing_changes: list[_TimingChange] | None = Field(default=None, min_length=1, max_length=6)
+    # Outline-targeted semantic issues. No package repair may change the
+    # plan-time outline, so they are never repair targets or blockers: they
+    # are reconciling guidance for the activity repair and the lesson writer.
+    outline_guidance: list[Annotated[StrictStr, Field(min_length=24, max_length=2000)]] = Field(
+        default_factory=list, max_length=20)
+    # Latest exhausted evidence-stage failure per owner, so a defect is diagnosable.
+    evidence_failures: dict[str, _EvidenceFailure] = Field(default_factory=dict, max_length=6)
 
 
 _SEMANTIC_PROMPT = (
@@ -101,7 +124,8 @@ _SEMANTIC_PROMPT = (
     "Required quantitative facts must be declared in public activity data even for text or choice answers. "
     "A declared datum is not evidence of real-world truth: verify supplied evidence or fictional framing. "
     "Reject contradictions, missing assumptions or inputs, unsupported numeric comparisons, ambiguous "
-    "answer fields, multiple defensible correct choices, mismatched text criteria/solutions, or required "
+    "answer fields, multiple defensible correct choices in a single-answer choice field (a multi_choice answer is an "
+    "exact set the case must fully determine), mismatched text criteria/solutions, or required "
     "tools unavailable in capabilities. Public labels and instructions must be understandable in the "
     "requested learner language. Transfer must apply the method to genuinely new conditions or decisions; "
     "reject public-answer recall, renamed worked examples, or leaked independent-transfer answers. "
@@ -129,6 +153,20 @@ _SEMANTIC_PROMPT = (
     "covered across its sequence. Do not require every tutorial to contain a full mission project. "
     "Both phases still require complete inputs, meaningful reasoning, and private feedback."
 )
+
+
+OUTLINE_TARGET = "outline"
+
+
+def outline_reconciliation(description: str) -> str:
+    """Writer/repair guidance for an outline issue no package repair may fix."""
+    return (f"The outline wording is inconsistent: {description.strip().rstrip('.')}; "
+            "teach one consistent version and do not repeat the inconsistency.")
+
+
+def outline_guidance(state) -> list[str]:
+    """The outline issues a saved preflight state carries as guidance."""
+    return list((state or {}).get("outline_guidance") or [])
 
 
 def _identity(package: LessonPackage, outline: dict, context: dict) -> dict:
@@ -167,6 +205,28 @@ def _patch_verdict(patch: ReviewEvidencePatch) -> PackageReview:
     return PackageReview.model_validate({"acceptable": True, "issues": [],
         "contains_calculations": bool(patch.calculations),
         **patch.model_dump(mode="json", exclude={"issues", "package_issues", "practice_minutes", "affected_sections"})})
+
+
+def _accepted_literal_facts(package: LessonPackage, payload: dict, groups: dict[str, list[str]],
+                            compiled_ids: set[str]) -> dict[str, list]:
+    """Per owner, the deterministic literal facts the evidence gate accepts."""
+    from app.services.planning.evidence_resolver import package_cases, resolve_literal_evidence
+
+    cases = package_cases(package.review_context())
+    accepted = {}
+    for owner, ids in groups.items():
+        spans = {key: payload["numeric_spans"][key] for key in ids if key not in compiled_ids}
+        facts, _ = resolve_literal_evidence(spans, payload["numeric_span_owners"], cases)
+        for _ in range(2):  # Drop rejected claims, then confirm the rest together.
+            if not facts:
+                break
+            rejected = {error.split(":", 1)[0] for error in _scope_failures(
+                ReviewEvidencePatch(literal_facts=facts), {fact.claim_id for fact in facts}, package)}
+            if not rejected:
+                accepted[owner] = facts
+                break
+            facts = [fact for fact in facts if fact.claim_id not in rejected]
+    return accepted
 
 
 def _scope_failures(patch: ReviewEvidencePatch, ids: set[str], package: LessonPackage) -> list[str]:
@@ -226,6 +286,8 @@ def merge_preflight_states(previous, incoming) -> dict:
             raise ValueError("Preflight evidence conflict")
         merged["scopes"][owner] = scope
     merged["correction_used"] = older["correction_used"] or newer["correction_used"]
+    merged["outline_guidance"] = list(dict.fromkeys(older["outline_guidance"] + newer["outline_guidance"]))
+    merged["evidence_failures"] = {**older["evidence_failures"], **newer["evidence_failures"]}
     return parse_preflight_state(merged)
 
 
@@ -268,7 +330,13 @@ def recover_preflight_context(value, *, package: LessonPackage, outline: dict, c
 
 
 def _known_negative(data) -> bool:
-    return isinstance(data, dict) and (data.get("acceptable") is False or bool(data.get("issues")) or bool(data.get("package_issues")))
+    if not isinstance(data, dict):
+        return False
+    issues = data.get("issues")
+    if (isinstance(issues, list) and issues and not data.get("package_issues")
+            and all(isinstance(issue, dict) and issue.get("target") == OUTLINE_TARGET for issue in issues)):
+        return False  # Outline-only issues are guidance, never a terminal verdict.
+    return data.get("acceptable") is False or bool(issues) or bool(data.get("package_issues"))
 
 
 def _last_response(client, previous, previous_id, error: str) -> LLMResponse:
@@ -279,6 +347,82 @@ def _last_response(client, previous, previous_id, error: str) -> LLMResponse:
         data={}, model=getattr(client, "model", None), provider=getattr(client, "provider_name", None))
     response.error = error
     return response
+
+
+# Fixed server phrases of evidence/scope failures -> stable codes. Messages can
+# also carry model text (a location, an expression), so only codes are kept.
+_EVIDENCE_ERROR_CODES = (
+    ("mathematical role invalid", "invalid_math_role"),
+    ("mathematical role repeats", "repeated_math_role"),
+    ("literal facts reference an unknown", "unknown_fact_reference"),
+    ("literal facts mix different cases", "mixed_fact_cases"),
+    ("bound datum values are absent", "datum_absent_from_span"),
+    ("derived result cannot be classified as a literal fact", "derived_value_as_fact"),
+    ("literal numeric facts are not bound", "unbound_literal_fact"),
+    ("formula is not derived from the bound case inputs", "formula_not_from_inputs"),
+    ("calculation is not bound to an exact source span", "unbound_calculation"),
+    ("calculation and literal facts bind different cases", "mixed_binding_cases"),
+    ("claimed result is absent from its source quote", "result_absent_from_quote"),
+    ("numeric span contains additional unverified values", "unverified_extra_values"),
+    ("explicit derived value has no calculation evidence", "derived_value_unproven"),
+    ("numeric verification coverage is incomplete", "incomplete_coverage"),
+    ("canonical numeric result requires calculation evidence", "canonical_result_unproven"),
+    ("verification scope contains unknown span ids", "unknown_span_ids"),
+    ("span ids outside the requested scope", "out_of_scope_span_ids"),
+    ("calculation cannot be verified", "unverifiable_calculation"),
+    ("numeric examples were not checked", "unchecked_examples"),
+    ("unrequested evidence patch fields", "unrequested_patch_fields"),
+    ("unrequested evidence scope fields", "unrequested_scope_fields"),
+    ("negative evidence has malformed scope fields", "malformed_negative_scope"),
+)
+_ARITHMETIC_MISMATCH = re.compile(r" = \S+, not \S+$")
+_PATH_PART = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,40}$")
+
+
+def _evidence_error_code(message: str) -> str:
+    lowered = message.casefold()
+    for phrase, code in _EVIDENCE_ERROR_CODES:
+        if phrase in lowered:
+            return code
+    return "wrong_arithmetic" if _ARITHMETIC_MISMATCH.search(message) else "evidence_check_failed"
+
+
+def _evidence_diagnosis(requested_ids, *, exc: Exception | None = None, errors=()) -> dict:
+    """Span ids, codes and schema paths of a failed evidence response; no text."""
+    scope = list(requested_ids)
+    claim_ids, codes, paths = [], [], []
+    if isinstance(exc, ValidationError):
+        for item in exc.errors()[:40]:
+            codes.append(str(item.get("type") or "invalid"))
+            parts = [str(part) if isinstance(part, int) or _PATH_PART.match(str(part)) else "?"
+                     for part in item.get("loc") or ()]
+            paths.append(".".join(parts)[:160] or "?")
+    elif exc is not None:
+        codes.append(_evidence_error_code(str(exc)))
+    for error in errors:
+        codes.append(_evidence_error_code(error))
+        claim_ids += [token for token in re.findall(r"\bn[1-9][0-9]*\b", error) if token in scope]
+    codes = [code if re.fullmatch(r"[a-z][a-z0-9_]{0,59}", code) else "invalid" for code in codes]
+    return {"claim_ids": list(dict.fromkeys(claim_ids or scope))[:160],
+            "codes": list(dict.fromkeys(codes))[:40] or ["evidence_check_failed"],
+            "paths": list(dict.fromkeys(paths))[:40]}
+
+
+def _evidence_defect_description(diagnosis: dict) -> str:
+    ids = diagnosis["claim_ids"]
+    shown = ", ".join(ids[:20]) + (f" and {len(ids) - 20} more" if len(ids) > 20 else "")
+    paths = "; paths: " + ", ".join(diagnosis["paths"][:8]) if diagnosis["paths"] else ""
+    return (f"Numeric evidence for spans {shown} could not be bound to this activity's declared "
+            f"data after the allowed correction (codes: {', '.join(diagnosis['codes'][:8])}{paths}). "
+            "Declare every raw number shown as a datum with an id, keep derived results as expressions "
+            "over those data, and make each quoted number match its datum.")
+
+
+@dataclass(frozen=True)
+class _EvidenceDefect:
+    """An owner whose evidence corrections are exhausted: repairable, not unavailable."""
+    target: str
+    failure: str
 
 
 class _TerminalRejection(Exception):
@@ -311,8 +455,12 @@ async def review_package(package: LessonPackage, outline: dict, context: dict, *
                            if payload["numeric_span_owners"].get(key) == "practice." + activity.id]
               for activity in package.workbook.activities}
     groups = {owner: ids for owner, ids in groups.items() if ids}
-    remaining_groups = {owner: [key for key in ids if key not in compiled_ids]
-                        for owner, ids in groups.items() if set(ids) - compiled_ids}
+    # Literal spans made only of the owner's declared data are bound in code;
+    # the gate must accept each proposal, otherwise it stays with the reviewer.
+    resolved_facts = _accepted_literal_facts(package, payload, groups, compiled_ids)
+    resolved_ids = {fact.claim_id for facts in resolved_facts.values() for fact in facts}
+    remaining_groups = {owner: [key for key in ids if key not in compiled_ids | resolved_ids]
+                        for owner, ids in groups.items() if set(ids) - compiled_ids - resolved_ids}
     caps = {owner: min(6000, max(2000, 500 + 120 * len(ids))) for owner, ids in remaining_groups.items()}
     max_requests = 1 + len(remaining_groups) + 1
     output_budget = SEMANTIC_TOKENS + sum(caps.values()) + max([SEMANTIC_TOKENS, *caps.values()])
@@ -353,6 +501,11 @@ async def review_package(package: LessonPackage, outline: dict, context: dict, *
                 active_started = None
                 if stage_running and not stage_timer.expired():
                     stage_timer.reschedule(None)
+
+    def rejection_failures() -> list[str]:
+        rejection = state["rejection"]
+        return ([issue["target"] + ": " + issue["description"] for issue in rejection["issues"]]
+                + [OUTLINE_TARGET + ": " + outline_reconciliation(text) for text in state["outline_guidance"]])
 
     def result(failures=None, error=None, approved=None, *, local_package_defect=False, local_targets=None):
         rejection = state["rejection"]
@@ -435,11 +588,13 @@ async def review_package(package: LessonPackage, outline: dict, context: dict, *
                 return True
         return await bounded_finish(claim())
 
-    async def reject(issues=None, *, unavailable=False, semantic=None):
+    async def reject(issues=None, *, unavailable=False, semantic=None, guidance=None):
         issues = issues or [{"target": "package", "description": "A known negative review lacked a valid actionable diagnostic."}]
         change = {"rejection": {"unavailable": unavailable, "issues": issues}}
         if semantic is not None:
             change["semantic"] = semantic
+        if guidance:
+            change["outline_guidance"] = guidance
         await save(change)
         if asyncio.current_task() in deferred_cancellation:
             # Persist the received negative without swallowing caller/stage
@@ -551,13 +706,18 @@ async def review_package(package: LessonPackage, outline: dict, context: dict, *
                     if _known_negative(response.data):
                         await reject(unavailable=True)
                 else:
-                    if verdict.issues or not verdict.acceptable:
-                        if not verdict.issues:
-                            await reject(unavailable=True)
-                        negative = verdict.model_dump(mode="json")
-                        negative["acceptable"] = False
-                        await reject(negative["issues"], semantic=negative)
-                    await save({"semantic": verdict.model_dump(mode="json")})
+                    if not verdict.issues and not verdict.acceptable:
+                        await reject(unavailable=True)
+                    guidance = [issue.description for issue in verdict.issues if issue.target == OUTLINE_TARGET]
+                    blocking = [issue.model_dump(mode="json") for issue in verdict.issues
+                                if issue.target != OUTLINE_TARGET]
+                    if blocking:
+                        await reject(blocking, semantic={"acceptable": False, "issues": blocking},
+                                     guidance=guidance)
+                    # Outline-only issues do not block: the lesson writer
+                    # reconciles them and the lesson review still checks it.
+                    await save({"semantic": {"acceptable": True, "issues": []},
+                                **({"outline_guidance": guidance} if guidance else {})})
                     return True
             elif _known_negative(response.data):
                 await reject(unavailable=True)
@@ -570,8 +730,9 @@ async def review_package(package: LessonPackage, outline: dict, context: dict, *
     async def evidence_stage(owner: str, ids: list[str]):
         seed = [check for check in compiled_evidence.calculations if set(check.claim_ids) <= set(ids)]
         requested_ids = remaining_groups.get(owner, [])
+        owner_facts = resolved_facts.get(owner, [])
         if not requested_ids:
-            complete = ReviewEvidencePatch(calculations=seed)
+            complete = ReviewEvidencePatch(calculations=seed, literal_facts=owner_facts)
             if _scope_failures(complete, set(ids), package):
                 return False
             await save({"scopes": {owner: {"claim_ids": ids, "evidence": complete.model_dump(mode="json")}}})
@@ -581,10 +742,23 @@ async def review_package(package: LessonPackage, outline: dict, context: dict, *
             "numeric_span_owners": {key: payload["numeric_span_owners"][key] for key in requested_ids}}
         prior = PackageReview(acceptable=True, issues=[])
         errors = []
+        diagnosis = None  # Set while the latest complete response failed validation.
+
+        async def scoped_defect():
+            """Corrections are exhausted for a well-formed but unverifiable scope:
+            a package defect the bounded activity repair owns (F18)."""
+            if stopped:
+                return False
+            logger.warning("[PREFLIGHT] Evidence scope %s unverifiable after correction: codes=%s paths=%s",
+                           owner, diagnosis["codes"], diagnosis["paths"])
+            await save({"evidence_failures": {owner: diagnosis}})
+            return _EvidenceDefect("practice." + owner,
+                                   "practice." + owner + ": " + _evidence_defect_description(diagnosis))
+
         while True:
             built = _evidence_patch_request(prior, scoped_payload, errors)
             if built is None:
-                return False
+                return await scoped_defect() if diagnosis is not None else False
             request, requested_scope = built
             request = {**request, "system_prompt": request["system_prompt"] +
                 " A supplied writing-length quota (for example a 600-word scene) is workload "
@@ -606,6 +780,7 @@ async def review_package(package: LessonPackage, outline: dict, context: dict, *
                 "are missing, report that specific missing-input defect for correction."}
             response = await call("package_preflight_evidence_" + owner, request, caps[owner])
             normalize_response_case_aliases(response, package.review_context())
+            diagnosis = None
             if not response.error and response.finish_reason in (None, "stop"):
                 try:
                     patch = ReviewEvidencePatch.model_validate(response.data)
@@ -627,12 +802,15 @@ async def review_package(package: LessonPackage, outline: dict, context: dict, *
                                 **complete_patch.model_dump(mode="json"),
                                 "calculations": [check.model_dump(mode="json") for check in seed]
                                     + [check.model_dump(mode="json") for check in complete_patch.calculations],
+                                "literal_facts": [fact.model_dump(mode="json") for fact in owner_facts]
+                                    + [fact.model_dump(mode="json") for fact in complete_patch.literal_facts],
                             })
                             errors = _scope_failures(complete_patch, set(ids), package)
-                except (ValidationError, ValueError):
+                except (ValidationError, ValueError) as exc:
                     if _known_negative(response.data):
                         await reject(unavailable=True)
                     errors = ["Evidence response must match the schema and this exact source scope"]
+                    diagnosis = _evidence_diagnosis(requested_ids, exc=exc)
                 else:
                     if issues:
                         await reject(issues)
@@ -641,10 +819,13 @@ async def review_package(package: LessonPackage, outline: dict, context: dict, *
                         await save({"scopes": {owner: scope}})
                         return True
                     prior = merged
+                    diagnosis = _evidence_diagnosis(requested_ids, errors=errors)
             elif _known_negative(response.data):
                 await reject(unavailable=True)
             if not await may_correct(response):
-                return False
+                # A transport/provider failure stays "unavailable"; a complete
+                # response that failed validation is the activity's defect.
+                return await scoped_defect() if diagnosis is not None else False
 
     if existing_review is not None:
         try:
@@ -654,9 +835,7 @@ async def review_package(package: LessonPackage, outline: dict, context: dict, *
         except (ValidationError, ValueError, TypeError):
             return result(error="Saved package preflight failed revalidation")
     if state["rejection"]:
-        rejection = state["rejection"]
-        return result([issue["target"] + ": " + issue["description"] for issue in rejection["issues"]],
-                      error=_UNAVAILABLE if rejection["unavailable"] else None)
+        return result(rejection_failures(), error=_UNAVAILABLE if state["rejection"]["unavailable"] else None)
     workload_failures = workload_feasibility_issues(_activity_timings(package),
         lesson_format=outline.get("lesson_format"),
             allotted_lesson_minutes=context.get("allotted_lesson_minutes"))
@@ -692,8 +871,13 @@ async def review_package(package: LessonPackage, outline: dict, context: dict, *
                 return result(error=_UNAVAILABLE)
             tasks = [asyncio.create_task(evidence_stage(owner, ids)) for owner, ids in groups.items()
                      if owner not in state["scopes"]]
-            if tasks and not all(await asyncio.gather(*tasks)):
-                return result(error=_UNAVAILABLE)
+            outcomes = await asyncio.gather(*tasks) if tasks else []
+            if not all(outcome is True for outcome in outcomes):
+                defects = [outcome for outcome in outcomes if isinstance(outcome, _EvidenceDefect)]
+                if not defects or any(outcome is False for outcome in outcomes):
+                    return result(error=_UNAVAILABLE)
+                return result([defect.failure for defect in defects],
+                              local_targets={defect.target for defect in defects})
             union = {"acceptable": True, "issues": [], "contains_calculations": False,
                      "calculations": [], "literal_facts": [], "literal_fact_ids": [], "math_roles": []}
             for scope in state["scopes"].values():
@@ -716,9 +900,7 @@ async def review_package(package: LessonPackage, outline: dict, context: dict, *
         # Let already-started bounded checkpoint finalizers preserve concurrent
         # negative evidence before constructing the terminal aggregate.
         await drain_tasks()
-        rejection = state["rejection"]
-        return result([issue["target"] + ": " + issue["description"] for issue in rejection["issues"]],
-                      error=_UNAVAILABLE if rejection["unavailable"] else None)
+        return result(rejection_failures(), error=_UNAVAILABLE if state["rejection"]["unavailable"] else None)
     except TimeoutError:
         stage_running = False
         if not stage_timer.expired():

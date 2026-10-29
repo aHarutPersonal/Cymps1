@@ -10,6 +10,17 @@ typedef BookNarrationRemoteSeek = Future<void> Function(double progress);
 typedef BookNarrationRemoteStyleChange =
     Future<void> Function(BookNarrationStyle style);
 typedef BookNarrationRemoteSpeedChange = Future<void> Function(double speed);
+typedef BookNarrationRemoteSkip = Future<void> Function(Duration delta);
+
+/// The full player's speed button order (design `SP = [1, 1.25, 1.5, 2, .75]`).
+const List<double> bookNarrationSpeedCycle = [1, 1.25, 1.5, 2, 0.75];
+
+/// The speed after [speed] in [bookNarrationSpeedCycle]. A speed outside the
+/// cycle starts it again at 1×, as `SP.indexOf` → -1 does in the design.
+double nextBookNarrationSpeed(double speed) {
+  final index = bookNarrationSpeedCycle.indexOf(speed);
+  return bookNarrationSpeedCycle[(index + 1) % bookNarrationSpeedCycle.length];
+}
 
 /// App-scoped bridge between the active reader and playback controls rendered
 /// elsewhere in the navigation tree.
@@ -26,6 +37,8 @@ class BookNarrationRemoteController extends ChangeNotifier {
   BookNarrationRemoteSpeedChange? _onSpeedChanged;
   BookNarrationRemoteAction? _onStop;
   BookNarrationRemoteAction? _onReplaced;
+  BookNarrationRemoteAction? _onChapters;
+  BookNarrationRemoteSkip? _onSkip;
   final Map<Object, Future<void>> _ownerStops = Map.identity();
 
   bool _active = false;
@@ -36,6 +49,12 @@ class BookNarrationRemoteController extends ChangeNotifier {
   BookNarrationStyle _style = BookNarrationStyle.expressive;
   double _speed = 1;
   int? _branchIndex;
+  String? _resourceId;
+  String _title = '';
+  String _author = '';
+  int? _chapterIndex;
+  String _chapterTitle = '';
+  Duration _duration = Duration.zero;
 
   bool get active => _active;
   bool get playing => _playing;
@@ -46,6 +65,40 @@ class BookNarrationRemoteController extends ChangeNotifier {
   double get speed => _speed;
   int? get branchIndex => _branchIndex;
   bool get hasOwner => _ownerToken != null;
+
+  /// The book being narrated, so a Listen elsewhere can tell whether it is
+  /// already the one playing.
+  String? get resourceId => _resourceId;
+  String get title => _title;
+
+  /// Empty when the book has no known author.
+  String get author => _author;
+
+  /// Zero-based chapter being narrated, when known.
+  int? get chapterIndex => _chapterIndex;
+  String get chapterTitle => _chapterTitle;
+
+  /// Listening time of the whole book at 1×. The reader estimates it from the
+  /// narration text; zero when unknown.
+  Duration get duration => _duration;
+
+  /// [progress] as listening time of the book at 1×.
+  Duration get elapsed => _duration * _progress;
+
+  /// [elapsed] at the current [speed]: what a listener has heard so far in
+  /// clock time (half of [elapsed] at 2×).
+  Duration get listeningElapsed => _atSpeed(elapsed);
+
+  /// [duration] at the current [speed].
+  Duration get listeningDuration => _atSpeed(_duration);
+
+  Duration _atSpeed(Duration time) => speed > 0 ? time * (1 / speed) : time;
+
+  /// Whether the session offers a chapter list.
+  bool get hasChapters => _onChapters != null;
+
+  /// Whether [resourceId] is the book this session narrates.
+  bool narrates(String resourceId) => active && this.resourceId == resourceId;
 
   /// Claims the remote for [ownerToken], replacing any older session.
   void attach({
@@ -58,6 +111,8 @@ class BookNarrationRemoteController extends ChangeNotifier {
     required BookNarrationRemoteSpeedChange onSpeedChanged,
     required BookNarrationRemoteAction onStop,
     BookNarrationRemoteAction? onReplaced,
+    BookNarrationRemoteAction? onChapters,
+    BookNarrationRemoteSkip? onSkip,
     bool active = true,
     bool playing = false,
     bool preparing = false,
@@ -66,6 +121,12 @@ class BookNarrationRemoteController extends ChangeNotifier {
     BookNarrationStyle style = BookNarrationStyle.expressive,
     double speed = 1,
     int? branchIndex,
+    String? resourceId,
+    String title = '',
+    String author = '',
+    int? chapterIndex,
+    String chapterTitle = '',
+    Duration duration = Duration.zero,
   }) {
     final previousOwnerToken = _ownerToken;
     final previousStop = _onReplaced ?? _onStop;
@@ -85,6 +146,8 @@ class BookNarrationRemoteController extends ChangeNotifier {
     _onSpeedChanged = onSpeedChanged;
     _onStop = onStop;
     _onReplaced = onReplaced;
+    _onChapters = onChapters;
+    _onSkip = onSkip;
     _active = active;
     _playing = playing;
     _preparing = preparing;
@@ -93,6 +156,12 @@ class BookNarrationRemoteController extends ChangeNotifier {
     _style = style;
     _speed = speed;
     _branchIndex = branchIndex;
+    _resourceId = resourceId;
+    _title = title.trim();
+    _author = author.trim();
+    _chapterIndex = chapterIndex;
+    _chapterTitle = chapterTitle.trim();
+    _duration = _clampDuration(duration);
     if (replacingOwner && previousStop != null) {
       unawaited(_retireOwner(previousOwnerToken, previousStop));
     }
@@ -111,6 +180,11 @@ class BookNarrationRemoteController extends ChangeNotifier {
     double? speed,
     int? branchIndex,
     bool clearBranchIndex = false,
+    String? title,
+    String? author,
+    int? chapterIndex,
+    String? chapterTitle,
+    Duration? duration,
   }) {
     if (!_owns(ownerToken)) return false;
 
@@ -150,6 +224,26 @@ class BookNarrationRemoteController extends ChangeNotifier {
       _branchIndex = nextBranchIndex;
       changed = true;
     }
+    if (title != null && _title != title.trim()) {
+      _title = title.trim();
+      changed = true;
+    }
+    if (author != null && _author != author.trim()) {
+      _author = author.trim();
+      changed = true;
+    }
+    if (chapterIndex != null && _chapterIndex != chapterIndex) {
+      _chapterIndex = chapterIndex;
+      changed = true;
+    }
+    if (chapterTitle != null && _chapterTitle != chapterTitle.trim()) {
+      _chapterTitle = chapterTitle.trim();
+      changed = true;
+    }
+    if (duration != null && _duration != _clampDuration(duration)) {
+      _duration = _clampDuration(duration);
+      changed = true;
+    }
     if (changed) notifyListeners();
     return true;
   }
@@ -179,6 +273,30 @@ class BookNarrationRemoteController extends ChangeNotifier {
       notifyListeners();
     }
   }
+
+  /// Moves the position by [delta] of the book's time at 1× (the full
+  /// player's ±15 s), clamped to the start and end of the book.
+  ///
+  /// A session that maps time to text itself (the reader's `onSkip`) does
+  /// so; otherwise [delta] is converted through [duration], and a session
+  /// without a known [duration] ignores it.
+  Future<void> skip(Duration delta) async {
+    final onSkip = _onSkip;
+    if (!_active) return;
+    if (onSkip != null) {
+      await onSkip(delta);
+      return;
+    }
+    if (_duration <= Duration.zero) return;
+    final target = (elapsed + delta).inMicroseconds / _duration.inMicroseconds;
+    await seek(target);
+  }
+
+  /// Opens the session's chapter list, when it has one.
+  Future<void> showChapters() => _invoke(_onChapters);
+
+  /// Steps [speed] through [bookNarrationSpeedCycle].
+  Future<void> cycleSpeed() => setSpeed(nextBookNarrationSpeed(_speed));
 
   Future<void> setStyle(BookNarrationStyle style) async {
     final callback = _onStyleChanged;
@@ -275,6 +393,9 @@ class BookNarrationRemoteController extends ChangeNotifier {
     return progress.clamp(0.0, 1.0).toDouble();
   }
 
+  static Duration _clampDuration(Duration duration) =>
+      duration.isNegative ? Duration.zero : duration;
+
   static bool _replaceBool(
     bool? next,
     bool current,
@@ -295,12 +416,20 @@ class BookNarrationRemoteController extends ChangeNotifier {
     _onSpeedChanged = null;
     _onStop = null;
     _onReplaced = null;
+    _onChapters = null;
+    _onSkip = null;
     _active = false;
     _playing = false;
     _preparing = false;
     _progress = 0;
     _semanticText = '';
     _branchIndex = null;
+    _resourceId = null;
+    _title = '';
+    _author = '';
+    _chapterIndex = null;
+    _chapterTitle = '';
+    _duration = Duration.zero;
   }
 
   @override

@@ -21,6 +21,13 @@ void main() {
       RegExp(r'figma_refs', caseSensitive: false),
       RegExp(r'Your selected mentor is no longer available'),
       RegExp(r'Pick a benchmark', caseSensitive: false),
+      // Copy of the retired onboarding analysis and blueprint steps; the v3
+      // flow goes personalize > discovery > intake > Mentor Lab instead.
+      RegExp(r'Reading your interview'),
+      RegExp(r'Build my plan to close the gap'),
+      RegExp(r'Designing your blueprint'),
+      RegExp(r'Your blueprint is ready'),
+      RegExp(r'You vs .*, in plain terms'),
     ];
 
     final offenders = <String>[];

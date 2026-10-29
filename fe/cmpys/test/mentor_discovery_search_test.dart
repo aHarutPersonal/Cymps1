@@ -41,6 +41,9 @@ class _DiscoveryRepo extends Fake implements SessionRepository {
   }
 
   @override
+  Future<List<IdolTimelineEntry>> idolTimeline(String idolName) async => [];
+
+  @override
   Future<List<Map<String, dynamic>>> discoverMentors(String query) async {
     queries.add(query);
     return [
@@ -52,6 +55,15 @@ class _DiscoveryRepo extends Fake implements SessionRepository {
       },
     ];
   }
+}
+
+// The restyled screen is taller than the default test view under the wide test
+// font (the display title wraps onto several lines), so give it room.
+void _tallView(WidgetTester tester) {
+  tester.view.physicalSize = const Size(390, 1800);
+  tester.view.devicePixelRatio = 1;
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
 }
 
 void main() {
@@ -87,6 +99,7 @@ void main() {
   testWidgets('search keeps the featured mentor when their name matches', (
     tester,
   ) async {
+    _tallView(tester);
     final repo = _DiscoveryRepo();
     String? picked;
     await tester.pumpWidget(
@@ -108,7 +121,12 @@ void main() {
     await tester.enterText(find.byType(TextField), 'Rockefeller');
     await tester.pump(const Duration(milliseconds: 450));
     await tester.pumpAndSettle();
+    // Tapping a mentor opens their preview; "Begin intake" is the pick.
     await tester.tap(find.text('John D. Rockefeller').last);
+    await tester.pumpAndSettle();
+    expect(picked, isNull);
+    await tester.tap(find.text('Begin intake with Rockefeller'));
+    await tester.pumpAndSettle();
     expect(picked, 'John D. Rockefeller');
     await tester.pumpWidget(const SizedBox());
   });
@@ -116,6 +134,7 @@ void main() {
   testWidgets('search finds a mentor outside the initial suggestions', (
     tester,
   ) async {
+    _tallView(tester);
     final repo = _DiscoveryRepo();
     String? picked;
     await tester.pumpWidget(
@@ -141,6 +160,10 @@ void main() {
     expect(repo.queries, ['Warren Buffett']);
     expect(find.text('Warren Buffett'), findsWidgets);
     await tester.tap(find.text('Warren Buffett').last);
+    await tester.pumpAndSettle();
+    expect(picked, isNull);
+    await tester.tap(find.text('Begin intake with Buffett'));
+    await tester.pumpAndSettle();
     expect(picked, 'Warren Buffett');
     await tester.pumpWidget(const SizedBox());
   });

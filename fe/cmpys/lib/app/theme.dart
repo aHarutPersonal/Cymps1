@@ -1,12 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 import 'design_tokens.dart';
 
 /// App theme configuration.
-/// CMPYS 2026: cool-paper canvas, vibrant-green accent, Plus Jakarta Sans body
-/// (Bricolage Grotesque display + JetBrains Mono labels live in AppTypography).
+/// CMPYS v3: warm-paper canvas, ember accent, Geist base font (Instrument Serif
+/// display and Literata reading faces live in AppTypography).
 abstract final class AppTheme {
   static ThemeData get light {
     return ThemeData(
@@ -14,18 +13,18 @@ abstract final class AppTheme {
       brightness: Brightness.light,
       scaffoldBackgroundColor: AppColors.brandBg,
       colorScheme: const ColorScheme.light(
-        primary: AppColors.green2,
+        primary: AppColors.ember2,
         onPrimary: Colors.white,
-        secondary: AppColors.emerald,
-        onSecondary: AppColors.charcoal,
+        secondary: AppColors.sage,
+        onSecondary: AppColors.night,
         tertiary: AppColors.blue,
-        onTertiary: AppColors.charcoal,
+        onTertiary: AppColors.night,
         surface: AppColors.surface,
         onSurface: AppColors.textPrimary,
         error: AppColors.error,
         onError: Colors.white,
       ),
-      fontFamily: GoogleFonts.plusJakartaSans().fontFamily,
+      fontFamily: AppTypography.geist,
       textTheme: _textTheme,
       appBarTheme: _appBarTheme,
       cardTheme: _cardTheme,
@@ -145,11 +144,11 @@ abstract final class AppTheme {
     );
   }
 
-  // Elevated Button Theme — coral capsule
+  // Elevated Button Theme — ember capsule
   static ElevatedButtonThemeData get _elevatedButtonTheme {
     return ElevatedButtonThemeData(
       style: ElevatedButton.styleFrom(
-        backgroundColor: AppColors.green2,
+        backgroundColor: AppColors.ember2,
         foregroundColor: Colors.white,
         elevation: 0,
         padding: const EdgeInsets.symmetric(
@@ -170,7 +169,7 @@ abstract final class AppTheme {
   static TextButtonThemeData get _textButtonTheme {
     return TextButtonThemeData(
       style: TextButton.styleFrom(
-        foregroundColor: AppColors.green2,
+        foregroundColor: AppColors.ember2,
         padding: const EdgeInsets.symmetric(
           horizontal: AppSpacing.s16,
           vertical: AppSpacing.s12,
@@ -277,7 +276,7 @@ abstract final class AppTheme {
       }),
       cancelButtonStyle: TextButton.styleFrom(foregroundColor: AppColors.peach),
       confirmButtonStyle: TextButton.styleFrom(
-        foregroundColor: AppColors.green2,
+        foregroundColor: AppColors.ember2,
       ),
     );
   }

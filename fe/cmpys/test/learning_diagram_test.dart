@@ -179,10 +179,12 @@ void main() {
         '${liveLearningDiagrams[0]}\n\n${liveLearningDiagrams[1]}\n\nAfter this diagram continue reading.';
     final current = BookNarrationDocument.fromMarkdown(markdown);
     for (final version in [1, 2]) {
+      // v1 and v2 were parsed with the Markdown parser's HTML escaping.
       final old = BookNarrationDocument.fromMarkdown(
         markdown,
         semanticComparisons: version == 2,
         semanticDiagrams: false,
+        encodeHtml: true,
       );
       for (final word in [
         'Euphoria',

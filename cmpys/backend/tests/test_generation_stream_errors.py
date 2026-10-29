@@ -88,5 +88,10 @@ async def test_unavailable_stream_preserves_saved_work_and_never_dispatches(monk
     assert session.comparison_output == saved
     assert session.blueprint_output is None
     assert all(event["type"] != "done" for event in events)
-    dispatch.assert_not_awaited()
+    # The plan needs only the saved comparison, so it starts before the blueprint
+    # streams; a failed comparison never starts it.
+    if section == "comparison":
+        dispatch.assert_not_awaited()
+    else:
+        dispatch.assert_awaited_once()
     release.assert_awaited_once()

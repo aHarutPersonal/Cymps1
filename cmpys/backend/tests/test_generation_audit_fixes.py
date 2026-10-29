@@ -301,14 +301,16 @@ def test_missing_or_planned_habits_are_not_discipline_evidence(answer):
     assert not has_established_habit_evidence(answer)
 
 
-def test_no_habit_answer_removes_unsupported_model_score():
+def test_no_learning_support_answer_removes_unsupported_model_score():
+    # The old "habits" dimension is gone; an 8-key interview's "Nothing yet"
+    # about learning support is still no evidence for the dimension it feeds.
     from app.services.comparison.scoring import normalize_comparison_scores
-    raw = {'dimensions': [{'id':'habits','status':'comparable',
-        'comparison_basis':'daily practice','you_level':3,'idol_level':3,
+    raw = {'dimensions': [{'id':'network','status':'comparable',
+        'comparison_basis':'feedback partners','you_level':3,'idol_level':3,
         'you_evidence':'self_reported','idol_evidence':'documented',
-        'you_note':'Routine','idol_note':'Routine'}]}
+        'you_note':'Weekly partner','idol_note':'Mentor'}]}
     result = normalize_comparison_scores(raw, learner_baseline={
         'learning_habits_support': {'answer':'Nothing yet'}})
-    habits = next(d for d in result['dimensions'] if d['id']=='habits')
-    assert habits['you'] is None
-    assert habits['status'] == 'insufficient_user_evidence'
+    network = next(d for d in result['dimensions'] if d['id']=='network')
+    assert network['you'] is None
+    assert network['status'] == 'insufficient_user_evidence'

@@ -4,7 +4,7 @@ import pytest
 
 from app.services.intake_diagnostics import BANK, diagnostic_summary, select_diagnostic
 from app.services.interview_inputs import (
-    INTERVIEW_ANSWER_KEYS,
+    INTERVIEW_ANSWER_KEYS_V1,
     build_interview_plan_inputs,
     provider_interview_plan_inputs,
 )
@@ -42,7 +42,7 @@ def test_unknown_answers_finish_collection_but_never_establish_competence():
         messages_for(
             {
                 key: ("8" if key == "weekly_hours" else "не знаю", None)
-                for key in INTERVIEW_ANSWER_KEYS
+                for key in INTERVIEW_ANSWER_KEYS_V1
             }
         )
     )
@@ -191,7 +191,7 @@ def test_russian_capacity_does_not_require_an_english_answer(answer, expected):
 def test_completed_legacy_intake_keeps_diagnostics_explicitly_unassessed():
     records = {
         key: ("8" if key == "weekly_hours" else "A concrete answer", None)
-        for key in INTERVIEW_ANSWER_KEYS
+        for key in INTERVIEW_ANSWER_KEYS_V1
         if key not in {"foundation_check", "application_check"}
     }
     messages = messages_for(records)
@@ -222,3 +222,41 @@ def test_lesson_context_preserves_checks_before_long_self_report():
     assert len(text) < 2000
     assert "needs_practice_on_item" in text
     assert text.index("needs_practice_on_item") < text.index("long text")
+
+
+@pytest.mark.parametrize("domain", ["general", "investing"])
+@pytest.mark.parametrize("missing_answer", ["I don’t have one yet", "A rough idea"])
+def test_a_check_answered_as_missing_evidence_is_not_provided_not_needs_review(
+    domain, missing_answer
+):
+    """F13: an answer sent with the "I don't have one yet" choice is flagged
+    missing_evidence. Its check is "unknown" (the existing not-provided
+    status, the same one an empty answer gets), never "needs_review", which
+    the app labels "Needs a closer review" as though a sample were weak."""
+    first, second = BANK[domain]
+    result = diagnostic_summary(
+        {
+            "foundation_check": [
+                {"diagnostic_id": first.id, "answer": missing_answer, "missing_evidence": True}
+            ],
+            "application_check": [
+                {"diagnostic_id": second.id, "answer": "I would compare it with a second method."}
+            ],
+        }
+    )
+    assert result[0]["status"] == "unknown"
+    assert result[0]["status"] == diagnostic_summary(
+        {"foundation_check": [{"diagnostic_id": first.id, "answer": ""}]}
+    )[0]["status"]
+    # An ordinary answer to the other check keeps its normal grading.
+    assert result[1]["status"] != "unknown"
+
+
+def test_missing_evidence_flag_reaches_the_starting_check_end_to_end():
+    first, _ = BANK["general"]
+    messages = messages_for({"foundation_check": ("I don’t have one yet", first.id)})
+    messages[-1].response_ui_json = {"missing_evidence": True}
+    baseline = build_interview_plan_inputs(messages)
+    (check, _) = baseline["skill_diagnostics"]
+    assert check["skill_id"] == "goal_specific_sample" and check["status"] == "unknown"
+    assert "foundation_check" in baseline["missing_evidence_keys"]

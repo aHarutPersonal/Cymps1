@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:cmpys/core/ui/v3/v3.dart';
 import 'package:cmpys/features/cmpys/presentation/compare_screen.dart';
 import 'package:cmpys/features/cmpys/state/cmpys_backend_sync.dart';
 import 'package:cmpys/features/cmpys/state/cmpys_store.dart';
@@ -118,6 +119,7 @@ void main() {
     });
 
     expect(find.byKey(const Key('comparison-scores-pending')), findsOneWidget);
+    expect(find.byType(V3Spinner), findsOneWidget);
     await tester.tap(find.byKey(const Key('comparison-scores-pending')));
     await tester.pump();
     expect(starts, 1);
@@ -139,7 +141,7 @@ void main() {
       find.text('Your comparison is still being prepared.'),
       findsOneWidget,
     );
-    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(find.byType(V3Spinner), findsNothing);
   });
 
   testWidgets('unavailable comparison does not show an endless spinner', (
@@ -154,7 +156,7 @@ void main() {
       find.byKey(const Key('comparison-scores-unavailable')),
       findsOneWidget,
     );
-    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(find.byType(V3Spinner), findsNothing);
   });
 
   testWidgets('terminal score failure shows an explicit fresh retry', (
@@ -167,31 +169,41 @@ void main() {
 
     expect(find.byKey(const Key('comparison-scores-failed')), findsOneWidget);
     expect(find.text('Your dimension assessment couldn’t finish.'), findsOneWidget);
-    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(find.byType(V3Spinner), findsNothing);
   });
 
   testWidgets('no achievements shows no invented overall percentage', (
     tester,
   ) async {
+    // The v3 dimension rows sit below the fold; build them all.
+    await tester.binding.setSurfaceSize(const Size(390, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     await _pumpCompare(
       tester,
       (ref) async => ComparisonScoresSyncResult.ready,
       scores: _insufficientScores(),
     );
 
+    // v3 look: the like-for-like count replaces the v2 overall hero.
+    expect(find.byKey(const Key('compare-like-for-like')), findsOneWidget);
     expect(
-      find.byKey(const Key('comparison-overall-insufficient')),
+      find.text('of 1 dimension compared like for like'),
       findsOneWidget,
     );
-    expect(find.text('Your starting point, skill by skill'), findsOneWidget);
-    expect(find.text('Different basis'), findsOneWidget);
-    expect(find.textContaining('No numeric score'), findsOneWidget);
+    expect(find.text('Not comparable'), findsOneWidget);
+    expect(
+      find.text('personal savings versus business capital raised'),
+      findsOneWidget,
+    );
     expect(find.textContaining('% of'), findsNothing);
   });
 
   testWidgets('complete evidence does not become an overall ability gap', (
     tester,
   ) async {
+    // The v3 dimension rows sit below the fold; build them all.
+    await tester.binding.setSurfaceSize(const Size(390, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     await _pumpCompare(
       tester,
       (ref) async => ComparisonScoresSyncResult.ready,
@@ -200,11 +212,12 @@ void main() {
 
     expect(find.text('−50'), findsNothing);
     expect(find.text('point gap'), findsNothing);
-    expect(find.text('Your starting point, skill by skill'), findsOneWidget);
+    // v3 look: per-dimension like-for-like count, no combined score.
     expect(
-      find.textContaining('not one overall ability score'),
+      find.text('of 5 dimensions compared like for like'),
       findsOneWidget,
     );
+    expect(find.text('Like for like'), findsNWidgets(5));
     expect(find.textContaining('% of'), findsNothing);
   });
   testWidgets('diagnostic uncertainty is visible without an ability score', (
@@ -220,15 +233,33 @@ void main() {
         'learner_diagnostics': [
           {'skill_id': 'profit_vs_cash', 'status': 'correct_on_item'},
           {'skill_id': 'maintenance_vs_growth', 'status': 'unknown'},
+          {'skill_id': 'goal_specific_sample', 'status': 'needs_review'},
+          {'skill_id': 'goal_specific_validation', 'status': 'a_new_status'},
+          {
+            'skill_id': 'logical_implication',
+            'status': 'needs_practice_on_item',
+          },
         ],
       },
     );
     expect(find.byKey(const Key('comparison-skill-checks')), findsOneWidget);
     expect(find.text('Profit and cash: Correct on this check'), findsOneWidget);
+    // F13: the backend's `unknown` (an answer recorded as missing, or none)
+    // reads as not provided, never as a weak answer.
     expect(
-      find.text('Maintenance and growth spending: Not established yet'),
+      find.text('Maintenance and growth spending: Not provided yet'),
       findsOneWidget,
     );
+    // Owner decision 7: an open answer that isn't auto-graded is reviewed by
+    // the mentor; a wrong answer keeps its own label.
+    expect(find.text('Your work example: Reviewed by your mentor'), findsOne);
+    expect(find.textContaining('Needs a closer review'), findsNothing);
+    expect(
+      find.text('Logical implication: Revisit this specific skill'),
+      findsOne,
+    );
+    // A status this build doesn't know claims nothing about the answer.
+    expect(find.text('Checking your work: Not checked yet'), findsOne);
     expect(find.text('point gap'), findsNothing);
     expect(tester.takeException(), isNull);
   });

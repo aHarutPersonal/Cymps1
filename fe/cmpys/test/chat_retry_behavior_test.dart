@@ -1,5 +1,5 @@
 import 'package:cmpys/core/network/api_error.dart';
-import 'package:cmpys/core/ui/cmpys/cmpys_primitives.dart';
+import 'package:cmpys/core/ui/v3/v3.dart';
 import 'package:cmpys/features/cmpys/data/cmpys_seed.dart';
 import 'package:cmpys/features/cmpys/presentation/chat_screen.dart';
 import 'package:cmpys/features/cmpys/state/cmpys_store.dart';
@@ -61,20 +61,19 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 500));
 
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('What should I focus on first?'));
+    final prompt = find.text('What should I focus on this week?');
+    await tester.ensureVisible(prompt);
+    await tester.pump();
+    await tester.tap(prompt);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
     expect(find.text('Start with one useful proof.'), findsOneWidget);
 
     await tester.enterText(find.byType(TextField), 'What comes next?');
     await tester.pump();
-    final sendAction = find.byWidgetPredicate(
-      (widget) =>
-          widget is CmpysPressable && widget.semanticLabel == 'Send message',
-    );
+    final sendAction = find.byKey(CmpysChatScreen.sendKey);
     expect(sendAction, findsOneWidget);
-    expect(tester.widget<CmpysPressable>(sendAction).onTap, isNotNull);
+    expect(tester.widget<V3Pressable>(sendAction).onTap, isNotNull);
     await tester.tap(sendAction);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
@@ -86,7 +85,7 @@ void main() {
       find.text('Couldn’t reach Buffett. Check your connection and tap retry.'),
       findsOneWidget,
     );
-    expect(find.text('Retry'), findsOneWidget);
+    expect(find.text('Retry reply'), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox());
   });
@@ -104,7 +103,7 @@ void main() {
     expect(find.text('How does cash differ from profit?'), findsOneWidget);
     expect(find.text('A credit sale increases profit before cash arrives.'), findsOneWidget);
     expect(repository.sends, 0);
-    await tester.pumpAndSettle();
+    await tester.pump(const Duration(seconds: 1));
     await tester.pumpWidget(const SizedBox());
   });
 
@@ -144,14 +143,9 @@ void main() {
     await tester.pump(const Duration(milliseconds: 250));
     field = tester.widget<TextField>(fieldFinder);
     expect(field.focusNode!.hasFocus, isTrue);
-    expect(find.byIcon(Icons.keyboard_hide_rounded), findsOneWidget);
 
-    final hideKeyboardAction = find.byWidgetPredicate(
-      (widget) =>
-          widget is CmpysPressable && widget.semanticLabel == 'Hide keyboard',
-    );
-    expect(hideKeyboardAction, findsOneWidget);
-    await tester.tap(hideKeyboardAction);
+    // Tapping outside the composer hides the keyboard.
+    await tester.tapAt(const Offset(400, 150));
     await tester.pump(const Duration(milliseconds: 250));
     field = tester.widget<TextField>(fieldFinder);
     expect(field.focusNode!.hasFocus, isFalse);

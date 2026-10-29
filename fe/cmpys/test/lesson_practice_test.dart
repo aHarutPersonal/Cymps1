@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:ui' as ui;
 import 'package:cmpys/features/plan/data/practice_repository.dart';
 import 'package:cmpys/core/network/api_error.dart';
+import 'package:cmpys/core/ui/v3/v3.dart';
 import 'package:cmpys/features/plan/data/plan_repository.dart';
 import 'package:cmpys/features/plan/models/plan_models.dart';
 import 'package:cmpys/features/plan/presentation/lesson_reader_screen.dart';
@@ -169,8 +170,9 @@ class FakePracticeRepository extends Fake implements PracticeRepository {
     String step,
     String? artifact,
     int revision,
-    Map<String, String> answers,
-  ) async {
+    Map<String, String> answers, {
+    List<PracticeActivity> activities = const [],
+  }) async {
     saves++;
     if (artifactChanged && artifact != 'refreshed') {
       throw const ApiError(message: 'Lesson refreshed', statusCode: 409);
@@ -243,6 +245,22 @@ class FakePracticeRepository extends Fake implements PracticeRepository {
   }
 }
 
+/// Fails the first completion, then succeeds.
+class _FlakyCompletionRepository extends Fake implements PlanRepository {
+  int calls = 0;
+  @override
+  Future<({bool completed, bool itemCompleted})> toggleStepComplete(
+    String itemId,
+    String stepId, {
+    String? artifactJobId,
+    bool? complete,
+  }) async {
+    calls++;
+    if (calls == 1) throw Exception('offline');
+    return (completed: true, itemCompleted: false);
+  }
+}
+
 class _CompletionRepository extends Fake implements PlanRepository {
   int completions = 0;
   String? lastArtifact;
@@ -251,6 +269,7 @@ class _CompletionRepository extends Fake implements PlanRepository {
     String itemId,
     String stepId, {
     String? artifactJobId,
+    bool? complete,
   }) async {
     completions++;
     lastArtifact = artifactJobId;
@@ -306,6 +325,17 @@ Future<void> mount(
   await tester.pumpAndSettle();
 }
 
+/// A v3 icon button by its accessible label ("Back", "Refer to lesson").
+Finder iconButton(String label) =>
+    find.byWidgetPredicate((w) => w is V3IconButton && w.label == label);
+
+/// The checking pass ticks for a few seconds before the result shows.
+Future<void> settleCheck(WidgetTester tester) async {
+  await tester.pump();
+  await tester.pump(const Duration(seconds: 4));
+  await tester.pumpAndSettle();
+}
+
 Future<void> enter(WidgetTester tester, String field, String value) async {
   final finder = find.byKey(ValueKey('answer-triangle.$field'));
   await tester.ensureVisible(finder);
@@ -337,7 +367,7 @@ void main() {
       expect(repo.refreshes, 1);
       expect(repo.savedArtifact, 'refreshed');
       expect(repo.data['answers']['triangle.length'], '5');
-      expect(find.text('All answers saved'), findsOneWidget);
+      expect(find.text('Draft saved'), findsOneWidget);
     },
   );
 
@@ -353,13 +383,16 @@ void main() {
       await tester.pumpAndSettle();
       expect(repo.refreshes, 1);
       expect(repo.data['answers'], isEmpty);
-      expect(find.text('Unsaved changes'), findsOneWidget);
-      await tester.tap(find.byTooltip('Back to lesson'));
+      expect(find.text('Unsaved'), findsOneWidget);
+      await tester.tap(iconButton('Back'));
       await tester.pumpAndSettle();
-      expect(find.text('Leave without saving?'), findsOneWidget);
-      await tester.tap(find.text('Keep editing'));
+      expect(find.text('Leave practice?'), findsOneWidget);
+      // The save already failed: the sheet offers a retry; closing it keeps
+      // editing.
+      expect(find.text('Retry'), findsOneWidget);
+      await tester.tap(iconButton('Close'));
       await tester.pumpAndSettle();
-      expect(find.text('Unsaved changes'), findsOneWidget);
+      expect(find.text('Unsaved'), findsOneWidget);
       expect(
         tester
             .widget<TextField>(
@@ -410,10 +443,20 @@ void main() {
       findsNothing,
     );
     await tester.pumpWidget(const SizedBox.shrink());
+    // The result panel shows the attempt graded on the current answers.
+    repo.data['answers'] = {
+      'triangle.length': '4',
+      'triangle.reason': 'Right angle.',
+      'triangle.assumption': 'right',
+    };
     repo.data['attempts'] = [
       {
         'activity_id': 'triangle',
-        'answers': <String, String>{},
+        'answers': <String, String>{
+          'length': '4',
+          'reason': 'Right angle.',
+          'assumption': 'right',
+        },
         'passed': false,
         'feedback': [
           {
@@ -457,11 +500,11 @@ void main() {
     await mount(tester, repo);
     expect(find.text('Schematic · not to scale'), findsOneWidget);
     await enter(tester, 'length', '5');
-    expect(find.text('Unsaved changes'), findsOneWidget);
+    expect(find.text('Unsaved'), findsOneWidget);
     await tester.pump(const Duration(seconds: 1));
     await tester.pumpAndSettle();
     expect(repo.data['answers']['triangle.length'], '5');
-    expect(find.text('All answers saved'), findsOneWidget);
+    expect(find.text('Draft saved'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -488,14 +531,14 @@ void main() {
       await enter(tester, 'length', '4');
       await tester.pump(const Duration(seconds: 1));
       await tester.pumpAndSettle();
-      expect(find.text('Unsaved changes'), findsOneWidget);
+      expect(find.text('Unsaved'), findsOneWidget);
       expect(repo.data['answers'], isEmpty);
       repo.failSave = false;
       await tester.ensureVisible(find.text('Retry save'));
       await tester.tap(find.text('Retry save'));
       await tester.pumpAndSettle();
       expect(repo.data['answers']['triangle.length'], '4');
-      expect(find.text('All answers saved'), findsOneWidget);
+      expect(find.text('Draft saved'), findsOneWidget);
     },
   );
 
@@ -509,18 +552,22 @@ void main() {
       'triangle.assumption': 'right',
     };
     await mount(tester, repo);
-    await tester.ensureVisible(find.text('Check my work'));
-    await tester.tap(find.text('Check my work'));
+    await tester.tap(find.text('Submit for checking'));
+    await settleCheck(tester);
+    expect(find.text('0 of 3 criteria met'), findsOneWidget);
+    expect(
+      find.text('Check the sum of the squared leg lengths.'),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Revise answer'));
     await tester.pumpAndSettle();
-    expect(find.text('Revise and try again'), findsOneWidget);
     await enter(tester, 'length', '5');
-    await tester.ensureVisible(find.text('Check my work'));
-    await tester.tap(find.text('Check my work'));
-    await tester.pumpAndSettle();
+    await tester.tap(find.text('Submit for checking'));
+    await settleCheck(tester);
     expect(repo.checks, 2);
-    expect(find.text('This attempt meets the criteria'), findsOneWidget);
-    await tester.ensureVisible(find.text('Continue to the next case'));
-    await tester.tap(find.text('Continue to the next case'));
+    expect(find.text('Accepted'), findsOneWidget);
+    expect(find.text('#2 · 3/3'), findsOneWidget);
+    await tester.tap(find.text('Continue to independent case'));
     await tester.pumpAndSettle();
     expect(find.text('A new triangle'), findsOneWidget);
     expect(tester.takeException(), isNull);
@@ -536,9 +583,8 @@ void main() {
       'triangle.assumption': 'right',
     };
     await mount(tester, repo);
-    await tester.ensureVisible(find.text('Check my work'));
-    await tester.tap(find.text('Check my work'));
-    await tester.pumpAndSettle();
+    await tester.tap(find.text('Submit for checking'));
+    await settleCheck(tester);
     expect(find.text('Finish lesson'), findsNothing);
     expect(find.textContaining('Could not finish this check'), findsOneWidget);
   });
@@ -547,7 +593,7 @@ void main() {
     tester,
   ) async {
     await mount(tester, FakePracticeRepository());
-    await tester.tap(find.byTooltip('Refer to lesson'));
+    await tester.tap(iconButton('Refer to lesson'));
     await tester.pumpAndSettle();
     expect(find.text('Lesson reference'), findsOneWidget);
     expect(
@@ -585,10 +631,11 @@ void main() {
       },
     };
     await mount(tester, repo);
+    // A finished workbook opens on its last case, read-only.
     expect(
       tester
           .widget<TextField>(
-            find.byKey(const ValueKey('answer-triangle.length')),
+            find.byKey(const ValueKey('answer-transfer.length')),
           )
           .enabled,
       isFalse,
@@ -608,14 +655,17 @@ void main() {
       'answers': {'triangle.length': '5'},
     };
     await mount(tester, repo, isTutorial: true);
-    expect(find.byTooltip('Back to tutorial'), findsOneWidget);
+    expect(iconButton('Back'), findsOneWidget);
+    expect(find.text('Finish tutorial'), findsOneWidget);
+    // The guided case keeps its saved answer, read-only.
+    await tester.tap(find.text('Guided'));
+    await tester.pumpAndSettle();
     final answer = tester.widget<TextField>(
       find.byKey(const ValueKey('answer-triangle.length')),
     );
     expect(answer.controller?.text, '5');
     expect(answer.enabled, isFalse);
-    await tester.ensureVisible(find.text('Finish tutorial'));
-    expect(find.text('Finish tutorial'), findsOneWidget);
+    expect(find.text('Continue to independent case'), findsOneWidget);
     expect(find.text('Finish lesson'), findsNothing);
     expect(repo.preparations, 0);
     expect(tester.takeException(), isNull);
@@ -664,7 +714,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  for (final entry in ['footer', 'toolbar', 'toolbar-back']) {
+  for (final entry in ['footer', 'footer-back']) {
     testWidgets(
       'reader completes only on explicit practice finish via $entry',
       (tester) async {
@@ -699,22 +749,18 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
-        await tester.tap(
-          entry == 'footer'
-              ? find.text('Practice & finish')
-              : find.byTooltip('Open practice'),
-        );
+        await tester.tap(find.text('Open practice'));
         await tester.pumpAndSettle();
         expect(completion.completions, 0);
         expect(find.byType(LessonPracticeScreen), findsOneWidget);
-        if (entry == 'toolbar-back') {
-          await tester.tap(find.byTooltip('Back to lesson'));
+        if (entry == 'footer-back') {
+          await tester.tap(iconButton('Back'));
         } else {
           await tester.ensureVisible(find.text('Finish lesson'));
           await tester.tap(find.text('Finish lesson'));
         }
         await tester.pumpAndSettle();
-        expect(completion.completions, entry == 'toolbar-back' ? 0 : 1);
+        expect(completion.completions, entry == 'footer-back' ? 0 : 1);
         expect(tester.takeException(), isNull);
       },
     );
@@ -744,7 +790,7 @@ void main() {
     await tester.tap(find.text('Open exercise'));
     await tester.pumpAndSettle();
     await enter(tester, 'length', '5');
-    await tester.tap(find.byTooltip('Back to lesson'));
+    await tester.tap(iconButton('Back'));
     await tester.pumpAndSettle();
     expect(repo.data['answers']['triangle.length'], '5');
     expect(find.text('Open exercise'), findsOneWidget);
@@ -778,7 +824,7 @@ void main() {
       await tester.tap(find.text('Open exercise'));
       await tester.pumpAndSettle();
       await enter(tester, 'length', '5');
-      await tester.tap(find.byTooltip('Back to lesson'));
+      await tester.tap(iconButton('Back'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Leave without saving'));
       await tester.pumpAndSettle();
@@ -788,6 +834,89 @@ void main() {
       expect(result, false);
     },
   );
+
+  testWidgets('a failed completion retries from Complete tutorial', (
+    tester,
+  ) async {
+    final repo = FakePracticeRepository();
+    repo.data = {
+      ...repo.data,
+      'complete': true,
+      'passed_activity_ids': ['triangle', 'transfer'],
+    };
+    final completion = _FlakyCompletionRepository();
+    final results = <bool?>[];
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          practiceRepositoryProvider.overrideWithValue(repo),
+          planRepositoryProvider.overrideWithValue(completion),
+        ],
+        child: MaterialApp(
+          home: Builder(
+            builder: (context) => TextButton(
+              onPressed: () async => results.add(
+                await Navigator.of(context).push<bool>(
+                  MaterialPageRoute(
+                    builder: (_) => const LessonReaderScreen(
+                      itemId: 'item',
+                      missionTitle: 'Geometry',
+                      step: PlanStepDetail(
+                        id: 's1',
+                        title: 'Triangle',
+                        lessonContent: '## Learn\nA triangle lesson.',
+                        lessonFormat: 'tutorial_v1',
+                      ),
+                      stepNumber: 1,
+                      totalSteps: 1,
+                      materials: [],
+                      completed: false,
+                    ),
+                  ),
+                ),
+              ),
+              child: const Text('Open reader'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open reader'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Open practice'));
+    await tester.pumpAndSettle();
+    // A tutorial's practice finishes with "Finish tutorial".
+    await tester.tap(find.text('Finish tutorial'));
+    await tester.pumpAndSettle();
+
+    // The first completion fails: the reader stays, with a direct retry and
+    // no celebration.
+    expect(completion.calls, 1);
+    expect(find.text('Tutorial 1 complete'), findsNothing);
+    expect(find.byType(LessonReaderScreen), findsOneWidget);
+    expect(
+      find.text('Couldn’t complete this tutorial. Try again.'),
+      findsOneWidget,
+    );
+    expect(find.text('Complete tutorial'), findsOneWidget);
+    expect(find.text('Open practice'), findsNothing);
+    await tester.pump(const Duration(seconds: 3)); // the toast times out
+
+    // The retry completes the step, then celebrates (it breathes: pump).
+    await tester.tap(find.text('Complete tutorial'));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 2));
+    expect(completion.calls, 2);
+    expect(find.text('Tutorial 1 complete'), findsOneWidget);
+    await tester.tap(find.text('Continue'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pumpAndSettle();
+    expect(find.byType(LessonPracticeScreen), findsNothing);
+    expect(find.byType(LessonReaderScreen), findsNothing);
+    expect(results, [true]);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'reader completes with the artifact verified by practice refresh',
@@ -819,7 +948,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.byTooltip('Open practice'));
+      await tester.tap(find.text('Open practice'));
       await tester.pumpAndSettle();
       repo.artifactChanged = true;
       await enter(tester, 'length', '5');
@@ -830,7 +959,9 @@ void main() {
       };
       await tester.pump(const Duration(seconds: 1));
       await tester.pumpAndSettle();
-      await tester.ensureVisible(find.text('Finish lesson'));
+      // Completed while on the first case: finish from the last one.
+      await tester.tap(find.text('Continue to independent case'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Finish lesson'));
       await tester.pumpAndSettle();
       expect(completion.completions, 1);
@@ -873,21 +1004,17 @@ void main() {
         ..holdPreparation = Completer<void>();
       await openUnpreparedPractice(tester, repo);
       expect(
-        tester
-            .widget<IconButton>(
-              find.widgetWithIcon(IconButton, Icons.arrow_back),
-            )
-            .onPressed,
+        tester.widget<V3IconButton>(iconButton('Back')).onPressed,
         isNotNull,
       );
-      await tester.tap(find.byTooltip('Refer to lesson'));
+      await tester.tap(iconButton('Refer to lesson'));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 400));
       expect(find.text('Lesson reference'), findsOneWidget);
-      await tester.tap(find.byTooltip('Close reference'));
+      await tester.tap(iconButton('Close'));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 400));
-      await tester.tap(find.byTooltip('Back to lesson'));
+      await tester.tap(iconButton('Back'));
       await tester.pumpAndSettle();
       expect(find.text('Open practice'), findsOneWidget);
       expect(find.byType(LessonPracticeScreen), findsNothing);
@@ -937,9 +1064,7 @@ void main() {
     );
     expect(
       tester
-          .widget<FilledButton>(
-            find.widgetWithText(FilledButton, 'Try again later'),
-          )
+          .widget<V3Button>(find.widgetWithText(V3Button, 'Try again later'))
           .onPressed,
       isNull,
     );
@@ -995,7 +1120,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Reload').last);
     await tester.pumpAndSettle();
-    expect(find.text('Unsaved changes'), findsOneWidget);
+    expect(find.text('Unsaved'), findsOneWidget);
     expect(
       tester
           .widget<TextField>(

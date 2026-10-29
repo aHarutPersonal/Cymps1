@@ -1,0 +1,61 @@
+{
+  "release": "20261016-100300-staged-packages",
+  "backend_tests": {
+    "passed": 2798,
+    "skipped": 4,
+    "warnings": 1
+  },
+  "release_image_tests": {
+    "passed": 980,
+    "skipped": 1,
+    "network": "disabled"
+  },
+  "independent_review": {
+    "passed": 123,
+    "remaining_concrete_blockers": 0
+  },
+  "https_ready": {
+    "certificate_validation": true,
+    "database": true,
+    "redis": true
+  },
+  "saved_state_before_after_equal": true,
+  "new_usage_events": 0,
+  "live_generation_tested": true,
+  "live_spending_authorized": false,
+  "previous_release_retained": true,
+  "latest_alias_promoted": false,
+  "simulator": {
+    "saved_reader_opened": true,
+    "saved_practice_loaded": true,
+    "returned_to_reader": true,
+    "answers_submitted": false,
+    "hints_requested": false,
+    "generation_started": false,
+    "fresh_generation_flow_verified": false
+  },
+  "pilot_preflight": {
+    "independent_review": "passed",
+    "scope": "synthetic package through final review; excludes outline generation and simulator interaction",
+    "domains": [
+      "accounting",
+      "geometry",
+      "writing"
+    ],
+    "tiers": [
+      "balanced"
+    ],
+    "shared_cap_requested_usd": 3,
+    "approval": "completed; no unused test allowance remains",
+    "launched": true
+  },
+  "live_batch_result": {
+    "accepted": 0,
+    "cases": 3,
+    "finished_requests": 11,
+    "reported_cost_usd": 0.2480034,
+    "unknown_reserved_usd": 0,
+    "pending_requests": 0,
+    "transport_timeouts": 0
+  }
+}

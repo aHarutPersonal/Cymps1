@@ -1,18 +1,23 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:markdown/markdown.dart' as md;
 
 import '../../../app/design_tokens.dart';
 import '../../../core/network/api_error.dart';
+import '../../../core/ui/motion/motion_config.dart';
 import '../../../core/ui/motion/page_transition.dart';
 import '../../../core/ui/app_shell.dart';
 import '../../../core/ui/cmpys/cmpys_markdown.dart';
 import '../../../core/ui/cmpys/learning_comparison_view.dart';
 import '../../../core/ui/cmpys/learning_diagram_view.dart';
-import '../../../core/ui/cmpys/cmpys_primitives.dart';
+import '../../../core/ui/v3/v3.dart';
 import '../../auth/controllers/session_controller.dart';
 import '../../cmpys/state/cmpys_store.dart';
+import '../../cmpys/state/reader_settings.dart';
 import '../../session/data/content_resources_repository.dart';
 import '../../session/models/content_resource.dart';
 import '../models/plan_models.dart';
@@ -21,6 +26,8 @@ import 'book_narration.dart';
 import 'book_narration_checkpoint.dart';
 import 'book_narration_dock.dart';
 import 'material_web_screen.dart';
+import 'reader_settings_sheet.dart';
+import '../../../core/ui/narration_dock_page.dart';
 
 /// Full-screen, chaptered reading experience for shared book resources.
 ///
@@ -38,8 +45,21 @@ class BookReaderScreen extends ConsumerStatefulWidget {
     this.checkpointStore,
     this.activeResumeStore,
     this.autoplayOnRestore = false,
+    this.startNarrationOnOpen = false,
     this.shellBranchIndex = 1,
   });
+
+  /// Key on the top chrome's slide, which hides on scroll-down (tests).
+  @visibleForTesting
+  static const chromeKey = ValueKey('book-reader-chrome');
+
+  /// Key on the Listen button's slide, which hides with the chrome (tests).
+  @visibleForTesting
+  static const listenKey = ValueKey('book-reader-listen');
+
+  /// Key on a paragraph's note glyph (tests).
+  @visibleForTesting
+  static const noteGlyphKey = ValueKey('book-paragraph-note');
 
   final String resourceId;
   final String fallbackTitle;
@@ -50,6 +70,11 @@ class BookReaderScreen extends ConsumerStatefulWidget {
 
   /// One-shot intent supplied only by the authenticated cold-start route.
   final bool autoplayOnRestore;
+
+  /// One-shot intent from a "Listen" button (library, Today): start narration
+  /// once the book loads, from its saved position or, for a book never
+  /// narrated, from the start of the current chapter.
+  final bool startNarrationOnOpen;
 
   /// Stateful-shell branch that owns this reader (Plan by default).
   final int shellBranchIndex;
@@ -71,9 +96,22 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
   List<BookNarrationDocument> _narrationDocuments = const [];
   List<ContentHighlight> _notes = const [];
   int _chapterIndex = 0;
-  double _fontSize = 18;
-  int _readingTheme = 0;
   String? _selectedQuote;
+  int? _selectedParagraph;
+  _PopoverAnchor? _popoverAnchor;
+  bool _marking = false;
+  final _chromeVisible = ValueNotifier<bool>(true);
+  double _lastScrollY = 0;
+  bool _userScroll = false;
+  final _popover = OverlayPortalController();
+  final Object _popoverGroup = Object();
+  final Map<int, List<BookReaderParagraph>> _markdownParagraphs = {};
+  final _narrationParagraphs = Expando<List<BookReaderParagraph>>(
+    'narration paragraphs',
+  );
+  List<ContentHighlight>? _marksNotes;
+  final Map<List<BookReaderParagraph>, List<_ParagraphMark?>> _marksCache =
+      Map.identity();
   bool _loading = true;
   bool _savingBook = false;
   String? _error;
@@ -112,26 +150,17 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
   bool _remoteDockAttached = false;
   late final BookNarrationRemoteController _remoteDockController;
   bool _autoplayOnRestoreConsumed = false;
+  bool _startOnOpenConsumed = false;
+  Duration _narrationListenDuration = Duration.zero;
+
+  /// Narration characters in each chapter. Characters are the one timeline
+  /// the player's clock, progress, seek and ±15 s share (15 a second at 1×).
+  List<int> _narrationChapterCharacters = const [];
   bool _leavingReader = false;
   bool _readerPopped = false;
 
   ContentResourcesRepository get _repository =>
       ref.read(contentResourcesRepositoryProvider);
-
-  Color get _background => switch (_readingTheme) {
-    1 => const Color(0xFFF7F0E3),
-    2 => const Color(0xFF1B1C21),
-    _ => const Color(0xFFFAFAF8),
-  };
-
-  Color get _ink =>
-      _readingTheme == 2 ? const Color(0xFFF2F0EA) : AppColors.ink;
-
-  Color get _muted =>
-      _readingTheme == 2 ? const Color(0xFFA8A8B2) : AppColors.ink3;
-
-  Color get _chrome =>
-      _readingTheme == 2 ? const Color(0xFF25262D) : Colors.white;
 
   @override
   void initState() {
@@ -190,6 +219,7 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _chromeVisible.dispose();
     if (_remoteDockAttached) {
       _remoteDockController.release(_remoteDockOwner);
       _remoteDockAttached = false;
@@ -300,7 +330,18 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
         _resource = resource;
         _chapters = chapters;
         _narrationDocuments = narrationDocuments;
+        _narrationListenDuration = estimateBookNarrationDuration(
+          narrationDocuments,
+        );
+        _narrationChapterCharacters = [
+          for (final document in narrationDocuments)
+            document.segments.fold<int>(
+              0,
+              (total, segment) => total + segment.text.length,
+            ),
+        ];
         _narrationBlockKeys.clear();
+        _markdownParagraphs.clear();
         _notes = notes;
         _chapterIndex = initialChapter!;
         _narrationStyle = narrationStyle;
@@ -312,10 +353,16 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
         _loading = false;
       });
       _syncRemoteDock();
-      if (widget.autoplayOnRestore &&
-          restoredCheckpoint != null &&
-          !_autoplayOnRestoreConsumed) {
+      final startOnOpen =
+          widget.startNarrationOnOpen &&
+          !_startOnOpenConsumed &&
+          chapters.isNotEmpty;
+      if (startOnOpen ||
+          (widget.autoplayOnRestore &&
+              restoredCheckpoint != null &&
+              !_autoplayOnRestoreConsumed)) {
         _autoplayOnRestoreConsumed = true;
+        _startOnOpenConsumed = true;
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted && !_narrationPlaying && !_narrationPreparing) {
             unawaited(_playNarration());
@@ -390,7 +437,7 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
         .toInt();
     final document = documents[chapterIndex];
     if (document.segments.isEmpty) return null;
-    final position = checkpoint.textVersion < 3
+    final position = checkpoint.textVersion < BookNarrationDocument.textVersion
         ? document.remapLegacyPosition(
             checkpoint.segmentIndex,
             checkpoint.characterOffset,
@@ -404,39 +451,73 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
     return BookNarrationCheckpoint(
       chapterIndex: chapterIndex,
       segmentIndex: segmentIndex,
-      textVersion: 3,
+      textVersion: BookNarrationDocument.textVersion,
       characterOffset: position.$2.clamp(0, segment.text.length).toInt(),
       updatedAtEpochMs: checkpoint.updatedAtEpochMs,
     );
   }
 
-  double get _narrationOverallProgress {
+  int get _narrationTotalCharacters =>
+      _narrationChapterCharacters.fold<int>(0, (total, count) => total + count);
+
+  /// Where narration is, in characters from the start of the book.
+  int get _narrationCharacterPosition {
     if (_narrationDocuments.isEmpty) return 0;
-    final totalSegments = _narrationDocuments.fold<int>(
-      0,
-      (total, document) => total + document.segments.length,
-    );
-    if (totalSegments == 0) return 0;
-    final chapterIndex = _chapterIndex
+    final chapter = _chapterIndex
         .clamp(0, _narrationDocuments.length - 1)
         .toInt();
-    var completedSegments = 0;
-    for (var index = 0; index < chapterIndex; index++) {
-      completedSegments += _narrationDocuments[index].segments.length;
+    var position = 0;
+    for (var index = 0; index < chapter; index++) {
+      position += _narrationChapterCharacters[index];
     }
-    final document = _narrationDocuments[chapterIndex];
-    if (document.segments.isEmpty) {
-      return (completedSegments / totalSegments).clamp(0.0, 1.0);
-    }
+    final segments = _narrationDocuments[chapter].segments;
+    if (segments.isEmpty) return position;
     final segmentIndex = (_narrationSegmentIndex ?? 0)
-        .clamp(0, document.segments.length - 1)
+        .clamp(0, segments.length - 1)
         .toInt();
-    final segment = document.segments[segmentIndex];
-    final withinSegment = segment.text.isEmpty
-        ? 0.0
-        : (_narrationResumeOffset / segment.text.length).clamp(0.0, 1.0);
-    return ((completedSegments + segmentIndex + withinSegment) / totalSegments)
-        .clamp(0.0, 1.0);
+    for (var index = 0; index < segmentIndex; index++) {
+      position += segments[index].text.length;
+    }
+    return position +
+        _narrationResumeOffset
+            .clamp(0, segments[segmentIndex].text.length)
+            .toInt();
+  }
+
+  /// The sentence and word start at [characters] into the book. The end of
+  /// the book maps to the start of its last sentence.
+  (int, int, int)? _narrationPositionAt(int characters) {
+    var remaining = characters;
+    (int, int, int)? last;
+    for (var chapter = 0; chapter < _narrationDocuments.length; chapter++) {
+      final segments = _narrationDocuments[chapter].segments;
+      if (segments.isEmpty) continue;
+      last = (chapter, segments.length - 1, 0);
+      if (remaining >= _narrationChapterCharacters[chapter]) {
+        remaining -= _narrationChapterCharacters[chapter];
+        continue;
+      }
+      for (var index = 0; index < segments.length; index++) {
+        final text = segments[index].text;
+        if (remaining < text.length) {
+          var offset = remaining < 0 ? 0 : remaining;
+          // Start on a word, so a voice never begins mid-word.
+          while (offset > 0 && text[offset - 1].trim().isNotEmpty) {
+            offset--;
+          }
+          return (chapter, index, offset);
+        }
+        remaining -= text.length;
+      }
+    }
+    return last;
+  }
+
+  /// Progress on the character timeline (the dock hairline, the seek bar).
+  double get _narrationOverallProgress {
+    final total = _narrationTotalCharacters;
+    if (total == 0) return 0;
+    return (_narrationCharacterPosition / total).clamp(0.0, 1.0);
   }
 
   String get _narrationSemanticText {
@@ -495,6 +576,14 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
         style: _narrationStyle,
         speed: _narrationSpeed,
         branchIndex: widget.shellBranchIndex,
+        onChapters: _showContents,
+        onSkip: _skipNarrationTime,
+        resourceId: widget.resourceId,
+        title: _narrationTitle,
+        author: _resource?.authorOrCreator ?? '',
+        chapterIndex: _chapterIndex,
+        chapterTitle: _narrationChapterTitle,
+        duration: _narrationListenDuration,
       );
       _remoteDockAttached = true;
       return;
@@ -509,8 +598,23 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
       style: _narrationStyle,
       speed: _narrationSpeed,
       branchIndex: widget.shellBranchIndex,
+      title: _narrationTitle,
+      author: _resource?.authorOrCreator ?? '',
+      chapterIndex: _chapterIndex,
+      chapterTitle: _narrationChapterTitle,
+      duration: _narrationListenDuration,
     );
   }
+
+  String get _narrationTitle {
+    final title = _resource?.title.trim() ?? '';
+    return title.isEmpty ? widget.fallbackTitle : title;
+  }
+
+  String get _narrationChapterTitle =>
+      _chapterIndex >= 0 && _chapterIndex < _chapters.length
+      ? _chapters[_chapterIndex].title
+      : '';
 
   int get _progressPercent {
     if (_chapters.isEmpty) return 0;
@@ -572,7 +676,7 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
           .clamp(0, segment.text.length)
           .toInt(),
       updatedAtEpochMs: DateTime.now().millisecondsSinceEpoch,
-      textVersion: 3,
+      textVersion: BookNarrationDocument.textVersion,
     );
   }
 
@@ -1105,6 +1209,10 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
         _narrationWordStart = 0;
         _narrationWordEnd = 0;
         _narrationAlignmentGranularity = BookNarrationAlignmentGranularity.none;
+        // The next track reports its own provider; until then nothing may
+        // claim (or deny) word timing.
+        _narrationProvider = '';
+        _narrationModel = '';
       });
       _syncRemoteDock();
     }
@@ -1138,6 +1246,9 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
         _narrationResumeOffset = 0;
         _narrationWordStart = 0;
         _narrationWordEnd = 0;
+        _narrationAlignmentGranularity = BookNarrationAlignmentGranularity.none;
+        _narrationProvider = '';
+        _narrationModel = '';
       });
       _syncRemoteDock();
     }
@@ -1168,49 +1279,98 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
   }
 
   Future<void> _seekNarrationProgress(double progress) async {
-    final totalSegments = _narrationDocuments.fold<int>(
-      0,
-      (total, document) => total + document.segments.length,
+    final total = _narrationTotalCharacters;
+    if (total == 0) return;
+    final target = _narrationPositionAt(
+      (progress.clamp(0.0, 1.0) * total).round(),
     );
-    if (totalSegments == 0) return;
-    var targetOrdinal = (progress.clamp(0.0, 1.0) * (totalSegments - 1))
-        .round();
-    for (var chapter = 0; chapter < _narrationDocuments.length; chapter++) {
-      final segmentCount = _narrationDocuments[chapter].segments.length;
-      if (targetOrdinal < segmentCount) {
-        await _seekNarrationTo(chapter, targetOrdinal);
-        return;
-      }
-      targetOrdinal -= segmentCount;
-    }
+    if (target == null) return;
+    await _seekNarrationTo(target.$1, target.$2, characterOffset: target.$3);
   }
 
-  Future<void> _seekNarrationTo(int chapter, int segment) async {
+  /// The full player's ±15 s: [delta] of the book's time at 1× converted to
+  /// characters, landing on the word there. Clamped at the ends, where it
+  /// does nothing; anywhere else it always moves.
+  Future<void> _skipNarrationTime(Duration delta) async {
+    final total = _narrationTotalCharacters;
+    if (total == 0) return;
+    final position = _narrationCharacterPosition;
+    final characters =
+        (delta.inMicroseconds /
+                Duration.microsecondsPerSecond *
+                bookNarrationCharactersPerSecond)
+            .round();
+    final target = (position + characters).clamp(0, total).toInt();
+    if (target == position || characters == 0) return;
+    final landing = _narrationPositionAt(target);
+    if (landing == null) return;
+    var landed = 0;
+    for (var index = 0; index < landing.$1; index++) {
+      landed += _narrationChapterCharacters[index];
+    }
+    final segments = _narrationDocuments[landing.$1].segments;
+    for (var index = 0; index < landing.$2; index++) {
+      landed += segments[index].text.length;
+    }
+    landed += landing.$3;
+    // Forward past the last sentence's start: already at the end.
+    if (characters > 0 && landed <= position) return;
+    await _seekNarrationTo(landing.$1, landing.$2, characterOffset: landing.$3);
+  }
+
+  Future<void> _seekNarrationTo(
+    int chapter,
+    int segment, {
+    int characterOffset = 0,
+  }) async {
     if (_narrationDocuments.isEmpty) return;
     chapter = chapter.clamp(0, _narrationDocuments.length - 1).toInt();
     final targetDocument = _narrationDocuments[chapter];
     if (targetDocument.segments.isEmpty) return;
     segment = segment.clamp(0, targetDocument.segments.length - 1).toInt();
+    final offset = characterOffset
+        .clamp(0, targetDocument.segments[segment].text.length)
+        .toInt();
     final continuePlaying = _narrationPlaying;
 
     if (_narrator case final BookNarrationTrackController controller
         when _narrationTrackReady) {
       if (!mounted) return;
+      // Move the chapter here, with the sentence and offset: the track's
+      // seek event then matches this position instead of reading as a
+      // chapter change, which would reset the in-sentence offset to 0.
+      final chapterChanged = chapter != _chapterIndex;
       setState(() {
         _narrationVisible = true;
         _narrationFinished = false;
+        _chapterIndex = chapter;
         _narrationSegmentIndex = segment;
-        _narrationResumeOffset = 0;
+        _narrationResumeOffset = offset;
         _narrationWordStart = 0;
         _narrationWordEnd = 0;
       });
       _syncRemoteDock();
+      // The page follows at once, as it does for a chapter the track reaches.
+      if (chapterChanged) {
+        _narrationChangingChapter = true;
+        unawaited(
+          _pageController
+              .animateToPage(
+                chapter,
+                duration: const Duration(milliseconds: 280),
+                curve: Curves.easeOutCubic,
+              )
+              .whenComplete(() => _narrationChangingChapter = false),
+        );
+        unawaited(_persistProgress());
+      }
       var seekSessionId = _narrationTrackSessionId;
       try {
         try {
           await controller.seekToSentence(
             chapterIndex: chapter,
             segmentIndex: segment,
+            characterOffset: offset,
           );
         } on RangeError {
           if (!mounted || seekSessionId != _narrationTrackSessionId) return;
@@ -1225,7 +1385,7 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
             chapters: _narrationDocuments,
             initialChapterIndex: chapter,
             initialSegmentIndex: segment,
-            initialCharacterOffset: 0,
+            initialCharacterOffset: offset,
           );
           if (!mounted || sessionId != _narrationTrackSessionId) return;
           _narrationTrackReady = true;
@@ -1244,18 +1404,6 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
         return;
       }
       if (!mounted || seekSessionId != _narrationTrackSessionId) return;
-      if (chapter != _chapterIndex) {
-        _narrationChangingChapter = true;
-        unawaited(
-          _pageController
-              .animateToPage(
-                chapter,
-                duration: const Duration(milliseconds: 280),
-                curve: Curves.easeOutCubic,
-              )
-              .whenComplete(() => _narrationChangingChapter = false),
-        );
-      }
       _revealNarrationSegment();
       _scheduleNarrationCheckpoint();
       return;
@@ -1288,7 +1436,7 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
     setState(() {
       _narrationVisible = true;
       _narrationSegmentIndex = segment;
-      _narrationResumeOffset = 0;
+      _narrationResumeOffset = offset;
       _narrationWordStart = 0;
       _narrationWordEnd = 0;
     });
@@ -1406,6 +1554,9 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
   void _onChapterChanged(int index) {
     final narrationControlled = _narrationChangingChapter;
     final continuePlaying = _narrationPlaying || _narrationPreparing;
+    _selectParagraph(null);
+    _lastScrollY = 0;
+    _chromeVisible.value = true;
     setState(() {
       _chapterIndex = index;
       _selectedQuote = null;
@@ -1456,7 +1607,11 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
       final refreshed = await _repository.getResource(widget.resourceId);
       if (!mounted) return;
       setState(() => _resource = refreshed);
-      _toast(wasSaved ? 'Removed from saved' : 'Saved to your library');
+      _toast(
+        wasSaved ? 'Removed from saved' : 'Book saved',
+        icon: V3Icons.bookmark,
+        success: true,
+      );
     } catch (_) {
       if (mounted) _toast('Couldn’t update your library');
     } finally {
@@ -1464,26 +1619,18 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
     }
   }
 
-  void _toast(String message) {
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(message),
-          behavior: SnackBarBehavior.floating,
-          margin: EdgeInsets.fromLTRB(
-            16,
-            0,
-            16,
-            AppShell.isWithinShell(context)
-                ? AppShell.bottomNavClearance(context)
-                : _narrationVisible
-                ? BookNarrationDock.preferredHeight + 24
-                : 16,
-          ),
-          duration: const Duration(seconds: 2),
-        ),
-      );
+  void _toast(
+    String message, {
+    V3Icons icon = V3Icons.alert,
+    bool success = false,
+  }) {
+    if (!mounted) return;
+    showV3Toast(
+      context,
+      message,
+      icon: icon,
+      tone: success ? V3ToastTone.success : V3ToastTone.warn,
+    );
   }
 
   Future<void> _openNoteComposer(String selectedQuote) async {
@@ -1500,20 +1647,11 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
 
     final chapterIndex = _chapterIndex;
     final chapterTitle = _chapters[chapterIndex].title;
-    final created = await showModalBottomSheet<ContentHighlight>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: _chrome,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-      ),
+    final created = await showV3Sheet<ContentHighlight>(
+      context,
+      title: 'Add a note',
       builder: (sheetContext) => BookNoteComposerSheet(
         quote: quote,
-        background: _background,
-        chrome: _chrome,
-        ink: _ink,
-        muted: _muted,
-        dark: _readingTheme == 2,
         onSave: (noteText) => _repository.createHighlight(
           widget.resourceId,
           locatorJson: {'chapter': chapterIndex, 'chapterTitle': chapterTitle},
@@ -1527,7 +1665,7 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
       _notes = [created, ..._notes];
       _selectedQuote = null;
     });
-    _toast('Note saved');
+    _toast('Note saved to this book', icon: V3Icons.note, success: true);
   }
 
   String _limited(String value, int max) =>
@@ -1554,366 +1692,257 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
     );
   }
 
-  String? get _originalBookUrl => safeDirectMaterialUrl(
-    (_resource?.summaryJson?['reading_url'] ?? _resource?.summaryJson?['text_url'])?.toString(),
-  );
+  // ── paragraphs: Highlight / Note / Quote ──────────────────────────────────
 
-  Future<void> _showContents() async {
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: _chrome,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-      ),
-      builder: (sheetContext) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(18, 14, 18, 12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _sheetHandle(),
-              const SizedBox(height: 18),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4),
-                child: Text(
-                  'Contents',
-                  style: AppTypography.h2.copyWith(color: _ink, fontSize: 23),
-                ),
-              ),
-              const SizedBox(height: 12),
-              Expanded(
-                child: ListView.separated(
-                  itemCount: _chapters.length,
-                  separatorBuilder: (context, index) =>
-                      Divider(height: 1, color: _muted.withValues(alpha: 0.18)),
-                  itemBuilder: (_, index) => ListTile(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-                    leading: Container(
-                      width: 32,
-                      height: 32,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: index == _chapterIndex
-                            ? AppColors.green
-                            : _muted.withValues(alpha: 0.12),
-                        shape: BoxShape.circle,
-                      ),
-                      child: Text(
-                        '${index + 1}',
-                        style: AppTypography.captionMedium.copyWith(
-                          color: index == _chapterIndex ? Colors.white : _muted,
-                        ),
-                      ),
-                    ),
-                    title: Text(
-                      _chapters[index].title,
-                      style: AppTypography.bodyMedium.copyWith(
-                        color: _ink,
-                        fontWeight: index == _chapterIndex
-                            ? FontWeight.w700
-                            : FontWeight.w500,
-                      ),
-                    ),
-                    trailing: index < _chapterIndex
-                        ? const Icon(
-                            Icons.check_rounded,
-                            color: AppColors.green,
-                            size: 18,
-                          )
-                        : null,
-                    onTap: () {
-                      Navigator.of(sheetContext).pop();
-                      _pageController.animateToPage(
-                        index,
-                        duration: const Duration(milliseconds: 260),
-                        curve: Curves.easeOutCubic,
-                      );
-                    },
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
+  void _selectParagraph(int? index, {_PopoverAnchor? anchor}) {
+    if (_selectedParagraph == index && anchor == null) return;
+    setState(() {
+      _selectedParagraph = index;
+      _popoverAnchor = index == null ? null : anchor;
+    });
+    if (index == null) {
+      _popover.hide();
+    } else {
+      _popover.show();
+    }
+  }
+
+  void _toggleParagraph(int index, BuildContext paragraph, Offset globalTap) {
+    if (_selectedParagraph == index) {
+      _selectParagraph(null);
+      return;
+    }
+    _selectParagraph(index, anchor: _anchorFor(paragraph, globalTap));
+  }
+
+  /// Where the actions may sit, in the overlay's coordinates: the tapped
+  /// paragraph, the tap, and the visible band between the chrome (when
+  /// shown) and the bottom bars.
+  _PopoverAnchor? _anchorFor(BuildContext paragraph, Offset globalTap) {
+    final overlay = Overlay.maybeOf(context)?.context.findRenderObject();
+    final box = paragraph.findRenderObject();
+    if (overlay is! RenderBox || box is! RenderBox || !box.attached) {
+      return null;
+    }
+    Rect rectOf(RenderBox target) =>
+        overlay.globalToLocal(target.localToGlobal(Offset.zero)) & target.size;
+    final rect = rectOf(box);
+    final viewport = Scrollable.maybeOf(paragraph)?.context.findRenderObject();
+    final view = viewport is RenderBox && viewport.attached
+        ? rectOf(viewport)
+        : Offset.zero & overlay.size;
+    final media = MediaQuery.of(context);
+    final chrome = media.padding.top + (_chromeVisible.value ? 53 : 0);
+    final bottomBars = AppShell.isWithinShell(context)
+        ? AppShell.bottomNavClearance(context)
+        : _narrationVisible
+        ? 0.0
+        : media.padding.bottom;
+    var tapY = overlay.globalToLocal(globalTap).dy;
+    // A semantics tap reports no position: use the paragraph's middle.
+    if (tapY < rect.top || tapY > rect.bottom) tapY = rect.center.dy;
+    return _PopoverAnchor(
+      paragraph: rect,
+      tapY: tapY,
+      top: view.top + chrome + 8,
+      bottom: view.bottom - bottomBars - 8,
     );
   }
 
-  Future<void> _showReaderSettings() async {
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: _chrome,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-      ),
-      builder: (context) => StatefulBuilder(
-        builder: (context, setSheetState) => SafeArea(
+  /// The paragraphs of the current chapter page, in the model it renders
+  /// (narration blocks while the narration dock is up, Markdown blocks
+  /// otherwise).
+  List<BookReaderParagraph> _paragraphsFor(int chapterIndex) {
+    if (_narrationVisible &&
+        chapterIndex < _narrationDocuments.length &&
+        _narrationDocuments[chapterIndex].blocks.isNotEmpty) {
+      final document = _narrationDocuments[chapterIndex];
+      // The narration text is plain (parsed without HTML escaping), so
+      // highlights, notes and quotes keep the text the reading view shows.
+      return _narrationParagraphs[document] ??= [
+        for (final block in document.blocks)
+          BookReaderParagraph(
+            markdown: block.text,
+            text: _normalizedQuote(block.text),
+            tappable: _tappableNarrationBlock(block.kind),
+          ),
+      ];
+    }
+    return _markdownParagraphs.putIfAbsent(
+      chapterIndex,
+      () => bookReaderParagraphs(_chapters[chapterIndex].markdown),
+    );
+  }
+
+  String? get _selectedParagraphText {
+    final index = _selectedParagraph;
+    if (index == null || _chapters.isEmpty) return null;
+    final paragraphs = _paragraphsFor(_chapterIndex);
+    if (index < 0 || index >= paragraphs.length) return null;
+    final text = paragraphs[index].text;
+    return text.isEmpty ? null : text;
+  }
+
+  /// How each paragraph of [chapterIndex] is marked by the book's highlights
+  /// (the existing highlights API): a highlight or note whose quote is part
+  /// of the paragraph.
+  List<_ParagraphMark?> _marksFor(
+    int chapterIndex,
+    List<BookReaderParagraph> paragraphs,
+  ) {
+    // `_notes` is replaced, never mutated, so its identity keys the cache;
+    // each paragraph list belongs to one chapter.
+    if (!identical(_marksNotes, _notes)) {
+      _marksNotes = _notes;
+      _marksCache.clear();
+    }
+    return _marksCache[paragraphs] ??= _computeMarks(chapterIndex, paragraphs);
+  }
+
+  List<_ParagraphMark?> _computeMarks(
+    int chapterIndex,
+    List<BookReaderParagraph> paragraphs,
+  ) {
+    final marks = List<_ParagraphMark?>.filled(paragraphs.length, null);
+    for (final note in _notes) {
+      final chapter = (note.locatorJson?['chapter'] as num?)?.toInt();
+      if (chapter != null && chapter != chapterIndex) continue;
+      final quote = _normalizedQuote(note.quoteText ?? '');
+      if (quote.isEmpty) continue;
+      final hasNote = (note.noteText ?? '').trim().isNotEmpty;
+      for (var index = 0; index < paragraphs.length; index++) {
+        final text = paragraphs[index].text;
+        if (text.isEmpty || !text.contains(quote)) continue;
+        if (hasNote) {
+          marks[index] = _ParagraphMark.note;
+        } else {
+          marks[index] ??= _ParagraphMark.highlight;
+        }
+        break;
+      }
+    }
+    return marks;
+  }
+
+  Future<void> _highlightSelected() async {
+    final quote = _selectedParagraphText;
+    _selectParagraph(null);
+    if (quote == null || _chapters.isEmpty || _marking) return;
+    final chapterIndex = _chapterIndex;
+    final paragraphs = _paragraphsFor(chapterIndex);
+    final alreadyMarked = _marksFor(chapterIndex, paragraphs).indexed.any(
+      (entry) => entry.$2 != null && paragraphs[entry.$1].text == quote,
+    );
+    if (alreadyMarked) {
+      _toast('Highlighted', icon: V3Icons.highlight, success: true);
+      return;
+    }
+    _marking = true;
+    try {
+      final created = await _repository.createHighlight(
+        widget.resourceId,
+        locatorJson: {
+          'chapter': chapterIndex,
+          'chapterTitle': _chapters[chapterIndex].title,
+        },
+        quoteText: _limited(quote, 5000),
+      );
+      if (!mounted) return;
+      setState(() => _notes = [created, ..._notes]);
+      _toast('Highlighted', icon: V3Icons.highlight, success: true);
+    } catch (_) {
+      if (mounted) _toast('Couldn’t save the highlight. Try again.');
+    } finally {
+      _marking = false;
+    }
+  }
+
+  Future<void> _noteSelected() async {
+    final quote = _selectedParagraphText;
+    _selectParagraph(null);
+    if (quote == null) return;
+    await _openNoteComposer(quote);
+  }
+
+  Future<void> _quoteSelected() async {
+    final quote = _selectedParagraphText;
+    _selectParagraph(null);
+    if (quote == null) return;
+    // No quote/share action exists yet, so Quote copies the paragraph.
+    await Clipboard.setData(ClipboardData(text: quote));
+    if (mounted) _toast('Copied quote', icon: V3Icons.check, success: true);
+  }
+
+  Widget _popoverContent(BuildContext context) {
+    final anchor = _popoverAnchor;
+    if (anchor == null) return const SizedBox.shrink();
+    Widget action(V3Icons icon, String label, VoidCallback onTap) =>
+        V3Pressable(
+          onTap: onTap,
+          semanticLabel: label,
+          focusRadius: BorderRadius.circular(10),
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(22, 14, 22, 24),
-            child: Column(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            child: Row(
               mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _sheetHandle(),
-                const SizedBox(height: 20),
+                V3Icon(icon, size: 14, color: Colors.white),
+                const SizedBox(width: 5),
                 Text(
-                  'Reading settings',
-                  style: AppTypography.h2.copyWith(color: _ink, fontSize: 23),
-                ),
-                const SizedBox(height: 20),
-                Row(
-                  children: [
-                    Text(
-                      'A',
-                      style: AppTypography.reading.copyWith(
-                        fontSize: 15,
-                        color: _ink,
-                      ),
-                    ),
-                    Expanded(
-                      child: Slider(
-                        value: _fontSize,
-                        min: 15,
-                        max: 23,
-                        divisions: 8,
-                        activeColor: AppColors.green,
-                        onChanged: (value) {
-                          setState(() => _fontSize = value);
-                          setSheetState(() {});
-                        },
-                      ),
-                    ),
-                    Text(
-                      'A',
-                      style: AppTypography.reading.copyWith(
-                        fontSize: 24,
-                        color: _ink,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    _themeChoice(
-                      0,
-                      const Color(0xFFFAFAF8),
-                      'Light',
-                      setSheetState,
-                    ),
-                    const SizedBox(width: 10),
-                    _themeChoice(
-                      1,
-                      const Color(0xFFF7F0E3),
-                      'Warm',
-                      setSheetState,
-                    ),
-                    const SizedBox(width: 10),
-                    _themeChoice(
-                      2,
-                      const Color(0xFF1B1C21),
-                      'Dark',
-                      setSheetState,
-                    ),
-                  ],
+                  label,
+                  style: AppTypography.sans(
+                    13,
+                    FontWeight.w600,
+                  ).copyWith(color: Colors.white),
                 ),
               ],
             ),
           ),
-        ),
-      ),
-    );
-  }
-
-  Widget _themeChoice(
-    int value,
-    Color color,
-    String label,
-    StateSetter setSheetState,
-  ) {
-    final selected = _readingTheme == value;
-    return Expanded(
-      child: CmpysPressable(
-        selected: _readingTheme == value,
-        onTap: () {
-          setState(() => _readingTheme = value);
-          setSheetState(() {});
-        },
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          decoration: BoxDecoration(
-            color: color,
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(
-              color: selected ? AppColors.green : _muted.withValues(alpha: .2),
-              width: selected ? 2 : 1,
-            ),
-          ),
-          child: Text(
-            label,
-            textAlign: TextAlign.center,
-            style: AppTypography.captionMedium.copyWith(
-              color: value == 2 ? Colors.white : AppColors.ink,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Future<void> _showNotes() async {
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: _chrome,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-      ),
-      builder: (sheetContext) => StatefulBuilder(
-        builder: (context, setSheetState) => FractionallySizedBox(
-          heightFactor: .78,
-          child: SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(18, 14, 18, 12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _sheetHandle(),
-                  const SizedBox(height: 18),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          'Notes & highlights',
-                          style: AppTypography.h2.copyWith(
-                            color: _ink,
-                            fontSize: 23,
-                          ),
-                        ),
-                      ),
-                      Text(
-                        '${_notes.length}',
-                        style: AppTypography.kicker.copyWith(color: _muted),
-                      ),
-                    ],
+        );
+    return CustomSingleChildLayout(
+      delegate: _PopoverLayout(anchor),
+      child: TapRegion(
+        groupId: _popoverGroup,
+        onTapOutside: (_) => _selectParagraph(null),
+        // Like the top bar, the pill scales its text at most 1.2×; on a
+        // narrow phone the actions wrap, each keeping its 44 pt target.
+        child: MediaQuery.withClampedTextScaling(
+          maxScaleFactor: 1.2,
+          child: V3Pop(
+            key: ValueKey(_selectedParagraph),
+            child: Container(
+              key: const ValueKey('book-paragraph-actions'),
+              padding: const EdgeInsets.all(4),
+              decoration: BoxDecoration(
+                color: AppColors.ink,
+                borderRadius: BorderRadius.circular(14),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x4D000000),
+                    blurRadius: 24,
+                    offset: Offset(0, 10),
                   ),
-                  const SizedBox(height: 14),
-                  Expanded(
-                    child: _notes.isEmpty
-                        ? Center(
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 30,
-                              ),
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    Icons.draw_outlined,
-                                    color: _muted,
-                                    size: 32,
-                                  ),
-                                  const SizedBox(height: 10),
-                                  Text(
-                                    'Select any passage to add a note.',
-                                    textAlign: TextAlign.center,
-                                    style: AppTypography.body.copyWith(
-                                      color: _muted,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          )
-                        : ListView.separated(
-                            itemCount: _notes.length,
-                            separatorBuilder: (context, index) =>
-                                const SizedBox(height: 10),
-                            itemBuilder: (_, index) {
-                              final note = _notes[index];
-                              return Container(
-                                padding: const EdgeInsets.all(15),
-                                decoration: BoxDecoration(
-                                  color: _background,
-                                  borderRadius: BorderRadius.circular(18),
-                                  border: Border.all(
-                                    color: _muted.withValues(alpha: .14),
-                                  ),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    if ((note.quoteText ?? '').isNotEmpty)
-                                      Text(
-                                        '“${note.quoteText}”',
-                                        maxLines: 4,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: AppTypography.readingQuote
-                                            .copyWith(
-                                              color: _ink,
-                                              fontSize: 14.5,
-                                              height: 1.4,
-                                            ),
-                                      ),
-                                    if ((note.noteText ?? '').isNotEmpty) ...[
-                                      const SizedBox(height: 10),
-                                      Text(
-                                        note.noteText!,
-                                        style: AppTypography.body.copyWith(
-                                          color: _ink,
-                                          height: 1.45,
-                                        ),
-                                      ),
-                                    ],
-                                    const SizedBox(height: 8),
-                                    Row(
-                                      children: [
-                                        Expanded(
-                                          child: Text(
-                                            note.locatorJson?['chapterTitle']
-                                                    ?.toString() ??
-                                                'Book note',
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: AppTypography.caption
-                                                .copyWith(color: _muted),
-                                          ),
-                                        ),
-                                        IconButton(
-                                          constraints: const BoxConstraints(
-                                            minWidth: 48,
-                                            minHeight: 48,
-                                          ),
-                                          onPressed: () async {
-                                            try {
-                                              await _repository.deleteHighlight(
-                                                widget.resourceId,
-                                                note.id,
-                                              );
-                                              if (!mounted) return;
-                                              setState(
-                                                () => _notes = _notes
-                                                    .where(
-                                                      (n) => n.id != note.id,
-                                                    )
-                                                    .toList(),
-                                              );
-                                              setSheetState(() {});
-                                            } catch (_) {}
-                                          },
-                                          icon: Icon(
-                                            Icons.delete_outline,
-                                            color: _muted,
-                                            size: 19,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ],
-                                ),
-                              );
-                            },
-                          ),
+                ],
+              ),
+              child: Wrap(
+                alignment: WrapAlignment.center,
+                spacing: 2,
+                runSpacing: 2,
+                children: [
+                  action(
+                    V3Icons.highlight,
+                    'Highlight',
+                    () => unawaited(_highlightSelected()),
+                  ),
+                  action(
+                    V3Icons.note,
+                    'Note',
+                    () => unawaited(_noteSelected()),
+                  ),
+                  action(
+                    V3Icons.quote,
+                    'Quote',
+                    () => unawaited(_quoteSelected()),
                   ),
                 ],
               ),
@@ -1924,19 +1953,279 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
     );
   }
 
-  Widget _sheetHandle() => Center(
-    child: Container(
-      width: 38,
-      height: 4,
-      decoration: BoxDecoration(
-        color: _muted.withValues(alpha: .35),
-        borderRadius: BorderRadius.circular(99),
+  // ── sheets ────────────────────────────────────────────────────────────────
+
+  void _openOriginal() {
+    final url = _resource?.originalReadingUrl;
+    if (url == null) return;
+    Navigator.of(context, rootNavigator: true).push(
+      CmpysPageRoute<void>(
+        builder: (_) => MaterialWebScreen(
+          title: _resource!.title,
+          url: url,
+          access: AccessType.original,
+        ),
       ),
-    ),
-  );
+    );
+  }
+
+  Future<void> _showMenu() async {
+    final saved = _resource?.isSaved == true;
+    final hasOriginal = _resource?.originalReadingUrl != null;
+    // Inside the tab shell the reader is a pushed page (no tab bar), and
+    // leaving it ends narration: the App menu switches tabs while the
+    // reader stays mounted and keeps narrating.
+    final openAppMenu = AppShell.appMenuOf(context);
+    final action = await showV3Sheet<String>(
+      context,
+      builder: (sheetContext) {
+        final rows = <(V3Icons, String, String)>[
+          (V3Icons.list, 'Contents', 'contents'),
+          (V3Icons.highlight, 'Notes & highlights · ${_notes.length}', 'notes'),
+          (V3Icons.bookmark, saved ? 'Remove from saved' : 'Save book', 'save'),
+          if (hasOriginal) (V3Icons.external, 'Read original book', 'original'),
+          (V3Icons.type, 'Reading settings', 'settings'),
+          if (openAppMenu != null) (V3Icons.home, 'App menu', 'app-menu'),
+        ];
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (final (index, (icon, label, value)) in rows.indexed)
+              _sheetRow(
+                first: index == 0,
+                onTap: () => Navigator.of(sheetContext).pop(value),
+                padding: 14,
+                child: Row(
+                  children: [
+                    V3Icon(icon, size: 19, color: AppColors.ink2),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Text(
+                        label,
+                        style: AppTypography.sans(
+                          15.5,
+                          FontWeight.w500,
+                        ).copyWith(color: AppColors.ink),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        );
+      },
+    );
+    if (!mounted) return;
+    switch (action) {
+      case 'contents':
+        await _showContents();
+      case 'notes':
+        await _showNotes();
+      case 'save':
+        await _toggleSaved();
+      case 'original':
+        _openOriginal();
+      case 'settings':
+        await showReaderSettingsSheet(context);
+      case 'app-menu':
+        await openAppMenu?.call();
+    }
+  }
+
+  Widget _sheetRow({
+    required bool first,
+    required VoidCallback onTap,
+    required double padding,
+    required Widget child,
+  }) {
+    return V3Pressable(
+      onTap: onTap,
+      pressedScale: 1,
+      focusRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: EdgeInsets.symmetric(vertical: padding),
+        decoration: BoxDecoration(
+          border: first
+              ? null
+              : const Border(top: BorderSide(color: AppColors.hair)),
+        ),
+        child: child,
+      ),
+    );
+  }
+
+  Future<void> _showContents() async {
+    final current = _chapterIndex;
+    final index = await showV3Sheet<int>(
+      context,
+      title: 'Contents',
+      builder: (sheetContext) => Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (var i = 0; i < _chapters.length; i++)
+            _sheetRow(
+              first: i == 0,
+              onTap: () => Navigator.of(sheetContext).pop(i),
+              padding: 13,
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 20,
+                    child: Text(
+                      '${i + 1}',
+                      style: AppTypography.sans(12, FontWeight.w700)
+                          .merge(AppTypography.tnum)
+                          .copyWith(
+                            color: i == current
+                                ? AppColors.ember
+                                : AppColors.ink3,
+                          ),
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Text(
+                      _chapters[i].title,
+                      style: AppTypography.sans(
+                        15,
+                        i == current ? FontWeight.w600 : FontWeight.w500,
+                      ).copyWith(color: AppColors.ink),
+                    ),
+                  ),
+                  if (i < current)
+                    const V3Icon(
+                      V3Icons.check,
+                      size: 15,
+                      color: AppColors.sage2,
+                    ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+    if (index != null && mounted) _goToChapter(index);
+  }
+
+  void _goToChapter(int index) {
+    if (!_pageController.hasClients) return;
+    if (MotionConfig.enabled(context)) {
+      unawaited(
+        _pageController.animateToPage(
+          index,
+          duration: const Duration(milliseconds: 260),
+          curve: Curves.easeOutCubic,
+        ),
+      );
+    } else {
+      _pageController.jumpToPage(index);
+    }
+  }
+
+  Future<void> _showNotes() async {
+    await showV3Sheet<void>(
+      context,
+      title: 'Notes & highlights',
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (context, setSheetState) {
+          if (_notes.isEmpty) {
+            return Text(
+              'Tap any paragraph to highlight it or add a note. They’re saved '
+              'to this book.',
+              style: AppTypography.sans(
+                14,
+              ).copyWith(color: AppColors.ink2, height: 1.5),
+            );
+          }
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (final note in _notes)
+                _noteRow(note, onDeleted: () => setSheetState(() {})),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _noteRow(ContentHighlight note, {required VoidCallback onDeleted}) {
+    final isNote = (note.noteText ?? '').trim().isNotEmpty;
+    final chapter = (note.locatorJson?['chapter'] as num?)?.toInt();
+    final quote = _normalizedQuote(note.quoteText ?? '');
+    final kind = isNote ? 'Note' : 'Highlight';
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      decoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: AppColors.hair)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                V3Tag(
+                  background: AppColors.goldSoft,
+                  color: AppColors.gold2,
+                  icon: isNote ? V3Icons.note : V3Icons.highlight,
+                  child: Text(
+                    chapter == null ? kind : '$kind · Ch. ${chapter + 1}',
+                  ),
+                ),
+                if (quote.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    '“${_excerpt(quote, 120)}”',
+                    style: AppTypography.read(
+                      14.5,
+                    ).copyWith(color: AppColors.ink, height: 1.55),
+                  ),
+                ],
+                if (isNote) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    note.noteText!.trim(),
+                    style: AppTypography.sans(
+                      14,
+                    ).copyWith(color: AppColors.ink2, height: 1.45),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          V3IconButton(
+            icon: V3Icons.trash,
+            size: 36,
+            color: AppColors.ink3,
+            label: isNote ? 'Delete note' : 'Delete highlight',
+            onPressed: () async {
+              try {
+                await _repository.deleteHighlight(widget.resourceId, note.id);
+                if (!mounted) return;
+                setState(
+                  () => _notes = _notes.where((n) => n.id != note.id).toList(),
+                );
+                onDeleted();
+              } catch (_) {}
+            },
+          ),
+        ],
+      ),
+    );
+  }
 
   Future<void> _next() async {
     if (_chapterIndex < _chapters.length - 1) {
+      if (!MotionConfig.enabled(context)) {
+        _pageController.jumpToPage(_chapterIndex + 1);
+        return;
+      }
       await _pageController.nextPage(
         duration: const Duration(milliseconds: 260),
         curve: Curves.easeOutCubic,
@@ -1946,7 +2235,7 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
     await _closeNarration();
     await _persistProgress(completed: true);
     if (!mounted || _readerPopped) return;
-    _toast('Book completed');
+    _toast('Book completed', icon: V3Icons.check, success: true);
     _leavingReader = true;
     Navigator.of(context).pop();
   }
@@ -1982,221 +2271,344 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
     Navigator.of(context).pop(result);
   }
 
+  // ── chrome ────────────────────────────────────────────────────────────────
+
+  /// Design `onScroll`: the chrome hides on scroll-down and comes back on
+  /// scroll-up or near the top; any scroll closes the paragraph actions.
+  /// Only the reader's own scrolling moves the chrome: narration following
+  /// the audio (`ensureVisible`) keeps the baseline but leaves it in place.
+  bool _onScroll(ScrollNotification notification) {
+    final vertical = notification.metrics.axis == Axis.vertical;
+    if (notification is ScrollStartNotification && vertical) {
+      _userScroll = notification.dragDetails != null;
+      // Re-base on the offset the scroll starts from (a page restored from
+      // PageStorage starts mid-chapter), so the first move can't flicker.
+      _lastScrollY = notification.metrics.pixels;
+    }
+    if (notification is! ScrollUpdateNotification) return false;
+    if (_selectedParagraph != null) _selectParagraph(null);
+    if (!vertical) return false;
+    final y = notification.metrics.pixels;
+    if (!_userScroll) {
+      _lastScrollY = y;
+      return false;
+    }
+    if ((y - _lastScrollY).abs() > 6) {
+      final show = y < _lastScrollY || y < 40;
+      _lastScrollY = y;
+      _chromeVisible.value = show;
+    }
+    return false;
+  }
+
+  Duration _motion(int milliseconds) => MotionConfig.enabled(context)
+      ? Duration(milliseconds: milliseconds)
+      : Duration.zero;
+
   @override
   Widget build(BuildContext context) {
+    final settings = ref.watch(readerSettingsProvider);
+    final theme = settings.theme;
+    final dark = theme == ReaderTheme.dark;
     final title = (_resource?.title.trim().isNotEmpty ?? false)
         ? _resource!.title
         : widget.fallbackTitle;
-    return PopScope<Object?>(
-      onPopInvokedWithResult: (didPop, result) {
-        if (didPop) {
-          _readerPopped = true;
-          unawaited(_leaveReader(result: result));
-        }
-      },
-      child: Scaffold(
-        backgroundColor: _background,
-        body: SafeArea(
-          child: _loading || _error != null
-              ? Column(
-                  children: [
-                    _topBar(title, readerReady: false),
-                    Expanded(
-                      child: _loading
-                          ? const Center(
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: AppColors.green,
-                              ),
-                            )
-                          : _errorState(),
-                    ),
-                  ],
-                )
-              : Column(
-                  children: [
-                    _topBar(title),
-                    LinearProgressIndicator(
-                      value: _progressPercent / 100,
-                      minHeight: 3,
-                      backgroundColor: _muted.withValues(alpha: .12),
-                      valueColor: const AlwaysStoppedAnimation<Color>(
-                        AppColors.green,
+    final ready = !_loading && _error == null;
+    return NarrationDockPage(
+      child: PopScope<Object?>(
+        onPopInvokedWithResult: (didPop, result) {
+          if (didPop) {
+            _readerPopped = true;
+            unawaited(_leaveReader(result: result));
+          }
+        },
+        child: AnnotatedRegion<SystemUiOverlayStyle>(
+          value: dark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark,
+          child: Scaffold(
+            backgroundColor: theme.bg,
+            body: AnimatedContainer(
+              duration: _motion(400),
+              color: theme.bg,
+              // Landscape: keep clear of the notch and rounded corners.
+              child: SafeArea(
+                top: false,
+                bottom: false,
+                child: ready
+                    ? _reader(context, title, settings)
+                    : Column(
+                        children: [
+                          V3TopBar(
+                            onBack: () => unawaited(_leaveReader()),
+                            dark: dark,
+                            title: title,
+                          ),
+                          Expanded(
+                            child: _loading
+                                ? Center(
+                                    child: V3Spinner(
+                                      color: dark
+                                          ? Colors.white
+                                          : AppColors.ink,
+                                    ),
+                                  )
+                                : _errorState(theme),
+                          ),
+                        ],
                       ),
-                    ),
-                    Expanded(
-                      child: _chapters.isEmpty
-                          ? Center(
-                              child: Text(
-                                'This book has no readable material yet.',
-                                style: AppTypography.body.copyWith(
-                                  color: _muted,
-                                ),
-                              ),
-                            )
-                          : PageView.builder(
-                              controller: _pageController,
-                              itemCount: _chapters.length,
-                              onPageChanged: _onChapterChanged,
-                              itemBuilder: (_, index) =>
-                                  _chapterPage(_chapters[index], index),
-                            ),
-                    ),
-                    if (_chapters.isNotEmpty &&
-                        _narrationVisible &&
-                        !AppShell.isWithinShell(context))
-                      _narrationPlayer(),
-                  ],
-                ),
+              ),
+            ),
+          ),
         ),
       ),
     );
   }
 
-  Widget _topBar(String title, {bool readerReady = true}) {
-    final chapterTitle = _chapters.isEmpty
-        ? 'Book guide'
-        : _chapters[_chapterIndex].title;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
-      child: Row(
-        children: [
-          _circleButton(
-            Icons.chevron_left_rounded,
-            () => unawaited(_leaveReader()),
-            tooltip: 'Back',
+  Widget _reader(BuildContext context, String title, ReaderSettings settings) {
+    final theme = settings.theme;
+    final dark = theme == ReaderTheme.dark;
+    final media = MediaQuery.of(context);
+    final inShell = AppShell.isWithinShell(context);
+    final dockBelow = _chapters.isNotEmpty && _narrationVisible && !inShell;
+    final bottomClearance = inShell
+        ? AppShell.bottomNavClearance(context)
+        : dockBelow
+        ? 0.0
+        : media.padding.bottom;
+    final fabBottom = inShell
+        ? bottomClearance + 16
+        : math.max(40.0, media.padding.bottom + 16);
+    final showListen = !_narrationVisible && _chapters.isNotEmpty;
+    final chrome = Positioned(
+      left: 0,
+      right: 0,
+      top: 0,
+      // Only the slide listens to the chrome flag, so a flip on scroll
+      // doesn't rebuild the page.
+      child: ValueListenableBuilder<bool>(
+        valueListenable: _chromeVisible,
+        builder: (context, visible, bar) => AnimatedSlide(
+          key: BookReaderScreen.chromeKey,
+          offset: visible ? Offset.zero : const Offset(0, -1),
+          duration: _motion(400),
+          curve: AppMotion.out,
+          child: bar,
+        ),
+        child: AnimatedContainer(
+          duration: _motion(400),
+          decoration: BoxDecoration(
+            color: theme.bg,
+            border: Border(bottom: BorderSide(color: theme.hair)),
           ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+          child: V3TopBar(
+            onBack: () => unawaited(_leaveReader()),
+            dark: dark,
+            title: title,
+            sub: _chapters.isEmpty
+                ? null
+                : 'Chapter ${_chapterIndex + 1} of ${_chapters.length}',
+            right: Row(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: AppTypography.label.copyWith(
-                    color: _ink,
-                    fontSize: 13.5,
-                    fontWeight: FontWeight.w700,
-                  ),
+                V3IconButton(
+                  icon: V3Icons.type,
+                  dark: dark,
+                  label: 'Reading settings',
+                  onPressed: () => unawaited(showReaderSettingsSheet(context)),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  chapterTitle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: AppTypography.caption.copyWith(
-                    color: _muted,
-                    fontSize: 11.5,
-                  ),
+                const SizedBox(width: 8),
+                V3IconButton(
+                  icon: V3Icons.more,
+                  dark: dark,
+                  label: 'Book menu',
+                  onPressed: () => unawaited(_showMenu()),
                 ),
               ],
             ),
           ),
-          if (readerReady) ...[
-            _circleButton(
-              Icons.format_size_rounded,
-              _showReaderSettings,
-              tooltip: 'Reading settings',
-            ),
-            if (!_narrationVisible && _chapters.isNotEmpty)
-              IconButton(
-                key: const Key('book-listen-button'),
-                tooltip: 'Listen',
-                onPressed: () => unawaited(_toggleNarration()),
-                icon: const Icon(
-                  Icons.headphones_rounded,
-                  color: AppColors.green2,
-                ),
-              ),
-            PopupMenuButton<String>(
-              tooltip: 'Book menu',
-              icon: Icon(Icons.more_horiz_rounded, color: _muted),
-              onSelected: (action) {
-                switch (action) {
-                  case 'contents':
-                    _showContents();
-                  case 'notes':
-                    _showNotes();
-                  case 'original':
-                    final url = _originalBookUrl;
-                    if (url != null) {
-                      Navigator.of(context, rootNavigator: true).push(CmpysPageRoute<void>(
-                        builder: (_) => MaterialWebScreen(title: _resource!.title, url: url),
-                      ));
-                    }
-                  case 'save':
-                    _toggleSaved();
-                }
-              },
-              itemBuilder: (_) => [
-                const PopupMenuItem(value: 'contents', child: Text('Contents')),
-                if (_originalBookUrl != null)
-                  const PopupMenuItem(value: 'original', child: Text('Read original book')),
-                PopupMenuItem(
-                  value: 'notes',
-                  child: Text(
-                    _notes.isEmpty
-                        ? 'Notes & highlights'
-                        : 'Notes & highlights (${_notes.length})',
-                  ),
-                ),
-                PopupMenuItem(
-                  value: 'save',
-                  child: Text(
-                    _resource?.isSaved == true
-                        ? 'Remove saved book'
-                        : 'Save book',
-                  ),
+        ),
+      ),
+    );
+    final listen = Positioned(
+      right: 20,
+      bottom: fabBottom,
+      child: ValueListenableBuilder<bool>(
+        valueListenable: _chromeVisible,
+        builder: (context, visible, button) => AnimatedSlide(
+          key: BookReaderScreen.listenKey,
+          offset: visible ? Offset.zero : Offset(0, (fabBottom + 68) / 52),
+          duration: _motion(450),
+          curve: AppMotion.out,
+          child: button,
+        ),
+        child: V3Pressable(
+          key: const Key('book-listen-button'),
+          semanticLabel: 'Listen',
+          onTap: () => unawaited(_toggleNarration()),
+          child: Container(
+            height: 52,
+            padding: const EdgeInsets.fromLTRB(16, 0, 20, 0),
+            decoration: BoxDecoration(
+              color: AppColors.ink,
+              borderRadius: BorderRadius.circular(99),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x40000000),
+                  blurRadius: 30,
+                  offset: Offset(0, 12),
                 ),
               ],
             ),
-          ],
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const V3Icon(V3Icons.headphones, size: 19, color: Colors.white),
+                const SizedBox(width: 8),
+                Text(
+                  'Listen',
+                  style: AppTypography.sans(
+                    15,
+                    FontWeight.w600,
+                  ).copyWith(color: Colors.white),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    final pages = _chapters.isEmpty
+        ? Center(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                24,
+                media.padding.top + 68,
+                24,
+                bottomClearance + 24,
+              ),
+              child: Text(
+                'This book has no readable material yet.',
+                textAlign: TextAlign.center,
+                style: AppTypography.sans(15).copyWith(color: theme.fg2),
+              ),
+            ),
+          )
+        : NotificationListener<ScrollNotification>(
+            onNotification: _onScroll,
+            child: PageView.builder(
+              controller: _pageController,
+              itemCount: _chapters.length,
+              onPageChanged: _onChapterChanged,
+              itemBuilder: (_, index) => _chapterPage(
+                _chapters[index],
+                index,
+                settings,
+                top: media.padding.top + 52 + 16,
+                bottom: bottomClearance + (_narrationVisible ? 60 : 100),
+              ),
+            ),
+          );
+    return OverlayPortal(
+      controller: _popover,
+      overlayChildBuilder: _popoverContent,
+      child: Column(
+        children: [
+          Expanded(
+            child: Stack(
+              children: [
+                Positioned.fill(child: pages),
+                chrome,
+                if (showListen) listen,
+              ],
+            ),
+          ),
+          if (dockBelow) SafeArea(top: false, child: _narrationPlayer(theme)),
         ],
       ),
     );
   }
 
-  Widget _circleButton(
-    IconData icon,
-    VoidCallback onTap, {
-    bool active = false,
-    required String tooltip,
-  }) {
-    return IconButton(
-      tooltip: tooltip,
-      onPressed: onTap,
-      constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
-      style: IconButton.styleFrom(
-        backgroundColor: _chrome,
-        side: BorderSide(color: _muted.withValues(alpha: .15)),
-      ),
-      icon:
-          _savingBook &&
-              (icon == Icons.bookmark_rounded ||
-                  icon == Icons.bookmark_border_rounded)
-          ? const SizedBox(
-              width: 16,
-              height: 16,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            )
-          : Icon(icon, size: 20, color: active ? AppColors.green : _muted),
-    );
-  }
+  // ── chapter page ──────────────────────────────────────────────────────────
 
-  Widget _chapterPage(BookChapter chapter, int index) {
+  Widget _chapterPage(
+    BookChapter chapter,
+    int index,
+    ReaderSettings settings, {
+    required double top,
+    required double bottom,
+  }) {
+    final theme = settings.theme;
+    final dark = theme == ReaderTheme.dark;
+    final fontSize = bookReaderFontSizes[settings.size.clamp(0, 2)];
+    final current = index == _chapterIndex;
+    final paragraphs = _paragraphsFor(index);
+    final marks = _marksFor(index, paragraphs);
+    final narratedBlock = _narrationVisible && current
+        ? _currentNarrationSegment?.blockIndex
+        : null;
+
+    Widget frame(int blockIndex, Widget child) {
+      final paragraph = paragraphs[blockIndex];
+      final selected = current && _selectedParagraph == blockIndex;
+      return _ParagraphFrame(
+        key: ValueKey('book-paragraph-$index-$blockIndex'),
+        theme: theme,
+        tapGroup: _popoverGroup,
+        selected: selected,
+        mark: marks[blockIndex],
+        narrated: narratedBlock == blockIndex,
+        onTap: current && paragraph.tappable && paragraph.text.isNotEmpty
+            ? (context, tap) => _toggleParagraph(blockIndex, context, tap)
+            : null,
+        child: child,
+      );
+    }
+
+    final body =
+        _narrationVisible &&
+            index < _narrationDocuments.length &&
+            _narrationDocuments[index].blocks.isNotEmpty
+        ? _NarratedBookMarkdown(
+            document: _narrationDocuments[index],
+            activeSegmentIndex:
+                current &&
+                    _narrationPlaying &&
+                    !_narrationPreparing &&
+                    _narrationWordEnd > _narrationWordStart
+                ? _narrationSegmentIndex
+                : null,
+            activeWordStart: _narrationWordStart,
+            activeWordEnd: _narrationWordEnd,
+            fontSize: fontSize,
+            theme: theme,
+            blockKey: (blockIndex) => _narrationBlockKey(index, blockIndex),
+            frame: frame,
+          )
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (var i = 0; i < paragraphs.length; i++)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: frame(
+                    i,
+                    CmpysMarkdown(
+                      paragraphs[i].markdown,
+                      readerTheme: theme,
+                      fontSize: fontSize,
+                      lineHeight: 1.7,
+                    ),
+                  ),
+                ),
+            ],
+          );
+
     final author = _resource?.authorOrCreator?.trim();
+    final guide = _resource?.kind == 'llm_book_summary';
+    final hasOriginal = _resource?.originalReadingUrl != null;
+    const inset = EdgeInsets.symmetric(horizontal: 4);
     return SingleChildScrollView(
       key: PageStorageKey<String>('${widget.resourceId}-$index'),
-      padding: EdgeInsets.fromLTRB(
-        24,
-        30,
-        24,
-        AppShell.isWithinShell(context)
-            ? AppShell.bottomNavClearance(context) + 20
-            : 52,
-      ),
+      padding: EdgeInsets.fromLTRB(20, top, 20, bottom),
       child: Align(
         alignment: Alignment.topCenter,
         child: ConstrainedBox(
@@ -2206,88 +2618,113 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
             onSelectionChanged: (content) =>
                 _selectedQuote = content?.plainText.trim(),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  'CHAPTER ${(index + 1).toString().padLeft(2, '0')} '
-                  'OF ${_chapters.length.toString().padLeft(2, '0')}',
-                  style: AppTypography.kicker.copyWith(
-                    color: AppColors.green,
-                    fontSize: 10.5,
-                  ),
-                ),
-                const SizedBox(height: 13),
-                Text(
-                  chapter.title,
-                  style: AppTypography.h1.copyWith(
-                    color: _ink,
-                    fontSize: 30,
-                    height: 1.16,
-                    letterSpacing: -.5,
-                  ),
-                ),
-                if (index == 0 && author != null && author.isNotEmpty) ...[
-                  const SizedBox(height: 10),
-                  Text(
-                    'A practical reading of $author',
-                    style: AppTypography.captionMedium.copyWith(
-                      color: _muted,
-                      fontSize: 13,
+                if (guide)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(4, 0, 4, 22),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppColors.irisSoft,
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Padding(
+                            padding: EdgeInsets.only(top: 1),
+                            child: V3Icon(
+                              V3Icons.info,
+                              size: 15,
+                              color: AppColors.iris2,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Study guide written for CMPYS. Not '
+                              '${author == null || author.isEmpty ? 'the author' : author}’s '
+                              'full text.'
+                              '${hasOriginal ? ' The original is available from the menu.' : ''}',
+                              style: AppTypography.sans(
+                                12.5,
+                                FontWeight.w500,
+                              ).copyWith(color: AppColors.iris2, height: 1.45),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                ],
-                const SizedBox(height: 24),
-                if (_narrationVisible &&
-                    index < _narrationDocuments.length &&
-                    _narrationDocuments[index].blocks.isNotEmpty)
-                  _NarratedBookMarkdown(
-                    document: _narrationDocuments[index],
-                    activeSegmentIndex:
-                        index == _chapterIndex &&
-                            _narrationPlaying &&
-                            !_narrationPreparing &&
-                            _narrationWordEnd > _narrationWordStart
-                        ? _narrationSegmentIndex
-                        : null,
-                    activeWordStart: _narrationWordStart,
-                    activeWordEnd: _narrationWordEnd,
-                    fontSize: _fontSize,
-                    ink: _ink,
-                    muted: _muted,
-                    dark: _readingTheme == 2,
-                    blockKey: (blockIndex) =>
-                        _narrationBlockKey(index, blockIndex),
-                  )
-                else
-                  CmpysMarkdown(
-                    chapter.markdown,
-                    onDark: _readingTheme == 2,
-                    fontSize: _fontSize,
-                    lineHeight: 1.72,
+                V3Rise(
+                  duration: const Duration(milliseconds: 500),
+                  child: Padding(
+                    padding: inset,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'CHAPTER ${index + 1}',
+                          style: AppTypography.kick.copyWith(color: theme.fg2),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          chapter.title,
+                          style: AppTypography.display(
+                            38,
+                          ).copyWith(color: theme.fg, height: 1.1),
+                        ),
+                        const SizedBox(height: 22),
+                      ],
+                    ),
                   ),
-                const SizedBox(height: 32),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: FilledButton.icon(
+                ),
+                body,
+                if (current && _narrationApproximate)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(4, 0, 4, 14),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 3,
+                          height: 12,
+                          decoration: BoxDecoration(
+                            color: AppColors.ember,
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            'Position follows audio approximately. This voice '
+                            'doesn’t provide word timing.',
+                            style: AppTypography.sans(
+                              11.5,
+                            ).copyWith(color: theme.fg2),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                Padding(
+                  padding: inset,
+                  child: V3Button(
                     key: ValueKey('book-chapter-next-$index'),
-                    onPressed: _next,
-                    icon: Icon(
-                      index == _chapters.length - 1
-                          ? Icons.check_rounded
-                          : Icons.arrow_forward_rounded,
-                    ),
-                    label: Text(
+                    kind: dark ? V3ButtonKind.glass : V3ButtonKind.line,
+                    full: true,
+                    icon: index == _chapters.length - 1 ? V3Icons.check : null,
+                    iconRight: index == _chapters.length - 1
+                        ? null
+                        : V3Icons.arrowR,
+                    onPressed: () => unawaited(_next()),
+                    child: Text(
                       index == _chapters.length - 1
                           ? 'Finish book'
-                          : 'Next chapter',
-                    ),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.green,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 20,
-                        vertical: 14,
-                      ),
+                          : 'Next: Chapter ${index + 2}',
                     ),
                   ),
                 ),
@@ -2299,15 +2736,30 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
     );
   }
 
-  Widget _narrationPlayer() {
-    return BookNarrationDock(
-      controller: _remoteDockController,
-      backgroundColor: _chrome,
-      foregroundColor: _ink,
+  /// Whether the narration marker is only an estimate: the voice gives no
+  /// word timing (design "Position follows audio approximately…").
+  ///
+  /// The provider is set by a session's first audio event and cleared when
+  /// the session ends, so the caption waits for that first event but stays
+  /// while the stream buffers mid-playback.
+  bool get _narrationApproximate =>
+      _narrationVisible &&
+      _narrationProvider.trim().isNotEmpty &&
+      _narrationAlignmentGranularity != BookNarrationAlignmentGranularity.word;
+
+  Widget _narrationPlayer(ReaderTheme theme) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 560),
+          child: BookNarrationDock(controller: _remoteDockController),
+        ),
+      ),
     );
   }
 
-  Widget _errorState() {
+  Widget _errorState(ReaderTheme theme) {
     final sourceUrl = safeDirectMaterialUrl(widget.fallbackSourceUrl);
     return Center(
       child: Padding(
@@ -2315,33 +2767,44 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.menu_book_outlined, size: 42, color: _muted),
+            V3Icon(V3Icons.book, size: 42, color: theme.fg2),
             const SizedBox(height: 14),
             Text(
               _error!,
               textAlign: TextAlign.center,
-              style: AppTypography.body.copyWith(color: _ink),
+              style: AppTypography.sans(
+                15,
+              ).copyWith(color: theme.fg, height: 1.45),
             ),
-            const SizedBox(height: 16),
-            CmpysButton(
-              onTap: _load,
-              leadingIcon: Icons.refresh_rounded,
+            const SizedBox(height: 18),
+            V3Button(
+              size: V3Size.md,
+              kind: theme == ReaderTheme.dark
+                  ? V3ButtonKind.light
+                  : V3ButtonKind.dark,
+              icon: V3Icons.refresh,
+              onPressed: _load,
               child: const Text('Try again'),
             ),
             if (sourceUrl != null) ...[
-              const SizedBox(height: 12),
-              TextButton.icon(
+              const SizedBox(height: 8),
+              V3Button(
+                size: V3Size.sm,
+                kind: theme == ReaderTheme.dark
+                    ? V3ButtonKind.glass
+                    : V3ButtonKind.ghost,
+                icon: V3Icons.external,
                 onPressed: () =>
                     Navigator.of(context, rootNavigator: true).push(
                       CmpysPageRoute<void>(
                         builder: (_) => MaterialWebScreen(
                           title: widget.fallbackTitle,
                           url: sourceUrl,
+                          access: AccessType.web,
                         ),
                       ),
                     ),
-                icon: const Icon(Icons.open_in_new_rounded),
-                label: const Text('Open source'),
+                child: const Text('Open source'),
               ),
             ],
           ],
@@ -2351,6 +2814,301 @@ class _BookReaderScreenState extends ConsumerState<BookReaderScreen>
   }
 }
 
+/// Body text sizes for the shared "A", "A+" and "A++" setting in the book
+/// reader (design `fs = [16.5, 18, 20][st.readSize ?? 1]`).
+const bookReaderFontSizes = [16.5, 18.0, 20.0];
+
+/// One tappable unit of a chapter page (design `BOOK_TEXT[i]`): its Markdown
+/// and the plain text a highlight, note or quote keeps.
+@immutable
+class BookReaderParagraph {
+  const BookReaderParagraph({
+    required this.markdown,
+    required this.text,
+    this.tappable = true,
+  });
+
+  final String markdown;
+
+  /// Plain text with whitespace collapsed.
+  final String text;
+
+  /// Prose takes Highlight / Note / Quote; headings and figures do not.
+  final bool tappable;
+}
+
+/// Splits chapter Markdown into its top-level blocks (paragraphs, lists,
+/// quotes, tables, fenced figures, headings), so each renders on its own and
+/// can be tapped. Fenced blocks stay whole, blank lines inside them included.
+@visibleForTesting
+List<BookReaderParagraph> bookReaderParagraphs(String markdown) {
+  final blocks = <BookReaderParagraph>[];
+  final lines = <String>[];
+  String? fence;
+
+  void flush({bool tappable = true}) {
+    final source = lines.join('\n').trim();
+    lines.clear();
+    if (source.isEmpty) return;
+    final nodes = md.Document(
+      extensionSet: md.ExtensionSet.gitHubFlavored,
+      encodeHtml: false,
+    ).parse(source);
+    blocks.add(
+      BookReaderParagraph(
+        markdown: source,
+        text: _normalizedQuote(nodes.map(_plainText).join(' ')),
+        tappable: tappable,
+      ),
+    );
+  }
+
+  final fenceOpen = RegExp(r'^(`{3,}|~{3,})');
+  final heading = RegExp(r'^#{1,6}(\s|$)');
+  for (final line in markdown.split('\n')) {
+    final trimmed = line.trimLeft();
+    if (fence != null) {
+      lines.add(line);
+      final close = RegExp(
+        '^${RegExp.escape(fence[0])}{${fence.length},}\\s*\$',
+      );
+      if (close.hasMatch(trimmed)) {
+        fence = null;
+        flush(tappable: false);
+      }
+      continue;
+    }
+    final open = fenceOpen.firstMatch(trimmed);
+    if (open != null) {
+      flush();
+      fence = open.group(1);
+      lines.add(line);
+      continue;
+    }
+    if (trimmed.isEmpty) {
+      flush();
+      continue;
+    }
+    if (heading.hasMatch(trimmed)) {
+      flush();
+      lines.add(line);
+      flush(tappable: false);
+      continue;
+    }
+    lines.add(line);
+  }
+  // An unclosed fence still renders (CmpysMarkdown degrades it to a box).
+  flush(tappable: fence == null);
+  return blocks;
+}
+
+String _plainText(md.Node node) {
+  if (node is md.Text) return node.text;
+  if (node is! md.Element) return node.textContent;
+  if (node.tag == 'br') return ' ';
+  final children = node.children ?? const <md.Node>[];
+  const separated = {
+    'ul',
+    'ol',
+    'li',
+    'blockquote',
+    'table',
+    'thead',
+    'tbody',
+    'tr',
+  };
+  return children.map(_plainText).join(separated.contains(node.tag) ? ' ' : '');
+}
+
+String _normalizedQuote(String value) =>
+    value.replaceAll(RegExp(r'\s+'), ' ').trim();
+
+String _excerpt(String value, int max) =>
+    value.length <= max ? value : '${value.substring(0, max).trimRight()}…';
+
+bool _tappableNarrationBlock(BookNarrationBlockKind kind) => switch (kind) {
+  BookNarrationBlockKind.paragraph ||
+  BookNarrationBlockKind.listItem ||
+  BookNarrationBlockKind.quote => true,
+  _ => false,
+};
+
+enum _ParagraphMark { highlight, note }
+
+/// A paragraph's surface (design `<p className="serif">`): tap to select it
+/// for Highlight / Note / Quote, the gold wash once highlighted, the note
+/// glyph, and the ember inset that marks the narration position.
+class _ParagraphFrame extends StatelessWidget {
+  const _ParagraphFrame({
+    super.key,
+    required this.theme,
+    required this.tapGroup,
+    required this.selected,
+    required this.mark,
+    required this.narrated,
+    required this.onTap,
+    required this.child,
+  });
+
+  /// Key on the narration marker (tests).
+  static const markerKey = ValueKey('book-narration-marker');
+
+  /// `oklch(0.5 0.1 85 / .28)`, the highlight wash on the dark theme.
+  static const _darkHighlight = Color(0x477D5E07);
+
+  final ReaderTheme theme;
+  final Object tapGroup;
+  final bool selected;
+  final _ParagraphMark? mark;
+  final bool narrated;
+
+  /// Called with this paragraph's context and the tap's global position.
+  final void Function(BuildContext paragraph, Offset globalTap)? onTap;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = theme == ReaderTheme.dark;
+    final motion = MotionConfig.enabled(context);
+    final background = mark != null
+        ? (dark ? _darkHighlight : AppColors.goldSoft)
+        : selected
+        ? (dark ? const Color(0x0FFFFFFF) : const Color(0x0D17151A))
+        : const Color(0x00000000);
+    Widget surface = ClipRRect(
+      borderRadius: BorderRadius.circular(6),
+      child: Stack(
+        children: [
+          AnimatedContainer(
+            duration: motion
+                ? const Duration(milliseconds: 300)
+                : Duration.zero,
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+            color: background,
+            child: child,
+          ),
+          Positioned(
+            left: 0,
+            top: 0,
+            bottom: 0,
+            child: AnimatedOpacity(
+              opacity: narrated ? 1 : 0,
+              duration: motion
+                  ? const Duration(milliseconds: 400)
+                  : Duration.zero,
+              child: Container(
+                key: narrated ? markerKey : null,
+                width: 3,
+                color: AppColors.ember,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (mark == _ParagraphMark.note) {
+      surface = Stack(
+        clipBehavior: Clip.none,
+        children: [
+          surface,
+          const Positioned(
+            right: -16,
+            top: 4,
+            child: V3Icon(
+              key: BookReaderScreen.noteGlyphKey,
+              V3Icons.note,
+              size: 14,
+              color: AppColors.gold2,
+            ),
+          ),
+        ],
+      );
+    }
+    final tap = onTap;
+    if (tap == null) return surface;
+    return TapRegion(
+      groupId: tapGroup,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTapUp: (details) => tap(context, details.globalPosition),
+        child: surface,
+      ),
+    );
+  }
+}
+
+/// Where the paragraph actions may go, in the overlay's coordinates.
+@immutable
+class _PopoverAnchor {
+  const _PopoverAnchor({
+    required this.paragraph,
+    required this.tapY,
+    required this.top,
+    required this.bottom,
+  });
+
+  /// The tapped paragraph.
+  final Rect paragraph;
+
+  /// The tap's vertical position, inside [paragraph].
+  final double tapY;
+
+  /// The visible band: below the chrome, above the bottom bars.
+  final double top;
+  final double bottom;
+
+  @override
+  bool operator ==(Object other) =>
+      other is _PopoverAnchor &&
+      other.paragraph == paragraph &&
+      other.tapY == tapY &&
+      other.top == top &&
+      other.bottom == bottom;
+
+  @override
+  int get hashCode => Object.hash(paragraph, tapY, top, bottom);
+}
+
+/// Places the actions above the paragraph as the design does (`top: -46`,
+/// centred) when that is visible; otherwise below the tap point, or above
+/// it near the bottom; always clamped into the visible band and 16 pt from
+/// the sides. The actions close on any scroll, so the place is fixed.
+class _PopoverLayout extends SingleChildLayoutDelegate {
+  const _PopoverLayout(this.anchor);
+
+  final _PopoverAnchor anchor;
+
+  @override
+  BoxConstraints getConstraintsForChild(BoxConstraints constraints) =>
+      BoxConstraints(
+        maxWidth: math.max(0, constraints.maxWidth - 32),
+        maxHeight: constraints.maxHeight,
+      );
+
+  @override
+  Offset getPositionForChild(Size size, Size childSize) {
+    final a = anchor;
+    final above = a.paragraph.top - 6 - childSize.height;
+    final double y;
+    if (above >= a.top) {
+      y = above;
+    } else if (a.tapY + 16 + childSize.height <= a.bottom) {
+      y = a.tapY + 16;
+    } else {
+      y = a.tapY - 16 - childSize.height;
+    }
+    final x = a.paragraph.center.dx - childSize.width / 2;
+    return Offset(
+      x.clamp(16, math.max(16, size.width - 16 - childSize.width)).toDouble(),
+      y.clamp(a.top, math.max(a.top, a.bottom - childSize.height)).toDouble(),
+    );
+  }
+
+  @override
+  bool shouldRelayout(_PopoverLayout oldDelegate) =>
+      oldDelegate.anchor != anchor;
+}
+
 class _NarratedBookMarkdown extends StatelessWidget {
   const _NarratedBookMarkdown({
     required this.document,
@@ -2358,10 +3116,9 @@ class _NarratedBookMarkdown extends StatelessWidget {
     required this.activeWordStart,
     required this.activeWordEnd,
     required this.fontSize,
-    required this.ink,
-    required this.muted,
-    required this.dark,
+    required this.theme,
     required this.blockKey,
+    required this.frame,
   });
 
   final BookNarrationDocument document;
@@ -2369,10 +3126,13 @@ class _NarratedBookMarkdown extends StatelessWidget {
   final int activeWordStart;
   final int activeWordEnd;
   final double fontSize;
-  final Color ink;
-  final Color muted;
-  final bool dark;
+  final ReaderTheme theme;
   final GlobalKey Function(int blockIndex) blockKey;
+
+  /// Wraps a block in its paragraph surface.
+  final Widget Function(int blockIndex, Widget child) frame;
+
+  bool get _dark => theme == ReaderTheme.dark;
 
   BookNarrationSegment? get _activeSegment {
     final index = activeSegmentIndex;
@@ -2409,14 +3169,14 @@ class _NarratedBookMarkdown extends StatelessWidget {
       BookNarrationBlockKind.diagram => LearningDiagramView(
         diagram: block.diagram!,
         fontSize: fontSize,
-        dark: dark,
+        dark: _dark,
         spansForRange: (start, end) =>
             _textSpans(block, activeSegment, rangeStart: start, rangeEnd: end),
       ),
       BookNarrationBlockKind.comparison => LearningComparisonView(
         comparison: block.comparison!,
         fontSize: fontSize,
-        dark: dark,
+        dark: _dark,
         spansForRange: (start, end) =>
             _textSpans(block, activeSegment, rangeStart: start, rangeEnd: end),
       ),
@@ -2427,10 +3187,9 @@ class _NarratedBookMarkdown extends StatelessWidget {
             width: 27,
             child: Text(
               block.listMarker ?? '•',
-              style: AppTypography.reading.copyWith(
-                color: isActive ? AppColors.green : muted,
-                fontSize: fontSize,
-                height: 1.72,
+              style: AppTypography.read(fontSize).copyWith(
+                color: isActive ? AppColors.ember : theme.fg2,
+                height: 1.7,
               ),
             ),
           ),
@@ -2440,9 +3199,7 @@ class _NarratedBookMarkdown extends StatelessWidget {
       BookNarrationBlockKind.quote => Container(
         padding: const EdgeInsets.fromLTRB(14, 11, 14, 11),
         decoration: BoxDecoration(
-          color: dark
-              ? Colors.white.withValues(alpha: .07)
-              : AppColors.greenSoft.withValues(alpha: .72),
+          color: theme.card,
           borderRadius: AppRadii.br12,
         ),
         child: text,
@@ -2450,9 +3207,7 @@ class _NarratedBookMarkdown extends StatelessWidget {
       BookNarrationBlockKind.code => Container(
         padding: const EdgeInsets.all(13),
         decoration: BoxDecoration(
-          color: dark
-              ? Colors.white.withValues(alpha: .06)
-              : AppColors.paper2.withValues(alpha: .7),
+          color: theme.card,
           borderRadius: AppRadii.br12,
         ),
         child: text,
@@ -2477,7 +3232,7 @@ class _NarratedBookMarkdown extends StatelessWidget {
           _ => 14,
         },
       ),
-      child: content,
+      child: frame(blockIndex, content),
     );
   }
 
@@ -2486,30 +3241,26 @@ class _NarratedBookMarkdown extends StatelessWidget {
       BookNarrationBlockKind.heading =>
         block.headingLevel <= 3
             ? AppTypography.h3.copyWith(
-                color: ink,
+                color: theme.fg,
                 fontSize: fontSize + 3,
                 height: 1.32,
               )
             : AppTypography.h4.copyWith(
-                color: ink,
+                color: theme.fg,
                 fontSize: fontSize + 1,
                 height: 1.38,
               ),
       BookNarrationBlockKind.quote => AppTypography.readingQuote.copyWith(
-        color: ink,
+        color: theme.fg,
         fontSize: fontSize + .5,
         height: 1.55,
       ),
       BookNarrationBlockKind.code => AppTypography.monoLabel.copyWith(
-        color: ink,
+        color: theme.fg,
         fontSize: (fontSize - 2).clamp(13, 21).toDouble(),
         height: 1.55,
       ),
-      _ => AppTypography.reading.copyWith(
-        color: ink,
-        fontSize: fontSize,
-        height: 1.72,
-      ),
+      _ => AppTypography.read(fontSize).copyWith(color: theme.fg, height: 1.7),
     };
   }
 
@@ -2576,15 +3327,15 @@ class _NarratedBookMarkdown extends StatelessWidget {
       TextStyle? style;
       if (inActiveSentence) {
         style = TextStyle(
-          backgroundColor: dark
-              ? AppColors.green.withValues(alpha: .22)
-              : AppColors.greenSoft,
+          backgroundColor: _dark
+              ? AppColors.ember.withValues(alpha: .22)
+              : AppColors.emberSoft,
         );
       }
       if (inActiveWord) {
         style = (style ?? const TextStyle()).copyWith(
           color: Colors.white,
-          backgroundColor: AppColors.green,
+          backgroundColor: AppColors.ember,
           fontWeight: FontWeight.w700,
         );
       }
@@ -2594,25 +3345,17 @@ class _NarratedBookMarkdown extends StatelessWidget {
   }
 }
 
+/// The "Add a note" sheet body: the quoted passage, "Your thought", and
+/// "Save note". It pops with the saved highlight.
 @visibleForTesting
 class BookNoteComposerSheet extends StatefulWidget {
   const BookNoteComposerSheet({
     super.key,
     required this.quote,
-    required this.background,
-    required this.chrome,
-    required this.ink,
-    required this.muted,
-    required this.dark,
     required this.onSave,
   });
 
   final String quote;
-  final Color background;
-  final Color chrome;
-  final Color ink;
-  final Color muted;
-  final bool dark;
   final Future<ContentHighlight> Function(String noteText) onSave;
 
   @override
@@ -2637,7 +3380,7 @@ class _BookNoteComposerSheetState extends State<BookNoteComposerSheet> {
   }
 
   Future<void> _save() async {
-    if (_saving) return;
+    if (_saving || _noteController.text.trim().isEmpty) return;
     setState(() {
       _saving = true;
       _error = null;
@@ -2657,117 +3400,55 @@ class _BookNoteComposerSheetState extends State<BookNoteComposerSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
+    final quote = _normalizedQuote(widget.quote);
     return PopScope(
       canPop: !_saving,
-      child: AnimatedPadding(
-        duration: const Duration(milliseconds: 180),
-        curve: Curves.easeOutCubic,
-        padding: EdgeInsets.only(bottom: keyboardInset),
-        child: SafeArea(
-          top: false,
-          child: SingleChildScrollView(
-            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-            padding: const EdgeInsets.fromLTRB(22, 14, 22, 22),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Center(
-                  child: Container(
-                    width: 38,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: widget.muted.withValues(alpha: 0.35),
-                      borderRadius: BorderRadius.circular(99),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 22),
-                Text(
-                  'Add a note',
-                  style: AppTypography.h2.copyWith(
-                    color: widget.ink,
-                    fontSize: 23,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Container(
-                  width: double.infinity,
-                  constraints: const BoxConstraints(maxHeight: 130),
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: AppColors.ochreSoft.withValues(
-                      alpha: widget.dark ? 0.12 : 0.65,
-                    ),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: SingleChildScrollView(
-                    child: Text(
-                      '“${widget.quote}”',
-                      style: AppTypography.readingQuote.copyWith(
-                        color: widget.ink,
-                        fontSize: 15.5,
-                        height: 1.45,
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 14),
-                TextField(
-                  controller: _noteController,
-                  autofocus: true,
-                  minLines: 3,
-                  maxLines: 6,
-                  enabled: !_saving,
-                  style: AppTypography.body.copyWith(color: widget.ink),
-                  decoration: InputDecoration(
-                    hintText: 'What do you want to remember?',
-                    hintStyle: AppTypography.body.copyWith(color: widget.muted),
-                    filled: true,
-                    fillColor: widget.background,
-                    border: OutlineInputBorder(
-                      borderSide: BorderSide.none,
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                  ),
-                ),
-                if (_error != null) ...[
-                  const SizedBox(height: 10),
-                  Text(
-                    _error!,
-                    style: AppTypography.captionMedium.copyWith(
-                      color: AppColors.danger,
-                    ),
-                  ),
-                ],
-                const SizedBox(height: 14),
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    onPressed: _saving ? null : _save,
-                    icon: _saving
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.note_add_outlined),
-                    label: Text(_saving ? 'Saving…' : 'Save note'),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.green,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 15),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(99),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            padding: const EdgeInsets.only(left: 12),
+            decoration: const BoxDecoration(
+              border: Border(left: BorderSide(color: AppColors.gold, width: 3)),
+            ),
+            child: Text(
+              '“${_excerpt(quote, 110)}”',
+              style: AppTypography.read(
+                14,
+              ).copyWith(color: AppColors.ink2, height: 1.5),
             ),
           ),
-        ),
+          const SizedBox(height: 14),
+          V3Field(
+            controller: _noteController,
+            multiline: true,
+            rows: 3,
+            placeholder: 'Your thought',
+            autofocus: true,
+            enabled: !_saving,
+            textCapitalization: TextCapitalization.sentences,
+            onChanged: (_) => setState(() {}),
+          ),
+          if (_error != null) ...[
+            const SizedBox(height: 10),
+            Text(
+              _error!,
+              style: AppTypography.sans(
+                13,
+                FontWeight.w500,
+              ).copyWith(color: AppColors.danger),
+            ),
+          ],
+          const SizedBox(height: 14),
+          V3Button(
+            full: true,
+            loading: _saving,
+            disabled: _noteController.text.trim().isEmpty,
+            onPressed: () => unawaited(_save()),
+            child: const Text('Save note'),
+          ),
+        ],
       ),
     );
   }

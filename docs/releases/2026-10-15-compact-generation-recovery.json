@@ -1,0 +1,31 @@
+{
+  "release": "20261015-140800-approved-lessons",
+  "image_digest": "sha256:653ab7a0d079cc5804665336794d586547e37d86191e1a4073750bf91d1ca58e",
+  "review_version": 7,
+  "production_files_match": true,
+  "api_database_redis_ready": true,
+  "runtime_services_on_release": 9,
+  "worker_queues_verified": 7,
+  "paid_calls_in_this_turn": 0,
+  "fresh_generation_verified": false,
+  "source_sha256": {
+    "cmpys/backend/app/services/planning/lesson_package.py": "1bdefc277f942aac962ef0000bfede94a56066d0b46571a036dc2685cbcaeb3d",
+    "cmpys/backend/app/services/planning/lesson_review.py": "c267464f97559f9276f4e741bf6dc6d99c1a69996ff3cb3b6bd1af78753e4132",
+    "cmpys/prompts/lesson_package_generate.txt": "1b226bbde12c6f5bb4b8d4e12d8c42cad031fde27af9218a50684e95462c1ced",
+    "cmpys/prompts/plan_item_detail_lesson.txt": "2c6681de101f5887435e11bc5efae260473c2473a82f798956bbdd485ed1009f",
+    "cmpys/backend/app/api/v1/plans.py": "2fe118927c0744b1c824fa7aea844871bdef3450f2d2cbfad47bdef6002f11d4"
+  },
+  "saved_lessons_readable": true,
+  "ready_steps": [
+    "step_1",
+    "step_3"
+  ],
+  "simulator_reader_and_practice_opened": true,
+  "simulator_cold_launch_verified": true,
+  "authentication_and_plan_restored": true,
+  "reader_next_verified": true,
+  "practice_after_fresh_mission_load_verified": true,
+  "backend_targeted_tests": 347,
+  "flutter_targeted_tests": 29,
+  "flutter_analysis_clean": true
+}

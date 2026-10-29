@@ -1,3 +1,5 @@
+import '../../plan/models/plan_models.dart' show safeDirectMaterialUrl;
+
 class ContentResource {
   const ContentResource({
     required this.id,
@@ -78,6 +80,13 @@ class ContentResource {
 
   bool get canReadInApp =>
       contentMarkdown != null && contentMarkdown!.isNotEmpty;
+
+  /// The original book text the reader offers as "Read original book" (and
+  /// the library badges as available): the summary's `reading_url`, else its
+  /// `text_url`, kept only when [safeDirectMaterialUrl] accepts it.
+  String? get originalReadingUrl => safeDirectMaterialUrl(
+    (summaryJson?['reading_url'] ?? summaryJson?['text_url'])?.toString(),
+  );
 
   String get kindLabel {
     switch (kind) {

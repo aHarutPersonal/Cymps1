@@ -25,7 +25,8 @@ def backfill_comparison_scores(self, session_id: str) -> dict:
 
     Enqueued when such a session is fetched, so old sessions self-heal and
     the client stops falling back to seed numbers. Idempotent: no-ops when
-    scores already exist.
+    scores already exist (a stored version 2 payload counts as existing and
+    is left as stored; new payloads are version 3).
     """
     logger.info(f"[CMP_SCORES] Starting backfill for session={session_id}")
     try:
@@ -68,6 +69,7 @@ async def _backfill_comparison_scores_async(session_id: str) -> dict:
         provider_interview_plan_inputs,
     )
     from app.services.llm.client import get_llm_client
+    from app.services.session_context import situation_profile_fields
     from app.services.transcripts import build_chat_history_json
 
     async with async_session_maker() as db:
@@ -81,6 +83,9 @@ async def _backfill_comparison_scores_async(session_id: str) -> dict:
         if not session:
             return {"status": "skipped", "reason": "session_not_found"}
         if comparison_scores_are_current(session.comparison_scores_json):
+            # "Current" covers stored version 2 payloads (the old dimension
+            # ids) as well as version 3: a stored payload is never re-scored
+            # or rewritten, only a missing or pre-placement one is generated.
             return {"status": "skipped", "reason": "scores_already_present"}
         if not session.comparison_output:
             return {"status": "skipped", "reason": "no_comparison_output"}
@@ -147,6 +152,8 @@ async def _backfill_comparison_scores_async(session_id: str) -> dict:
             "interests": session.user_interests,
             "goal": session_goal,
             "learner_baseline": learner_baseline,
+            # Onboarding situation chips and note; absent for older sessions.
+            **situation_profile_fields(session),
         }
 
         scores = await generate_comparison_scores(

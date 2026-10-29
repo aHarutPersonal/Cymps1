@@ -1,0 +1,17 @@
+{
+  "scenario_id": "geometry_novice_missing",
+  "tier": "quality",
+  "model": "gpt-5.6-sol",
+  "accepted": false,
+  "adjudicated": false,
+  "repair_count": 0,
+  "elapsed_ms": 180004.7845830013,
+  "package_ms": 28893.9160000009,
+  "estimated_cost_usd_excluding_shared_package": 1.5860750000000001,
+  "failures": [
+    "OpenLux request failed (TimeoutError; finish=missing)"
+  ],
+  "review": null,
+  "sections": {},
+  "lesson": {}
+}

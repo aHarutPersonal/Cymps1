@@ -107,8 +107,8 @@ void main() {
       );
       expect(find.textContaining('Check your connection'), findsNothing);
       expect(find.text('Open source'), findsOneWidget);
-      expect(find.byTooltip('Book menu'), findsNothing);
-      await tester.tap(find.byTooltip('Back'));
+      expect(find.bySemanticsLabel('Book menu'), findsNothing);
+      await tester.tap(find.bySemanticsLabel('Back'));
       await tester.pumpAndSettle();
       expect(find.text('Open test book'), findsOneWidget);
       expect(tester.takeException(), isNull);
@@ -124,8 +124,8 @@ void main() {
     await tester.tap(find.text('Open test book'));
     await tester.pump();
     await tester.pump(const Duration(seconds: 1));
-    expect(find.byTooltip('Back'), findsOneWidget);
-    await tester.tap(find.byTooltip('Back'));
+    expect(find.bySemanticsLabel('Back'), findsOneWidget);
+    await tester.tap(find.bySemanticsLabel('Back'));
     await tester.pumpAndSettle();
     pending.complete(_book);
     await tester.pumpAndSettle();
@@ -150,7 +150,7 @@ void main() {
       find.textContaining('This text can be read.', findRichText: true),
       findsWidgets,
     );
-    expect(find.byTooltip('Book menu'), findsOneWidget);
+    expect(find.bySemanticsLabel('Book menu'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
     await tester.pumpAndSettle();

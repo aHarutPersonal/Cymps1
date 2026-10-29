@@ -18,8 +18,9 @@ Choose {minimum_lessons} to {maximum_lessons} short tutorials covering the entir
 mission time budget. Each takes 5–8 minutes including reading and one small
 in-app exercise; aim for about 6 minutes each. Split larger concepts into
 focused explanation, application, transfer and revision tutorials. Every tutorial
-teaches ONE concept with a visual comparison or diagram, ONE worked example,
-and ONE small exercise with two brief guided/transfer phases. The sequence must
+teaches ONE concept with one native visual (a formula, comparison or diagram),
+ONE step-by-step worked example, a quick self-check, and ONE small in-app
+exercise with two brief guided/transfer phases. The sequence must
 progress toward the same mission output, without repeated introductory lessons.
 Write only titles, concise descriptions and resource references now.
 
@@ -28,7 +29,8 @@ CURRICULUM RULES:
 - Titles start with an action verb. Aim for 3-6 words and fewer than 45 characters;
   60 characters is the absolute limit. Put additional context in description.
 - Each description is 1-2 concise specific sentences explaining the skill, practice,
-  and concrete output. The outputs must combine into the mission result.
+  and concrete output. The outputs must combine into the mission result. A count
+  in a description equals the items it names ("label the four sections" lists four).
 - Choose {minimum_materials} to {maximum_materials} real resources. Select the
   exact count and mix that best improves this mission; there is no book, video,
   or other type quota. Prefer fewer authoritative resources over decorative
@@ -43,8 +45,6 @@ CURRICULUM RULES:
   precise search_query so the backend can resolve and verify a direct page.
 - Recommend only resources you are confident really exist and whose exact
   identity is specific enough to resolve. Avoid generic search topics.
-- All content_markdown values are null and all ideas arrays are empty. Long book
-  content is produced by the canonical book pipeline, not here.
 - The definition_of_done is binary and names the artifact plus its quality
   check. The mental_model names one specific model used across the sequence.
 - Use documented mentor evidence when available. Never invent mentor quotes,
@@ -56,13 +56,11 @@ CURRICULUM RULES:
 Return strict JSON with exactly this shape and no commentary. Repeat the step
 and material object shapes only as many times as your chosen counts require:
 {
-  "lesson_format": "tutorial_v1",
   "steps": [
     {
       "id": "step_1",
-      "lesson_format": "tutorial_v1",
       "title": "Action-verb lesson title",
-      "description": "Two or three concrete sentences.",
+      "description": "One or two concrete sentences.",
       "resources": ["Exact Resource Title"]
     }
   ],
@@ -73,11 +71,7 @@ and material object shapes only as many times as your chosen counts require:
       "author_or_creator": "Exact Author, Creator, Channel, or Platform",
       "search_query": "Exact title and creator lookup query",
       "duration_minutes": 15,
-      "canonical_hint": null,
-      "source_strategy": "direct_verified_lookup",
-      "reason": "Why this resource directly supports a named lesson.",
-      "content_markdown": null,
-      "ideas": []
+      "reason": "Why this resource directly supports a named lesson."
     }
   ],
   "definition_of_done": "One binary artifact and quality-check criterion.",
@@ -95,4 +89,3 @@ the named book or video as optional further reading. A title or URL is not sourc
 For a two-hour mission, aim for about twenty cumulative tutorials of roughly six
 minutes each. Preserve the complete planned workload; do not replace the mission
 with only a handful of tutorials. Keep required in-app practice self-contained.
-All top-level and step lesson_format fields must equal tutorial_v1.

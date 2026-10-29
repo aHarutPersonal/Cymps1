@@ -1,0 +1,155 @@
+{
+  "running": false,
+  "exit_code": 0,
+  "finished_calls": 13,
+  "pending_calls": 0,
+  "reported_cost_usd": 0.288669,
+  "unknown_reserved_usd": 0.2874735,
+  "pending_reserved_usd": 0,
+  "accounted_usd": 0.5761425,
+  "responses": [
+    {
+      "schema": "LessonPackage",
+      "seconds": 48.99,
+      "error": false,
+      "unknown_usage": false
+    },
+    {
+      "schema": "LessonPackage",
+      "seconds": 38.31,
+      "error": false,
+      "unknown_usage": false
+    },
+    {
+      "schema": "PackageReview",
+      "seconds": 17.01,
+      "error": false,
+      "unknown_usage": false
+    },
+    {
+      "schema": "PackageReview",
+      "seconds": 21.75,
+      "error": false,
+      "unknown_usage": false
+    },
+    {
+      "schema": "PrivatePackageRepair",
+      "seconds": 6.23,
+      "error": false,
+      "unknown_usage": false
+    },
+    {
+      "schema": "PackageReview",
+      "seconds": 5.83,
+      "error": false,
+      "unknown_usage": false
+    },
+    {
+      "schema": "LessonSectionGroup_framing",
+      "seconds": 37.29,
+      "error": false,
+      "unknown_usage": false
+    },
+    {
+      "schema": null,
+      "seconds": 0.0,
+      "error": false,
+      "unknown_usage": true
+    },
+    {
+      "schema": "LessonSectionGroup_worked",
+      "seconds": 31.48,
+      "error": false,
+      "unknown_usage": false
+    },
+    {
+      "schema": "LessonSectionGroup_practice",
+      "seconds": 58.59,
+      "error": false,
+      "unknown_usage": false
+    },
+    {
+      "schema": "LessonSectionGroup_mechanism",
+      "seconds": 58.88,
+      "error": false,
+      "unknown_usage": false
+    },
+    {
+      "schema": "LessonReview",
+      "seconds": 110.98,
+      "error": false,
+      "unknown_usage": false
+    },
+    {
+      "schema": null,
+      "seconds": 0.0,
+      "error": false,
+      "unknown_usage": true
+    }
+  ],
+  "accepted": false,
+  "elapsed_seconds": 470.004,
+  "failure_count": 1,
+  "validation_identity": {
+    "review_version": 9,
+    "package_version": 1,
+    "capability_hash": "1815a97ad0c7246f737c493fbec7b9217c6a5dd6a7d96cacd93c0c34b3afe48f",
+    "prompt_hash": "405fc1fd8302bca3d6964c8309bb523f7eab15a27a3fefcbaaccf75fdce8abe1",
+    "generation_contract_hash": "04e47b821a9c637551c9a089f8af4e791e9136ff2cb5a11f637c123788771184",
+    "schema_hash": "1d0cf0045863177a578bddcf267a7ccada58a0ea89111935117bf8878fc67a5e"
+  },
+  "attempts": [
+    {
+      "stage": "parallel_lesson_step_1_package",
+      "error": false,
+      "seconds": 38.31
+    },
+    {
+      "stage": "parallel_lesson_step_1_package_preflight",
+      "error": false,
+      "seconds": 21.75
+    },
+    {
+      "stage": "parallel_lesson_step_1_package_repair",
+      "error": false,
+      "seconds": 6.23
+    },
+    {
+      "stage": "parallel_lesson_step_1_package_preflight_recheck",
+      "error": false,
+      "seconds": 5.83
+    },
+    {
+      "stage": "parallel_lesson_step_1_draft_1_framing_1",
+      "error": false,
+      "seconds": 37.29
+    },
+    {
+      "stage": "parallel_lesson_step_1_draft_1_worked_1",
+      "error": false,
+      "seconds": 31.48
+    },
+    {
+      "stage": "parallel_lesson_step_1_draft_1_mechanism_1",
+      "error": true,
+      "seconds": 90.0
+    },
+    {
+      "stage": "parallel_lesson_step_1_draft_1_practice_1",
+      "error": false,
+      "seconds": 58.59
+    },
+    {
+      "stage": "parallel_lesson_step_1_draft_1_mechanism_2",
+      "error": false,
+      "seconds": 58.88
+    },
+    {
+      "stage": "parallel_lesson_step_1_review_1",
+      "error": true,
+      "seconds": 71.83
+    }
+  ],
+  "word_count": 0,
+  "activity_count": 0
+}

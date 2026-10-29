@@ -206,6 +206,25 @@ class PlanRepository {
     return PlanItemDetailed.fromJson(response.data as Map<String, dynamic>);
   }
 
+  /// [getPlanItemDetailed] as a pure read (`?peek=true`): the current details
+  /// and job status, but the backend never promotes a prefetch job, enqueues
+  /// generation or writes. With no details and no job it answers `pending`
+  /// with no job id. For missions the learner is not working on yet.
+  Future<PlanItemDetailed> peekPlanItemDetailed(String itemId) async {
+    final response = await _dioClient.get(
+      '/plan-items/$itemId/detailed',
+      queryParameters: const {'peek': true},
+    );
+    return PlanItemDetailed.fromJson(response.data as Map<String, dynamic>);
+  }
+
+  /// A habit's completions for each day of the server's current week
+  /// (Monday to Sunday).
+  Future<DailyStatus> getDailyStatus(String itemId) async {
+    final response = await _dioClient.get('/plan-items/$itemId/daily-status');
+    return DailyStatus.fromJson(response.data as Map<String, dynamic>);
+  }
+
   /// Explicitly retry a mission lesson after the backend reports generation
   /// failure. Failed jobs are not auto-requeued on every poll, preventing an
   /// endless loading/cost loop.
@@ -309,16 +328,20 @@ class PlanRepository {
 
   /// Complete or uncomplete one lesson step. The backend enforces sequential
   /// progression and auto-completes the mission after its final lesson.
+  ///
+  /// [complete] is the desired state (`?complete=`): a server that knows it
+  /// sets exactly that state, and leaves a step already in it unchanged, so
+  /// a retry after a lost response never flips it back. Without it, or on an
+  /// older server, the request toggles.
   Future<({bool completed, bool itemCompleted})> toggleStepComplete(
     String itemId,
     String stepId, {
     String? artifactJobId,
+    bool? complete,
   }) async {
     final response = await _dioClient.post(
       '/plan-items/$itemId/steps/$stepId/toggle',
-      queryParameters: artifactJobId == null
-          ? null
-          : {'artifactJobId': artifactJobId},
+      queryParameters: _completionQuery(artifactJobId, complete),
     );
     final data = response.data as Map<String, dynamic>;
     return (
@@ -330,19 +353,31 @@ class PlanRepository {
   /// Toggle item-level completion. Returns a [ToggleResult] with the new
   /// completed state plus plan-level signals (planComplete,
   /// missionTasksRemaining) used by the achievement cycle flow.
+  ///
+  /// [complete] is the desired state, as for [toggleStepComplete].
   Future<ToggleResult> toggleItemComplete(
     String itemId, {
     String? artifactJobId,
+    bool? complete,
   }) async {
     final response = await _dioClient.post(
       '/plan-items/$itemId/toggle-complete',
-      queryParameters: artifactJobId == null
-          ? null
-          : {'artifactJobId': artifactJobId},
+      queryParameters: _completionQuery(artifactJobId, complete),
     );
     final data = response.data as Map<String, dynamic>;
     debugPrint('✅ Toggled plan item $itemId → ${data['completed']}');
     return ToggleResult.fromJson(data);
+  }
+
+  static Map<String, dynamic>? _completionQuery(
+    String? artifactJobId,
+    bool? complete,
+  ) {
+    final query = <String, dynamic>{
+      'artifactJobId': ?artifactJobId,
+      'complete': ?complete,
+    };
+    return query.isEmpty ? null : query;
   }
 
   /// Fetch an AI-suggested achievement title + category for a completed item.
@@ -359,8 +394,10 @@ class PlanRepository {
     );
   }
 
-  /// Persist a user achievement (auto-generated or manually edited).
-  Future<void> saveAchievement({
+  /// Persist a user achievement (auto-generated or manually edited) and
+  /// return the server's achievement id (null when the response carries
+  /// none), so the device record can delete it later.
+  Future<String?> saveAchievement({
     required String title,
     required String category,
     String? notes,
@@ -370,7 +407,7 @@ class PlanRepository {
     String? planItemId,
     int cycleNumber = 1,
   }) async {
-    await _dioClient.post(
+    final response = await _dioClient.post(
       '/achievements',
       data: {
         'title': title,
@@ -383,6 +420,46 @@ class PlanRepository {
         if (evidenceLink != null) 'evidenceLink': evidenceLink,
       },
     );
+    final body = response.data;
+    final id = body is Map ? body['id'] : null;
+    return id is String && id.trim().isNotEmpty ? id : null;
+  }
+
+  /// Every achievement of the user's (`GET /achievements`), read page by
+  /// page ([pageSize] rows, the server's maximum by default) until the
+  /// reported total, a short page, or [maxPages] pages: a sane bound for
+  /// the Record restore. Rows without an id are skipped.
+  Future<List<ServerAchievement>> listAchievements({
+    int pageSize = 200,
+    int maxPages = 10,
+  }) async {
+    final all = <ServerAchievement>[];
+    var offset = 0;
+    for (var page = 0; page < maxPages; page++) {
+      final response = await _dioClient.get(
+        '/achievements',
+        queryParameters: {'limit': pageSize, 'offset': offset},
+      );
+      final body = response.data;
+      final rows = body is Map ? body['achievements'] : null;
+      if (rows is! List) break;
+      for (final row in rows) {
+        final achievement = ServerAchievement.tryParse(row);
+        if (achievement != null) all.add(achievement);
+      }
+      offset += rows.length;
+      final total = body is Map && body['total'] is num
+          ? (body['total'] as num).toInt()
+          : null;
+      if (rows.length < pageSize || (total != null && offset >= total)) break;
+    }
+    return all;
+  }
+
+  /// Delete one of the user's achievements (`DELETE /achievements/{id}`,
+  /// scoped to the user by the server).
+  Future<void> deleteAchievement(String id) async {
+    await _dioClient.delete('/achievements/${Uri.encodeComponent(id)}');
   }
 
   /// Generate a narrative summary of the completed plan cycle.
@@ -408,6 +485,12 @@ class PlanRepository {
   Future<TodayView> getTodayView(String planId) async {
     final response = await _dioClient.get('/plans/$planId/today');
     return TodayView.fromJson(response.data as Map<String, dynamic>);
+  }
+
+  /// The current and longest daily streak and the last active day.
+  Future<StreakSummary> getStreak() async {
+    final response = await _dioClient.get('/streak');
+    return StreakSummary.fromJson(response.data as Map<String, dynamic>);
   }
 
   /// Toggle *today's* completion for a habit/practice item (resets daily,

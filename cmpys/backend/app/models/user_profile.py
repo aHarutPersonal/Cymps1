@@ -29,6 +29,8 @@ class UserProfile(Base, UUIDMixin, TimestampUpdateMixin):
     
     # Intake-derived fields
     weekly_hours: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Canonical capacity; weekly_hours is ceil(weekly_minutes / 60).
+    weekly_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     goals: Mapped[list[str] | None] = mapped_column(ARRAY(String(500)), nullable=True)
     interests: Mapped[list[str] | None] = mapped_column(ARRAY(String(200)), nullable=True)
     domains: Mapped[list[str] | None] = mapped_column(ARRAY(String(100)), nullable=True)

@@ -2,6 +2,7 @@
 import asyncio
 import copy
 import json
+import re
 from collections import defaultdict, deque
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -169,7 +170,9 @@ async def test_full_semantic_then_parallel_scopes_and_union_records_each_real_ca
 async def test_partial_failure_saves_good_scope_then_resume_calls_only_failed_activity(isolate):
     failed = Harness({"a1": ["bad_math", "bad_math"]})
     (failures, response, _), snapshots = await run(failed)
-    assert failures and response.error and failed.counts == {"semantic": 1, "a0": 1, "a1": 2}
+    # F18: exhausted evidence corrections are a repairable activity defect.
+    assert failures and not response.error and failed.counts == {"semantic": 1, "a0": 1, "a1": 2}
+    assert response.effective_parameters["validated_repair_targets"] == ["practice.a1"]
     saved = snapshots[-1]
     assert set(saved["scopes"]) == {"a0"} and saved["correction_used"]
     before = copy.deepcopy(saved)
@@ -194,11 +197,36 @@ async def test_partial_scope_correction_keeps_prior_valid_proof_and_requests_onl
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["bad_math", "outside", "wrong_case", "malformed"])
 async def test_wrong_math_scope_binding_and_schema_never_become_approved(kind):
+    """F18: exhausting the evidence corrections for one owner is a scoped,
+    repairable defect on that activity (never "preflight unavailable"), named
+    by span ids and error codes/paths only, never by source text."""
     harness = Harness({"a0": [kind, kind]})
     (failures, response, _), snapshots = await run(harness)
-    assert failures and response.error and not response.data["acceptable"]
+    assert failures and not response.data["acceptable"]
+    assert response.error is None
+    assert response.effective_parameters["validated_repair_targets"] == ["practice.a0"]
+    (failure,) = failures
+    assert failure.startswith("practice.a0: Numeric evidence for spans n1 ")
+    assert "derived results as expressions" in failure
+    for source_text in ("Receipts", "Difference", "receipts + revenue", "practice.unknown", "not an array"):
+        assert source_text not in failure
     assert harness.counts["a0"] == 2
-    assert "a0" not in snapshots[-1]["scopes"]
+    saved = snapshots[-1]
+    assert "a0" not in saved["scopes"] and saved["rejection"] is None
+    diagnosis = saved["evidence_failures"]["a0"]
+    assert diagnosis["claim_ids"] == ["n1"] and diagnosis["codes"]
+    assert all(re.fullmatch(r"[a-z][a-z0-9_]*", code) for code in diagnosis["codes"])
+    if kind == "malformed":
+        assert "calculations" in diagnosis["paths"] and "list_type" in diagnosis["codes"]
+
+
+@pytest.mark.asyncio
+async def test_transport_exhaustion_of_an_evidence_scope_stays_unavailable():
+    harness = Harness({"a0": ["timeout", "timeout"]})
+    (failures, response, _), snapshots = await run(harness)
+    assert response.error == preflight._UNAVAILABLE and failures == [preflight._UNAVAILABLE]
+    assert "validated_repair_targets" not in response.effective_parameters
+    assert snapshots[-1]["evidence_failures"] == {}
 
 
 @pytest.mark.asyncio
@@ -225,7 +253,9 @@ async def test_known_negative_is_terminal_and_cached_without_favorable_retry(neg
 async def test_one_shared_correction_is_atomic_for_six_concurrent_activity_failures(isolate):
     harness = Harness({"a0": ["bad_math", "good"], "a1": ["bad_math", "good"]})
     (failures, response, _), snapshots = await run(harness, package(6))
-    assert failures and response.error
+    # The owner left without the shared correction becomes a scoped defect.
+    assert failures and not response.error
+    assert len(response.effective_parameters["validated_repair_targets"]) == 1
     assert len(harness.requests) == 8 and harness.max_active == 2
     assert sum(harness.counts[key] == 2 for key in ("a0", "a1")) == 1
     assert isolate.await_count == 8
@@ -239,7 +269,8 @@ async def test_one_shared_correction_is_atomic_for_six_concurrent_activity_failu
 async def test_semantic_retry_consumes_same_correction_as_numerical_scopes():
     harness = Harness({"a0": ["bad_math"]}, semantic=["timeout", "good"])
     (failures, response, _), snapshots = await run(harness)
-    assert failures and response.error
+    assert failures and not response.error
+    assert response.effective_parameters["validated_repair_targets"] == ["practice.a0"]
     assert harness.counts == {"semantic": 2, "a0": 1, "a1": 1}
     assert snapshots[-1]["correction_used"]
 
@@ -519,3 +550,27 @@ def test_semantic_diagnostic_remains_bounded():
     from pydantic import ValidationError
     with pytest.raises(ValidationError):
         preflight.SemanticIssue(target="package", description="x" * 2001)
+
+
+def restated_inputs_package():
+    """a0 only restates its declared inputs; a1 also states a computed result."""
+    value = package()
+    raw = value.model_dump(mode="json")
+    first = raw["workbook"]["activities"][0]
+    first["worked_solution"] = ("Receipts were 120 and revenue was 100 in the supplied case. "
+                                "Explain why this comparison is supported by the supplied case facts.")
+    return LessonPackage.model_validate(raw)
+
+
+@pytest.mark.asyncio
+async def test_literal_input_spans_are_bound_in_code_without_an_evidence_call(isolate):
+    harness = Harness()
+    (failures, response, _), snapshots = await run(harness, restated_inputs_package())
+    assert not failures and not response.error and response.data["acceptable"]
+    # a0's spans are all declared inputs: no model evidence request for it.
+    assert harness.counts == {"semantic": 1, "a1": 1}
+    a0 = snapshots[-1]["scopes"]["a0"]["evidence"]
+    assert a0["literal_facts"] and {fact["case_id"] for fact in a0["literal_facts"]} == {"practice.a0"}
+    # a1 still asks the reviewer, and only about its computed span.
+    a1_body = json.loads(next(request for owner, request in harness.requests if owner == "a1")["user_prompt"])
+    assert all("practice.a1" == owner for owner in a1_body["numeric_span_owners"].values())

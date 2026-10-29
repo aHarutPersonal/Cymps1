@@ -81,19 +81,21 @@ def test_plan_contract_rejects_thin_week_below_declared_capacity() -> None:
 
 
 def test_plan_request_requires_an_honest_minimum_weekly_capacity() -> None:
+    # Weeks under three hours are planned as one short mission (Task A4), so
+    # one hour is the floor; zero hours is still rejected.
     with pytest.raises(ValidationError):
         PlanGenerateRequest(
             idolId="idol-1",
             targetAge=30,
-            weeklyHours=2,
+            weeklyHours=0,
         )
 
     request = PlanGenerateRequest(
         idolId="idol-1",
         targetAge=30,
-        weeklyHours=3,
+        weeklyHours=2,
     )
-    assert request.weeklyHours == 3
+    assert request.weeklyHours == 2
 
 
 def test_backbone_contract_rejects_thin_week_below_declared_capacity() -> None:

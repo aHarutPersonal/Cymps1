@@ -17,6 +17,7 @@ from app.models.suggest_job import IdolSuggestJob
 from app.models.idol_profile import IdolProfile
 from app.models.idol_timeline import IdolTimelineEvent
 from app.models.plan import Plan, PlanItem
+from app.services.planning.capacity import effective_weekly_minutes, format_hours
 from app.models.user import User
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -97,7 +98,7 @@ THINKING_NARRATIVES = {
         "Selecting resources and practice loops tied to the idol's real domain.",
     ],
     "balancing_workload": [
-        "Fitting these goals into your {weekly_hours}h weekly schedule...",
+        "Fitting these goals into your {weekly_capacity} weekly schedule...",
         "Making sure the plan is realistic but challenging...",
         "Prioritizing foundational steps for the early weeks...",
     ],
@@ -232,6 +233,7 @@ def get_thinking_stream(
     duration_weeks: int | None = None,
     interests: str | None = None,
     task_title: str | None = None,
+    weekly_minutes: int | None = None,
 ) -> dict:
     """
     Generate a stream of thinking text for typewriter effect.
@@ -295,12 +297,14 @@ def get_thinking_stream(
     # Get the lines to display
     lines_to_show = narratives[:num_lines]
 
-    # Format with idol name, domain, etc.
+    # Format with idol name, domain, etc. Capacity reads minutes ("4.5h").
+    capacity_minutes = weekly_minutes or round(float(weekly_hours or 10) * 60)
     formatted_lines = [
         line.format(
             idol_name=idol_name,
             domain_hint=domain_hint,
             weekly_hours=weekly_hours or 10,
+            weekly_capacity=f"{format_hours(capacity_minutes)}h",
             duration_weeks=duration_weeks or 12,
             interests=interests or "your interests",
             task_title=task_title or "this task",
@@ -466,6 +470,9 @@ async def get_job_status(
 
     # Contextual parameters
     weekly_hours = getattr(job, "weekly_hours", None)
+    weekly_minutes = (
+        effective_weekly_minutes(job) if isinstance(job, PlanGenerationJob) else None
+    )
     duration_weeks = getattr(job, "duration_weeks", None)
     interests = getattr(job, "interests", None)
     task_title = None
@@ -553,6 +560,7 @@ async def get_job_status(
             duration_weeks=duration_weeks,
             interests=interests,
             task_title=task_title,
+            weekly_minutes=weekly_minutes,
         )
         thinking_stream = ThinkingStream(
             currentLine=stream["currentLine"],

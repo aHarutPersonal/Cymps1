@@ -1,17 +1,306 @@
-// CMPYS "Your Record" — dual timeline of your wins vs your mentor's ledger at
-// the same ages, plus the log-a-win sheet, milestone claim sheet, and the AI
-// reassessment overlay. Ported from record.jsx / record-sheets.jsx.
+// CMPYS "Your record" (`v3/compare.jsx` RecordScreen): the learner's wins and
+// the mentor's documented milestones side by side, by age. "Log a win" (the
+// shared WinSheet in record mode), the dimension filter, the on-device
+// reassess, the entry sheet and the milestone claim sheet.
+
+import 'dart:async';
+import 'dart:math' as math;
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:phosphor_flutter/phosphor_flutter.dart';
 
 import '../../../app/design_tokens.dart';
+import '../../../core/network/api_error.dart';
 import '../../../core/ui/app_shell.dart';
-import '../../../core/ui/cmpys/cmpys_primitives.dart';
+import '../../../core/ui/motion/motion_config.dart';
+import '../../../core/ui/narration_dock_page.dart';
+import '../../../core/ui/v3/v3.dart';
+import '../../plan/data/plan_repository.dart';
+import '../../session/data/session_repository.dart';
+import '../../session/models/session_models.dart';
 import '../data/cmpys_record_data.dart';
 import '../data/cmpys_seed.dart';
+import '../data/reported_win.dart';
 import '../state/cmpys_store.dart';
+import 'onboarding/mentor_image.dart';
+
+export '../data/reported_win.dart' show recordDimForCategory;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Timeline data
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The filter value that shows every entry ("All").
+const recordAllFilter = 'all';
+
+/// One card on the dual timeline: a win of yours (left) or one of the
+/// mentor's milestones (right).
+@immutable
+class RecordEntry {
+  const RecordEntry({
+    required this.id,
+    required this.mine,
+    required this.title,
+    this.age,
+    this.dim,
+    this.source = '',
+    this.note = '',
+    this.idolNote,
+    this.local = false,
+    this.serverId,
+    this.milestoneId,
+    this.claimed = false,
+  });
+
+  final String id;
+
+  /// Yours (a record win) or the mentor's.
+  final bool mine;
+  final String title;
+
+  /// Null for an entry with no known age, shown under "Undated".
+  final int? age;
+
+  /// The v3 dimension id ([recordDimId]); null for the mentor's events,
+  /// which carry no dimension.
+  final String? dim;
+
+  /// The win's source as the store records it (empty for the mentor).
+  final String source;
+  final String note;
+  final String? idolNote;
+
+  /// A local entry can be deleted here ([recordWinIsLocal]).
+  final bool local;
+
+  /// The server achievement id of a synced win: deleting the entry deletes
+  /// that achievement first.
+  final String? serverId;
+
+  /// "Delete entry" shows: a local entry, or a synced win whose server copy
+  /// can be deleted too (older synced wins have no [serverId]).
+  bool get deletable => mine && (local || serverId != null);
+
+  /// The comparison milestone id when this is a claimable mentor milestone.
+  final String? milestoneId;
+  final bool claimed;
+
+  bool get claimable => milestoneId != null && !claimed;
+}
+
+const _stopwords = {
+  'a',
+  'an',
+  'and',
+  'as',
+  'at',
+  'be',
+  'been',
+  'but',
+  'by',
+  'for',
+  'from',
+  'had',
+  'has',
+  'have',
+  'he',
+  'her',
+  'hers',
+  'him',
+  'his',
+  'in',
+  'into',
+  'is',
+  'it',
+  'its',
+  'of',
+  'on',
+  'or',
+  'she',
+  'that',
+  'the',
+  'their',
+  'them',
+  'they',
+  'this',
+  'to',
+  'was',
+  'were',
+  'which',
+  'who',
+  'with',
+};
+
+String _stem(String w) {
+  if (w.length > 5 && w.endsWith('ing')) return w.substring(0, w.length - 3);
+  if (w.length > 4 && w.endsWith('ed')) return w.substring(0, w.length - 2);
+  if (w.length > 3 && w.endsWith('s') && !w.endsWith('ss')) {
+    return w.substring(0, w.length - 1);
+  }
+  return w;
+}
+
+/// The normalised tokens of an event's text: lower case, split on anything
+/// but letters and digits, stopwords and one-letter tokens dropped, and a
+/// naive stem (`-ing`, `-ed`, `-s`).
+Set<String> recordTokens(String text) => {
+  for (final w
+      in text
+          .toLowerCase()
+          .replaceAll(RegExp('[’\']s\\b'), '')
+          .split(RegExp(r'[^\p{L}\p{N}]+', unicode: true)))
+    if (w.length > 1 && !_stopwords.contains(w)) _stem(w),
+};
+
+/// Whether a comparison milestone and a mentor timeline event describe the
+/// same thing: the same known age, and a token Jaccard similarity of at
+/// least 0.5 ([recordTokens]).
+bool recordSameEvent(String a, int? ageA, String b, int? ageB) {
+  if (ageA == null || ageB == null || ageA != ageB) return false;
+  final x = recordTokens(a);
+  final y = recordTokens(b);
+  if (x.isEmpty || y.isEmpty) return false;
+  return x.intersection(y).length / x.union(y).length >= 0.5;
+}
+
+/// The Record's entries for [filter] (a v3 dimension id, or
+/// [recordAllFilter]), sorted by age with the undated ones last, and your
+/// entries before the mentor's at each age.
+///
+/// - Your side is every record win. A win stored at age 0 has no age and
+///   goes under "Undated"; it is never placed at age 0 or moved to the
+///   current age.
+/// - The mentor's side:
+///   - the session's comparison milestones ([CmpysState.liveMilestones]) at
+///     their `hit_by_age`, which can be claimed. They are on the device, so
+///     they always show, even while the documented events load.
+///   - the documented events, unless [eventsLoading]: [mentorTimeline], the
+///     catalog's events (up to your age), each under the dimension of its
+///     category ([recordDimForCategory]); when it is empty (none, failed,
+///     timed out, or a mentor outside the catalog), the seeded ledger
+///     [cmpysIdolLedgers] instead, with no dimension.
+///   - A milestone that matches an event ([recordSameEvent]) always stays
+///     and the event is dropped; the milestone takes the event's dimension.
+List<RecordEntry> recordTimeline(
+  CmpysState st, {
+  String filter = recordAllFilter,
+  List<IdolTimelineEntry> mentorTimeline = const [],
+  bool eventsLoading = false,
+}) {
+  final userAge = st.user.age;
+  bool upToYou(int age) => userAge <= 0 || age <= userAge;
+  final idol = st.idol;
+
+  // The mentor's documented events: the catalog's, else the seeded ledger.
+  final catalog = [
+    for (final (i, e) in mentorTimeline.indexed)
+      if (upToYou(e.age))
+        (
+          id: 'timeline-${e.id ?? i}',
+          age: e.age > 0 ? e.age : null,
+          text: e.text,
+          dim: recordDimForCategory(e.category),
+        ),
+  ];
+  final ledger = [
+    for (final (i, e)
+        in (cmpysIdolLedgers[idol.id] ?? const <LedgerEntry>[]).indexed)
+      if (upToYou(e.age))
+        (
+          id: 'ledger-${idol.id}-$i',
+          age: e.age > 0 ? e.age : null,
+          text: e.text,
+          dim: null as String?,
+        ),
+  ];
+  final events = mentorTimeline.isNotEmpty ? catalog : ledger;
+  // Only the documented events wait for the fetch.
+  if (eventsLoading) events.clear();
+  final milestones = st.liveMilestones();
+  final dropped = <int>{};
+  final milestoneDim = <String, String?>{};
+  for (final m in milestones) {
+    for (final (i, e) in events.indexed) {
+      if (dropped.contains(i)) continue;
+      if (recordSameEvent(m.label, m.age, e.text, e.age)) {
+        dropped.add(i);
+        milestoneDim[m.id] = e.dim;
+        break;
+      }
+    }
+  }
+
+  final all = <RecordEntry>[
+    for (final w in st.achievements)
+      RecordEntry(
+        id: w.id,
+        mine: true,
+        title: w.source == 'milestone' ? 'Claimed: ${w.title}' : w.title,
+        age: w.age > 0 ? w.age : null,
+        dim: recordDimId(w.dim),
+        source: w.source,
+        note: w.note,
+        idolNote: w.idolNote,
+        local: recordWinIsLocal(w),
+        serverId: w.synced ? w.serverId : null,
+      ),
+    for (final (i, e) in events.indexed)
+      if (!dropped.contains(i))
+        RecordEntry(
+          id: e.id,
+          mine: false,
+          title: e.text,
+          age: e.age,
+          dim: e.dim,
+        ),
+    for (final m in milestones)
+      RecordEntry(
+        id: 'milestone-${m.id}',
+        mine: false,
+        title: m.label,
+        age: m.age,
+        dim: milestoneDim[m.id],
+        milestoneId: m.id,
+        claimed: st.milestones[m.id] == true,
+      ),
+  ];
+  final shown = [
+    for (final (i, e) in all.indexed)
+      if (filter == recordAllFilter || e.dim == filter) (i, e),
+  ];
+  const undated = 1 << 30;
+  shown.sort((a, b) {
+    final byAge = (a.$2.age ?? undated).compareTo(b.$2.age ?? undated);
+    if (byAge != 0) return byAge;
+    if (a.$2.mine != b.$2.mine) return a.$2.mine ? -1 : 1;
+    return a.$1.compareTo(b.$1);
+  });
+  return [for (final (_, e) in shown) e];
+}
+
+/// The entry sheet's source line, verbatim from the design.
+String recordSourceCopy(RecordEntry e) {
+  if (!e.mine) return 'Source: documented biography';
+  if (e.source == 'auto') return 'Recorded from plan completion';
+  // A synced or restored win lives on the account, not only this device.
+  if (e.serverId != null) return 'Saved to your record';
+  return 'Saved on this device · not verified';
+}
+
+/// What a screen reader hears for a timeline card: its side, its age, the
+/// title, then its dimension and "Claimed." when they apply.
+String recordEntryLabel(RecordEntry e, String mentorShort) {
+  final owner = e.mine ? 'Your win' : '$mentorShort’s milestone';
+  final when = e.age == null ? 'undated' : 'age ${e.age}';
+  final title = e.title.trim();
+  final parts = [
+    '$owner, $when: ${RegExp(r'[.!?…]$').hasMatch(title) ? title : '$title.'}',
+    if (e.dim != null) '${winDimOf(e.dim!).label}.',
+    if (e.claimed) 'Claimed.',
+  ];
+  return parts.join(' ');
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Record screen
@@ -20,106 +309,78 @@ import '../state/cmpys_store.dart';
 class CmpysRecordScreen extends ConsumerStatefulWidget {
   const CmpysRecordScreen({super.key});
 
+  /// The "n new entries waiting" banner.
+  static const bannerKey = ValueKey('record-reassess-banner');
+
   @override
   ConsumerState<CmpysRecordScreen> createState() => _CmpysRecordScreenState();
 }
 
+enum _EntryAction { claim, delete }
+
 class _CmpysRecordScreenState extends ConsumerState<CmpysRecordScreen> {
-  String _filter = 'all';
+  String _filter = recordAllFilter;
 
   @override
   Widget build(BuildContext context) {
     final st = ref.watch(cmpysStoreProvider);
     final idol = st.idol;
-    final userAge = st.user.age;
+    // The placeholder mentor (no mentor picked yet) has no catalog timeline.
+    final timeline =
+        idol.id == cmpysPlaceholderIdol.id || idol.name.trim().isEmpty
+        ? null
+        : ref.watch(idolTimelineProvider(idol.name));
+    // Only the first load waits: a refresh (an invalidate from the Mentor
+    // screen's "Try again") keeps the current result until the new one lands.
+    final eventsLoading =
+        timeline != null && !timeline.hasValue && !timeline.hasError;
+    final entries = recordTimeline(
+      st,
+      filter: _filter,
+      // A failed or timed-out fetch falls back to the seeded ledger, like
+      // an empty one.
+      mentorTimeline: timeline?.valueOrNull ?? const [],
+      eventsLoading: eventsLoading,
+    );
     final pending = st.pendingWins().length;
 
-    final ledger = (cmpysIdolLedgers[idol.id] ?? const [])
-        .where((e) => e.age <= userAge)
-        .toList();
-    final wins = st.achievements
-        .where((w) => _filter == 'all' || w.dim == _filter)
-        .toList();
-
-    // Unique sorted ages across your wins + (when unfiltered) idol ledger.
-    final ageSet = <int>{
-      ...wins.map((w) => w.age),
-      if (_filter == 'all') ...ledger.map((e) => e.age),
-    };
-    final ages = ageSet.toList()..sort();
-
-    final teaser = _filter == 'all'
-        ? ledger.where((e) => e.age == userAge + 1).toList()
-        : <LedgerEntry>[];
-
-    return Scaffold(
-      backgroundColor: AppColors.paper,
-      floatingActionButton: _logWinFab(),
-      body: SafeArea(
-        bottom: false,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+    return NarrationDockPage(
+      child: Scaffold(
+        backgroundColor: AppColors.paper,
+        body: Column(
           children: [
-            // header
-            Padding(
-              padding: const EdgeInsets.fromLTRB(10, 8, 16, 4),
-              child: Row(
-                children: [
-                  _circleBack(),
-                  const Spacer(),
-                  if (pending > 0)
-                    CmpysPressable(
-                      onTap: _openReassess,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 13, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: AppColors.blkInk,
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(PhosphorIconsRegular.arrowClockwise,
-                                size: 14, color: Colors.white),
-                            const SizedBox(width: 6),
-                            Text('Reassess',
-                                style: AppTypography.captionMedium.copyWith(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: 12.5)),
-                          ],
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(22, 0, 22, 12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  CmpysKicker('You & ${idol.short}, age for age'),
-                  const SizedBox(height: 4),
-                  Text('Your record',
-                      style: AppTypography.h1.copyWith(
-                          fontSize: 30, letterSpacing: -0.4, height: 1.3)),
-                ],
+            V3TopBar(
+              onBack: () => Navigator.of(context).maybePop(),
+              right: V3Button(
+                kind: V3ButtonKind.dark,
+                size: V3Size.sm,
+                icon: V3Icons.plus,
+                onPressed: _logWin,
+                child: const Text('Log a win'),
               ),
             ),
             Expanded(
               child: ListView(
-                padding: EdgeInsets.fromLTRB(
-                    22, 0, 22, AppShell.bottomNavClearance(context, extra: 12)),
+                padding: EdgeInsets.only(
+                  bottom: AppShell.bottomNavClearance(context, extra: 12),
+                ),
                 children: [
-                  if (pending > 0) _pendingBanner(idol, pending),
-                  _filterChips(),
-                  const SizedBox(height: 16),
-                  if (ages.isEmpty)
-                    _emptyState()
+                  _heading(),
+                  _chips(),
+                  _legend(st.idol),
+                  if (pending > 0) _banner(pending),
+                  // While the documented events load, an empty record shows
+                  // the loading row rather than "Nothing here yet".
+                  if (entries.isEmpty && !eventsLoading)
+                    _empty()
                   else
-                    _timeline(ages, wins, ledger, userAge, idol, teaser),
+                    _RecordTimeline(
+                      entries: entries,
+                      userAge: st.user.age,
+                      mentorShort: idol.short,
+                      eventsLoading: eventsLoading,
+                      onOpen: _openEntry,
+                    ),
                 ],
               ),
             ),
@@ -129,1038 +390,793 @@ class _CmpysRecordScreenState extends ConsumerState<CmpysRecordScreen> {
     );
   }
 
-  Widget _circleBack() => Material(
-        color: Colors.transparent,
-        child: CmpysPressable(
-          semanticLabel: 'Back',
-          onTap: () => Navigator.of(context).maybePop(),
-          child: Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: AppColors.card,
-              shape: BoxShape.circle,
-              border: Border.all(color: AppColors.hair),
-            ),
-            child: const Icon(Icons.chevron_left_rounded,
-                size: 22, color: AppColors.ink),
-          ),
-        ),
-      );
-
-  Widget _logWinFab() {
+  Widget _heading() {
     return Padding(
-      padding: EdgeInsets.only(bottom: AppShell.isWithinShell(context)
-          ? AppShell.bottomNavClearance(context) : 12),
-      child: CmpysPressable(
-        onTap: _openAddWin,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-          decoration: BoxDecoration(
-            color: AppColors.blkInk,
-            borderRadius: BorderRadius.circular(999),
-            boxShadow: const [
-              BoxShadow(
-                  color: Color(0x47000000), blurRadius: 24, offset: Offset(0, 10)),
-            ],
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.add_rounded, size: 20, color: Colors.white),
-              const SizedBox(width: 6),
-              Flexible(child: Text('Log a win',
-                  textAlign: TextAlign.center,
-                  style: AppTypography.button.copyWith(fontSize: 15))),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _pendingBanner(CmpysIdol idol, int pending) {
-    return CmpysPressable(
-      onTap: _openReassess,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 14),
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-        decoration: BoxDecoration(
-          color: AppColors.ochreSoft,
-          borderRadius: AppRadii.card,
-        ),
-        child: Row(
-          children: [
-            const Icon(PhosphorIconsFill.sparkle,
-                size: 20, color: AppColors.ochre2),
-            const SizedBox(width: 11),
-            Expanded(
-              child: Text(
-                '$pending new ${pending == 1 ? "entry" : "entries"} since ${idol.short}’s last assessment. Ask ${idol.short} to re-score your side.',
-                style: AppTypography.captionMedium
-                    .copyWith(color: AppColors.ochre2, fontSize: 13, height: 1.4),
-              ),
-            ),
-            const SizedBox(width: 6),
-            const Icon(Icons.chevron_right_rounded,
-                size: 18, color: AppColors.ochre2),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _filterChips() {
-    return SizedBox(
-      height: MediaQuery.textScalerOf(context).scale(14) * 1.5 + 22,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        children: [
-          _chip('All', _filter == 'all', AppColors.green, AppColors.greenSoft,
-              () => setState(() => _filter = 'all')),
-          for (final d in cmpysDims) ...[
-            const SizedBox(width: 8),
-            _chip(d.label, _filter == d.id, d.deep, d.tint,
-                () => setState(() => _filter = d.id)),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _chip(String label, bool active, Color color, Color tint,
-      VoidCallback onTap) {
-    return CmpysPressable(
-      selected: active,
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 9),
-        decoration: BoxDecoration(
-          color: active ? tint : Colors.transparent,
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(
-              color: active ? color : AppColors.hair2, width: 1.5),
-        ),
-        child: Text(label,
-            style: AppTypography.bodyMedium.copyWith(
-                color: active ? color : AppColors.ink2,
-                fontSize: 14,
-                fontWeight: FontWeight.w500)),
-      ),
-    );
-  }
-
-  Widget _emptyState() {
-    return CmpysCardSurface(
-      pad: const EdgeInsets.all(22),
-      child: Column(
-        children: [
-          const Icon(PhosphorIconsRegular.sparkle,
-              size: 26, color: AppColors.ink3),
-          const SizedBox(height: 12),
-          Text('Nothing here yet',
-              style: AppTypography.display.copyWith(fontSize: 19, height: 1.2)),
-          const SizedBox(height: 6),
-          Text(
-            'Log a win in this area and it becomes part of your side of the comparison.',
-            textAlign: TextAlign.center,
-            style: AppTypography.bodyDim.copyWith(fontSize: 14),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _timeline(List<int> ages, List<CmpysWin> wins, List<LedgerEntry> ledger,
-      int userAge, CmpysIdol idol, List<LedgerEntry> teaser) {
-    return Padding(
-      padding: const EdgeInsets.only(left: 30, top: 4),
-      child: Stack(
-        children: [
-          // spine
-          Positioned(
-            left: -21,
-            top: 6,
-            bottom: 6,
-            child: Container(width: 2, color: AppColors.hair2),
-          ),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              for (final age in ages)
-                _ageGroup(age, wins, ledger, userAge, idol),
-              if (teaser.isNotEmpty) _teaser(teaser, userAge, idol),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _ageGroup(int age, List<CmpysWin> wins, List<LedgerEntry> ledger,
-      int userAge, CmpysIdol idol) {
-    final mine = wins.where((w) => w.age == age).toList();
-    final his = _filter == 'all'
-        ? ledger.where((e) => e.age == age).toList()
-        : <LedgerEntry>[];
-    final isNow = age == userAge;
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 18),
+      padding: const EdgeInsets.symmetric(horizontal: 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // node + age label
-          Stack(
-            clipBehavior: Clip.none,
-            children: [
-              Positioned(
-                left: -28,
-                top: 2,
-                child: Container(
-                  width: 20,
-                  height: 20,
-                  decoration: BoxDecoration(
-                    color: isNow ? AppColors.blkInk : AppColors.card,
-                    shape: BoxShape.circle,
-                    border: isNow
-                        ? null
-                        : Border.all(color: AppColors.hair2, width: 2),
-                  ),
-                  alignment: Alignment.center,
-                  child: isNow
-                      ? Container(
-                          width: 7,
-                          height: 7,
-                          decoration: const BoxDecoration(
-                              color: Colors.white, shape: BoxShape.circle),
-                        )
-                      : null,
-                ),
-              ),
-              Row(
+          V3Rise(child: Text('YOUR RECORD', style: AppTypography.kick)),
+          const SizedBox(height: 8),
+          V3Rise(
+            delay: const Duration(milliseconds: 50),
+            child: Text.rich(
+              TextSpan(
                 children: [
-                  Text('Age $age',
-                      style: AppTypography.display
-                          .copyWith(fontSize: 17, height: 1, letterSpacing: -0.2)),
-                  if (isNow) ...[
-                    const SizedBox(width: 8),
-                    Text('NOW',
-                        style: AppTypography.kicker
-                            .copyWith(color: AppColors.ink3, fontSize: 10)),
-                  ],
+                  const TextSpan(text: 'Wins and milestones,\n'),
+                  TextSpan(
+                    text: 'by age.',
+                    style: AppTypography.displayItalic(40),
+                  ),
                 ],
               ),
-            ],
+              style: AppTypography.display(40).copyWith(color: AppColors.ink),
+            ),
           ),
-          const SizedBox(height: 10),
-          for (final w in mine) ...[
-            _WinCard(win: w),
-            const SizedBox(height: 9),
-          ],
-          for (final e in his) ...[
-            _idolRow('${idol.short} at $age: ${e.text}'),
-            const SizedBox(height: 9),
-          ],
         ],
       ),
     );
   }
 
-  Widget _teaser(List<LedgerEntry> teaser, int userAge, CmpysIdol idol) {
-    return Opacity(
-      opacity: 0.55,
-      child: Padding(
-        padding: const EdgeInsets.only(bottom: 12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+  Widget _chips() {
+    return V3Rise(
+      delay: const Duration(milliseconds: 100),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+        child: Row(
           children: [
-            Stack(
-              clipBehavior: Clip.none,
-              children: [
+            V3Chip(
+              on: _filter == recordAllFilter,
+              onPressed: () => setState(() => _filter = recordAllFilter),
+              child: const Text('All'),
+            ),
+            for (final d in winDims) ...[
+              const SizedBox(width: 6),
+              V3Chip(
+                on: _filter == d.id,
+                onPressed: () => setState(() => _filter = d.id),
+                child: Text(d.label),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _legend(CmpysIdol idol) {
+    Widget key(Color color, String label) => Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(3),
+          ),
+        ),
+        const SizedBox(width: 6),
+        Flexible(
+          child: Text(
+            label,
+            style: AppTypography.sans(
+              12,
+              FontWeight.w600,
+            ).copyWith(color: AppColors.ink2),
+          ),
+        ),
+      ],
+    );
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 0),
+      child: Wrap(
+        spacing: 14,
+        runSpacing: 6,
+        children: [
+          key(AppColors.ember, 'You'),
+          key(AppColors.iris, idol.short),
+        ],
+      ),
+    );
+  }
+
+  Widget _banner(int pending) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+      child: V3Pressable(
+        key: CmpysRecordScreen.bannerKey,
+        onTap: _reassess,
+        focusRadius: AppRadii.brR,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: const BoxDecoration(
+            color: AppColors.goldSoft,
+            borderRadius: AppRadii.brR,
+          ),
+          child: Row(
+            children: [
+              const V3Icon(V3Icons.refresh, size: 17, color: AppColors.gold2),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  '$pending new ${pending == 1 ? 'entry' : 'entries'} '
+                  'waiting. Reassess on this device',
+                  style: AppTypography.sans(
+                    13.5,
+                    FontWeight.w600,
+                  ).copyWith(color: AppColors.gold2),
+                ),
+              ),
+              const SizedBox(width: 10),
+              const V3Icon(V3Icons.right, size: 15, color: AppColors.gold2),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _empty() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 0),
+      child: Container(
+        padding: const EdgeInsets.all(22),
+        decoration: v3Card(),
+        child: Column(
+          children: [
+            const V3Icon(V3Icons.trophy, size: 24, color: AppColors.ink3),
+            const SizedBox(height: 10),
+            Text(
+              'Nothing here yet',
+              textAlign: TextAlign.center,
+              style: AppTypography.display(24).copyWith(color: AppColors.ink),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Log a win and it shows here, by age.',
+              textAlign: TextAlign.center,
+              style: AppTypography.sans(14).copyWith(color: AppColors.ink2),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── actions ──
+
+  Future<void> _logWin() async {
+    final st = ref.read(cmpysStoreProvider);
+    final idol = st.idol;
+    final win = await showWinSheet(
+      context,
+      mode: WinSheetMode.record,
+      mentorShort: idol.short,
+      mentorImage: cmpysIdolImage(idol),
+      mentorInitials: idol.initials,
+      mentorTint: idol.tint,
+      age: st.user.age,
+      onSave: (w) async {
+        await saveReportedWin(ref, w, source: 'manual');
+      },
+    );
+    if (win == null || !mounted) return;
+    showV3Toast(context, 'Added to your record', icon: V3Icons.trophy);
+  }
+
+  Future<void> _openEntry(RecordEntry entry) async {
+    final idol = ref.read(cmpysStoreProvider).idol;
+    final action = await showV3Sheet<_EntryAction>(
+      context,
+      builder: (sheetContext) => _EntrySheet(entry: entry, idol: idol),
+    );
+    if (!mounted || action == null) return;
+    switch (action) {
+      case _EntryAction.claim:
+        await _openClaim(entry);
+      case _EntryAction.delete:
+        await _delete(entry);
+    }
+  }
+
+  /// Deletes a local entry, or a synced win's server achievement and then
+  /// the entry. A failed server delete keeps the entry, except a 404 (already
+  /// gone), which counts as deleted.
+  Future<void> _delete(RecordEntry entry) async {
+    if (!entry.deletable) return;
+    final store = ref.read(cmpysStoreProvider.notifier);
+    final serverId = entry.local ? null : entry.serverId;
+    if (serverId != null) {
+      try {
+        await ref.read(planRepositoryProvider).deleteAchievement(serverId);
+      } on ApiError catch (error) {
+        // 404: the server copy is already gone, so removing the entry is the
+        // outcome the learner asked for.
+        if (error.statusCode != 404) {
+          _showDeleteFailed();
+          return;
+        }
+      } catch (_) {
+        _showDeleteFailed();
+        return;
+      }
+    }
+    store.deleteWin(entry.id);
+    if (!mounted) return;
+    showV3Toast(context, 'Entry removed', icon: V3Icons.trash);
+  }
+
+  void _showDeleteFailed() {
+    if (!mounted) return;
+    showV3Toast(
+      context,
+      'Couldn’t delete this entry. Try again.',
+      icon: V3Icons.alert,
+      tone: V3ToastTone.warn,
+    );
+  }
+
+  Future<void> _openClaim(RecordEntry entry) async {
+    final id = entry.milestoneId;
+    if (id == null) return;
+    final claimed = await showV3Sheet<bool>(
+      context,
+      title: 'Claim milestone',
+      builder: (_) => ClaimSheet(
+        milestoneId: id,
+        label: entry.title,
+        age: entry.age,
+        dim: entry.dim,
+      ),
+    );
+    if (claimed != true || !mounted) return;
+    showV3Toast(context, 'Milestone claimed', icon: V3Icons.flag);
+  }
+
+  /// True while the reassess overlay is open, so a double tap on the
+  /// banner can't push a second one.
+  bool _reassessing = false;
+
+  Future<void> _reassess() async {
+    if (_reassessing) return;
+    _reassessing = true;
+    final motion = MotionConfig.enabled(context);
+    await Navigator.of(context, rootNavigator: true).push(
+      PageRouteBuilder<void>(
+        opaque: false,
+        barrierColor: null,
+        transitionDuration: motion
+            ? const Duration(milliseconds: 300)
+            : Duration.zero,
+        reverseTransitionDuration: motion
+            ? const Duration(milliseconds: 220)
+            : Duration.zero,
+        pageBuilder: (_, _, _) => const ReassessOverlay(),
+        transitionsBuilder: (_, animation, _, child) =>
+            FadeTransition(opacity: animation, child: child),
+      ),
+    );
+    _reassessing = false;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Dual timeline
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _RecordTimeline extends StatelessWidget {
+  const _RecordTimeline({
+    required this.entries,
+    required this.userAge,
+    required this.mentorShort,
+    required this.onOpen,
+    this.eventsLoading = false,
+  });
+
+  final List<RecordEntry> entries;
+  final int userAge;
+  final String mentorShort;
+  final ValueChanged<RecordEntry> onOpen;
+
+  /// The mentor's documented events are still loading: a skeleton card on
+  /// the mentor's side stands in for them.
+  final bool eventsLoading;
+
+  static const loadingKey = ValueKey('record-events-loading');
+
+  /// Below this width, or at this text scale and above, the two columns
+  /// would leave cards too narrow: the timeline becomes a single column.
+  static const singleColumnWidth = 360.0;
+  static const singleColumnTextScale = 1.5;
+
+  static Duration _rise(int ms) => Duration(milliseconds: math.min(ms, 700));
+
+  @override
+  Widget build(BuildContext context) {
+    final largeText =
+        MediaQuery.textScalerOf(context).scale(1) >= singleColumnTextScale;
+    // Entries arrive sorted, so the groups keep age order, undated last.
+    final groups = <int?, List<RecordEntry>>{};
+    for (final e in entries) {
+      (groups[e.age] ??= []).add(e);
+    }
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 0),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final width = constraints.maxWidth;
+          // The screen width less the 20 pt gutters, from the layout itself.
+          final single = largeText || width + 40 < singleColumnWidth;
+          final cardWidth = math.max(0.0, width / 2 - 14);
+          return Stack(
+            children: [
+              if (!single)
                 Positioned(
-                  left: -28,
-                  top: 2,
-                  child: Container(
-                    width: 20,
-                    height: 20,
-                    decoration: BoxDecoration(
-                      color: AppColors.paper,
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                          color: AppColors.hair2,
-                          width: 2,
-                          style: BorderStyle.solid),
+                  top: 0,
+                  bottom: 0,
+                  left: width / 2 - 1,
+                  width: 2,
+                  child: const ColoredBox(color: AppColors.hair),
+                ),
+              Column(
+                children: [
+                  for (final (ai, group) in groups.entries.indexed)
+                    Semantics(
+                      key: ValueKey('record-group-${group.key ?? 'undated'}'),
+                      container: true,
+                      explicitChildNodes: true,
+                      child: Padding(
+                        padding: const EdgeInsets.only(bottom: 14),
+                        child: Column(
+                          children: [
+                            V3Rise(
+                              delay: _rise(ai * 70),
+                              child: Center(child: _agePill(group.key)),
+                            ),
+                            const SizedBox(height: 10),
+                            for (final (k, e) in group.value.indexed)
+                              Padding(
+                                key: ValueKey('record-row-${e.id}'),
+                                // One column: each side keeps a 24 pt
+                                // offset, yours from the right and the
+                                // mentor's from the left.
+                                padding: EdgeInsets.only(
+                                  bottom: 8,
+                                  left: single && !e.mine ? 24 : 0,
+                                  right: single && e.mine ? 24 : 0,
+                                ),
+                                child: V3Rise(
+                                  delay: _rise(ai * 70 + k * 50 + 40),
+                                  child: Align(
+                                    alignment: e.mine
+                                        ? Alignment.centerLeft
+                                        : Alignment.centerRight,
+                                    child: SizedBox(
+                                      width: single
+                                          ? double.infinity
+                                          : cardWidth,
+                                      child: _EntryCard(
+                                        entry: e,
+                                        mentorShort: mentorShort,
+                                        showOwner: single,
+                                        onTap: () => onOpen(e),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
                     ),
+                  if (eventsLoading)
+                    Padding(
+                      padding: EdgeInsets.only(
+                        bottom: 14,
+                        left: single ? 24 : 0,
+                      ),
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: SizedBox(
+                          width: single ? double.infinity : cardWidth,
+                          child: _loadingCard(),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  /// A skeleton card on the mentor's side while the documented events load.
+  Widget _loadingCard() {
+    return Semantics(
+      key: loadingKey,
+      label: 'Loading',
+      child: ExcludeSemantics(
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(12, 14, 12, 12),
+          decoration: v3Card(radius: 18),
+          child: const Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              V3Skel(height: 12),
+              SizedBox(height: 8),
+              V3Skel(width: 72, height: 12),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _agePill(int? age) {
+    final now = age != null && userAge > 0 && age == userAge;
+    final label = age == null
+        ? 'Undated'
+        : now
+        ? 'Age $age, your age now'
+        : 'Age $age';
+    return Semantics(
+      header: true,
+      label: label,
+      child: ExcludeSemantics(
+        child: Container(
+          key: ValueKey('record-age-${age ?? 'undated'}'),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+          decoration: BoxDecoration(
+            color: now ? AppColors.ink : AppColors.paper2,
+            borderRadius: BorderRadius.circular(99),
+          ),
+          child: Text(
+            age == null ? 'Undated' : 'Age $age',
+            style: AppTypography.sans(12, FontWeight.w700)
+                .merge(AppTypography.tnum)
+                .copyWith(color: now ? Colors.white : AppColors.ink2),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _EntryCard extends StatelessWidget {
+  const _EntryCard({
+    required this.entry,
+    required this.mentorShort,
+    required this.onTap,
+    this.showOwner = false,
+  });
+
+  final RecordEntry entry;
+  final String mentorShort;
+  final VoidCallback onTap;
+
+  /// In the single-column layout the card names its side ("You" or the
+  /// mentor) above the title, since left and right no longer say it.
+  final bool showOwner;
+
+  static const _radius = BorderRadius.all(Radius.circular(18));
+
+  /// A tag never wraps: in a narrow card or at large text it scales down.
+  static Widget _fit(Widget tag) => FittedBox(
+    fit: BoxFit.scaleDown,
+    alignment: Alignment.centerLeft,
+    child: tag,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    final dim = entry.dim == null ? null : winDimOf(entry.dim!);
+    return V3Pressable(
+      key: ValueKey('record-entry-${entry.id}'),
+      onTap: onTap,
+      focusRadius: _radius,
+      semanticLabel: recordEntryLabel(entry, mentorShort),
+      child: ClipRRect(
+        borderRadius: _radius,
+        child: Stack(
+          children: [
+            const Positioned.fill(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: AppColors.card,
+                  borderRadius: _radius,
+                  border: Border.fromBorderSide(
+                    BorderSide(color: AppColors.hair),
                   ),
                 ),
-                Row(
-                  children: [
-                    Text('Age ${userAge + 1}',
-                        style: AppTypography.display
-                            .copyWith(fontSize: 17, height: 1, letterSpacing: -0.2)),
-                    const SizedBox(width: 8),
-                    Flexible(
-                      child: Text('WHERE ${idol.short.toUpperCase()} WENT NEXT',
-                          style: AppTypography.kicker
-                              .copyWith(color: AppColors.ink3, fontSize: 10),
-                          overflow: TextOverflow.ellipsis),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 14, 12, 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (showOwner) ...[
+                    Text(
+                      entry.mine ? 'You' : mentorShort,
+                      key: const ValueKey('record-entry-owner'),
+                      style: AppTypography.sans(11, FontWeight.w700).copyWith(
+                        color: entry.mine ? AppColors.ember2 : AppColors.iris2,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                  ],
+                  Text(
+                    entry.title,
+                    style: AppTypography.sans(
+                      13.5,
+                      FontWeight.w600,
+                    ).copyWith(color: AppColors.ink, height: 1.35),
+                  ),
+                  if (dim != null || entry.claimed) ...[
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 4,
+                      runSpacing: 4,
+                      children: [
+                        if (dim != null)
+                          _fit(
+                            V3Tag(
+                              height: 20,
+                              fontSize: 10.5,
+                              color: dim.deep,
+                              background: dim.tint,
+                              child: Text(dim.label),
+                            ),
+                          ),
+                        if (entry.claimed)
+                          _fit(
+                            const V3Tag(
+                              height: 20,
+                              fontSize: 10.5,
+                              color: AppColors.sage2,
+                              background: AppColors.sageSoft,
+                              child: Text('Claimed'),
+                            ),
+                          ),
+                      ],
                     ),
                   ],
+                ],
+              ),
+            ),
+            // The design's 3 px top border: ember for you, iris for the
+            // mentor, curved by the card's corners.
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              height: 3,
+              child: ColoredBox(
+                color: entry.mine ? AppColors.ember : AppColors.iris,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Entry sheet
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _EntrySheet extends StatelessWidget {
+  const _EntrySheet({required this.entry, required this.idol});
+
+  final RecordEntry entry;
+  final CmpysIdol idol;
+
+  @override
+  Widget build(BuildContext context) {
+    final e = entry;
+    final who = e.mine ? 'Your win' : '${idol.short}’s milestone';
+    final idolNote = e.idolNote?.trim() ?? '';
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // A long mentor name or large text scales the tag down rather than
+        // overflowing it (a tag never wraps).
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: V3Tag(
+            color: e.mine ? AppColors.ember2 : AppColors.iris2,
+            background: e.mine ? AppColors.emberSoft : AppColors.irisSoft,
+            child: Text(e.age == null ? who : '$who · Age ${e.age}'),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Text(
+          e.title,
+          style: AppTypography.sans(21, FontWeight.w600).copyWith(
+            color: AppColors.ink,
+            letterSpacing: -0.015 * 21,
+            height: 1.25,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          recordSourceCopy(e),
+          style: AppTypography.sans(13).copyWith(color: AppColors.ink3),
+        ),
+        if (e.note.trim().isNotEmpty) ...[
+          const SizedBox(height: 14),
+          Text(
+            e.note,
+            style: AppTypography.sans(
+              14.5,
+            ).copyWith(color: AppColors.ink, height: 1.5),
+          ),
+        ],
+        if (e.mine && idolNote.isNotEmpty) ...[
+          const SizedBox(height: 14),
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: AppColors.paper,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                V3Avatar(
+                  image: cmpysIdolImage(idol),
+                  initials: idol.initials,
+                  name: idol.name,
+                  tint: idol.tint,
+                  size: 30,
+                  gray: true,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    idolNote,
+                    style: AppTypography.read(
+                      14.5,
+                    ).copyWith(color: AppColors.ink, height: 1.5),
+                  ),
                 ),
               ],
             ),
-            const SizedBox(height: 10),
-            for (final e in teaser) ...[
-              _idolRow(e.text),
-              const SizedBox(height: 9),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _idolRow(String text) {
-    final idol = ref.read(cmpysStoreProvider).idol;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
-      decoration: BoxDecoration(
-        color: AppColors.greenSoft,
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          CmpysMentorAvatar(
-            slug: idol.slug,
-            initials: idol.initials,
-            color: idol.color,
-            tint: Colors.white,
-            size: 22,
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(text,
-                style: AppTypography.caption.copyWith(
-                    color: AppColors.green2,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    height: 1.4)),
           ),
         ],
-      ),
-    );
-  }
-
-  void _openAddWin() {
-    showCmpysSheet(
-      context,
-      title: 'Log a win',
-      child: AddWinSheet(presetDim: _filter == 'all' ? null : _filter),
-    );
-  }
-
-  void _openReassess() {
-    Navigator.of(context).push(PageRouteBuilder(
-      opaque: false,
-      barrierColor: Colors.transparent,
-      pageBuilder: (_, _, _) => const ReassessOverlay(),
-    ));
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// WinCard (expandable)
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _WinCard extends ConsumerStatefulWidget {
-  const _WinCard({required this.win});
-  final CmpysWin win;
-
-  @override
-  ConsumerState<_WinCard> createState() => _WinCardState();
-}
-
-class _WinCardState extends ConsumerState<_WinCard> {
-  bool _open = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final w = widget.win;
-    final d = dimOf(w.dim);
-    final src = cmpysSourceMeta[w.source] ?? cmpysSourceMeta['manual']!;
-    final impact = cmpysImpacts.firstWhere((i) => i.v == w.impact,
-        orElse: () => cmpysImpacts[0]);
-
-    return CmpysCardSurface(
-      pad: const EdgeInsets.all(15),
-      onTap: () => setState(() => _open = !_open),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // badges
-          Wrap(
-            spacing: 8,
-            runSpacing: 6,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-                decoration: BoxDecoration(
-                    color: d.tint, borderRadius: BorderRadius.circular(999)),
-                child: Text(d.label,
-                    style: AppTypography.bodyMedium.copyWith(
-                        color: d.deep,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700)),
-              ),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(src.icon, size: 12, color: AppColors.ink3),
-                  const SizedBox(width: 4),
-                  Text(src.label,
-                      style: AppTypography.caption
-                          .copyWith(color: AppColors.ink3, fontSize: 11.5)),
-                ],
-              ),
-              if (!w.assessed)
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
-                  decoration: BoxDecoration(
-                      color: AppColors.ochreSoft,
-                      borderRadius: BorderRadius.circular(999)),
-                  child: Text('Awaiting review',
-                      style: AppTypography.bodyMedium.copyWith(
-                          color: AppColors.ochre2,
-                          fontSize: 10.5,
-                          fontWeight: FontWeight.w700)),
-                ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(w.title,
-              style: AppTypography.h4.copyWith(fontSize: 15.5, height: 1.3)),
-          const SizedBox(height: 7),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              _impactBars(w.impact, d.color),
-              const SizedBox(width: 6),
-              Text(impact.label,
-                  style: AppTypography.caption
-                      .copyWith(color: AppColors.ink3, fontSize: 11.5)),
-            ],
-          ),
-          if (_open) ...[
-            const SizedBox(height: 12),
-            Text(w.note,
-                style: AppTypography.body
-                    .copyWith(color: AppColors.ink2, fontSize: 13.5)),
-            if (w.photo) ...[
-              const SizedBox(height: 10),
-              _evidencePlaceholder(),
-            ],
-            if (w.idolNote != null) ...[
-              const SizedBox(height: 10),
-              _idolNote(w.idolNote!),
-            ],
-            if (w.source == 'manual' || w.source == 'milestone' || w.source == 'chat') ...[
-              const SizedBox(height: 10),
-              CmpysPressable(
-                onTap: () {
-                  ref.read(cmpysStoreProvider.notifier).deleteWin(w.id);
-                  showCmpysToast(context, 'Entry removed',
-                      icon: Icons.close_rounded, tone: AppColors.ink3);
-                },
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.close_rounded, size: 13, color: AppColors.ink3),
-                    const SizedBox(width: 5),
-                    Text('Remove entry',
-                        style: AppTypography.caption
-                            .copyWith(color: AppColors.ink3, fontSize: 12.5)),
-                  ],
-                ),
-              ),
-            ],
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _impactBars(int impact, Color color) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: List.generate(3, (i) {
-        final n = i + 1;
-        return Container(
-          width: 5,
-          height: 5 + n * 2.5,
-          margin: EdgeInsets.only(right: i == 2 ? 0 : 3),
-          decoration: BoxDecoration(
-            color: n <= impact ? color : AppColors.hair2,
-            borderRadius: BorderRadius.circular(2),
-          ),
-        );
-      }),
-    );
-  }
-
-  Widget _evidencePlaceholder() {
-    return Container(
-      height: 84,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(12),
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFFEAE5D8), Color(0xFFE3DDCD)],
-        ),
-      ),
-      alignment: Alignment.center,
-      child: Text('EVIDENCE PHOTO',
-          style: AppTypography.kicker.copyWith(color: const Color(0xFF8E876F), fontSize: 10)),
-    );
-  }
-
-  Widget _idolNote(String note) {
-    final idol = ref.read(cmpysStoreProvider).idol;
-    return Container(
-      padding: const EdgeInsets.fromLTRB(13, 11, 13, 11),
-      decoration: BoxDecoration(
-        color: AppColors.paper,
-        borderRadius: BorderRadius.circular(13),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          CmpysMentorAvatar(
-            slug: idol.slug,
-            initials: idol.initials,
-            color: idol.color,
-            tint: idol.tint,
-            size: 24,
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text('"$note"',
-                style: AppTypography.readingQuote
-                    .copyWith(fontSize: 13.5, height: 1.4)),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Add-win sheet
-// ─────────────────────────────────────────────────────────────────────────────
-
-class AddWinSheet extends ConsumerStatefulWidget {
-  const AddWinSheet({super.key, this.presetDim});
-  final String? presetDim;
-
-  @override
-  ConsumerState<AddWinSheet> createState() => _AddWinSheetState();
-}
-
-class _AddWinSheetState extends ConsumerState<AddWinSheet> {
-  final _title = TextEditingController();
-  final _note = TextEditingController();
-  late String _dim;
-  late int _age;
-  int _impact = 2;
-  bool _photo = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _dim = widget.presetDim ?? 'knowledge';
-    _age = ref.read(cmpysStoreProvider).user.age;
-  }
-
-  @override
-  void dispose() {
-    _title.dispose();
-    _note.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final maxAge = ref.read(cmpysStoreProvider).user.age;
-    return SingleChildScrollView(
-      keyboardDismissBehavior:
-          ScrollViewKeyboardDismissBehavior.onDrag,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _label('What did you do?'),
-          _multiline(_title, 'Describe it in one line'),
+        if (e.claimable) ...[
           const SizedBox(height: 18),
-          _label('Life area'),
-          Wrap(
-            spacing: 9,
-            runSpacing: 9,
-            children: cmpysDims.map((d) {
-              final on = _dim == d.id;
-              return CmpysPressable(
-                selected: on,
-                onTap: () => setState(() => _dim = d.id),
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: on ? d.tint : AppColors.card,
-                    borderRadius: BorderRadius.circular(999),
-                    border: Border.all(
-                        color: on ? Colors.transparent : AppColors.hair2,
-                        width: 1.5),
-                  ),
-                  child: Text(d.label,
-                      style: AppTypography.bodyMedium.copyWith(
-                          color: on ? d.deep : AppColors.ink2,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700)),
-                ),
-              );
-            }).toList(),
-          ),
-          const SizedBox(height: 18),
-          _label('When'),
-          _agePicker(maxAge),
-          const SizedBox(height: 18),
-          _label('How big was it?'),
-          Row(
-            children: cmpysImpacts.map((im) {
-              final on = _impact == im.v;
-              return Expanded(
-                child: Padding(
-                  padding: EdgeInsets.only(right: im.v == 3 ? 0 : 8),
-                  child: CmpysPressable(
-                    selected: on,
-                    onTap: () => setState(() => _impact = im.v),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      decoration: BoxDecoration(
-                        color: on ? AppColors.greenSoft : AppColors.card,
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(
-                            color: on ? AppColors.green : AppColors.hair2,
-                            width: 1.5),
-                      ),
-                      child: Column(
-                        children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            crossAxisAlignment: CrossAxisAlignment.end,
-                            children: List.generate(3, (i) {
-                              final n = i + 1;
-                              return Container(
-                                width: 5,
-                                height: 5 + n * 2.5,
-                                margin: EdgeInsets.only(right: i == 2 ? 0 : 3),
-                                decoration: BoxDecoration(
-                                  color: n <= im.v
-                                      ? (on ? AppColors.green : AppColors.ink3)
-                                      : AppColors.hair2,
-                                  borderRadius: BorderRadius.circular(2),
-                                ),
-                              );
-                            }),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(im.label,
-                              textAlign: TextAlign.center,
-                              style: AppTypography.caption.copyWith(
-                                  color: on ? AppColors.green2 : AppColors.ink2,
-                                  fontSize: 11.5,
-                                  fontWeight: FontWeight.w600)),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              );
-            }).toList(),
-          ),
-          const SizedBox(height: 18),
-          _label('The story (optional)'),
-          _multiline(_note, 'What it took, why it matters…'),
-          const SizedBox(height: 14),
-          _EvidenceField(
-            on: _photo,
-            onToggle: (v) => setState(() => _photo = v),
-          ),
-          const SizedBox(height: 18),
-          CmpysButton(
-            variant: CmpysBtnVariant.primary,
-            size: CmpysBtnSize.lg,
+          V3Button(
+            kind: V3ButtonKind.dark,
+            icon: V3Icons.flag,
             full: true,
-            disabled: _title.text.trim().isEmpty,
-            onTap: _title.text.trim().isEmpty ? null : _save,
-            child: const Text('Add to your record'),
+            onPressed: () => Navigator.of(context).pop(_EntryAction.claim),
+            child: const Text('Claim a similar milestone'),
           ),
         ],
-      ),
-    );
-  }
-
-  void _save() {
-    ref.read(cmpysStoreProvider.notifier).addWin(
-          title: _title.text.trim(),
-          dim: _dim,
-          age: _age,
-          impact: _impact,
-          note: _note.text.trim(),
-          photo: _photo,
-          source: 'manual',
-        );
-    Navigator.of(context).pop();
-    showCmpysToast(context, 'Added to your record',
-        icon: Icons.check_rounded, tone: AppColors.green);
-  }
-
-  Widget _label(String s) => Padding(
-        padding: const EdgeInsets.only(bottom: 8),
-        child: CmpysKicker(s),
-      );
-
-  Widget _multiline(TextEditingController c, String hint) {
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.paper,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.hair2, width: 1.5),
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-      child: TextField(
-        controller: c,
-        keyboardType: TextInputType.multiline,
-        onTapOutside: (_) => FocusManager.instance.primaryFocus?.unfocus(),
-        minLines: 2,
-        maxLines: 4,
-        onChanged: (_) => setState(() {}),
-        style: AppTypography.body.copyWith(fontSize: 15),
-        cursorColor: AppColors.green,
-        decoration: InputDecoration(
-          hintText: hint,
-          hintStyle: AppTypography.body
-              .copyWith(color: AppColors.ink3, fontSize: 15),
-          border: InputBorder.none,
-          isDense: true,
-          filled: false,
-          contentPadding: const EdgeInsets.symmetric(vertical: 10),
-        ),
-      ),
-    );
-  }
-
-  Widget _agePicker(int maxAge) {
-    final isNow = _age >= maxAge;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-      decoration: BoxDecoration(
-        color: AppColors.paper,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.hair2, width: 1.5),
-      ),
-      child: Row(
-        children: [
-          _stepBtn('−', () => setState(() => _age = _age > 10 ? _age - 1 : 10)),
-          Expanded(
-            child: Center(
-              child: RichText(
-                text: TextSpan(children: [
-                  TextSpan(
-                    text: isNow ? 'Now' : '$_age',
-                    style: AppTypography.display
-                        .copyWith(fontSize: 24, height: 1, color: AppColors.ink),
+        if (e.deletable) ...[
+          const SizedBox(height: 10),
+          V3Button(
+            kind: V3ButtonKind.ghost,
+            full: true,
+            semanticLabel: 'Delete entry',
+            onPressed: () => Navigator.of(context).pop(_EntryAction.delete),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                V3Icon(V3Icons.trash, size: 18, color: AppColors.danger),
+                SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    'Delete entry',
+                    style: TextStyle(color: AppColors.danger),
                   ),
-                  if (!isNow)
-                    TextSpan(
-                      text: ' years old',
-                      style: AppTypography.caption.copyWith(
-                          color: AppColors.ink3, fontSize: 13),
-                    ),
-                ]),
-              ),
+                ),
+              ],
             ),
           ),
-          _stepBtn('+', () => setState(() => _age = _age < maxAge ? _age + 1 : maxAge)),
         ],
-      ),
-    );
-  }
-
-  Widget _stepBtn(String s, VoidCallback onTap) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(10),
-        child: Container(
-          width: 44,
-          height: 44,
-          decoration: BoxDecoration(
-              color: AppColors.paper2, borderRadius: BorderRadius.circular(10)),
-          alignment: Alignment.center,
-          child: Text(s,
-              style: AppTypography.h2
-                  .copyWith(fontSize: 20, fontWeight: FontWeight.w600)),
-        ),
-      ),
-    );
-  }
-}
-
-class _EvidenceField extends StatelessWidget {
-  const _EvidenceField({required this.on, required this.onToggle});
-  final bool on;
-  final ValueChanged<bool> onToggle;
-
-  @override
-  Widget build(BuildContext context) {
-    if (!on) {
-      return CmpysPressable(
-        onTap: () => onToggle(true),
-        child: Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(vertical: 13),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(
-                color: AppColors.hair2, width: 1.5, style: BorderStyle.solid),
-          ),
-          alignment: Alignment.center,
-          child: Text('+ Add a photo or proof (optional)',
-              style:
-                  AppTypography.caption.copyWith(color: AppColors.ink3, fontSize: 13.5)),
-        ),
-      );
-    }
-    return Stack(
-      children: [
-        Container(
-          height: 92,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(14),
-            gradient: const LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [Color(0xFFEAE5D8), Color(0xFFE3DDCD)],
-            ),
-          ),
-          alignment: Alignment.center,
-          child: Text('EVIDENCE PHOTO',
-              style: AppTypography.kicker
-                  .copyWith(color: const Color(0xFF8E876F), fontSize: 10)),
-        ),
-        Positioned(
-          top: 8,
-          right: 8,
-          child: CmpysPressable(
-            semanticLabel: 'Remove evidence photo',
-            onTap: () => onToggle(false),
-            child: Container(
-              width: 28,
-              height: 28,
-              decoration: BoxDecoration(
-                color: const Color(0xBF16161C),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(Icons.close_rounded, size: 16, color: Colors.white),
-            ),
-          ),
-        ),
       ],
     );
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Milestone claim sheet (used by Compare)
+// Claim sheet
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// "Claim milestone": a statement of what you did that's comparable to one
+/// of the mentor's comparison milestones. "Claim" stays disabled until the
+/// trimmed statement has [minLength] characters; the claim is saved with the
+/// store's `claimMilestone` at your current age and pops `true`.
 class ClaimSheet extends ConsumerStatefulWidget {
-  const ClaimSheet({super.key, required this.milestoneId, required this.label});
+  const ClaimSheet({
+    super.key,
+    required this.milestoneId,
+    required this.label,
+    this.age,
+    this.dim,
+  });
+
   final String milestoneId;
   final String label;
+
+  /// The mentor's age at the milestone; null drops "at N".
+  final int? age;
+
+  /// The milestone's own v3 dimension (from its matched timeline event);
+  /// null files the claim by the milestone's position.
+  final String? dim;
+
+  static const minLength = 10;
 
   @override
   ConsumerState<ClaimSheet> createState() => _ClaimSheetState();
 }
 
 class _ClaimSheetState extends ConsumerState<ClaimSheet> {
-  final _note = TextEditingController();
-  late int _age;
-  bool _photo = false;
+  final _statement = TextEditingController();
 
-  @override
-  void initState() {
-    super.initState();
-    _age = ref.read(cmpysStoreProvider).user.age;
-  }
+  bool get _ready => _statement.text.trim().length >= ClaimSheet.minLength;
 
   @override
   void dispose() {
-    _note.dispose();
+    _statement.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final dim = dimOf(cmpysMilestoneDim[widget.milestoneId] ?? 'clarity');
-    final maxAge = ref.read(cmpysStoreProvider).user.age;
-    final idolShort = ref.read(cmpysStoreProvider).idol.short;
-    return SingleChildScrollView(
-      keyboardDismissBehavior:
-          ScrollViewKeyboardDismissBehavior.onDrag,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(14),
-            decoration:
-                BoxDecoration(color: dim.tint, borderRadius: BorderRadius.circular(16)),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(PhosphorIconsRegular.target, size: 20, color: dim.deep),
-                const SizedBox(width: 11),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(widget.label,
-                          style: AppTypography.bodyMedium.copyWith(
-                              color: dim.deep,
-                              fontSize: 14.5,
-                              fontWeight: FontWeight.w700)),
-                      const SizedBox(height: 2),
-                      Text(
-                          '$idolShort hit this by $maxAge · counts toward ${dim.label}',
-                          style: AppTypography.caption.copyWith(
-                              color: dim.deep.withValues(alpha: 0.75),
-                              fontSize: 12)),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 18),
-          const CmpysKicker('When did you do it?'),
-          const SizedBox(height: 8),
-          _agePicker(maxAge),
-          const SizedBox(height: 18),
-          const CmpysKicker('How did it happen?'),
-          const SizedBox(height: 8),
-          Container(
-            decoration: BoxDecoration(
-              color: AppColors.paper,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: AppColors.hair2, width: 1.5),
-            ),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-            child: TextField(
-              controller: _note,
-              keyboardType: TextInputType.multiline,
-              onTapOutside: (_) => FocusManager.instance.primaryFocus?.unfocus(),
-              minLines: 2,
-              maxLines: 4,
-              onChanged: (_) => setState(() {}),
-              style: AppTypography.body.copyWith(fontSize: 15),
-              cursorColor: AppColors.green,
-              decoration: InputDecoration(
-                hintText: 'A sentence is enough — this is your evidence.',
-                hintStyle: AppTypography.body
-                    .copyWith(color: AppColors.ink3, fontSize: 15),
-                border: InputBorder.none,
-                isDense: true,
-                filled: false,
-                contentPadding: const EdgeInsets.symmetric(vertical: 10),
-              ),
-            ),
-          ),
-          const SizedBox(height: 14),
-          _EvidenceField(on: _photo, onToggle: (v) => setState(() => _photo = v)),
-          const SizedBox(height: 18),
-          CmpysButton(
-            variant: CmpysBtnVariant.primary,
-            size: CmpysBtnSize.lg,
-            full: true,
-            disabled: _note.text.trim().isEmpty,
-            onTap: _note.text.trim().isEmpty ? null : _claim,
-            child: Text('Claim it — $idolShort will take note'),
-          ),
-        ],
-      ),
+    final at = widget.age == null ? '' : ' at ${widget.age}';
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          '“${widget.label}”$at. Explain what you did that’s comparable.',
+          style: AppTypography.sans(
+            14.5,
+          ).copyWith(color: AppColors.ink2, height: 1.5),
+        ),
+        const SizedBox(height: 14),
+        V3Field(
+          controller: _statement,
+          multiline: true,
+          rows: 3,
+          placeholder: 'Your statement',
+          textCapitalization: TextCapitalization.sentences,
+          onChanged: (_) => setState(() {}),
+        ),
+        const SizedBox(height: 16),
+        V3Button(
+          full: true,
+          disabled: !_ready,
+          onPressed: _claim,
+          child: const Text('Claim'),
+        ),
+      ],
     );
   }
 
   void _claim() {
-    ref.read(cmpysStoreProvider.notifier).claimMilestone(
+    if (!_ready) return;
+    ref
+        .read(cmpysStoreProvider.notifier)
+        .claimMilestone(
           widget.milestoneId,
           widget.label,
-          age: _age,
-          note: _note.text.trim(),
-          photo: _photo,
+          age: ref.read(cmpysStoreProvider).user.age,
+          note: _statement.text.trim(),
+          dim: widget.dim,
         );
-    Navigator.of(context).pop();
-    showCmpysToast(context, 'Milestone claimed',
-        icon: Icons.check_rounded, tone: AppColors.green);
-  }
-
-  Widget _agePicker(int maxAge) {
-    final isNow = _age >= maxAge;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-      decoration: BoxDecoration(
-        color: AppColors.paper,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.hair2, width: 1.5),
-      ),
-      child: Row(
-        children: [
-          _stepBtn('−', () => setState(() => _age = _age > 10 ? _age - 1 : 10)),
-          Expanded(
-            child: Center(
-              child: Text(isNow ? 'Now' : '$_age years old',
-                  style: AppTypography.display
-                      .copyWith(fontSize: 22, height: 1, color: AppColors.ink)),
-            ),
-          ),
-          _stepBtn('+', () => setState(() => _age = _age < maxAge ? _age + 1 : maxAge)),
-        ],
-      ),
-    );
-  }
-
-  Widget _stepBtn(String s, VoidCallback onTap) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(10),
-        child: Container(
-          width: 44,
-          height: 44,
-          decoration: BoxDecoration(
-              color: AppColors.paper2, borderRadius: BorderRadius.circular(10)),
-          alignment: Alignment.center,
-          child: Text(s,
-              style: AppTypography.h2
-                  .copyWith(fontSize: 20, fontWeight: FontWeight.w600)),
-        ),
-      ),
-    );
+    Navigator.of(context).pop(true);
   }
 }
 
@@ -1168,173 +1184,135 @@ class _ClaimSheetState extends ConsumerState<ClaimSheet> {
 // Reassess overlay
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// The on-device reassess: "Reviewing your new entries" for
+/// [reviewDuration], then the entries are marked reviewed (the store's
+/// `reassess`) and "Entries reviewed" says so. It changes this device's
+/// record only, never the comparison scores.
 class ReassessOverlay extends ConsumerStatefulWidget {
   const ReassessOverlay({super.key});
+
+  static const reviewDuration = Duration(milliseconds: 2200);
 
   @override
   ConsumerState<ReassessOverlay> createState() => _ReassessOverlayState();
 }
 
 class _ReassessOverlayState extends ConsumerState<ReassessOverlay> {
-  String _phase = 'think';
-  late Map<String, int> _deltas;
-  late Map<String, int> _beforeScores;
+  Timer? _timer;
+  bool _done = false;
 
   @override
   void initState() {
     super.initState();
-    final st = ref.read(cmpysStoreProvider);
-    _deltas = st.assessDeltas();
-    _beforeScores = {
-      for (final d in st.liveDims())
-        if (d.you != null) d.id: d.you!,
-    };
+    _timer = Timer(ReassessOverlay.reviewDuration, _finish);
   }
 
-  List<String> get _lines {
-    final pendingCount = ref.read(cmpysStoreProvider).pendingWins().length;
-    return [
-      'Reading your ${pendingCount == 1 ? "new entry" : "$pendingCount new entries"}, one by one…',
-      'Weighing each against where I stood at your age…',
-      'Some of these move the needle. Updating your indexes…',
-    ];
+  void _finish() {
+    // Backed out (the route is popping): the review never finished.
+    if (!mounted || ModalRoute.of(context)?.isActive == false) return;
+    ref.read(cmpysStoreProvider.notifier).reassess();
+    setState(() => _done = true);
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final idol = ref.read(cmpysStoreProvider).idol;
-    return Scaffold(
-      backgroundColor: Colors.transparent,
-      body: Container(
-        decoration: const BoxDecoration(gradient: AppColors.gradInk),
-        child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(28),
-            child: _phase == 'think'
-                ? _thinkPhase(idol)
-                : _resultPhase(idol),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _thinkPhase(CmpysIdol idol) {
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        CmpysMentorAvatar(
-          slug: idol.slug,
-          initials: idol.initials,
-          color: idol.color,
-          tint: idol.tint,
-          size: 64,
-        ),
-        const SizedBox(height: 26),
-        Text('REASSESSING YOUR RECORD',
-            style: AppTypography.kicker
-                .copyWith(color: Colors.white.withValues(alpha: 0.5))),
-        const SizedBox(height: 18),
-        Container(
-          padding: const EdgeInsets.all(18),
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.06),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.09)),
-          ),
-          child: CmpysThinkFeed(
-            lines: _lines,
-            intervalMs: 950,
-            accent: AppColors.green,
-            onDone: () {
-              if (!mounted) return;
-              Future.delayed(const Duration(milliseconds: 700), () {
-                if (!mounted) return;
-                ref.read(cmpysStoreProvider.notifier).reassess(_deltas);
-                setState(() => _phase = 'result');
-              });
-            },
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _resultPhase(CmpysIdol idol) {
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        CmpysMentorAvatar(
-          slug: idol.slug,
-          initials: idol.initials,
-          color: idol.color,
-          tint: idol.tint,
-          size: 64,
-        ),
-        const SizedBox(height: 22),
-        Text('The record moved the needle.',
-            textAlign: TextAlign.center,
-            style: AppTypography.h2.copyWith(
-                color: Colors.white, fontSize: 22, fontWeight: FontWeight.w700)),
-        const SizedBox(height: 18),
-        for (final entry in _deltas.entries) _deltaRow(entry.key, entry.value),
-        const SizedBox(height: 16),
-        Text(
-          '"Progress you can write down is progress you can trust. Keep the entries coming."',
-          textAlign: TextAlign.center,
-          style: AppTypography.body.copyWith(
-              color: Colors.white.withValues(alpha: 0.65), fontSize: 14),
-        ),
-        const SizedBox(height: 20),
-        CmpysButton(
-          variant: CmpysBtnVariant.primary,
-          size: CmpysBtnSize.lg,
-          full: true,
-          onTap: () => Navigator.of(context).maybePop(),
-          child: const Text('See the new picture'),
-        ),
-      ],
-    );
-  }
-
-  Widget _deltaRow(String dimId, int delta) {
-    final before = (_beforeScores[dimId] ?? 0).clamp(0, 100);
-    final after = (before + delta).clamp(0, 100);
-    final meta = dimOf(dimId);
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Row(
+    final title = AppTypography.sans(
+      17,
+      FontWeight.w600,
+    ).copyWith(color: AppColors.ink);
+    return Material(
+      type: MaterialType.transparency,
+      child: Stack(
+        fit: StackFit.expand,
         children: [
-          Container(
-            width: 10,
-            height: 10,
-            decoration: BoxDecoration(
-                color: meta.color, borderRadius: BorderRadius.circular(3)),
+          BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 6, sigmaY: 6),
+            child: const ColoredBox(color: Color(0xB30E0C14)),
           ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(meta.label,
-                style: AppTypography.bodyMedium.copyWith(
-                    color: Colors.white, fontSize: 14.5)),
+          SafeArea(
+            child: Center(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(28),
+                child: V3Pop(
+                  duration: const Duration(milliseconds: 500),
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(24),
+                    decoration: const BoxDecoration(
+                      color: AppColors.card,
+                      borderRadius: AppRadii.brR2,
+                    ),
+                    child: _done
+                        ? Semantics(
+                            liveRegion: true,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Container(
+                                  width: 60,
+                                  height: 60,
+                                  decoration: const BoxDecoration(
+                                    color: AppColors.sageSoft,
+                                    shape: BoxShape.circle,
+                                  ),
+                                  alignment: Alignment.center,
+                                  child: const V3Icon(
+                                    V3Icons.check,
+                                    size: 26,
+                                    strokeWidth: 2.6,
+                                    color: AppColors.sage2,
+                                  ),
+                                ),
+                                const SizedBox(height: 14),
+                                Text(
+                                  'Entries reviewed',
+                                  textAlign: TextAlign.center,
+                                  style: title,
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  'Updated on this device only. This isn’t a '
+                                  'new assessment of your comparison scores.',
+                                  textAlign: TextAlign.center,
+                                  style: AppTypography.sans(13.5).copyWith(
+                                    color: AppColors.ink2,
+                                    height: 1.5,
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+                                V3Button(
+                                  kind: V3ButtonKind.dark,
+                                  full: true,
+                                  onPressed: () =>
+                                      Navigator.of(context).maybePop(),
+                                  child: const Text('Done'),
+                                ),
+                              ],
+                            ),
+                          )
+                        : Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const V3Spinner(size: 34, color: AppColors.gold2),
+                              const SizedBox(height: 14),
+                              Text(
+                                'Reviewing your new entries',
+                                textAlign: TextAlign.center,
+                                style: title,
+                              ),
+                            ],
+                          ),
+                  ),
+                ),
+              ),
+            ),
           ),
-          Text('$before',
-              style: AppTypography.monoLabel.copyWith(
-                  color: Colors.white.withValues(alpha: 0.55), fontSize: 13)),
-          const SizedBox(width: 8),
-          Icon(Icons.arrow_forward_rounded,
-              size: 14, color: Colors.white.withValues(alpha: 0.4)),
-          const SizedBox(width: 8),
-          Text('$after',
-              style: AppTypography.monoLabel.copyWith(
-                  color: AppColors.green,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700)),
         ],
       ),
     );

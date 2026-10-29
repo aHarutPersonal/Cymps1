@@ -229,10 +229,14 @@ def diagnostic_summary(answers: dict) -> list[dict]:
             continue
         answer = record.get("answer", "")
         value = normalized(answer)
-        if answer_evidence_status(answer) != "self_reported" or value in {
-            "i don t know yet",
-            "пока не знаю",
-        }:
+        if (
+            # Sent with the "I don't have one yet" choice: nothing was
+            # provided, so the check is not established (as for an empty
+            # answer), never a submitted answer that "needs review".
+            record.get("missing_evidence") is True
+            or answer_evidence_status(answer) != "self_reported"
+            or value in {"i don t know yet", "пока не знаю"}
+        ):
             status = "unknown"
         elif item.correct is None:
             status = "needs_review"

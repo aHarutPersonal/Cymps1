@@ -38,13 +38,42 @@ Future<void> _mount(
 void main() {
   test('secondary text and primary actions have readable contrast', () {
     for (final surface in [AppColors.paper, AppColors.card]) {
-      expect(_contrast(AppColors.ink3, surface), greaterThanOrEqualTo(4.5));
-      expect(_contrast(AppColors.green2, surface), greaterThanOrEqualTo(4.5));
+      expect(_contrast(AppColors.ink, surface), greaterThanOrEqualTo(7));
+      expect(_contrast(AppColors.ink2, surface), greaterThanOrEqualTo(4.5));
+      expect(_contrast(AppColors.sage2, surface), greaterThanOrEqualTo(4.5));
+    }
+    // v3 design values (ink3 #7E7983, ember2 as text on paper, ember2 on
+    // emberSoft chips) are below 4.5:1 for small text. The floors below stop
+    // them drifting any lighter; see the B1 report for AA-passing candidates.
+    for (final surface in [AppColors.paper, AppColors.card]) {
+      expect(_contrast(AppColors.ink3, surface), greaterThanOrEqualTo(3.5));
     }
     expect(
-      _contrast(AppColors.green2, AppColors.greenSoft),
+      _contrast(AppColors.ember2, AppColors.card),
       greaterThanOrEqualTo(4.5),
     );
+    expect(
+      _contrast(AppColors.ember2, AppColors.paper),
+      greaterThanOrEqualTo(4.0),
+    );
+    expect(
+      _contrast(AppColors.ember2, AppColors.emberSoft),
+      greaterThanOrEqualTo(3.5),
+    );
+    expect(
+      _contrast(AppColors.sage2, AppColors.sageSoft),
+      greaterThanOrEqualTo(4.0),
+    );
+    // White labels on the accessible primary-action fills, including every
+    // stop of the brand gradient behind white chat / hero text.
+    expect(
+      _contrast(Colors.white, AppColors.ember2),
+      greaterThanOrEqualTo(4.5),
+    );
+    expect(_contrast(Colors.white, AppColors.sage2), greaterThanOrEqualTo(4.5));
+    for (final stop in AppColors.gradGreen.colors) {
+      expect(_contrast(Colors.white, stop), greaterThanOrEqualTo(4.5));
+    }
   });
 
   for (final oldButton in [false, true]) {

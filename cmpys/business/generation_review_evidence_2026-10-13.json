@@ -1,0 +1,362 @@
+{
+  "date": "2026-10-13",
+  "kind": "offline_synthetic_contract_probes",
+  "provider_calls": 0,
+  "probes": {
+    "reviewer_omits_calculations": {
+      "failures": [],
+      "accepted": true,
+      "checks": []
+    },
+    "reviewer_uses_unrelated_correct_expression": {
+      "failures": [],
+      "accepted": true,
+      "checks": [
+        {
+          "location": "invented location",
+          "expression": "1+1",
+          "claimed_result": 2.0,
+          "absolute_tolerance": 0.01,
+          "claimed_literal": null
+        }
+      ]
+    },
+    "reviewer_repeats_answer_as_expression": {
+      "failures": [],
+      "accepted": true,
+      "checks": [
+        {
+          "location": "published calculation",
+          "expression": "999",
+          "claimed_result": 999.0,
+          "absolute_tolerance": 0.01,
+          "claimed_literal": "999"
+        }
+      ]
+    },
+    "duration_normalization": {
+      "mission_minutes": 480,
+      "returned_lesson_minutes": 42,
+      "note": "Normalization alone neither fills nor rejects an aggregate allocation gap; final PlanItemDetailsOutput also has no mission-budget input."
+    }
+  },
+  "prompt_inventory": [
+    {
+      "name": "achievements_extract.txt",
+      "words": 963,
+      "bytes": 7027,
+      "registered": true
+    },
+    {
+      "name": "blueprint_generate.txt",
+      "words": 430,
+      "bytes": 3028,
+      "registered": true
+    },
+    {
+      "name": "book_module_generate.txt",
+      "words": 791,
+      "bytes": 5569,
+      "registered": true
+    },
+    {
+      "name": "book_writer_system.txt",
+      "words": 204,
+      "bytes": 1401,
+      "registered": true
+    },
+    {
+      "name": "comparison_analyze.txt",
+      "words": 380,
+      "bytes": 3092,
+      "registered": true
+    },
+    {
+      "name": "comparison_generate.txt",
+      "words": 755,
+      "bytes": 4987,
+      "registered": true
+    },
+    {
+      "name": "comparison_scores.txt",
+      "words": 885,
+      "bytes": 7195,
+      "registered": true
+    },
+    {
+      "name": "curriculum_mentor_claim_verify.txt",
+      "words": 85,
+      "bytes": 635,
+      "registered": true
+    },
+    {
+      "name": "curriculum_mentor_claims.txt",
+      "words": 89,
+      "bytes": 708,
+      "registered": true
+    },
+    {
+      "name": "curriculum_module_repair.txt",
+      "words": 258,
+      "bytes": 1851,
+      "registered": true
+    },
+    {
+      "name": "curriculum_module_write.txt",
+      "words": 551,
+      "bytes": 3745,
+      "registered": true
+    },
+    {
+      "name": "curriculum_outline.txt",
+      "words": 330,
+      "bytes": 2375,
+      "registered": true
+    },
+    {
+      "name": "curriculum_research_curate.txt",
+      "words": 294,
+      "bytes": 2042,
+      "registered": true
+    },
+    {
+      "name": "curriculum_research_discovery.txt",
+      "words": 372,
+      "bytes": 2512,
+      "registered": true
+    },
+    {
+      "name": "curriculum_research_system.txt",
+      "words": 128,
+      "bytes": 967,
+      "registered": true
+    },
+    {
+      "name": "curriculum_research_verify.txt",
+      "words": 78,
+      "bytes": 588,
+      "registered": true
+    },
+    {
+      "name": "curriculum_review_factual.txt",
+      "words": 199,
+      "bytes": 1558,
+      "registered": true
+    },
+    {
+      "name": "curriculum_review_originality.txt",
+      "words": 69,
+      "bytes": 581,
+      "registered": true
+    },
+    {
+      "name": "curriculum_review_pedagogy.txt",
+      "words": 181,
+      "bytes": 1429,
+      "registered": true
+    },
+    {
+      "name": "curriculum_review_structure.txt",
+      "words": 173,
+      "bytes": 1387,
+      "registered": true
+    },
+    {
+      "name": "curriculum_technique_plan.txt",
+      "words": 252,
+      "bytes": 1849,
+      "registered": true
+    },
+    {
+      "name": "curriculum_writer_system.txt",
+      "words": 166,
+      "bytes": 1137,
+      "registered": true
+    },
+    {
+      "name": "daily_feed_generate.txt",
+      "words": 310,
+      "bytes": 2103,
+      "registered": true
+    },
+    {
+      "name": "discover_feed.txt",
+      "words": 588,
+      "bytes": 3838,
+      "registered": true
+    },
+    {
+      "name": "extractor_system.txt",
+      "words": 680,
+      "bytes": 4532,
+      "registered": true
+    },
+    {
+      "name": "guided_learning_system.txt",
+      "words": 443,
+      "bytes": 3148,
+      "registered": true
+    },
+    {
+      "name": "idol_suggest.txt",
+      "words": 526,
+      "bytes": 3529,
+      "registered": true
+    },
+    {
+      "name": "idol_suggest_system.txt",
+      "words": 60,
+      "bytes": 368,
+      "registered": true
+    },
+    {
+      "name": "image_generate.txt",
+      "words": 198,
+      "bytes": 1340,
+      "registered": true
+    },
+    {
+      "name": "interview_question.txt",
+      "words": 350,
+      "bytes": 2422,
+      "registered": true
+    },
+    {
+      "name": "interview_system.xml",
+      "words": 1214,
+      "bytes": 8802,
+      "registered": true
+    },
+    {
+      "name": "learning_materials_generate.txt",
+      "words": 110,
+      "bytes": 673,
+      "registered": true
+    },
+    {
+      "name": "learning_materials_system.txt",
+      "words": 60,
+      "bytes": 360,
+      "registered": true
+    },
+    {
+      "name": "lesson_practice_generate.txt",
+      "words": 482,
+      "bytes": 3280,
+      "registered": true
+    },
+    {
+      "name": "lesson_practice_review.txt",
+      "words": 169,
+      "bytes": 1136,
+      "registered": true
+    },
+    {
+      "name": "milestones_by_age.txt",
+      "words": 516,
+      "bytes": 3695,
+      "registered": true
+    },
+    {
+      "name": "persona_pack.txt",
+      "words": 600,
+      "bytes": 4780,
+      "registered": true
+    },
+    {
+      "name": "persona_system.txt",
+      "words": 351,
+      "bytes": 2480,
+      "registered": true
+    },
+    {
+      "name": "plan_backbone_generate.txt",
+      "words": 937,
+      "bytes": 6921,
+      "registered": true
+    },
+    {
+      "name": "plan_generate.txt",
+      "words": 2481,
+      "bytes": 17026,
+      "registered": true
+    },
+    {
+      "name": "plan_item_detail_lesson.txt",
+      "words": 914,
+      "bytes": 6484,
+      "registered": true
+    },
+    {
+      "name": "plan_item_details.txt",
+      "words": 1759,
+      "bytes": 12785,
+      "registered": true
+    },
+    {
+      "name": "plan_item_details_outline.txt",
+      "words": 537,
+      "bytes": 4048,
+      "registered": true
+    },
+    {
+      "name": "plan_week_generate.txt",
+      "words": 512,
+      "bytes": 3897,
+      "registered": true
+    },
+    {
+      "name": "planner_system.txt",
+      "words": 446,
+      "bytes": 3006,
+      "registered": true
+    },
+    {
+      "name": "profile_extract.txt",
+      "words": 386,
+      "bytes": 3430,
+      "registered": true
+    },
+    {
+      "name": "thinking_plan.txt",
+      "words": 126,
+      "bytes": 793,
+      "registered": true
+    },
+    {
+      "name": "thinking_task.txt",
+      "words": 111,
+      "bytes": 731,
+      "registered": true
+    },
+    {
+      "name": "timeline_normalize.txt",
+      "words": 817,
+      "bytes": 6122,
+      "registered": true
+    }
+  ],
+  "tests": {
+    "focused": {
+      "passed": 176,
+      "failed": 0,
+      "seconds": 2.94
+    },
+    "expanded": {
+      "passed": 646,
+      "environment_blocked": 4,
+      "seconds": 8.23,
+      "blocked_reason": "PostgreSQL connection denied by sandbox for four integration cases; no assertion verdict."
+    },
+    "total_passed": 822,
+    "full_suite_run": false
+  },
+  "checkout": "c5d7b54",
+  "source_digests": {
+    "cmpys/backend/app/tasks/plans.py": "f85eca74b0bc5111cad1b0aa2126d31377c37f2852bf601c02a8b77065d4e9fb",
+    "cmpys/backend/app/services/planning/catalog_lessons.py": "1918e2cff9be73c52afab5bae1c11a44b4c02df7084b717ac8c0eb093dae7881",
+    "cmpys/backend/app/services/planning/lesson_review.py": "b57684034abc23da92bb8e1d8ffd7f5ad98d1d8f485fedc8fac7b912a8e0ed74",
+    "cmpys/backend/app/services/llm/zai.py": "9e9264ff85b3fccac4c45685401891f90d15e1981cabb1928ad2d8d8d8d0dbc7",
+    "cmpys/backend/app/services/llm/routing.py": "12d86d154a28cc67383c63c0661f563384be385ab86f83027eb9f952aec0f461"
+  }
+}

@@ -1,25 +1,39 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:phosphor_flutter/phosphor_flutter.dart';
 
 import '../../../app/design_tokens.dart';
 import '../../../app/router.dart';
 import '../../../core/ui/app_shell.dart';
-import '../../../core/ui/cmpys/cmpys_primitives.dart';
-import '../../../core/ui/motion/entrance.dart';
+import '../../../core/ui/motion/motion_config.dart';
 import '../../../core/ui/motion/page_transition.dart';
+import '../../../core/ui/v3/v3.dart';
 import '../../auth/controllers/auth_controller.dart';
 import '../../auth/controllers/session_controller.dart';
 import '../../plan/presentation/reading_library_screen.dart';
 import '../../plan/state/current_plan_provider.dart';
 import '../data/cmpys_seed.dart';
 import '../state/cmpys_store.dart';
+import '../state/plan_data.dart';
+import '../state/today_data.dart';
 import 'detail_screens.dart';
-import 'idol_detail_screen.dart';
+import 'onboarding/mentor_image.dart';
 import 'record_screen.dart';
 
-/// CMPYS You tab — profile, stats, library, account, logout.
+/// CMPYS You tab (`v3/you.jsx` YouTab): the profile header with the edit
+/// sheet, three stat cards, the mentor portrait (opens Mentor context),
+/// Library rows, the device-only Settings card and Log out.
+///
+/// The design's "Change" mentor action is left out: the store's mentor is
+/// also the session identity, so switching it on the device orphans the plan
+/// (the plan provider rejects it and its retry generates a new, paid plan).
+///
+/// Stats are real figures only: overall plan progress
+/// ([planOverallProgress] over [currentPlanProvider]), the current streak
+/// ([todayStreakProvider]; "—" while it loads or fails) and the wins on the
+/// record ([CmpysStore]).
 class CmpysYouScreen extends ConsumerWidget {
   const CmpysYouScreen({super.key});
 
@@ -30,346 +44,69 @@ class CmpysYouScreen extends ConsumerWidget {
         (s) => (
           idol: s.idol,
           user: s.user,
-          notesCount: s.notes.length,
-          achievementsCount: s.achievements.length,
-          savedCount: s.saved.length,
+          notes: s.notes.length,
+          saved: s.saved.length,
+          wins: s.achievements.length,
         ),
       ),
     );
-    final idol = st.idol;
-    final name = st.user.name.isEmpty ? 'Your name' : st.user.name;
     final plan = ref.watch(currentPlanProvider.select((s) => s.plan));
-    final today = ref.watch(todayViewProvider).valueOrNull;
-    final planPct = plan?.overallProgress.round();
-    final planDay = _planDay(plan?.createdAt);
+    final streak = ref.watch(todayStreakProvider).valueOrNull?.current;
+    final planPct = plan == null
+        ? 0
+        : (planOverallProgress(plan) * 100).round();
+    final top = math.max(MediaQuery.paddingOf(context).top + 8, 20.0);
 
     return Scaffold(
       backgroundColor: AppColors.paper,
-      body: SafeArea(
-        bottom: false,
-        child: EntranceScope(
-          child: ListView(
-            padding: EdgeInsets.fromLTRB(
-              AppSpacing.pageGutter(MediaQuery.sizeOf(context).width),
-              14,
-              AppSpacing.pageGutter(MediaQuery.sizeOf(context).width),
-              AppShell.bottomNavClearance(context),
-            ),
-            children: EntranceGroup.wrap([
-              Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        CmpysKicker('Profile'),
-                        const SizedBox(height: 4),
-                        Text(
-                          'You',
-                          style: AppTypography.display.copyWith(
-                            fontSize: 30,
-                            letterSpacing: -0.5,
-                            height: 1.1,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: _circleAction(PhosphorIconsRegular.gearSix, () {
-                      Navigator.of(context).push(
-                        CmpysPageRoute(
-                          builder: (_) => const CmpysSettingsScreen(),
-                        ),
-                      );
-                    }),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              _profileCard(context, st.user, idol, name, planDay),
-              const SizedBox(height: 18),
-              Row(
-                children: [
-                  Expanded(
-                    child: _stat(
-                      today == null ? '—' : '${today.streak}',
-                      'Day streak',
-                      PhosphorIconsRegular.flame,
-                      AppColors.ochre,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: _stat(
-                      planPct == null ? '—' : '$planPct%',
-                      'Plan done',
-                      PhosphorIconsRegular.target,
-                      AppColors.green,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: _stat(
-                      '${st.notesCount}',
-                      'Notes',
-                      PhosphorIconsRegular.note,
-                      AppColors.blue,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 22),
-              const Padding(
-                padding: EdgeInsets.only(left: 2),
-                child: CmpysKicker('Library'),
-              ),
-              const SizedBox(height: 10),
-              CmpysCardSurface(
-                pad: const EdgeInsets.symmetric(horizontal: 14),
-                child: Column(
-                  children: [
-                    _row(
-                      context,
-                      PhosphorIconsFill.sparkle,
-                      'Your record',
-                      '${st.achievementsCount}',
-                      () => Navigator.of(context).push(
-                        CmpysSheetRoute(
-                          builder: (_) => const CmpysRecordScreen(),
-                        ),
-                      ),
-                      first: true,
-                    ),
-                    _row(
-                      context,
-                      PhosphorIconsRegular.bookOpen,
-                      'Reading',
-                      null,
-                      () => Navigator.of(context).push(
-                        CmpysPageRoute(
-                          builder: (_) => const ReadingLibraryScreen(),
-                        ),
-                      ),
-                    ),
-                    _row(
-                      context,
-                      PhosphorIconsRegular.note,
-                      'Notes',
-                      '${st.notesCount}',
-                      () => Navigator.of(context).push(
-                        CmpysPageRoute(
-                          builder: (_) => const CmpysNotesScreen(),
-                        ),
-                      ),
-                    ),
-                    _row(
-                      context,
-                      PhosphorIconsRegular.bookmarkSimple,
-                      'Saved',
-                      '${st.savedCount}',
-                      () => Navigator.of(context).push(
-                        CmpysPageRoute(
-                          builder: (_) => const CmpysSavedScreen(),
-                        ),
-                      ),
-                    ),
-                    _row(
-                      context,
-                      PhosphorIconsRegular.quotes,
-                      'Idea reels',
-                      null,
-                      () => context.goToIdeas(),
-                      last: true,
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 18),
-              const Padding(
-                padding: EdgeInsets.only(left: 2),
-                child: CmpysKicker('Account'),
-              ),
-              const SizedBox(height: 10),
-              CmpysCardSurface(
-                pad: const EdgeInsets.symmetric(horizontal: 14),
-                child: Column(
-                  children: [
-                    _row(
-                      context,
-                      PhosphorIconsRegular.user,
-                      'Edit profile',
-                      null,
-                      () => Navigator.of(context).push(
-                        CmpysPageRoute(
-                          builder: (_) => const CmpysEditProfileScreen(),
-                        ),
-                      ),
-                      first: true,
-                    ),
-                    _row(
-                      context,
-                      PhosphorIconsRegular.scales,
-                      'Change mentor',
-                      null,
-                      () => Navigator.of(context).push(
-                        CmpysPageRoute(
-                          builder: (_) => const CmpysMentorPickerScreen(),
-                        ),
-                      ),
-                    ),
-                    _row(
-                      context,
-                      PhosphorIconsRegular.gearSix,
-                      'Settings',
-                      null,
-                      () => Navigator.of(context).push(
-                        CmpysPageRoute(
-                          builder: (_) => const CmpysSettingsScreen(),
-                        ),
-                      ),
-                      last: true,
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 18),
-              CmpysCardSurface(
-                pad: const EdgeInsets.symmetric(horizontal: 14),
-                child: _row(
-                  context,
-                  PhosphorIconsRegular.signOut,
-                  'Log out',
-                  null,
-                  () => _confirmLogout(context, ref),
-                  first: true,
-                  last: true,
-                  danger: true,
-                ),
-              ),
-              const SizedBox(height: 22),
-              Center(
-                child: Text(
-                  'CMPYS · v1.0',
-                  style: AppTypography.monoLabel.copyWith(
-                    color: AppColors.ink3,
-                    fontSize: 10.5,
-                  ),
-                ),
-              ),
-            ]),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _circleAction(IconData icon, VoidCallback onTap) {
-    return Tooltip(
-      message: 'Settings',
-      child: CmpysPressable(
-        semanticLabel: 'Settings',
-        onTap: onTap,
-        child: Container(
-          width: 48,
-          height: 48,
-          decoration: BoxDecoration(
-            color: AppColors.card,
-            shape: BoxShape.circle,
-            border: Border.all(color: AppColors.hair),
-          ),
-          child: Icon(icon, color: AppColors.ink2, size: 20),
-        ),
-      ),
-    );
-  }
-
-  int? _planDay(DateTime? createdAt) {
-    if (createdAt == null) return null;
-    final local = createdAt.toLocal();
-    final start = DateTime(local.year, local.month, local.day);
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final day = today.difference(start).inDays + 1;
-    return day < 1 ? 1 : day;
-  }
-
-  Widget _profileCard(
-    BuildContext context,
-    CmpysUser user,
-    CmpysIdol idol,
-    String name,
-    int? planDay,
-  ) {
-    final initial = user.name.isNotEmpty ? user.name[0].toUpperCase() : 'Y';
-    return CmpysCardSurface(
-      raised: true,
-      pad: const EdgeInsets.fromLTRB(18, 24, 18, 22),
-      child: Column(
+      body: ListView(
+        padding: EdgeInsets.only(bottom: AppShell.bottomNavClearance(context)),
         children: [
-          CmpysMonogram(
-            initials: initial,
-            size: 84,
-            color: AppColors.ochre2,
-            tint: AppColors.ochreSoft,
+          Padding(
+            padding: EdgeInsets.fromLTRB(20, top, 20, 0),
+            child: _header(context, st.user),
           ),
-          const SizedBox(height: 12),
-          Text(
-            name,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            textAlign: TextAlign.center,
-            style: AppTypography.display.copyWith(
-              fontSize: 24,
-              fontWeight: FontWeight.w700,
-              height: 1.1,
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+            child: V3Rise(
+              delay: const Duration(milliseconds: 120),
+              child: _stats(planPct, streak, st.wins),
             ),
           ),
-          const SizedBox(height: 3),
-          Text(
-            user.age <= 0
-                ? 'Complete your profile to personalize CMPYS'
-                : planDay == null
-                ? 'Age ${user.age}'
-                : 'Age ${user.age} · Day $planDay on CMPYS',
-            textAlign: TextAlign.center,
-            style: AppTypography.caption.copyWith(
-              color: AppColors.ink2,
-              fontSize: 13.5,
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+            child: V3Rise(
+              delay: const Duration(milliseconds: 160),
+              child: _mentor(context, st.idol),
             ),
           ),
-          const SizedBox(height: 14),
-          CmpysPressable(
-            onTap: () => Navigator.of(context).push(
-              CmpysPageRoute(builder: (_) => CmpysIdolDetailScreen(idol: idol)),
+          V3Rise(
+            delay: const Duration(milliseconds: 200),
+            child: V3Section(
+              title: 'Library',
+              child: _library(context, st.notes, st.saved),
             ),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(
-                color: idol.tint,
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: Row(
+          ),
+          const V3Rise(
+            delay: Duration(milliseconds: 240),
+            child: V3Section(title: 'Settings', child: _SettingsList()),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 0),
+            child: V3Button(
+              kind: V3ButtonKind.line,
+              full: true,
+              semanticLabel: 'Log out',
+              onPressed: () => _confirmLogout(context, ref),
+              child: const Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  CmpysMentorAvatar(
-                    slug: idol.slug,
-                    initials: idol.initials,
-                    color: idol.color,
-                    tint: Colors.white,
-                    size: 20,
-                  ),
-                  const SizedBox(width: 7),
+                  V3Icon(V3Icons.logout, size: 18, color: AppColors.danger),
+                  SizedBox(width: 8),
                   Flexible(
                     child: Text(
-                      'Mentored by ${idol.short}',
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppTypography.captionMedium.copyWith(
-                        color: idol.color,
-                        fontWeight: FontWeight.w700,
-                      ),
+                      'Log out',
+                      style: TextStyle(color: AppColors.danger),
                     ),
                   ),
                 ],
@@ -381,169 +118,520 @@ class CmpysYouScreen extends ConsumerWidget {
     );
   }
 
-  Widget _stat(String n, String label, IconData icon, Color color) {
-    return Container(
-      padding: const EdgeInsets.all(13),
-      decoration: BoxDecoration(
-        color: AppColors.card,
-        borderRadius: AppRadii.card,
-        border: Border.all(color: AppColors.hair),
-      ),
-      child: Column(
-        children: [
-          Icon(icon, size: 19, color: color),
-          const SizedBox(height: 5),
-          Text(
-            n,
-            style: AppTypography.display.copyWith(
-              fontSize: 24,
-              fontWeight: FontWeight.w700,
-              height: 1,
+  Widget _header(BuildContext context, CmpysUser user) {
+    final name = user.name.trim().isEmpty ? 'Your name' : user.name.trim();
+    final sub = [
+      if (user.age > 0) '${user.age}',
+      if (user.interests.isNotEmpty) user.interests.take(2).join(', '),
+    ].join(' · ');
+    return Row(
+      children: [
+        V3Pop(
+          duration: const Duration(milliseconds: 600),
+          child: Container(
+            width: 76,
+            height: 76,
+            decoration: const BoxDecoration(
               color: AppColors.ink,
+              shape: BoxShape.circle,
+            ),
+            alignment: Alignment.center,
+            child: Text(
+              name.characters.first.toUpperCase(),
+              style: AppTypography.display(34).copyWith(color: Colors.white),
             ),
           ),
-          const SizedBox(height: 3),
-          Text(
-            label,
-            maxLines: 2,
-            textAlign: TextAlign.center,
-            style: AppTypography.caption.copyWith(
-              color: AppColors.ink3,
-              fontSize: 12,
+        ),
+        const SizedBox(width: 16),
+        Expanded(
+          child: V3Rise(
+            delay: const Duration(milliseconds: 60),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  name,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTypography.display(
+                    36,
+                  ).copyWith(color: AppColors.ink),
+                ),
+                if (sub.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      sub,
+                      style: AppTypography.sans(
+                        13,
+                      ).copyWith(color: AppColors.ink3),
+                    ),
+                  ),
+              ],
             ),
           ),
+        ),
+        const SizedBox(width: 8),
+        V3IconButton(
+          icon: V3Icons.edit,
+          label: 'Edit profile',
+          onPressed: () => showCmpysEditProfileSheet(context),
+        ),
+      ],
+    );
+  }
+
+  Widget _stats(int planPct, int? streak, int wins) {
+    final stats = <({num? value, String label, String Function(double)? fmt})>[
+      (value: planPct, label: 'plan complete', fmt: (v) => '${v.round()}%'),
+      (value: streak, label: 'day streak', fmt: null),
+      (value: wins, label: 'wins recorded', fmt: null),
+    ];
+    final numberStyle = AppTypography.display(
+      32,
+    ).merge(AppTypography.tnum).copyWith(color: AppColors.ink);
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (var i = 0; i < stats.length; i++) ...[
+            if (i > 0) const SizedBox(width: 8),
+            Expanded(
+              // One stop for screen readers: "35%, plan complete".
+              child: MergeSemantics(
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(12, 14, 12, 14),
+                  decoration: v3Card(),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: switch (stats[i].value) {
+                          final value? => V3CountUp(
+                            to: value,
+                            delay: Duration(milliseconds: i * 100),
+                            format: stats[i].fmt,
+                            style: numberStyle,
+                          ),
+                          // Not known yet (loading or failed), as in v2.
+                          null => Text('—', style: numberStyle),
+                        },
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        stats[i].label,
+                        style: AppTypography.sans(
+                          11.5,
+                        ).copyWith(color: AppColors.ink3),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
   }
 
-  Widget _row(
-    BuildContext context,
-    IconData icon,
-    String label,
-    String? detail,
-    VoidCallback onTap, {
-    bool first = false,
-    bool last = false,
-    bool danger = false,
-  }) {
-    return CmpysPressable(
-      onTap: onTap,
-      child: Container(
-        decoration: BoxDecoration(
-          border: first
-              ? null
-              : const Border(top: BorderSide(color: AppColors.hair)),
-        ),
-        padding: const EdgeInsets.symmetric(vertical: 13),
-        child: Row(
-          children: [
-            Container(
-              width: 32,
-              height: 32,
-              decoration: BoxDecoration(
-                color: danger ? AppColors.claySoft : AppColors.paper2,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Icon(
-                icon,
-                size: 18,
-                color: danger ? AppColors.danger : AppColors.ink2,
-              ),
-            ),
-            const SizedBox(width: 13),
-            Expanded(
-              child: Text(
-                label,
-                style: AppTypography.bodyMedium.copyWith(
-                  fontSize: 15.5,
-                  color: danger ? AppColors.danger : AppColors.ink,
-                  fontWeight: danger ? FontWeight.w700 : FontWeight.w600,
-                ),
-              ),
-            ),
-            if (detail != null) ...[
+  Widget _mentor(BuildContext context, CmpysIdol idol) {
+    return V3Pressable(
+      onTap: () => openIdolDetail(context, idol),
+      focusRadius: AppRadii.brR,
+      child: V3Portrait(
+        image: cmpysIdolImage(idol),
+        height: 150,
+        radius: AppRadii.r,
+        tone: idol.color,
+        child: Positioned(
+          left: 18,
+          right: 18,
+          bottom: 16,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
               Text(
-                detail,
-                style: AppTypography.caption.copyWith(
-                  color: AppColors.ink3,
-                  fontSize: 14,
-                ),
+                'Your mentor',
+                style: AppTypography.sans(
+                  12,
+                  FontWeight.w600,
+                ).copyWith(color: AppColors.nink3),
               ),
-              const SizedBox(width: 6),
+              Text(
+                idol.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: AppTypography.display(30).copyWith(color: Colors.white),
+              ),
             ],
-            if (!danger)
-              const Icon(
-                Icons.chevron_right_rounded,
-                size: 18,
-                color: AppColors.hair2,
-              ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _library(BuildContext context, int notes, int saved) {
+    void push(Widget screen, {bool sheet = false}) =>
+        Navigator.of(context).push(
+          sheet
+              ? CmpysSheetRoute<void>(builder: (_) => screen)
+              : CmpysPageRoute<void>(builder: (_) => screen),
+        );
+    return ClipRRect(
+      borderRadius: AppRadii.brR,
+      child: DecoratedBox(
+        decoration: v3Card(),
+        child: Column(
+          children: [
+            _YouRow(
+              first: true,
+              icon: V3Icons.book,
+              tone: AppColors.irisSoft,
+              label: 'Reading',
+              sub: 'Guides, originals, excerpts',
+              onTap: () => push(const ReadingLibraryScreen()),
+            ),
+            _YouRow(
+              icon: V3Icons.bulb,
+              tone: AppColors.goldSoft,
+              label: 'Idea reels',
+              onTap: () => context.goToIdeas(),
+            ),
+            _YouRow(
+              icon: V3Icons.trophy,
+              tone: AppColors.emberSoft,
+              label: 'Your record',
+              onTap: () => push(const CmpysRecordScreen(), sheet: true),
+            ),
+            _YouRow(
+              icon: V3Icons.note,
+              label: 'Notes',
+              sub: '$notes on this device',
+              onTap: () => push(const CmpysNotesScreen()),
+            ),
+            _YouRow(
+              icon: V3Icons.bookmark,
+              label: 'Saved',
+              sub: '$saved on this device',
+              onTap: () => push(const CmpysSavedScreen()),
+            ),
           ],
         ),
       ),
     );
   }
 
+  /// The "Log out?" sheet. Confirming clears this account's CMPYS data on
+  /// this device (so the next account never inherits it), signs out and
+  /// returns to auth.
   Future<void> _confirmLogout(BuildContext context, WidgetRef ref) async {
-    await showCmpysSheet(
+    final confirmed = await showV3Sheet<bool>(
       context,
-      title: 'Log out of CMPYS?',
-      child: Column(
+      title: 'Log out?',
+      builder: (sheet) => Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Row(
-            children: [
-              Container(
-                width: 46,
-                height: 46,
-                decoration: BoxDecoration(
-                  color: AppColors.claySoft,
-                  borderRadius: BorderRadius.circular(13),
-                ),
-                child: const Icon(
-                  PhosphorIconsRegular.signOut,
-                  color: AppColors.danger,
-                  size: 22,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  'Your plan and completed progress stay in your account. Notes and saved items stored only on this device will be cleared.',
-                  style: AppTypography.body.copyWith(
-                    color: AppColors.ink2,
-                    fontSize: 14,
-                    height: 1.45,
-                  ),
-                ),
-              ),
-            ],
+          Text(
+            // The design says local items "stay on this device", but a
+            // deliberate logout clears this account's (account isolation),
+            // so the second sentence says so. Wins saved to the account come
+            // back into the Record on the next sign-in; device-only wins and
+            // notes don't, so the copy still names the whole record.
+            'Your plan, practice and reading progress are saved to your '
+            'account. Your record, notes and saved items on this device will '
+            'be cleared.',
+            style: AppTypography.sans(
+              14.5,
+            ).copyWith(color: AppColors.ink2, height: 1.5),
           ),
-          const SizedBox(height: 16),
-          CmpysButton(
-            variant: CmpysBtnVariant.danger,
-            full: true,
-            onTap: () async {
-              Navigator.of(context).pop();
-              // Wipe local state so the next account never inherits this
-              // user's mentor, achievements, notes, or saved items.
-              await ref.read(cmpysStoreProvider.notifier).reset();
-              await ref.read(authControllerProvider.notifier).logout();
-              await ref.read(sessionControllerProvider.notifier).onLogout();
-              if (context.mounted) context.go(AppRoutes.auth);
-            },
-            child: const Text('Log out'),
+          const SizedBox(height: 18),
+          _DangerButton(
+            label: 'Log out',
+            onTap: () => Navigator.of(sheet).pop(true),
           ),
-          const SizedBox(height: 10),
-          CmpysButton(
-            variant: CmpysBtnVariant.ghost,
+          const SizedBox(height: 8),
+          V3Button(
+            kind: V3ButtonKind.ghost,
             full: true,
-            onTap: () => Navigator.of(context).pop(),
-            child: const Text('Stay logged in'),
+            onPressed: () => Navigator.of(sheet).pop(false),
+            child: const Text('Stay signed in'),
           ),
         ],
       ),
+    );
+    if (confirmed != true || !context.mounted) return;
+    // Read everything up front: signing out can unmount this tab.
+    final store = ref.read(cmpysStoreProvider.notifier);
+    final auth = ref.read(authControllerProvider.notifier);
+    final session = ref.read(sessionControllerProvider.notifier);
+    final router = GoRouter.maybeOf(context);
+    await store.reset();
+    await auth.logout();
+    await session.onLogout();
+    router?.go(AppRoutes.auth);
+  }
+}
+
+/// The sheet's "Log out": the design's full dark button on a danger fill
+/// (V3Button has no colour override).
+class _DangerButton extends StatelessWidget {
+  const _DangerButton({required this.label, required this.onTap});
+
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return V3Pressable(
+      onTap: onTap,
+      child: Container(
+        height: V3Size.lg.height,
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 22),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: AppColors.danger,
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: AppTypography.sans(
+            15.5,
+            FontWeight.w600,
+          ).copyWith(color: Colors.white, letterSpacing: -0.005 * 15.5),
+        ),
+      ),
+    );
+  }
+}
+
+/// The design's `Row`: a 34 pt tinted icon tile, a 15 pt label with an
+/// optional 12 pt [sub] line, and a trailing chevron unless [right] is given.
+/// Rows after the [first] get a hairline on top. Tappable when [onTap] is set.
+class _YouRow extends StatelessWidget {
+  const _YouRow({
+    required this.icon,
+    required this.label,
+    this.sub,
+    this.right,
+    this.onTap,
+    this.tone,
+    this.first = false,
+  });
+
+  final V3Icons icon;
+  final String label;
+  final String? sub;
+
+  /// Replaces the chevron (a toggle, say).
+  final Widget? right;
+  final VoidCallback? onTap;
+
+  /// The icon tile's fill (paper2 by default).
+  final Color? tone;
+  final bool first;
+
+  @override
+  Widget build(BuildContext context) {
+    final row = Container(
+      constraints: const BoxConstraints(minHeight: 60),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+      decoration: BoxDecoration(
+        border: first
+            ? null
+            : const Border(top: BorderSide(color: AppColors.hair)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: tone ?? AppColors.paper2,
+              borderRadius: BorderRadius.circular(11),
+            ),
+            alignment: Alignment.center,
+            child: V3Icon(icon, size: 17, color: AppColors.ink),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: AppTypography.sans(
+                    15,
+                    FontWeight.w500,
+                  ).copyWith(color: AppColors.ink),
+                ),
+                if (sub != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 1),
+                    child: Text(
+                      sub!,
+                      style: AppTypography.sans(
+                        12,
+                      ).copyWith(color: AppColors.ink3),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 14),
+          right ?? const V3Icon(V3Icons.right, size: 16, color: AppColors.ink3),
+        ],
+      ),
+    );
+    if (onTap == null) return row;
+    return V3Pressable(
+      onTap: onTap,
+      pressedScale: 1,
+      focusRadius: BorderRadius.zero,
+      child: row,
+    );
+  }
+}
+
+/// The design's `Toggle`: a 50×30 switch, sage2 when [on] (hair2 off), its
+/// knob sliding on the spring. It carries the toggled state and the tap
+/// action but no label: [_toggleRow] merges it with the row's text, so the
+/// setting is announced once.
+class _Toggle extends StatelessWidget {
+  const _Toggle({super.key, required this.on, required this.onTap});
+
+  final bool on;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final motion = MotionConfig.enabled(context);
+    return Semantics(
+      toggled: on,
+      child: V3Pressable(
+        onTap: onTap,
+        button: false,
+        pressedScale: 1,
+        child: AnimatedContainer(
+          duration: motion ? const Duration(milliseconds: 300) : Duration.zero,
+          width: 50,
+          height: 30,
+          decoration: BoxDecoration(
+            color: on ? AppColors.sage2 : AppColors.hair2,
+            borderRadius: BorderRadius.circular(99),
+          ),
+          child: AnimatedAlign(
+            duration: motion
+                ? const Duration(milliseconds: 350)
+                : Duration.zero,
+            curve: AppMotion.spring,
+            alignment: on ? Alignment.centerRight : Alignment.centerLeft,
+            child: Container(
+              width: 24,
+              height: 24,
+              margin: const EdgeInsets.all(3),
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: Color(0x33000000),
+                    offset: Offset(0, 2),
+                    blurRadius: 5,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A settings row whose trailing [_Toggle] flips [setting]: one merged
+/// semantics node ("Sound & haptics", toggled, tap toggles).
+Widget _toggleRow({
+  required String setting,
+  required bool on,
+  required VoidCallback onTap,
+  required V3Icons icon,
+  required String label,
+  bool first = false,
+}) => MergeSemantics(
+  child: _YouRow(
+    first: first,
+    icon: icon,
+    label: label,
+    right: _Toggle(
+      key: ValueKey<String>('you-toggle-$setting'),
+      on: on,
+      onTap: onTap,
+    ),
+  ),
+);
+
+/// The "Settings" card from the You tab: the one wired toggle, Sound &
+/// haptics, kept on this device ([CmpysStore.toggleSetting]), "Privacy &
+/// data" (coming soon, a toast) and "About CMPYS" (a toast). The toggles
+/// that aren't wired yet (daily reminder, mentor messages, weekly digest)
+/// are hidden until they work (owner decision 4).
+class _SettingsList extends ConsumerWidget {
+  const _SettingsList();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = ref.watch(cmpysStoreProvider.select((s) => s.settings));
+    final store = ref.read(cmpysStoreProvider.notifier);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ClipRRect(
+          borderRadius: AppRadii.brR,
+          child: DecoratedBox(
+            decoration: v3Card(),
+            child: Column(
+              children: [
+                _toggleRow(
+                  setting: 'haptics',
+                  on: s.haptics,
+                  onTap: () => store.toggleSetting('haptics'),
+                  first: true,
+                  icon: V3Icons.sparkle,
+                  label: 'Sound & haptics',
+                ),
+                _YouRow(
+                  icon: V3Icons.lock,
+                  label: 'Privacy & data',
+                  sub: 'Coming soon',
+                  onTap: () => showV3Toast(
+                    context,
+                    'Privacy center is coming soon',
+                    icon: V3Icons.info,
+                    tone: V3ToastTone.warn,
+                  ),
+                ),
+                _YouRow(
+                  icon: V3Icons.info,
+                  label: 'About CMPYS',
+                  onTap: () => showV3Toast(
+                    context,
+                    'CMPYS 3.0 · build 2026.10',
+                    icon: V3Icons.info,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

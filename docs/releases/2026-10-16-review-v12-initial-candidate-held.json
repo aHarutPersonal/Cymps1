@@ -1,0 +1,30 @@
+{
+  "release": "20261016-091200-review-provenance",
+  "image_digest": "sha256:b34e72cd78fff54fc9990618befb3064f730c59db2c2d973b16b6129cec1543d",
+  "deployed": false,
+  "review_version": 12,
+  "backend_tests": {
+    "passed": 2687,
+    "skipped": 4,
+    "warnings": 1,
+    "seconds": 24.3
+  },
+  "exact_image_tests": {
+    "passed": 748,
+    "skipped": 1,
+    "network_enabled": false,
+    "seconds": 9.65
+  },
+  "verified_file_hashes": 17,
+  "app_import": true,
+  "paid_calls_after_batch": 0,
+  "fresh_live_success_verified": false,
+  "known_limitations": [
+    "Three-domain v11 batch accepted zero lessons",
+    "Actual accounting wording remains semantically unresolved",
+    "Writing timeout cause lacks completion metadata",
+    "Conservative source arithmetic binding does not infer ambiguous prose semantics"
+  ],
+  "candidate_held": true,
+  "hold_reason": "Final review found duplicate equation context suppression and cross-field context leakage; corrections are under verification. Existing counts refer to the initial candidate, not the pending final freeze."
+}

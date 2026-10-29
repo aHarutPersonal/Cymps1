@@ -139,6 +139,32 @@ void main() {
     );
   });
 
+  test('router nests a book reader in the Today branch too (R3-M9)', () {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+    final router = container.read(routerProvider);
+    addTearDown(router.dispose);
+    final shell = router.configuration.routes
+        .whereType<StatefulShellRoute>()
+        .single;
+    final todayRoute = shell.branches[0].routes.single as GoRoute;
+    expect(todayRoute.path, AppRoutes.home);
+    expect(
+      (todayRoute.routes.single as GoRoute).path,
+      AppRoutes.bookRouteSegment,
+    );
+
+    final uri = Uri.parse(
+      splashRouteForReadySession(
+        resume: _activeResume.copyWith(
+          branchIndex: ActiveBookNarrationResume.todayBranchIndex,
+        ),
+        isWeb: false,
+      ),
+    );
+    expect(uri.pathSegments, ['home', 'book', 'book-one']);
+  });
+
   test('native prior-playing session restores its nested Plan route', () {
     final location = splashRouteForReadySession(
       resume: _activeResume,

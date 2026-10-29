@@ -1,4 +1,4 @@
-import 'package:cmpys/core/ui/motion/page_transition.dart';
+import 'package:cmpys/core/ui/v3/v3.dart';
 import 'package:cmpys/features/cmpys/presentation/detail_screens.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -137,9 +137,12 @@ void main() {
     expect(find.text('Options'), findsNothing);
     expect(opener.hasFocus, isTrue);
   });
-  testWidgets('profile swipes back when clean and protects unsaved edits', (
+  testWidgets('profile sheet drags closed when clean and guards unsaved edits', (
     tester,
   ) async {
+    // v3: Edit profile is a sheet (`v3/you.jsx` EditProfile). A clean sheet
+    // drags closed; a dirty one stops at the Save / Discard / Keep editing
+    // guard.
     SharedPreferences.setMockInitialValues({});
     await tester.pumpWidget(
       ProviderScope(
@@ -148,42 +151,37 @@ void main() {
           home: Scaffold(
             body: Builder(
               builder: (context) => TextButton(
-                onPressed: () => Navigator.of(context).push(
-                  CmpysPageRoute<void>(
-                    builder: (_) => const CmpysEditProfileScreen(),
-                  ),
-                ),
-                child: const Text('Edit profile'),
+                onPressed: () => showCmpysEditProfileSheet(context),
+                child: const Text('Open profile'),
               ),
             ),
           ),
         ),
       ),
     );
-    await tester.tap(find.text('Edit profile'));
+    await tester.tap(find.text('Open profile'));
     await tester.pumpAndSettle();
-    await tester.dragFrom(const Offset(1, 200), const Offset(700, 0));
+    await tester.drag(find.byKey(V3Sheet.handleKey), const Offset(0, 300));
     await tester.pumpAndSettle();
-    expect(find.text('Edit profile'), findsOneWidget);
-    await tester.tap(find.text('Edit profile'));
+    expect(find.byType(CmpysEditProfileScreen), findsNothing);
+    await tester.tap(find.text('Open profile'));
     await tester.pumpAndSettle();
-    await tester.enterText(find.byType(TextField), 'Unsaved name');
+    await tester.enterText(find.byType(TextField).first, 'Unsaved name');
     FocusManager.instance.primaryFocus?.unfocus();
     await tester.pump();
-    await tester.dragFrom(const Offset(1, 200), const Offset(700, 0));
+    await tester.drag(find.byKey(V3Sheet.handleKey), const Offset(0, 300));
     await tester.pumpAndSettle();
     expect(find.byType(CmpysEditProfileScreen), findsOneWidget);
-    await tester.tap(find.byIcon(Icons.chevron_left_rounded));
-    await tester.pumpAndSettle();
-    expect(find.text('Discard changes?'), findsOneWidget);
+    expect(find.text('You have unsaved changes.'), findsOneWidget);
     await tester.tap(find.text('Keep editing'));
     await tester.pumpAndSettle();
     expect(find.text('Unsaved name'), findsOneWidget);
-    await tester.tap(find.byIcon(Icons.chevron_left_rounded));
+    await tester.drag(find.byKey(V3Sheet.handleKey), const Offset(0, 300));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Discard'));
     await tester.pumpAndSettle();
-    expect(find.text('Edit profile'), findsOneWidget);
+    expect(find.byType(CmpysEditProfileScreen), findsNothing);
+    expect(find.text('Open profile'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

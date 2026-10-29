@@ -6,6 +6,30 @@ import 'package:cmpys/core/storage/token_store.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+/// Answers every request with [body] and [status].
+class _JsonAdapter implements HttpClientAdapter {
+  _JsonAdapter(this.body, this.status);
+
+  final String body;
+  final int status;
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async => ResponseBody.fromString(
+    body,
+    status,
+    headers: {
+      Headers.contentTypeHeader: ['application/json'],
+    },
+  );
+
+  @override
+  void close({bool force = false}) {}
+}
+
 class _ErrorAdapter implements HttpClientAdapter {
   @override
   Future<ResponseBody> fetch(
@@ -59,4 +83,32 @@ void main() {
       );
     },
   );
+
+  test('a 422 validation list keeps its fields and never its raw text', () async {
+    final client = DioClient(tokenStore: TokenStore());
+    client.dio.httpClientAdapter = _JsonAdapter(
+      '{"detail":[{"type":"value_error","loc":["body","email"],'
+      '"msg":"value is not a valid email address: The part after the @-sign '
+      'is a special-use or reserved name that cannot be used with email.",'
+      '"input":"v3-live@example.test","ctx":{"reason":"reserved"}},'
+      '{"type":"string_too_short","loc":["body","password"],'
+      '"msg":"String should have at least 8 characters"}]}',
+      422,
+    );
+    addTearDown(() => client.dio.close(force: true));
+
+    await expectLater(
+      client.post<dynamic>('/auth/register', data: const {}, skipAuth: true),
+      throwsA(
+        isA<ApiError>()
+            .having((e) => e.statusCode, 'statusCode', 422)
+            .having(
+              (e) => e.fieldErrors.map((f) => (f.field, f.type)).toList(),
+              'fieldErrors',
+              [('email', 'value_error'), ('password', 'string_too_short')],
+            )
+            .having((e) => e.message, 'message', 'Invalid data provided'),
+      ),
+    );
+  });
 }

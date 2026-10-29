@@ -1,22 +1,22 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui' show PathMetric;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:phosphor_flutter/phosphor_flutter.dart';
 
 import '../../../app/design_tokens.dart';
 import '../../../app/router.dart';
 import '../../../core/ui/app_shell.dart';
 import '../../../core/ui/cmpys/cmpys_markdown.dart';
-import '../../../core/ui/cmpys/cmpys_primitives.dart';
-import '../../../core/ui/motion/entrance.dart';
 import '../../../core/ui/motion/page_transition.dart';
+import '../../../core/ui/v3/v3.dart';
 import '../data/cmpys_seed.dart';
 import '../../session/data/session_repository.dart';
 import '../state/cmpys_backend_sync.dart';
 import '../state/cmpys_store.dart';
+import 'onboarding/mentor_image.dart';
 import 'record_screen.dart';
 
 typedef LiveDim = ({
@@ -32,8 +32,123 @@ typedef LiveDim = ({
   String idolEvidence,
 });
 
-/// CMPYS Compare tab — learning context, skill checks, record entry, radar,
-/// expandable dimensions, milestones (claimable), strengths.
+/// How a dimension is shown, from the design's `DIM_STATE`.
+enum _DimState {
+  comparable('Like for like', AppColors.sage2, AppColors.sageSoft),
+  incompatible('Not comparable', AppColors.gold2, AppColors.goldSoft),
+  missing('Evidence missing', AppColors.ink2, AppColors.paper2);
+
+  const _DimState(this.label, this.color, this.background);
+  final String label;
+  final Color color;
+  final Color background;
+
+  /// comparable → Like for like; different_basis → Not comparable;
+  /// insufficient_* and any unknown status → Evidence missing. A
+  /// "comparable" row without both scores has nothing to draw, so it is
+  /// treated as missing evidence rather than as a zero.
+  static _DimState of(LiveDim d) {
+    if (d.status == 'comparable' && d.you != null && d.idol != null) {
+      return comparable;
+    }
+    if (d.status == 'different_basis') return incompatible;
+    return missing;
+  }
+}
+
+/// The starting checks' skill names (`learner_diagnostics[].skill_id`).
+const _skillLabels = {
+  'profit_vs_cash': 'Profit and cash',
+  'maintenance_vs_growth': 'Maintenance and growth spending',
+  'pythagorean_calculation': 'Right-triangle calculation',
+  'pythagorean_precondition': 'When the triangle rule applies',
+  'logical_implication': 'Logical implication',
+  'universal_counterexample': 'Testing a universal claim',
+  'goal_specific_sample': 'Your work example',
+  'goal_specific_validation': 'Checking your work',
+};
+
+/// The starting checks' statuses (`learner_diagnostics[].status`). The
+/// backend's `unknown` is an answer that wasn't given (or was recorded as
+/// missing evidence), so it reads "Not provided yet". `needs_review` is an
+/// open answer that isn't auto-graded, so it reads "Reviewed by your mentor";
+/// a wrong answer (`needs_practice_on_item`) keeps "Revisit this specific
+/// skill" (owner decision 7).
+const _checkStatuses = {
+  'correct_on_item': 'Correct on this check',
+  'needs_practice_on_item': 'Revisit this specific skill',
+  'needs_review': 'Reviewed by your mentor',
+  'unknown': 'Not provided yet',
+  'not_assessed': 'Not checked yet',
+};
+
+/// A status this build doesn't know claims nothing about the answer.
+const _unknownCheckStatus = 'Not checked yet';
+
+/// Scorer enums and field names that can reach the learner inside
+/// comparison evidence and gap text, as plain words.
+const _scorerWords = {
+  'needs_review': 'needs a closer review',
+  'needs_practice_on_item': 'needs practice on this skill',
+  'correct_on_item': 'correct on this check',
+  'not_assessed': 'not checked yet',
+  'insufficient_user_evidence': 'not enough of your evidence',
+  'insufficient_evidence': 'not enough evidence',
+  'different_basis': 'not comparable',
+  'missing_evidence_keys': 'missing answers',
+  'missing_evidence': 'missing evidence',
+  'learner_diagnostics': 'starting checks',
+  'skill_diagnostics': 'starting checks',
+  'self_reported': 'self-reported',
+  'like_for_like_evidence': 'like-for-like evidence',
+};
+
+final _snakeToken = RegExp(
+  r'(?<![\w/.:@-])[a-z][a-z0-9]*(?:_[a-z0-9]+)+(?![\w/@-])',
+);
+final _factsNotSupplied = RegExp(
+  r"((?:[A-Z][\w’'.-]*\s+)*[A-Z][\w’'.-]*)\s+facts at (\d+) (?:were |was )?not supplied",
+);
+
+/// [text] from the comparison scorer (a dimension's evidence, mentor note or
+/// gap reason), with its shorthand in plain words (F12). The prompt asks for
+/// plain sentences; this is the app's defensive half:
+/// - "The relevant learner input has not been established." → "You
+///   haven’t shared this yet.";
+/// - "{Name} facts at {age} not supplied" → "no verified record of {Name}
+///   at {age} for this yet" (capitalised at the start of a sentence);
+/// - known enums (`needs_review`, `insufficient_idol_evidence`, skill ids, …)
+///   → their words, naming [mentor] where the enum refers to the mentor;
+/// - any other snake_case token loses its underscores.
+/// Ordinary prose, numbers and links are unchanged.
+String plainComparisonText(String text, {required String mentor}) {
+  if (text.trim() == 'The relevant learner input has not been established.') {
+    return 'You haven’t shared this yet.';
+  }
+  var out = text.replaceAllMapped(_factsNotSupplied, (m) {
+    final start =
+        m.start == 0 ||
+        RegExp(r'[.!?]\s*$').hasMatch(text.substring(0, m.start));
+    return '${start ? 'No' : 'no'} verified record of ${m[1]} at ${m[2]} '
+        'for this yet';
+  });
+  out = out.replaceAllMapped(_snakeToken, (m) {
+    final token = m[0]!;
+    if (token == 'insufficient_idol_evidence') {
+      return 'not enough documented evidence about $mentor';
+    }
+    final word = _scorerWords[token] ?? _skillLabels[token]?.toLowerCase();
+    return word ?? token.replaceAll('_', ' ');
+  });
+  return out;
+}
+
+/// The design's inline quote tint, `oklch(0.78 0.1 42)`.
+const _quoteTint = Color(0xFFEEA285);
+
+/// CMPYS Compare tab (v3 `CompareTab`): you and your mentor at the same age,
+/// how many dimensions compare like for like, the written perspective, and
+/// one row per evidence dimension with a detail sheet.
 class CmpysCompareScreen extends ConsumerStatefulWidget {
   const CmpysCompareScreen({super.key});
 
@@ -42,16 +157,6 @@ class CmpysCompareScreen extends ConsumerStatefulWidget {
 }
 
 class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
-  String? _open; // expanded dimension id
-
-  static const _dimShort = {
-    'capital': 'Capital',
-    'knowledge': 'Knowledge',
-    'habits': 'Discipline',
-    'network': 'Network',
-    'clarity': 'Clarity',
-  };
-
   @override
   Widget build(BuildContext context) {
     final st = ref.watch(cmpysStoreProvider);
@@ -59,106 +164,704 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
     final scoresSync = ref.watch(cmpysComparisonScoresSyncProvider);
     final idol = st.idol;
     final dims = st.liveDims();
-    final ms = st.liveMilestones();
-    final cmpAge = st.user.age;
-    final hasScores = dims.isNotEmpty;
-    final comparableDims = dims
-        .where(
-          (d) => d.status == 'comparable' && d.you != null && d.idol != null,
-        )
-        .toList();
-    final rawOverall = st.liveComparisonScores?['overall'];
-    final overall = rawOverall is Map
-        ? rawOverall.cast<String, dynamic>()
-        : null;
-    final hitCount = ms.where((m) => st.milestones[m.id] ?? false).length;
-    final pending = st.pendingWins().length;
-    final strengths = comparableDims.where((d) => d.you! >= d.idol!).toList();
+    final age = st.user.age > 0 ? st.user.age : null;
+    final perspective = perspectiveParagraphs(st.comparisonMd);
+    final diagnostics = st.liveComparisonScores?['learner_diagnostics'];
+    final top = math.max(MediaQuery.paddingOf(context).top + 8, 20.0);
 
     return Scaffold(
       backgroundColor: AppColors.paper,
-      body: SafeArea(
-        bottom: false,
-        child: EntranceScope(
-          child: ListView(
-            padding: EdgeInsets.fromLTRB(
-              AppSpacing.pageGutter(MediaQuery.sizeOf(context).width),
-              14,
-              AppSpacing.pageGutter(MediaQuery.sizeOf(context).width),
-              AppShell.bottomNavClearance(context),
+      body: ListView(
+        padding: EdgeInsets.only(bottom: AppShell.bottomNavClearance(context)),
+        children: [
+          Padding(
+            padding: EdgeInsets.fromLTRB(20, top, 20, 0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                V3Rise(child: Text('COMPARE', style: AppTypography.kick)),
+                const SizedBox(height: 10),
+                V3Rise(
+                  delay: const Duration(milliseconds: 50),
+                  child: _headline(idol, age),
+                ),
+              ],
             ),
-            children: EntranceGroup.wrap([
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  CmpysKicker(
-                    cmpAge > 0
-                        ? 'Your context at age $cmpAge'
-                        : 'Your learning context',
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 22, 20, 0),
+            child: V3Rise(
+              delay: const Duration(milliseconds: 100),
+              child: Center(child: _faces(st.user.name, idol, age)),
+            ),
+          ),
+          if (dims.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 22, 20, 0),
+              child: V3Rise(
+                delay: const Duration(milliseconds: 160),
+                child: _likeForLikeCard(dims),
+              ),
+            )
+          else
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 22, 20, 0),
+              child: _comparisonScoresStatus(scoresSync),
+            ),
+          if (perspective.isNotEmpty)
+            V3Rise(
+              delay: const Duration(milliseconds: 220),
+              child: V3Section(
+                title: 'Written perspective',
+                child: _perspectiveCard(idol, st.comparisonMd!, perspective),
+              ),
+            ),
+          if (dims.isNotEmpty)
+            V3Rise(
+              delay: const Duration(milliseconds: 280),
+              child: V3Section(
+                title: 'Dimensions',
+                child: Column(
+                  children: [
+                    for (var i = 0; i < dims.length; i++)
+                      Padding(
+                        padding: EdgeInsets.only(top: i == 0 ? 0 : 10),
+                        child: V3Rise(
+                          delay: Duration(milliseconds: 320 + i * 60),
+                          child: _dimRow(dims[i], i, idol, age),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          if (dims.isNotEmpty && diagnostics is List && diagnostics.isNotEmpty)
+            V3Section(
+              title: 'Your starting checks',
+              child: _diagnosticCard(diagnostics),
+            ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+            child: Row(
+              children: [
+                Expanded(
+                  child: V3Button(
+                    kind: V3ButtonKind.dark,
+                    icon: V3Icons.trophy,
+                    full: true,
+                    onPressed: () => Navigator.of(context).push(
+                      CmpysSheetRoute(
+                        builder: (_) => const CmpysRecordScreen(),
+                      ),
+                    ),
+                    child: const Text('Your record'),
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Learn from ${idol.short}',
-                    style: AppTypography.display.copyWith(
-                      fontSize: 30,
-                      letterSpacing: -0.5,
-                      height: 1.1,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: V3Button(
+                    kind: V3ButtonKind.line,
+                    icon: V3Icons.plan,
+                    full: true,
+                    onPressed: () => context.go(AppRoutes.plan),
+                    child: const Text('Plan'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── header ──
+
+  /// "You and X, both at age." The age line is dropped, never shown as 0,
+  /// when the learner's age is unknown.
+  Widget _headline(CmpysIdol idol, int? age) {
+    final mentor = idol.short.trim();
+    final headline = Text.rich(
+      key: const Key('compare-headline'),
+      TextSpan(
+        children: [
+          TextSpan(text: age == null ? 'You and $mentor.' : 'You and $mentor,'),
+          if (age != null) ...[
+            const TextSpan(text: '\n'),
+            TextSpan(
+              text: 'both at $age.',
+              style: AppTypography.displayItalic(42),
+            ),
+          ],
+        ],
+      ),
+      style: AppTypography.display(42).copyWith(color: AppColors.ink),
+    );
+    return Semantics(header: true, child: headline);
+  }
+
+  /// The overlapping learner initial, shared age and mentor avatar.
+  Widget _faces(String name, CmpysIdol idol, int? age) {
+    const big = 104.0;
+    const small = 56.0;
+    const overlap = 16.0;
+    final trimmed = name.trim();
+    final initial = trimmed.isEmpty ? '' : trimmed.characters.first;
+    final width = age == null
+        ? big * 2 - overlap
+        : big * 2 + small - overlap * 2;
+
+    BoxDecoration disc(Color color) => BoxDecoration(
+      color: color,
+      shape: BoxShape.circle,
+      border: Border.all(color: AppColors.paper, width: 4),
+    );
+
+    final you = Container(
+      width: big,
+      height: big,
+      decoration: disc(AppColors.ink),
+      alignment: Alignment.center,
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Text(
+          initial.toUpperCase(),
+          style: AppTypography.display(40).copyWith(color: Colors.white),
+        ),
+      ),
+    );
+    final mentor = Container(
+      width: big,
+      height: big,
+      decoration: disc(AppColors.paper),
+      child: V3Avatar(
+        image: cmpysIdolImage(idol),
+        initials: idol.initials,
+        tint: idol.tint,
+        size: big - 8,
+        gray: true,
+      ),
+    );
+
+    return ExcludeSemantics(
+      child: SizedBox(
+        width: width,
+        height: big,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Positioned(
+              left: 0,
+              top: 0,
+              child: V3Pop(
+                duration: const Duration(milliseconds: 700),
+                delay: const Duration(milliseconds: 200),
+                child: you,
+              ),
+            ),
+            Positioned(
+              right: 0,
+              top: 0,
+              child: V3Pop(
+                duration: const Duration(milliseconds: 700),
+                delay: const Duration(milliseconds: 300),
+                child: mentor,
+              ),
+            ),
+            if (age != null)
+              Positioned(
+                left: big - overlap,
+                top: (big - small) / 2,
+                child: V3Pop(
+                  duration: const Duration(milliseconds: 600),
+                  delay: const Duration(milliseconds: 450),
+                  child: Container(
+                    key: const Key('compare-age-disc'),
+                    width: small,
+                    height: small,
+                    decoration: disc(AppColors.ember),
+                    alignment: Alignment.center,
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        '$age',
+                        style: AppTypography.sans(18, FontWeight.w700)
+                            .merge(AppTypography.tnum)
+                            .copyWith(color: Colors.white),
+                      ),
                     ),
                   ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              if (hasScores)
-                _insufficientEvidenceHero(overall)
-              else
-                _comparisonScoresStatus(scoresSync),
-              if (hasScores &&
-                  (st.liveComparisonScores?['learner_diagnostics'] as List?)
-                          ?.isNotEmpty ==
-                      true)
-                _diagnosticCard(
-                  st.liveComparisonScores!['learner_diagnostics'] as List,
                 ),
-              const SizedBox(height: 14),
-              _aiVerdictCard(st, idol),
-              const SizedBox(height: 14),
-              _recordEntry(st, idol, hasScores ? pending : 0),
-              if (hasScores) ...[
-                const SizedBox(height: 18),
-                if (comparableDims.length >= 3) ...[
-                  _radarCard(idol, comparableDims),
-                  const SizedBox(height: 16),
-                ],
-                _dimensionRows(dims),
-                if (ms.isNotEmpty) ...[
-                  const SizedBox(height: 22),
-                  _milestonesSection(st, idol, ms, hitCount, cmpAge),
-                ],
-                if (strengths.isNotEmpty) ...[
-                  const SizedBox(height: 22),
-                  const Padding(
-                    padding: EdgeInsets.only(left: 2),
-                    child: CmpysKicker('Strengths to build on'),
-                  ),
-                  const SizedBox(height: 10),
-                  ...strengths.map(_strengthCard),
-                ],
-              ],
-              const SizedBox(height: 18),
-              CmpysButton(
-                variant: CmpysBtnVariant.primary,
-                size: CmpysBtnSize.lg,
-                full: true,
-                leadingIcon: PhosphorIconsBold.signpost,
-                onTap: () => context.go(AppRoutes.plan),
-                child: const Text('Continue your learning plan'),
               ),
-            ]),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── like-for-like count ──
+
+  /// "n of total dimensions compared like for like": solid segments for
+  /// comparable dimensions, dashed for the rest. The total is the number of
+  /// dimensions in the payload.
+  Widget _likeForLikeCard(List<LiveDim> dims) {
+    final states = dims.map(_DimState.of).toList();
+    final comparable = states.where((s) => s == _DimState.comparable).length;
+    return Container(
+      key: const Key('compare-like-for-like'),
+      padding: const EdgeInsets.all(16),
+      decoration: v3Card(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.baseline,
+            textBaseline: TextBaseline.alphabetic,
+            children: [
+              Text(
+                '$comparable',
+                key: const Key('compare-comparable-count'),
+                style: AppTypography.display(
+                  34,
+                ).merge(AppTypography.tnum).copyWith(color: AppColors.ink),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'of ${dims.length} '
+                  '${dims.length == 1 ? 'dimension' : 'dimensions'} '
+                  'compared like for like',
+                  style: AppTypography.sans(14).copyWith(color: AppColors.ink2),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              for (var i = 0; i < states.length; i++)
+                Expanded(
+                  child: Padding(
+                    padding: EdgeInsets.only(left: i == 0 ? 0 : 5),
+                    child: V3Pop(
+                      duration: const Duration(milliseconds: 450),
+                      delay: Duration(milliseconds: 300 + i * 80),
+                      child: states[i] == _DimState.comparable
+                          ? Container(
+                              key: const ValueKey('compare-segment-solid'),
+                              height: 8,
+                              decoration: BoxDecoration(
+                                color: AppColors.ink,
+                                borderRadius: BorderRadius.circular(9),
+                              ),
+                            )
+                          : const CustomPaint(
+                              key: ValueKey('compare-segment-dashed'),
+                              painter: _DashedPillPainter(),
+                              child: SizedBox(height: 8),
+                            ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            'Dimensions without comparable evidence are left unscored. '
+            'That’s not a zero.',
+            style: AppTypography.sans(
+              12.5,
+            ).copyWith(color: AppColors.ink3, height: 1.45),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── written perspective ──
+
+  Widget _perspectiveCard(
+    CmpysIdol idol,
+    String markdown,
+    List<String> paragraphs,
+  ) {
+    return V3Pressable(
+      key: const Key('compare-perspective-card'),
+      onTap: () => _openPerspective(idol, markdown),
+      focusRadius: AppRadii.brR,
+      child: ClipRRect(
+        borderRadius: AppRadii.brR,
+        child: Container(
+          width: double.infinity,
+          color: AppColors.night,
+          child: Stack(
+            children: [
+              const Positioned.fill(child: V3Grain()),
+              Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const V3Icon(V3Icons.quote, size: 26, color: _quoteTint),
+                    const SizedBox(height: 8),
+                    Text(
+                      paragraphs.first,
+                      maxLines: 5,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTypography.read(
+                        17,
+                      ).copyWith(color: Colors.white, height: 1.6),
+                    ),
+                    const SizedBox(height: 14),
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            'Read in full',
+                            style: AppTypography.sans(
+                              13.5,
+                              FontWeight.w600,
+                            ).copyWith(color: Colors.white),
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        const V3Icon(
+                          V3Icons.right,
+                          size: 15,
+                          color: Colors.white,
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
         ),
       ),
     );
   }
+
+  /// The full perspective, rendered as markdown so emphasis, rules and links
+  /// survive, in Literata 16.5 / 1.65 as the design's sheet.
+  void _openPerspective(CmpysIdol idol, String markdown) {
+    unawaited(
+      showV3Sheet<void>(
+        context,
+        title: 'Written perspective',
+        max: 0.9,
+        builder: (_) => Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            V3Rise(
+              child: CmpysMarkdown(
+                markdown,
+                readerTheme: ReaderTheme.light,
+                fontSize: 16.5,
+                lineHeight: 1.65,
+              ),
+            ),
+            const SizedBox(height: 14),
+            Text(
+              'Written by an AI interpretation of ${idol.name}. Historical '
+              'claims come from cited biographies; treat them as reported, '
+              'not certain.',
+              style: AppTypography.sans(
+                12,
+              ).copyWith(color: AppColors.ink3, height: 1.5),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── dimensions ──
+
+  String _mentorAtAge(CmpysIdol idol, int? age) =>
+      age == null ? idol.short : '${idol.short} at $age';
+
+  Widget _dimRow(LiveDim d, int index, CmpysIdol idol, int? age) {
+    final state = _DimState.of(d);
+    final basis = plainComparisonText(
+      d.comparisonBasis.trim(),
+      mentor: idol.short,
+    );
+    final barDelay = 400 + index * 80;
+    return V3Pressable(
+      key: const ValueKey('compare-dim-row'),
+      onTap: () => _openDim(d, idol, age),
+      focusRadius: AppRadii.brR,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(16),
+        decoration: v3Card(),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Wrap(
+                    alignment: WrapAlignment.spaceBetween,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 8,
+                    runSpacing: 6,
+                    children: [
+                      Text(
+                        d.label,
+                        style: AppTypography.sans(
+                          15.5,
+                          FontWeight.w600,
+                        ).copyWith(color: AppColors.ink),
+                      ),
+                      FittedBox(fit: BoxFit.scaleDown, child: _tag(state)),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                const V3Icon(V3Icons.right, size: 15, color: AppColors.ink3),
+              ],
+            ),
+            if (state == _DimState.comparable) ...[
+              const SizedBox(height: 14),
+              _barRow('You', d.you!, AppColors.ember, barDelay, barDelay),
+              const SizedBox(height: 8),
+              _barRow(
+                _mentorAtAge(idol, age),
+                d.idol!,
+                AppColors.ink,
+                barDelay + 120,
+                barDelay,
+              ),
+            ] else if (basis.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(
+                basis,
+                style: AppTypography.sans(
+                  13.5,
+                ).copyWith(color: AppColors.ink2, height: 1.45),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _tag(_DimState state) => V3Tag(
+    color: state.color,
+    background: state.background,
+    child: Text(state.label),
+  );
+
+  Widget _barRow(
+    String who,
+    int value,
+    Color color,
+    int barDelayMs,
+    int countDelayMs,
+  ) {
+    final row = Row(
+      children: [
+        SizedBox(
+          width: 92,
+          child: Text(
+            who,
+            style: AppTypography.sans(
+              12.5,
+              FontWeight.w500,
+            ).copyWith(color: AppColors.ink2),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: V3Bar(
+            value: value / 100,
+            color: color,
+            height: 8,
+            delay: Duration(milliseconds: barDelayMs),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Container(
+          constraints: const BoxConstraints(minWidth: 24),
+          alignment: Alignment.centerRight,
+          child: V3CountUp(
+            to: value,
+            delay: Duration(milliseconds: countDelayMs),
+            style: AppTypography.sans(
+              13,
+              FontWeight.w700,
+            ).merge(AppTypography.tnum).copyWith(color: AppColors.ink),
+          ),
+        ),
+      ],
+    );
+    return Semantics(
+      label: '$who: $value out of 100',
+      excludeSemantics: true,
+      child: row,
+    );
+  }
+
+  void _openDim(LiveDim d, CmpysIdol idol, int? age) {
+    unawaited(
+      showV3Sheet<void>(
+        context,
+        title: d.label,
+        builder: (_) => _dimDetail(d, idol, age),
+      ),
+    );
+  }
+
+  /// The design's `DimDetail`: Your evidence, the mentor at the same age,
+  /// then Uncertainty (comparable) or "Why there’s no score". A section
+  /// whose payload text is missing is left out.
+  Widget _dimDetail(LiveDim d, CmpysIdol idol, int? age) {
+    final state = _DimState.of(d);
+    String plain(String text) =>
+        plainComparisonText(text.trim(), mentor: idol.short);
+    final youNote = plain(d.youNote);
+    final idolNote = plain(d.idolNote);
+    final basis = plain(d.comparisonBasis);
+
+    Widget score(String who, int value, Color color) => Expanded(
+      child: Semantics(
+        label: '$who: $value out of 100',
+        excludeSemantics: true,
+        child: Container(
+          key: const ValueKey('compare-score-box'),
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: AppColors.hair),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                who,
+                style: AppTypography.sans(
+                  12,
+                  FontWeight.w600,
+                ).copyWith(color: AppColors.ink3),
+              ),
+              V3CountUp(
+                to: value,
+                style: AppTypography.display(
+                  38,
+                ).merge(AppTypography.tnum).copyWith(color: color),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    Widget block(String title, String body, {Color? tone}) => Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 10),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: tone ?? AppColors.paper,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: AppTypography.sans(
+              12,
+              FontWeight.w600,
+            ).copyWith(color: AppColors.ink2),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            body,
+            style: AppTypography.sans(
+              14.5,
+            ).copyWith(color: AppColors.ink, height: 1.5),
+          ),
+        ],
+      ),
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        FittedBox(fit: BoxFit.scaleDown, child: _tag(state)),
+        if (state == _DimState.comparable)
+          Padding(
+            padding: const EdgeInsets.only(top: 14),
+            child: Row(
+              children: [
+                score('You', d.you!, AppColors.ember),
+                const SizedBox(width: 10),
+                score(idol.short, d.idol!, AppColors.ink),
+              ],
+            ),
+          ),
+        if (youNote.isNotEmpty) block('Your evidence', youNote),
+        if (idolNote.isNotEmpty) block(_mentorAtAge(idol, age), idolNote),
+        if (basis.isNotEmpty)
+          block(
+            state == _DimState.comparable
+                ? 'Uncertainty'
+                : 'Why there’s no score',
+            basis,
+            tone: state.background,
+          ),
+        const SizedBox(height: 12),
+        Text(
+          'Scores show evidence on a shared scale for this dimension only. '
+          'They don’t rank overall ability.',
+          style: AppTypography.sans(
+            12,
+          ).copyWith(color: AppColors.ink3, height: 1.45),
+        ),
+      ],
+    );
+  }
+
+  // ── starting skill checks (server diagnostics, kept from v2) ──
+
+  Widget _diagnosticCard(List values) {
+    return Container(
+      key: const Key('comparison-skill-checks'),
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: v3Card(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final value in values.whereType<Map>())
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(
+                '${_skillLabels[value['skill_id']] ?? 'Skill check'}: '
+                '${_checkStatuses[value['status']] ?? _unknownCheckStatus}',
+                style: AppTypography.sans(
+                  14,
+                  FontWeight.w500,
+                ).copyWith(color: AppColors.ink),
+              ),
+            ),
+          Text(
+            'Brief checks guide the next lesson; they do not certify your overall level.',
+            style: AppTypography.sans(
+              12.5,
+            ).copyWith(color: AppColors.ink3, height: 1.45),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── score generation states (no dimensions yet) ──
 
   Widget _comparisonScoresStatus(
     AsyncValue<ComparisonScoresSyncResult> scoresSync,
@@ -195,7 +898,8 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
             return _comparisonScoresCard(
               key: const Key('comparison-scores-failed'),
               title: 'Your dimension assessment couldn’t finish.',
-              subtitle: 'Your written comparison is saved. Tap to retry the assessment.',
+              subtitle:
+                  'Your written comparison is saved. Tap to retry the assessment.',
               onRetry: () => unawaited(_retryComparisonScores()),
             );
           case ComparisonScoresSyncResult.ready:
@@ -243,25 +947,24 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
     bool loading = false,
     VoidCallback? onRetry,
   }) {
-    return CmpysCardSurface(
-      key: key,
-      onTap: onRetry,
-      raised: true,
+    final body = Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: v3Card(),
       child: Row(
         children: [
           SizedBox(
             width: 20,
             height: 20,
-            child: loading
-                ? const CircularProgressIndicator(
-                    strokeWidth: 2,
-                    valueColor: AlwaysStoppedAnimation<Color>(AppColors.ochre),
-                  )
-                : const Icon(
-                    PhosphorIconsBold.arrowClockwise,
-                    size: 20,
-                    color: AppColors.ochre,
-                  ),
+            child: Center(
+              child: loading
+                  ? const V3Spinner(color: AppColors.ember)
+                  : const V3Icon(
+                      V3Icons.refresh,
+                      size: 20,
+                      color: AppColors.ember,
+                    ),
+            ),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -270,18 +973,17 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
               children: [
                 Text(
                   title,
-                  style: AppTypography.bodyMedium.copyWith(
-                    color: AppColors.ink,
-                    fontSize: 14.5,
-                  ),
+                  style: AppTypography.sans(
+                    14.5,
+                    FontWeight.w600,
+                  ).copyWith(color: AppColors.ink),
                 ),
                 const SizedBox(height: 3),
                 Text(
                   subtitle,
-                  style: AppTypography.caption.copyWith(
-                    color: AppColors.ink3,
-                    fontSize: 12.5,
-                  ),
+                  style: AppTypography.sans(
+                    12.5,
+                  ).copyWith(color: AppColors.ink3),
                 ),
               ],
             ),
@@ -289,843 +991,83 @@ class _CmpysCompareScreenState extends ConsumerState<CmpysCompareScreen> {
         ],
       ),
     );
-  }
-
-  Widget _diagnosticCard(List values) {
-    const labels = {
-      'profit_vs_cash': 'Profit and cash',
-      'maintenance_vs_growth': 'Maintenance and growth spending',
-      'pythagorean_calculation': 'Right-triangle calculation',
-      'pythagorean_precondition': 'When the triangle rule applies',
-      'logical_implication': 'Logical implication',
-      'universal_counterexample': 'Testing a universal claim',
-      'goal_specific_sample': 'Your work example',
-      'goal_specific_validation': 'Checking your work',
-    };
-    const statuses = {
-      'correct_on_item': 'Correct on this check',
-      'needs_practice_on_item': 'Revisit this specific skill',
-      'needs_review': 'Needs a closer review',
-      'unknown': 'Not established yet',
-      'not_assessed': 'Not checked yet',
-    };
-    return Padding(
-      padding: const EdgeInsets.only(top: 14),
-      child: CmpysCardSurface(
-        key: const Key('comparison-skill-checks'),
-        pad: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const CmpysKicker('Your starting checks'),
-            const SizedBox(height: 8),
-            for (final value in values.whereType<Map>())
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
-                  '${labels[value['skill_id']] ?? 'Skill check'}: '
-                  '${statuses[value['status']] ?? 'Needs a closer review'}',
-                  style: AppTypography.bodyMedium,
-                ),
-              ),
-            Text(
-              'Brief checks guide the next lesson; they do not certify your overall level.',
-              style: AppTypography.caption,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _insufficientEvidenceHero(Map<String, dynamic>? overall) {
-    final comparable =
-        (overall?['comparable_dimensions'] as num?)?.toInt() ?? 0;
-    final total = (overall?['total_dimensions'] as num?)?.toInt() ?? 5;
-    const reason =
-        'Your knowledge, resources, and circumstances are different dimensions. '
-        'They are not one overall ability score. Missing evidence means we still need '
-        'to check, not that you are a beginner. Your plan should build on what you can already do.';
-    return CmpysCardSurface(
-      key: const Key('comparison-overall-insufficient'),
-      raised: true,
-      pad: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 38,
-                height: 38,
-                decoration: BoxDecoration(
-                  color: AppColors.ochreSoft,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Icon(
-                  PhosphorIconsBold.scales,
-                  size: 20,
-                  color: AppColors.ochre2,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  'Your starting point, skill by skill',
-                  style: AppTypography.h4.copyWith(fontSize: 16),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Text(
-            reason,
-            style: AppTypography.caption.copyWith(
-              color: AppColors.ink2,
-              fontSize: 13,
-              height: 1.45,
-            ),
-          ),
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-            decoration: BoxDecoration(
-              color: AppColors.paper2,
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Text(
-              '$comparable/$total dimensions are like-for-like',
-              style: AppTypography.monoLabel.copyWith(
-                color: AppColors.ink3,
-                fontSize: 10.5,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _aiVerdictCard(CmpysState st, CmpysIdol idol) {
-    final md = st.comparisonMd;
-    if (md == null || md.trim().isEmpty) {
-      return Container(
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          gradient: AppColors.gradInk,
-          borderRadius: AppRadii.card,
-        ),
-        child: Row(
-          children: [
-            const Icon(
-              Icons.auto_awesome_rounded,
-              size: 20,
-              color: Color(0xFFFFD166),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                'Your verdict from ${idol.short} hasn’t been generated yet — finish the onboarding interview to get it.',
-                style: AppTypography.caption.copyWith(
-                  color: Colors.white.withValues(alpha: 0.85),
-                  fontSize: 13.5,
-                  height: 1.5,
-                ),
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        gradient: AppColors.gradInk,
-        borderRadius: AppRadii.card,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(
-                Icons.auto_awesome_rounded,
-                size: 14,
-                color: Color(0xFFFFD166),
-              ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  '${idol.short.toUpperCase()}’S VERDICT',
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: AppTypography.kicker.copyWith(
-                    color: Colors.white.withValues(alpha: 0.6),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          // Preview viewport: the markdown lays out at natural height inside
-          // a capped, non-scrollable scroll view — clipping without the
-          // RenderFlex overflow a bare ConstrainedBox would throw.
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 180),
-            child: ShaderMask(
-              shaderCallback: (rect) => const LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [Colors.white, Colors.white, Colors.transparent],
-                stops: [0.0, 0.72, 1.0],
-              ).createShader(rect),
-              blendMode: BlendMode.dstIn,
-              child: SingleChildScrollView(
-                physics: const NeverScrollableScrollPhysics(),
-                child: CmpysMarkdown(md, onDark: true),
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
-          CmpysPressable(
-            onTap: () => Navigator.of(context).push(
-              CmpysPageRoute(
-                builder: (_) => CmpysMarkdownScreen(
-                  kicker: 'From ${idol.short}',
-                  title: 'Learning perspective',
-                  markdown: md,
-                ),
-              ),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Flexible(
-                  child: Text(
-                    'Read the full perspective',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: AppTypography.bodyMedium.copyWith(
-                      color: const Color(0xFFFFD166),
-                      fontWeight: FontWeight.w700,
-                      fontSize: 14,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 4),
-                const Icon(
-                  Icons.arrow_forward_rounded,
-                  size: 16,
-                  color: Color(0xFFFFD166),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _recordEntry(CmpysState st, CmpysIdol idol, int pending) {
-    return CmpysCardSurface(
-      raised: true,
-      pad: EdgeInsets.zero,
-      child: Column(
-        children: [
-          CmpysPressable(
-            onTap: () => Navigator.of(
-              context,
-            ).push(CmpysSheetRoute(builder: (_) => const CmpysRecordScreen())),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Row(
-                children: [
-                  Container(
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                      color: AppColors.ochreSoft,
-                      borderRadius: BorderRadius.circular(13),
-                    ),
-                    child: const Icon(
-                      PhosphorIconsFill.sparkle,
-                      size: 20,
-                      color: AppColors.ochre2,
-                    ),
-                  ),
-                  const SizedBox(width: 13),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Your record',
-                          style: AppTypography.h4.copyWith(fontSize: 15.5),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          '${st.achievements.length} entries · your side of this story',
-                          style: AppTypography.caption.copyWith(
-                            color: AppColors.ink3,
-                            fontSize: 12.5,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  if (pending > 0)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 9,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: AppColors.ochreSoft,
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Text(
-                        '$pending new',
-                        style: AppTypography.kicker.copyWith(
-                          color: AppColors.ochre2,
-                          fontSize: 9.5,
-                        ),
-                      ),
-                    ),
-                  const SizedBox(width: 6),
-                  const Icon(
-                    Icons.chevron_right_rounded,
-                    size: 18,
-                    color: AppColors.hair2,
-                  ),
-                ],
-              ),
-            ),
-          ),
-          if (pending > 0)
-            CmpysPressable(
-              onTap: _openReassess,
-              child: Container(
-                decoration: const BoxDecoration(
-                  color: AppColors.paper,
-                  border: Border(top: BorderSide(color: AppColors.hair)),
-                  borderRadius: BorderRadius.vertical(
-                    bottom: Radius.circular(26),
-                  ),
-                ),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 13,
-                ),
-                child: Row(
-                  children: [
-                    const Icon(
-                      PhosphorIconsRegular.arrowClockwise,
-                      size: 15,
-                      color: AppColors.green2,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Ask ${idol.short} to reassess your indexes',
-                        style: AppTypography.captionMedium.copyWith(
-                          color: AppColors.green2,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 13,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _radarCard(CmpysIdol idol, List<LiveDim> dims) {
-    return CmpysCardSurface(
-      child: Column(
-        children: [
-          Row(
-            children: [
-              const Expanded(child: CmpysKicker('Evidence by dimension')),
-              const SizedBox(width: 10),
-              _legendDot(AppColors.ochre, 'You'),
-              const SizedBox(width: 14),
-              _legendDot(AppColors.green, idol.short),
-            ],
-          ),
-          const SizedBox(height: 4),
-          SizedBox(
-            height: 270,
-            child: CustomPaint(
-              size: const Size.fromHeight(270),
-              painter: _RadarPainter(
-                dims: dims
-                    .map(
-                      (d) => (
-                        label: _dimShort[d.id] ?? d.label,
-                        you: d.you!,
-                        idol: d.idol!,
-                      ),
-                    )
-                    .toList(),
-              ),
-            ),
-          ),
-          Text(
-            'Comparable dimensions only · tap below for evidence',
-            style: AppTypography.caption.copyWith(
-              color: AppColors.ink3,
-              fontSize: 12,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _legendDot(Color c, String label) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 10,
-          height: 10,
-          decoration: BoxDecoration(
-            color: c,
-            borderRadius: BorderRadius.circular(3),
-          ),
-        ),
-        const SizedBox(width: 6),
-        Text(
-          label,
-          style: AppTypography.captionMedium.copyWith(fontSize: 12.5),
-        ),
-      ],
-    );
-  }
-
-  Widget _dimensionRows(List<LiveDim> dims) {
-    return CmpysCardSurface(
-      pad: const EdgeInsets.all(6),
-      child: Column(
-        children: [
-          for (var i = 0; i < dims.length; i++) _dimRow(dims[i], first: i == 0),
-        ],
-      ),
-    );
-  }
-
-  Widget _dimRow(LiveDim d, {required bool first}) {
-    final open = _open == d.id;
-    final comparable =
-        d.status == 'comparable' && d.you != null && d.idol != null;
-    return Container(
-      decoration: BoxDecoration(
-        border: first
-            ? null
-            : const Border(top: BorderSide(color: AppColors.hair)),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            CmpysPressable(
-              onTap: () => setState(() => _open = open ? null : d.id),
-              child: Column(
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          d.label,
-                          style: AppTypography.h4.copyWith(fontSize: 15),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 9,
-                          vertical: 3,
-                        ),
-                        decoration: BoxDecoration(
-                          color: comparable
-                              ? AppColors.greenSoft
-                              : AppColors.paper2,
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                        child: Text(
-                          comparable
-                              ? 'Comparable evidence'
-                              : _dimensionStatusLabel(d.status),
-                          style: AppTypography.kicker.copyWith(
-                            color: comparable
-                                ? AppColors.green2
-                                : AppColors.ink3,
-                            fontSize: 10.5,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  if (comparable) ...[
-                    _barWithVal(d.you!, AppColors.ochre, AppColors.ochre2),
-                    const SizedBox(height: 6),
-                    _barWithVal(d.idol!, AppColors.green, AppColors.green2),
-                  ] else
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 9,
-                      ),
-                      decoration: BoxDecoration(
-                        color: AppColors.paper2,
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Text(
-                        d.comparisonBasis.isNotEmpty
-                            ? 'No numeric score · ${d.comparisonBasis}'
-                            : 'No numeric score · evidence is not comparable',
-                        style: AppTypography.caption.copyWith(
-                          color: AppColors.ink3,
-                          fontSize: 11.5,
-                          height: 1.35,
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            if (open) ...[
-              const SizedBox(height: 12),
-              if (d.youNote.isNotEmpty) _noteLine(AppColors.ochre, d.youNote),
-              if (d.youNote.isNotEmpty && d.idolNote.isNotEmpty)
-                const SizedBox(height: 8),
-              if (d.idolNote.isNotEmpty) _noteLine(AppColors.green, d.idolNote),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  String _dimensionStatusLabel(String status) {
-    return switch (status) {
-      'different_basis' => 'Different basis',
-      'insufficient_idol_evidence' => 'Need mentor evidence',
-      _ => 'Need your evidence',
-    };
-  }
-
-  Widget _barWithVal(int value, Color color, Color valueColor) {
-    return Row(
-      children: [
-        Expanded(
-          child: CmpysBar(value: value.toDouble(), color: color, height: 9),
-        ),
-        const SizedBox(width: 9),
-        SizedBox(
-          width: 24,
-          child: Text(
-            '$value',
-            textAlign: TextAlign.right,
-            style: AppTypography.monoLabel.copyWith(
-              color: valueColor,
-              fontSize: 11,
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _noteLine(Color dot, String text) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.only(top: 4, right: 9),
-          child: Container(
-            width: 9,
-            height: 9,
-            decoration: BoxDecoration(
-              color: dot,
-              borderRadius: BorderRadius.circular(3),
-            ),
-          ),
-        ),
-        Expanded(
-          child: Text(
-            text,
-            style: AppTypography.caption.copyWith(
-              color: AppColors.ink2,
-              fontSize: 13,
-              height: 1.45,
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _milestonesSection(
-    CmpysState st,
-    CmpysIdol idol,
-    List<CmpysMilestone> ms,
-    int hitCount,
-    int cmpAge,
-  ) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.only(left: 2),
-          child: Row(
-            children: [
-              CmpysKicker('Milestones ${idol.short} hit by $cmpAge'),
-              const Spacer(),
-              Text(
-                '$hitCount/${ms.length}',
-                style: AppTypography.captionMedium.copyWith(
-                  color: AppColors.green,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 10),
-        CmpysCardSurface(
-          pad: const EdgeInsets.all(6),
-          child: Column(
-            children: [
-              for (var i = 0; i < ms.length; i++)
-                _milestoneRow(st, ms[i], first: i == 0),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _milestoneRow(CmpysState st, CmpysMilestone m, {required bool first}) {
-    final hit = st.milestones[m.id] ?? false;
-    return Container(
-      decoration: BoxDecoration(
-        border: first
-            ? null
-            : const Border(top: BorderSide(color: AppColors.hair)),
-      ),
-      child: CmpysPressable(
-        onTap: () {
-          if (hit) {
-            ref.read(cmpysStoreProvider.notifier).toggleMilestone(m.id);
-          } else {
-            showCmpysSheet(
-              context,
-              title: 'Claim this milestone',
-              child: ClaimSheet(milestoneId: m.id, label: m.label),
-            );
-          }
-        },
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 13),
-          child: Row(
-            children: [
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                width: 25,
-                height: 25,
-                decoration: BoxDecoration(
-                  color: hit ? AppColors.green : Colors.transparent,
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: hit ? AppColors.green : AppColors.hair2,
-                    width: 2,
-                  ),
-                ),
-                child: hit
-                    ? const Icon(
-                        Icons.check_rounded,
-                        size: 14,
-                        color: Colors.white,
-                      )
-                    : null,
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  m.label,
-                  style: AppTypography.bodyMedium.copyWith(
-                    fontSize: 14.5,
-                    color: hit ? AppColors.ink3 : AppColors.ink,
-                    decoration: hit ? TextDecoration.lineThrough : null,
-                  ),
-                ),
-              ),
-              if (!hit)
-                const Icon(
-                  Icons.chevron_right_rounded,
-                  size: 16,
-                  color: AppColors.hair2,
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _strengthCard(LiveDim dimension) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: CmpysCardSurface(
-        color: AppColors.greenSoft,
-        border: false,
-        pad: const EdgeInsets.all(14),
-        child: Row(
-          children: [
-            const Icon(
-              PhosphorIconsFill.sparkle,
-              size: 20,
-              color: AppColors.green,
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                'Build on your reported strengths in ${dimension.label}.',
-                style: AppTypography.bodyMedium.copyWith(
-                  color: AppColors.green2,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _openReassess() {
-    Navigator.of(context).push(
-      PageRouteBuilder(
-        opaque: false,
-        barrierColor: Colors.transparent,
-        pageBuilder: (_, _, _) => const ReassessOverlay(),
-      ),
+    if (onRetry == null) return KeyedSubtree(key: key, child: body);
+    return V3Pressable(
+      key: key,
+      onTap: onRetry,
+      focusRadius: AppRadii.brR,
+      child: body,
     );
   }
 }
 
-class _RadarPainter extends CustomPainter {
-  _RadarPainter({required this.dims});
-  final List<({String label, int you, int idol})> dims;
+/// The written perspective as plain paragraphs for the card preview: split
+/// on blank lines; headings and rules (`---`) dropped; quote and list
+/// markers removed; links and images unwrapped to their text; inline code
+/// and `**`/`__`/`*`/`_` emphasis unwrapped. A literal `*` or `_` that does
+/// not delimit emphasis (as in "5 * 3" or "snake_case") is kept.
+@visibleForTesting
+List<String> perspectiveParagraphs(String? markdown) {
+  if (markdown == null || markdown.trim().isEmpty) return const [];
+  final heading = RegExp(r'^\s{0,3}#{1,6}\s');
+  final rule = RegExp(r'^\s{0,3}([-*_])(?:\s*\1){2,}\s*$');
+  final marker = RegExp(r'^\s*(?:>\s?|[-*+]\s+)');
+  final link = RegExp(r'!?\[([^\]]*)\]\([^)]*\)');
+  final code = RegExp(r'`([^`]*)`');
+  final strong = RegExp(r'(\*\*|__)(?=\S)(.+?)(?<=\S)\1');
+  final emStar = RegExp(r'(?<![\w*])\*(?=[^\s*])(.+?)(?<=[^\s*])\*(?![\w*])');
+  final emUnderscore = RegExp(
+    r'(?<![\w_])_(?=[^\s_])(.+?)(?<=[^\s_])_(?![\w_])',
+  );
+  final out = <String>[];
+  for (final block in markdown.split(RegExp(r'\n\s*\n'))) {
+    final lines = block
+        .split('\n')
+        .where((line) => !heading.hasMatch(line) && !rule.hasMatch(line))
+        .map((line) => line.replaceFirst(marker, '').trim())
+        .where((line) => line.isNotEmpty);
+    final text = lines
+        .join(' ')
+        .replaceAllMapped(link, (m) => m[1]!)
+        .replaceAllMapped(code, (m) => m[1]!)
+        .replaceAllMapped(strong, (m) => m[2]!)
+        .replaceAllMapped(emStar, (m) => m[1]!)
+        .replaceAllMapped(emUnderscore, (m) => m[1]!)
+        .trim();
+    if (text.isNotEmpty) out.add(text);
+  }
+  return out;
+}
+
+/// A pill outline in a 1.5 pt dashed hair2 stroke (`1.5px dashed
+/// var(--hair2)`), for a dimension that is not compared like for like.
+class _DashedPillPainter extends CustomPainter {
+  const _DashedPillPainter();
+
+  static const double _stroke = 1.5;
+  static const double _dash = 4;
+  static const double _gap = 3;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final n = dims.length;
-    final cx = size.width / 2;
-    final cy = size.height / 2 + 4;
-    final radius = math.min(size.width, size.height) / 2 - 30;
-
-    Offset vertex(int i, double r) {
-      final angle = -math.pi / 2 + (i * 2 * math.pi / n);
-      return Offset(cx + math.cos(angle) * r, cy + math.sin(angle) * r);
-    }
-
-    // grid
-    final grid = Paint()
+    if (size.isEmpty) return;
+    final rect = (Offset.zero & size).deflate(_stroke / 2);
+    final path = Path()
+      ..addRRect(RRect.fromRectAndRadius(rect, const Radius.circular(9)));
+    final paint = Paint()
       ..color = AppColors.hair2
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1;
-    for (final pct in [0.25, 0.5, 0.75, 1.0]) {
-      final path = Path();
-      for (var i = 0; i < n; i++) {
-        final o = vertex(i, radius * pct);
-        i == 0 ? path.moveTo(o.dx, o.dy) : path.lineTo(o.dx, o.dy);
+      ..strokeWidth = _stroke;
+    for (final PathMetric metric in path.computeMetrics()) {
+      for (var d = 0.0; d < metric.length; d += _dash + _gap) {
+        canvas.drawPath(
+          metric.extractPath(d, math.min(d + _dash, metric.length)),
+          paint,
+        );
       }
-      path.close();
-      canvas.drawPath(path, grid);
-    }
-    for (var i = 0; i < n; i++) {
-      canvas.drawLine(Offset(cx, cy), vertex(i, radius), grid);
-    }
-
-    Path poly(int Function(int) val) {
-      final p = Path();
-      for (var i = 0; i < n; i++) {
-        final o = vertex(i, radius * val(i) / 100);
-        i == 0 ? p.moveTo(o.dx, o.dy) : p.lineTo(o.dx, o.dy);
-      }
-      p.close();
-      return p;
-    }
-
-    final idolPath = poly((i) => dims[i].idol);
-    canvas.drawPath(
-      idolPath,
-      Paint()..color = AppColors.green.withValues(alpha: 0.2),
-    );
-    canvas.drawPath(
-      idolPath,
-      Paint()
-        ..color = AppColors.green
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2.5
-        ..strokeJoin = StrokeJoin.round,
-    );
-
-    final youPath = poly((i) => dims[i].you);
-    canvas.drawPath(
-      youPath,
-      Paint()..color = AppColors.ochre.withValues(alpha: 0.3),
-    );
-    canvas.drawPath(
-      youPath,
-      Paint()
-        ..color = AppColors.ochre
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2.5
-        ..strokeJoin = StrokeJoin.round,
-    );
-    for (var i = 0; i < n; i++) {
-      final o = vertex(i, radius * dims[i].you / 100);
-      canvas.drawCircle(o, 3.5, Paint()..color = AppColors.ochre);
-      canvas.drawCircle(
-        o,
-        3.5,
-        Paint()
-          ..color = Colors.white
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.5,
-      );
-    }
-
-    // labels
-    final tp = TextPainter(textDirection: TextDirection.ltr);
-    for (var i = 0; i < n; i++) {
-      final o = vertex(i, radius + 18);
-      tp.text = TextSpan(
-        text: dims[i].label,
-        style: TextStyle(
-          fontFamily: AppTypography.label.fontFamily,
-          fontSize: 11.5,
-          fontWeight: FontWeight.w700,
-          color: AppColors.ink2,
-        ),
-      );
-      tp.layout(maxWidth: 90);
-      tp.paint(canvas, o.translate(-tp.width / 2, -tp.height / 2));
     }
   }
 
   @override
-  bool shouldRepaint(covariant _RadarPainter old) => old.dims != dims;
+  bool shouldRepaint(_DashedPillPainter oldDelegate) => false;
 }

@@ -643,3 +643,419 @@ async def test_fixed_diagnostic_stream_persists_exact_case_without_model_call(
     )
     assert assistant.content == BANK["geometry"][0].question
     assert assistant.response_ui_json == done["response_ui"]
+
+
+# ---------------------------------------------------------------------------
+# v3 control kinds: multi_choice, scale, option details, suggestions, presets
+# ---------------------------------------------------------------------------
+
+
+def _v3(**fields) -> InterviewResponseInput:
+    return InterviewResponseInput.model_validate({"version": 1, **fields})
+
+
+def test_multi_choice_requires_2_to_6_unique_options():
+    response_input = _v3(
+        kind="multi_choice",
+        options=["  Reading ", "Videos", "reading", "Practice"],
+        min_selected=1,
+        max_selected=3,
+        allow_custom=False,
+    )
+
+    assert response_input.kind == "multi_choice"
+    assert response_input.options == ["Reading", "Videos", "Practice"]
+    assert response_input.min_selected == 1
+    assert response_input.max_selected == 3
+    assert response_input.allow_custom is True
+
+    # No cap by default, and six options is the ceiling.
+    open_ended = _v3(kind="multi_choice", options=[f"Mode {i}" for i in range(6)])
+    assert len(open_ended.options) == 6
+    assert open_ended.max_selected is None
+
+    for options in (
+        ["Only one"],
+        ["Same", "same", "SAME"],
+        ["Fine", "   "],
+        ["Fine", "x" * 81],
+        [f"Mode {i}" for i in range(7)],
+    ):
+        with pytest.raises(ValidationError):
+            _v3(kind="multi_choice", options=options)
+
+    # Selection limits must be satisfiable with the (deduplicated) options.
+    for limits in (
+        {"min_selected": 0},
+        {"min_selected": 4},
+        {"max_selected": 4},
+        {"min_selected": 3, "max_selected": 2},
+    ):
+        with pytest.raises(ValidationError):
+            _v3(kind="multi_choice", options=["A", "B", "C"], **limits)
+    assert (
+        _v3(
+            kind="multi_choice",
+            options=["A", "B", "C"],
+            min_selected=2,
+            max_selected=2,
+        ).max_selected
+        == 2
+    )
+
+    # Selection limits are multi-only: other kinds reset them.
+    single = _v3(
+        kind="single_choice",
+        options=["A", "B"],
+        min_selected=2,
+        max_selected=2,
+    )
+    assert single.min_selected == 1
+    assert single.max_selected is None
+    text = _v3(kind="text", min_selected=1, max_selected=3)
+    assert text.min_selected == 1
+    assert text.max_selected is None
+
+
+def test_scale_forces_one_to_five():
+    scale = _v3(
+        kind="scale",
+        min=0,
+        max=10,
+        step=2,
+        initial=7,
+        unit="points",
+        low_label="  Not at all ",
+        high_label="Fluent",
+        options=["A", "B"],
+        suggestions=["x"],
+        presets=[1],
+        daily_hint=True,
+    )
+
+    assert scale.kind == "scale"
+    assert (scale.min_value, scale.max_value, scale.step) == (1, 5, 1)
+    assert scale.initial_value is None
+    assert scale.unit is None
+    assert scale.low_label == "Not at all"
+    assert scale.high_label == "Fluent"
+    assert scale.options == []
+    assert scale.suggestions == []
+    assert scale.presets == []
+    assert scale.daily_hint is False
+
+    payload = scale.model_dump(mode="json", by_alias=True, exclude_none=True)
+    assert (payload["min"], payload["max"], payload["step"]) == (1, 5, 1)
+    assert "initial" not in payload
+
+    # Missing or unusable bounds are overwritten, not rejected.
+    bare = _v3(kind="scale")
+    assert (bare.min_value, bare.max_value, bare.step) == (1, 5, 1)
+    assert bare.low_label is None and bare.high_label is None
+    broken = _v3(kind="scale", min=5, max=1, step=0)
+    assert (broken.min_value, broken.max_value, broken.step) == (1, 5, 1)
+
+    with pytest.raises(ValidationError):
+        _v3(kind="scale", low_label="x" * 41)
+    with pytest.raises(ValidationError):
+        _v3(kind="scale", high_label="x" * 41)
+
+    # Labels belong to scale only.
+    for kind, extra in (
+        ("text", {}),
+        ("single_choice", {"options": ["A", "B"]}),
+        ("multi_choice", {"options": ["A", "B"]}),
+        ("number", {"min": 0, "max": 10, "step": 1}),
+    ):
+        other = _v3(kind=kind, low_label="Low", high_label="High", **extra)
+        assert other.low_label is None
+        assert other.high_label is None
+
+
+def test_option_details_length_must_match_options():
+    details = [
+        {"description": "  One at a time ", "icon": "book"},
+        {"description": "Together", "icon": "users"},
+        {"icon": "sparkle"},
+    ]
+
+    for kind in ("single_choice", "multi_choice"):
+        response_input = _v3(
+            kind=kind,
+            options=["Solo", "Pair", "Group"],
+            option_details=details,
+        )
+        assert [d.description for d in response_input.option_details] == [
+            "One at a time",
+            "Together",
+            None,
+        ]
+        assert [d.icon for d in response_input.option_details] == [
+            "book",
+            "users",
+            "sparkle",
+        ]
+        # Older clients keep reading plain option strings.
+        assert response_input.options == ["Solo", "Pair", "Group"]
+
+        with pytest.raises(ValidationError):
+            _v3(
+                kind=kind, options=["Solo", "Pair", "Group"], option_details=details[:2]
+            )
+        with pytest.raises(ValidationError):
+            _v3(kind=kind, options=["Solo", "Pair"], option_details=details)
+
+        empty = _v3(kind=kind, options=["Solo", "Pair"])
+        assert empty.option_details == []
+
+    # Details stay aligned when a duplicate option is dropped.
+    deduped = _v3(
+        kind="single_choice",
+        options=["Solo", "solo", "Pair"],
+        option_details=[{"icon": "list"}, {"icon": "clock"}, {"icon": "target"}],
+    )
+    assert deduped.options == ["Solo", "Pair"]
+    assert [d.icon for d in deduped.option_details] == ["list", "target"]
+
+    # Individual details are validated.
+    for bad in ({"icon": "rocket"}, {"description": "x" * 91}):
+        with pytest.raises(ValidationError):
+            _v3(
+                kind="single_choice",
+                options=["A", "B"],
+                option_details=[bad, {}],
+            )
+
+    # Details belong to the choice kinds only.
+    assert _v3(kind="text", option_details=[{"icon": "list"}]).option_details == []
+    assert (
+        _v3(
+            kind="number", min=0, max=10, step=1, option_details=[{"icon": "list"}]
+        ).option_details
+        == []
+    )
+
+    # A mismatch from the model degrades to the text composer.
+    fallback = sessions._validated_interview_response_input(
+        {
+            "version": 1,
+            "kind": "single_choice",
+            "options": ["A", "B"],
+            "option_details": [{"icon": "list"}],
+        }
+    )
+    assert fallback.kind == "text"
+    assert fallback.options == []
+    assert fallback.option_details == []
+
+
+def test_number_presets_must_align_to_step():
+    hours = _v3(
+        kind="number",
+        min=1,
+        max=15,
+        step=0.5,
+        initial=4,
+        unit="hours / week",
+        presets=[2, 4, 6.5, 8],
+        daily_hint=True,
+    )
+
+    assert hours.presets == [2, 4, 6.5, 8]
+    assert hours.daily_hint is True
+    payload = hours.model_dump(mode="json", by_alias=True, exclude_none=True)
+    assert payload["presets"] == [2, 4, 6.5, 8]
+    assert payload["daily_hint"] is True
+
+    defaults = _v3(kind="number", min=0, max=10, step=1)
+    assert defaults.presets == []
+    assert defaults.daily_hint is False
+
+    for presets in (
+        [2, 4.25],  # off the 0.5 step
+        [0.5],  # below min
+        [16],  # above max
+        [1, 2, 3, 4, 5],  # too many
+        [float("nan")],
+    ):
+        with pytest.raises(ValidationError):
+            _v3(kind="number", min=1, max=15, step=0.5, presets=presets)
+
+    # Alignment is measured from min, like the initial value.
+    offset = _v3(kind="number", min=1, max=11, step=2, presets=[1, 3, 11])
+    assert offset.presets == [1, 3, 11]
+    with pytest.raises(ValidationError):
+        _v3(kind="number", min=1, max=11, step=2, presets=[2])
+
+    # Presets and the daily hint belong to number only.
+    for kind, extra in (
+        ("text", {}),
+        ("single_choice", {"options": ["A", "B"]}),
+        ("multi_choice", {"options": ["A", "B"]}),
+        ("scale", {}),
+    ):
+        other = _v3(kind=kind, presets=[1, 2], daily_hint=True, **extra)
+        assert other.presets == []
+        assert other.daily_hint is False
+
+
+def test_text_suggestions_dropped_for_choice_kinds():
+    text = _v3(
+        kind="text",
+        suggestions=["  Built a landing page ", "Shipped an app"],
+        missing_option="  I don’t have one yet ",
+    )
+    assert text.suggestions == ["Built a landing page", "Shipped an app"]
+    assert text.missing_option == "I don’t have one yet"
+
+    plain = _v3(kind="text")
+    assert plain.suggestions == []
+    assert plain.missing_option is None
+
+    for kind, extra in (
+        ("single_choice", {"options": ["A", "B"]}),
+        ("multi_choice", {"options": ["A", "B"]}),
+        ("scale", {}),
+        ("number", {"min": 0, "max": 10, "step": 1}),
+    ):
+        other = _v3(
+            kind=kind,
+            suggestions=["One", "Two"],
+            missing_option="I don’t have one yet",
+            **extra,
+        )
+        assert other.suggestions == [], kind
+        assert other.missing_option is None, kind
+
+    # Text-only limits are still enforced on text.
+    for bad in (
+        {"suggestions": ["a", "b", "c", "d", "e"]},
+        {"suggestions": ["fine", "  "]},
+        {"suggestions": ["x" * 61]},
+        {"missing_option": "x" * 61},
+    ):
+        with pytest.raises(ValidationError):
+            _v3(kind="text", **bad)
+
+    # Text drops every other kind's fields.
+    leaked = _v3(
+        kind="text",
+        options=["A", "B"],
+        option_details=[{"icon": "list"}, {"icon": "book"}],
+        min=1,
+        max=5,
+        step=1,
+        presets=[1],
+        low_label="Low",
+    )
+    assert leaked.options == []
+    assert leaked.option_details == []
+    assert leaked.min_value is None
+    assert leaked.presets == []
+    assert leaked.low_label is None
+
+
+def test_unknown_kind_falls_back_to_text():
+    with pytest.raises(ValidationError):
+        _v3(kind="carousel")
+
+    fallback = sessions._validated_interview_response_input(
+        {"version": 1, "kind": "carousel", "options": ["A", "B"]}
+    )
+    assert fallback.kind == "text"
+    assert fallback.options == []
+    assert (
+        sessions._response_input_payload(
+            {"version": 1, "kind": "ranking", "options": ["A", "B"]}
+        )["kind"]
+        == "text"
+    )
+
+    visible, from_trailer = sessions._split_interview_response(
+        "Rank these.\n"
+        f"{sessions.INTERVIEW_RESPONSE_UI_OPEN}"
+        '{"version":1,"kind":"ranking","options":["A","B"]}'
+        f"{sessions.INTERVIEW_RESPONSE_UI_CLOSE}"
+    )
+    assert visible == "Rank these."
+    assert from_trailer.kind == "text"
+
+    # The new kinds survive the same trailer path.
+    _, multi = sessions._split_interview_response(
+        "Pick any.\n"
+        f"{sessions.INTERVIEW_RESPONSE_UI_OPEN}"
+        '{"version":1,"kind":"multi_choice","options":["A","B"],"max_selected":2}'
+        f"{sessions.INTERVIEW_RESPONSE_UI_CLOSE}"
+    )
+    assert multi.kind == "multi_choice"
+    assert multi.max_selected == 2
+    _, scale = sessions._split_interview_response(
+        "Rate it.\n"
+        f"{sessions.INTERVIEW_RESPONSE_UI_OPEN}"
+        '{"version":1,"kind":"scale","low_label":"Lost","high_label":"Fluent"}'
+        f"{sessions.INTERVIEW_RESPONSE_UI_CLOSE}"
+    )
+    assert scale.kind == "scale"
+    assert scale.low_label == "Lost"
+
+    # The protocol version is unchanged so older apps keep parsing.
+    assert multi.version == 1
+    with pytest.raises(ValidationError):
+        _v3(kind="text", version=2)
+
+
+async def _post_answer(monkeypatch, **request_fields) -> _Database:
+    session = _session(turn=1)
+    db = _Database(_thread())
+
+    async def stream(*_args, **_kwargs):
+        yield "What can you do without help today?"
+
+    _patch_session(monkeypatch, session)
+    monkeypatch.setattr(sessions, "interview_stream", stream)
+
+    response = await sessions.interview(
+        session_id=session.id,
+        data=InterviewMessageRequest(question_id="message-1", **request_fields),
+        db=db,
+        current_user=User(
+            id="user-1",
+            email="learner@example.com",
+            password_hash="hash",
+        ),
+    )
+    events = await _body_events(response)
+    assert any(event["type"] == "done" for event in events)
+    return db
+
+
+def _user_answer(db: _Database) -> ChatMessage:
+    return next(
+        item
+        for item in db.added
+        if isinstance(item, ChatMessage) and item.role == MessageRole.USER
+    )
+
+
+@pytest.mark.asyncio
+async def test_missing_evidence_flag_persisted_on_answer(monkeypatch):
+    assert InterviewMessageRequest(content="x").missing_evidence is False
+
+    flagged = await _post_answer(
+        monkeypatch,
+        content="I don’t have one yet",
+        missing_evidence=True,
+    )
+    answer = _user_answer(flagged)
+    assert answer.content == "I don’t have one yet"
+    assert answer.reply_to_message_id == "message-1"
+    assert answer.response_ui_json == {"missing_evidence": True}
+
+    # Anything else leaves the stored answer exactly as before.
+    for fields in ({}, {"missing_evidence": False}):
+        plain = await _post_answer(
+            monkeypatch,
+            content="I built a prototype for five users.",
+            **fields,
+        )
+        assert _user_answer(plain).response_ui_json is None

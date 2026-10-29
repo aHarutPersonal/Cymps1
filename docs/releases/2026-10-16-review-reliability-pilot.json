@@ -1,0 +1,38 @@
+{
+  "running": false,
+  "exit_code": 0,
+  "finished_calls": 1,
+  "pending_calls": 0,
+  "reported_cost_usd": 0.035077,
+  "unknown_reserved_usd": 0,
+  "pending_reserved_usd": 0,
+  "accounted_usd": 0.035077,
+  "responses": [
+    {
+      "schema": "LessonPackage",
+      "seconds": 99.08,
+      "error": true,
+      "unknown_usage": false
+    }
+  ],
+  "accepted": false,
+  "elapsed_seconds": 99.113,
+  "failure_count": 1,
+  "validation_identity": {
+    "review_version": 10,
+    "package_version": 1,
+    "capability_hash": "1815a97ad0c7246f737c493fbec7b9217c6a5dd6a7d96cacd93c0c34b3afe48f",
+    "prompt_hash": "98e465bab4aae70070a9c729558e1ba86af525682137b56274e2a08420389f4c",
+    "generation_contract_hash": "26e766b90ec5a759f196e2fb585994038bd4e39eed93144e39d740cbbe0e224f",
+    "schema_hash": "1d0cf0045863177a578bddcf267a7ccada58a0ea89111935117bf8878fc67a5e"
+  },
+  "attempts": [
+    {
+      "stage": "parallel_lesson_step_1_package",
+      "error": true,
+      "seconds": 99.08
+    }
+  ],
+  "word_count": 0,
+  "activity_count": 0
+}

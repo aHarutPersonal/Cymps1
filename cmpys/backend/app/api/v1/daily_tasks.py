@@ -16,6 +16,7 @@ from app.api.dependencies import get_current_user
 from app.core.db import get_db
 from app.models.daily_task_completion import DailyTaskCompletion
 from app.models.plan import Plan, PlanItem, PlanItemCompletion, PlanItemType
+from app.services.planning.capacity import plan_item_minutes, rhythm_cadence
 from app.services.planning.artifact_identity import (
     current_item_completion_query_predicates,
 )
@@ -199,6 +200,11 @@ class TodayItemResponse(BaseModel):
     title: str
     type: str
     estimated_hours: int
+    # Exact weekly minutes (a 15-minute short-week rhythm); hours round up.
+    estimated_minutes: int | None = None
+    # Minutes of one practice session: the weekly minutes over the rhythm's
+    # sessions per week (rhythm_cadence). Optional for older readers.
+    session_minutes: int | None = None
     completed_today: bool
     daily_instructions: str | None = None
 
@@ -237,6 +243,8 @@ class DailyFocusItemResponse(BaseModel):
     title: str
     type: str
     estimated_hours: int
+    estimated_minutes: int | None = None
+    session_minutes: int | None = None
     daily_instructions: str | None = None
 
 
@@ -244,6 +252,16 @@ class DailyFocusResponse(BaseModel):
     focus_item: DailyFocusItemResponse | None = None
     reflection_prompt: str | None = None
     streak: int
+
+
+def _session_minutes(item: PlanItem) -> int:
+    """Minutes of one session of a daily rhythm, at least one.
+
+    The item's minutes are a weekly allocation practised in the sessions
+    ``rhythm_cadence`` gives (three under an hour, else four); halves round up.
+    """
+    _, per_session = rhythm_cadence(plan_item_minutes(item))
+    return max(1, int(per_session + 0.5))
 
 
 def _daily_instructions_for_item(item: PlanItem) -> str | None:
@@ -404,6 +422,8 @@ async def get_today_view(
                 title=item.title,
                 type=item.type.value,
                 estimated_hours=item.estimated_hours,
+                estimated_minutes=plan_item_minutes(item),
+                session_minutes=_session_minutes(item),
                 completed_today=item.id in completed_today_set,
                 daily_instructions=daily_instructions,
             )
@@ -590,6 +610,8 @@ async def get_daily_focus(
                     title=item.title,
                     type=item.type.value,
                     estimated_hours=item.estimated_hours,
+                    estimated_minutes=plan_item_minutes(item),
+                    session_minutes=_session_minutes(item),
                     daily_instructions=daily_instructions,
                 )
                 break

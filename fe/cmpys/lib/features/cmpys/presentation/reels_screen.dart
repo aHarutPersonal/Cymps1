@@ -1,61 +1,142 @@
-// CMPYS Ideas Reels — full-screen vertical snap feed (TikTok/Reels style).
+// CMPYS v3 idea reels (design `ReelsScreen` in v3/you.jsx).
 //
-// Ported from reels.jsx: per-idea gradient cards, floating watermark quote,
-// entrance text animation, action rail with fill-on-active + count pop,
-// double-tap heart burst, story-style progress segments, swipe hint, overlay
-// header with refresh (first-refresh-fails demo), and a comments sheet.
+// Full-screen vertical snap pages on night: a provenance tag, the big quote
+// mark, the quote and its attribution. Double-tap likes (never unlikes) and
+// plays the heart burst; the side rail likes, opens the on-device comments,
+// saves to Saved and shares (copies the quote, as the app has no share
+// sheet). The top bar carries the progress segments, close, "Ideas for week
+// w" and up/down. The last idea offers "Load new ideas" (`/feed?refresh`).
 
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:phosphor_flutter/phosphor_flutter.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/design_tokens.dart';
 import '../../../core/network/dio_client.dart';
-import '../../../core/ui/cmpys/cmpys_primitives.dart';
+import '../../../core/ui/haptics.dart';
 import '../../../core/ui/motion/motion_config.dart';
+import '../../../core/ui/v3/v3.dart';
+import '../../plan/state/current_plan_provider.dart';
 import '../data/cmpys_ideas_provider.dart';
 import '../data/cmpys_seed.dart';
 import '../state/cmpys_store.dart';
 
-const _reelsTitleStyle = TextStyle(
-  color: Colors.white,
-  fontFamily: 'Plus Jakarta Sans',
-  fontWeight: FontWeight.w800,
-  fontSize: 16,
-  height: 1.2,
-);
+/// The design's `PROV` labels and icons.
+enum IdeaProvenance {
+  verified('Verified quotation', V3Icons.check),
+  exact('Exact quotation', V3Icons.quote),
+  sourced('Sourced attribution', V3Icons.link),
+  generated('Generated insight', V3Icons.sparkle);
 
-TextStyle _reelsCountStyle(BuildContext context) =>
-    Theme.of(context).textTheme.bodyMedium!.copyWith(
-      color: Colors.white.withValues(alpha: 0.75),
-      fontSize: 11.5,
-      height: 1.2,
-    );
+  const IdeaProvenance(this.label, this.icon);
+  final String label;
+  final V3Icons icon;
+}
 
-double _reelsHeaderHeight(BuildContext context, String countLabel) {
-  final media = MediaQuery.of(context);
-  final textWidth = (media.size.width - 28 - 88 - 10).clamp(
-    1.0,
-    double.infinity,
-  );
-  double measure(String text, TextStyle style) {
-    final painter = TextPainter(
-      text: TextSpan(text: text, style: style),
-      textDirection: Directionality.of(context),
-      textScaler: media.textScaler,
-    )..layout(maxWidth: textWidth);
-    final height = painter.height;
-    painter.dispose();
-    return height;
+/// Maps the `/feed` provenance of [idea] to a design label.
+///
+/// - Not linked to a catalog quote, or the quote's verification was
+///   `rejected`: Generated insight.
+/// - `is_verified` (verification `verified`): Verified quotation.
+/// - `quote_type` `sourced` (exact words with a source reference) with
+///   verification `source_backed`: Exact quotation.
+/// - `quote_type` `sourced` with verification `inconclusive`, or
+///   `quote_type` `attributed` / `paraphrase` (`source_backed` or
+///   `inconclusive`): Sourced attribution.
+/// - Anything else (a missing or unknown type or verification): Generated
+///   insight, the claim that promises least.
+IdeaProvenance ideaProvenanceOf(CmpysIdea idea) {
+  String norm(String? v) => (v ?? '').trim().toLowerCase();
+  final level = norm(idea.verificationLevel);
+  if (!idea.isSourced || level == 'rejected') return IdeaProvenance.generated;
+  if (idea.isVerified || level == 'verified') return IdeaProvenance.verified;
+  if (level != 'source_backed' && level != 'inconclusive') {
+    return IdeaProvenance.generated;
   }
+  switch (norm(idea.quoteType)) {
+    case 'sourced':
+      return level == 'source_backed'
+          ? IdeaProvenance.exact
+          : IdeaProvenance.sourced;
+    case 'attributed':
+    case 'paraphrase':
+      return IdeaProvenance.sourced;
+    default:
+      return IdeaProvenance.generated;
+  }
+}
 
-  final textHeight =
-      measure('Ideas', _reelsTitleStyle) +
-      measure(countLabel, _reelsCountStyle(context));
-  return media.padding.top + 37 + textHeight.clamp(44.0, double.infinity);
+String? _sourceOf(CmpysIdea idea) {
+  for (final s in [idea.sourceReference, idea.sourceTitle]) {
+    if (s != null && s.trim().isNotEmpty) return s.trim();
+  }
+  return null;
+}
+
+/// What Share copies. Only verified and exact quotations are put in
+/// quotation marks; anything else is plain text that names its provenance,
+/// so a pasted idea never passes for a quotation it isn't.
+String ideaShareText(CmpysIdea idea) {
+  final prov = ideaProvenanceOf(idea);
+  final src = _sourceOf(idea);
+  final by = src == null ? idea.author : '${idea.author}, $src';
+  final quoted =
+      prov == IdeaProvenance.verified || prov == IdeaProvenance.exact;
+  final text = StringBuffer(
+    quoted ? '“${idea.text}” — $by' : '${idea.text} — $by (${prov.label})',
+  );
+  final url = idea.sourceUrl?.trim() ?? '';
+  if (url.isNotEmpty) text.write('\n$url');
+  return text.toString();
+}
+
+const _glass = Color(0x1FFFFFFF); // rgba(255,255,255,.12)
+const _segOff = Color(0x40FFFFFF); // rgba(255,255,255,.25)
+const _quoteMark = Color(0x12FFFFFF); // rgba(255,255,255,.07)
+const _hint = 'Double-tap to like · swipe for the next idea';
+
+TextStyle get _titleStyle => AppTypography.sans(
+  15,
+  FontWeight.w600,
+).copyWith(color: Colors.white, height: 1.25);
+
+TextStyle get _hintStyle =>
+    AppTypography.sans(11.5).copyWith(color: AppColors.nink3, height: 1.3);
+
+/// Short screens and very large text read the quote in a scroll viewport
+/// with the rail laid out as a row along the bottom.
+bool _readingLayout(MediaQueryData media) =>
+    media.size.height < 500 || media.textScaler.scale(14) >= 24;
+
+double _textHeight(
+  BuildContext context,
+  String text,
+  TextStyle style,
+  double maxWidth,
+) {
+  final media = MediaQuery.of(context);
+  final painter = TextPainter(
+    text: TextSpan(
+      text: text,
+      style: DefaultTextStyle.of(context).style.merge(style),
+    ),
+    textDirection: Directionality.of(context),
+    textScaler: media.textScaler,
+  )..layout(maxWidth: math.max(1.0, maxWidth));
+  final height = painter.height;
+  painter.dispose();
+  return height;
+}
+
+double _headerHeight(BuildContext context, String title) {
+  final media = MediaQuery.of(context);
+  // Row: close 44 · 10 · title · 10 · up 44 · 10 · down 44, inside 16 + 16.
+  final width = media.size.width - 32 - 44 * 3 - 30;
+  final textHeight = _textHeight(context, title, _titleStyle, width);
+  return media.padding.top + 8 + 3 + 12 + math.max(44.0, textHeight);
 }
 
 class CmpysReelsScreen extends ConsumerStatefulWidget {
@@ -66,10 +147,22 @@ class CmpysReelsScreen extends ConsumerStatefulWidget {
 }
 
 class _CmpysReelsScreenState extends ConsumerState<CmpysReelsScreen> {
-  final PageController _page = PageController();
+  PageController _page = PageController();
+  int _pageGen = 0;
   int _active = 0;
-  String _refresh = 'idle'; // idle | loading | error
-  List<CmpysIdea>? _ideas; // set by the explicit refresh; overrides the cache
+  DateTime? _lastTap;
+  ({int key, Offset at})? _heart;
+  int _heartSeq = 0;
+
+  /// Ideas from "Load new ideas"; they replace the cached feed until the
+  /// feed itself reloads (a new day).
+  List<CmpysIdea>? _fresh;
+  bool _loadingNew = false;
+
+  /// The next `/feed` page to read (the provider holds page 1), and whether
+  /// the last page read said the feed has no more.
+  int _nextPage = 2;
+  bool _feedDone = false;
 
   @override
   void dispose() {
@@ -77,1078 +170,830 @@ class _CmpysReelsScreenState extends ConsumerState<CmpysReelsScreen> {
     super.dispose();
   }
 
-  Future<void> _doRefresh() async {
-    if (_refresh == 'loading') return;
-    setState(() => _refresh = 'loading');
-    try {
-      final dio = ref.read(dioClientProvider);
-      final ideas = await fetchCmpysIdeasFromDio(dio, refresh: true);
-      if (!mounted) return;
-      setState(() {
-        _ideas = ideas;
-        _refresh = 'idle';
-        _active = 0;
-      });
-      _page.jumpToPage(0);
-      showCmpysToast(
-        context,
-        'Fresh ideas loaded',
-        icon: Icons.auto_awesome_rounded,
-        tone: AppColors.green,
+  /// A new list starts at its first idea with a fresh controller.
+  void _resetPaging() {
+    final old = _page;
+    _page = PageController();
+    _pageGen++;
+    _active = 0;
+    WidgetsBinding.instance.addPostFrameCallback((_) => old.dispose());
+  }
+
+  void _go(int delta, int count) {
+    final target = _active + delta;
+    if (!_page.hasClients || target < 0 || target >= count) return;
+    if (MotionConfig.enabled(context)) {
+      _page.animateToPage(
+        target,
+        duration: const Duration(milliseconds: 450),
+        curve: AppMotion.io,
       );
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _refresh = 'error');
+    } else {
+      _page.jumpToPage(target);
     }
   }
 
-  void _goToIdea(int index) {
-    if (!_page.hasClients) return;
-    if (MotionConfig.enabled(context)) {
-      _page.animateToPage(
-        index,
-        duration: AppDurations.normal,
-        curve: AppCurves.easeOut,
-      );
-    } else {
-      _page.jumpToPage(index);
+  /// The design's `tap`: two taps within 300 ms like the idea (never unlike
+  /// it) and drop the heart burst where the second tap landed.
+  void _onPageTap(CmpysIdea idea, Offset global) {
+    final now = ref.read(cmpysIdeasClockProvider)();
+    final last = _lastTap;
+    _lastTap = now;
+    if (last == null ||
+        now.difference(last) >= const Duration(milliseconds: 300)) {
+      return;
     }
+    // A third quick tap starts a new pair rather than chaining.
+    _lastTap = null;
+    final store = ref.read(cmpysStoreProvider.notifier);
+    if (!store.ideaOf(idea.id).liked) {
+      store.likeIdea(idea.id);
+      playHaptic(context, AppHaptic.light);
+    }
+    if (!MotionConfig.enabled(context)) return;
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    setState(() => _heart = (key: _heartSeq++, at: box.globalToLocal(global)));
+  }
+
+  void _toggleSave(CmpysIdea idea) {
+    final on = ref
+        .read(cmpysStoreProvider.notifier)
+        .toggleIdeaSave(id: idea.id, title: idea.text, author: idea.author);
+    showV3Toast(
+      context,
+      on ? 'Idea saved' : 'Removed from saved',
+      icon: V3Icons.bookmark,
+    );
+  }
+
+  /// No share plugin ships with the app, so share copies [ideaShareText].
+  Future<void> _share(CmpysIdea idea) async {
+    await Clipboard.setData(ClipboardData(text: ideaShareText(idea)));
+    if (!mounted) return;
+    showV3Toast(context, 'Copied quote', icon: V3Icons.link);
+  }
+
+  /// "Load new ideas", showing the skeleton meanwhile. It reads the next
+  /// page of the existing feed first; only once the feed reports no more
+  /// pages does it ask the backend to generate (`refresh=true`, paid). The
+  /// new page replaces the list and paging restarts at idea 1. A failure
+  /// keeps the current ideas and position.
+  Future<void> _loadNew() async {
+    // Single flight: a second tap in the same frame sees the flag.
+    if (_loadingNew) return;
+    setState(() => _loadingNew = true);
+    final dio = ref.read(dioClientProvider);
+    try {
+      var ideas = const <CmpysIdea>[];
+      while (ideas.isEmpty && !_feedDone) {
+        final page = await fetchCmpysIdeasPage(dio, page: _nextPage);
+        _nextPage++;
+        _feedDone = !page.hasMore;
+        ideas = page.ideas;
+      }
+      if (ideas.isEmpty) {
+        final page = await fetchCmpysIdeasPage(dio, refresh: true);
+        _nextPage = 2;
+        _feedDone = !page.hasMore;
+        ideas = page.ideas;
+      }
+      if (ideas.isEmpty) throw StateError('feed returned no quote items');
+      if (!mounted) return;
+      setState(() {
+        _loadingNew = false;
+        _fresh = ideas;
+        _resetPaging();
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _loadingNew = false);
+      showV3Toast(
+        context,
+        'Couldn’t refresh your feed',
+        icon: V3Icons.alert,
+        tone: V3ToastTone.warn,
+      );
+    }
+  }
+
+  void _openComments(CmpysIdea idea) {
+    // The sheet rides the root navigator; carry this screen's container so
+    // it reads the same store wherever the ProviderScope sits.
+    final container = ProviderScope.containerOf(context, listen: false);
+    showV3Sheet<void>(
+      context,
+      title: 'Comments',
+      builder: (_) => UncontrolledProviderScope(
+        container: container,
+        child: _CommentsSheet(idea: idea),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    // Initial data comes from the shared, cached ideas provider (same /feed
-    // payload the Today surface uses) — a network fetch only happens on the
-    // true first load. The explicit refresh button still fetches fresh ideas.
-    final ideasAsync = ref.watch(cmpysIdeasProvider);
-    final ideas = _ideas ?? ideasAsync.valueOrNull;
-    if (ideas == null) {
-      // First load: spinner, or full-screen error + retry. Never canned
-      // quotes. While a retry is reloading, show the spinner again.
-      if (_refresh == 'error' ||
-          (ideasAsync.hasError && !ideasAsync.isLoading)) {
-        return Scaffold(
-          backgroundColor: const Color(0xFF0E0E12),
-          body: SafeArea(
-            child: Stack(
-              children: [
-                Positioned(
-                  top: 8,
-                  left: 14,
-                  child: _circleBtn(
-                    PhosphorIconsRegular.caretLeft,
-                    () => Navigator.of(context).maybePop(),
-                  ),
-                ),
-                Center(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 32),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(
-                          Icons.wifi_off_rounded,
-                          size: 36,
-                          color: Colors.white,
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          'Couldn’t load your ideas. Check your connection and try again.',
-                          textAlign: TextAlign.center,
-                          style: AppTypography.bodyLarge.copyWith(
-                            color: Colors.white,
-                            fontSize: 16,
-                            height: 1.5,
-                          ),
-                        ),
-                        const SizedBox(height: 22),
-                        CmpysButton(
-                          variant: CmpysBtnVariant.primary,
-                          size: CmpysBtnSize.lg,
-                          leadingIcon: Icons.refresh_rounded,
-                          onTap: () {
-                            setState(() => _refresh = 'idle');
-                            ref.invalidate(cmpysIdeasProvider);
-                          },
-                          child: const Text('Try again'),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
+    // The feed reloaded (a new day on resume): show it from the top.
+    ref.listen<AsyncValue<List<CmpysIdea>>>(cmpysIdeasProvider, (prev, next) {
+      final before = prev?.valueOrNull;
+      final after = next.valueOrNull;
+      if (before != null && after != null && !identical(before, after)) {
+        setState(() {
+          _fresh = null;
+          _nextPage = 2;
+          _feedDone = false;
+          _resetPaging();
+        });
       }
-      return const Scaffold(
-        backgroundColor: Color(0xFF0E0E12),
-        body: Center(
-          child: CircularProgressIndicator(
-            strokeWidth: 2.4,
-            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-          ),
+    });
+    final media = MediaQuery.of(context);
+    final ideasAsync = ref.watch(cmpysIdeasProvider);
+    final ideas = _fresh ?? ideasAsync.valueOrNull;
+    final plan = ref.watch(
+      currentPlanProvider.select(
+        (s) => (
+          resolving: s.plan == null && s.status == CurrentPlanStatus.loading,
+          week: s.plan?.focusWeek,
+        ),
+      ),
+    );
+    final title = plan.week == null ? 'Ideas' : 'Ideas for week ${plan.week}';
+    // Measured at the longest form, so the bar never jumps as the plan
+    // resolves.
+    final headerHeight = _headerHeight(
+      context,
+      'Ideas for week ${plan.week ?? 12}',
+    );
+    final reading = _readingLayout(media);
+    final failed =
+        ideas == null && ideasAsync.hasError && !ideasAsync.isLoading;
+    final hintHeight = _textHeight(
+      context,
+      _hint,
+      _hintStyle,
+      media.size.width - 32,
+    );
+    final textBottom = reading
+        ? media.padding.bottom + 12 + 48 + media.textScaler.scale(11) * 1.4 + 16
+        : media.padding.bottom + 10 + hintHeight + 12;
+    final skeletonTop = math.max(headerHeight + 20, media.padding.top + 86);
+    final count = ideas?.length ?? 0;
+    final active = count == 0 ? 0 : math.min(_active, count - 1);
+
+    Widget body;
+    if (ideas != null) {
+      body = PageView.builder(
+        key: ValueKey('reels-pages-$_pageGen'),
+        controller: _page,
+        scrollDirection: Axis.vertical,
+        itemCount: ideas.length,
+        onPageChanged: (i) => setState(() => _active = i),
+        itemBuilder: (_, i) => _ReelPage(
+          idea: ideas[i],
+          active: i == active,
+          last: i == ideas.length - 1,
+          reading: reading,
+          headerHeight: headerHeight,
+          textBottom: textBottom,
+          onTap: (global) => _onPageTap(ideas[i], global),
+          onSave: () => _toggleSave(ideas[i]),
+          onComments: () => _openComments(ideas[i]),
+          onShare: () => _share(ideas[i]),
+          onLoadNew: _loadNew,
         ),
       );
-    }
-    return Scaffold(
-      backgroundColor: const Color(0xFF0E0E12),
-      body: Stack(
+      // One stable tree, so the pages keep their place while new ideas
+      // load; the covered idea and rail are not read meanwhile.
+      body = Stack(
         children: [
-          PageView.builder(
-            controller: _page,
-            scrollDirection: Axis.vertical,
-            itemCount: ideas.length,
-            onPageChanged: (i) => setState(() => _active = i),
-            itemBuilder: (_, i) => _Reel(
-              idea: ideas[i],
-              active: i == _active,
-              first: i == 0,
-              headerHeight: _reelsHeaderHeight(
-                context,
-                'For you · ${_active + 1} of ${ideas.length}',
-              ),
-              onComments: () => _openComments(ideas[i]),
-              onPrevious: i == 0 ? null : () => _goToIdea(i - 1),
-              onNext: i == ideas.length - 1 ? null : () => _goToIdea(i + 1),
-            ),
+          Positioned.fill(
+            child: ExcludeSemantics(excluding: _loadingNew, child: body),
           ),
-
-          // Top gradient + progress segments + header
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: Container(
-              padding: EdgeInsets.only(
-                top: MediaQuery.of(context).padding.top + 8,
-                left: 14,
-                right: 14,
-                bottom: 14,
-              ),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.black.withValues(alpha: 0.35),
-                    Colors.transparent,
-                  ],
+          if (_loadingNew)
+            Positioned.fill(
+              child: AbsorbPointer(
+                child: ColoredBox(
+                  color: AppColors.night,
+                  child: _Skeleton(top: skeletonTop),
                 ),
               ),
+            ),
+        ],
+      );
+    } else if (failed) {
+      body = _LoadError(onRetry: () => ref.invalidate(cmpysIdeasProvider));
+    } else {
+      body = _Skeleton(top: skeletonTop);
+    }
+
+    final heart = _heart;
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle.light,
+      child: Scaffold(
+        backgroundColor: AppColors.night,
+        body: Stack(
+          children: [
+            Positioned.fill(child: body),
+            if (heart != null)
+              Positioned(
+                key: ValueKey('reels-heart-${heart.key}'),
+                left: heart.at.dx - 50,
+                top: heart.at.dy - 50,
+                child: _HeartBurst(
+                  key: const ValueKey('reels-heart-burst'),
+                  onEnd: () {
+                    if (mounted && _heart?.key == heart.key) {
+                      setState(() => _heart = null);
+                    }
+                  },
+                ),
+              ),
+            Positioned(
+              top: media.padding.top + 8,
+              left: 16,
+              right: 16,
               child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // progress segments
-                  Row(
-                    children: List.generate(ideas.length, (i) {
-                      return Expanded(
-                        child: Container(
-                          height: 3,
-                          margin: EdgeInsets.only(
-                            right: i == ideas.length - 1 ? 0 : 4,
-                          ),
-                          decoration: BoxDecoration(
-                            color: i <= _active
-                                ? Colors.white
-                                : Colors.white.withValues(alpha: 0.28),
-                            borderRadius: BorderRadius.circular(999),
-                          ),
+                  Semantics(
+                    key: const ValueKey('reels-position'),
+                    container: true,
+                    label: count == 0 ? null : 'Idea ${active + 1} of $count',
+                    child: ExcludeSemantics(
+                      child: SizedBox(
+                        height: 3,
+                        child: Row(
+                          children: [
+                            for (var k = 0; k < count; k++) ...[
+                              if (k > 0) const SizedBox(width: 4),
+                              Expanded(
+                                child: AnimatedContainer(
+                                  key: ValueKey('reels-segment-$k'),
+                                  duration: MotionConfig.enabled(context)
+                                      ? const Duration(milliseconds: 400)
+                                      : Duration.zero,
+                                  decoration: BoxDecoration(
+                                    color: k <= active ? Colors.white : _segOff,
+                                    borderRadius: BorderRadius.circular(9),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
                         ),
-                      );
-                    }),
+                      ),
+                    ),
                   ),
                   const SizedBox(height: 12),
                   Row(
                     children: [
-                      _circleBtn(
-                        PhosphorIconsRegular.caretLeft,
-                        () => Navigator.of(context).maybePop(),
+                      V3IconButton(
+                        icon: V3Icons.x,
+                        label: 'Close',
+                        dark: true,
+                        onPressed: () => Navigator.of(context).maybePop(),
                       ),
                       const SizedBox(width: 10),
                       Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text('Ideas', style: _reelsTitleStyle),
-                            Text(
-                              'For you · ${_active + 1} of ${ideas.length}',
-                              style: _reelsCountStyle(context),
-                            ),
-                          ],
-                        ),
-                      ),
-                      _refresh == 'loading'
-                          ? Container(
-                              width: 44,
-                              height: 44,
-                              padding: const EdgeInsets.all(9),
-                              child: const CircularProgressIndicator(
-                                strokeWidth: 2,
-                                valueColor: AlwaysStoppedAnimation<Color>(
-                                  Colors.white,
+                        child: plan.resolving
+                            ? const Align(
+                                key: ValueKey('reels-title-skeleton'),
+                                alignment: Alignment.centerLeft,
+                                child: SizedBox(
+                                  width: 128,
+                                  child: V3Skel(dark: true, height: 14),
                                 ),
-                              ),
-                            )
-                          : _circleBtn(
-                              PhosphorIconsRegular.arrowClockwise,
-                              _doRefresh,
-                            ),
+                              )
+                            : Text(title, style: _titleStyle),
+                      ),
+                      const SizedBox(width: 10),
+                      V3IconButton(
+                        icon: V3Icons.up,
+                        label: 'Previous',
+                        dark: true,
+                        size: 36,
+                        onPressed: active > 0 && !_loadingNew
+                            ? () => _go(-1, count)
+                            : null,
+                      ),
+                      const SizedBox(width: 10),
+                      V3IconButton(
+                        icon: V3Icons.down,
+                        label: 'Next',
+                        dark: true,
+                        size: 36,
+                        onPressed: active < count - 1 && !_loadingNew
+                            ? () => _go(1, count)
+                            : null,
+                      ),
                     ],
                   ),
                 ],
               ),
             ),
-          ),
-
-          // Error banner
-          if (_refresh == 'error')
-            Positioned(
-              top: MediaQuery.of(context).padding.top + 110,
-              left: 16,
-              right: 16,
-              child: Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(18),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: Color(0x4D000000),
-                      blurRadius: 30,
-                      offset: Offset(0, 12),
-                    ),
-                  ],
-                ),
-                child: Row(
-                  children: [
-                    const Icon(
-                      Icons.warning_amber_rounded,
-                      size: 20,
-                      color: AppColors.danger,
-                    ),
-                    const SizedBox(width: 11),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Couldn’t refresh your feed',
-                            style: AppTypography.bodyMedium.copyWith(
-                              fontSize: 13.5,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          Text(
-                            'Check your connection and try again.',
-                            style: AppTypography.caption.copyWith(
-                              color: AppColors.ink2,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    CmpysButton(
-                      variant: CmpysBtnVariant.primary,
-                      size: CmpysBtnSize.sm,
-                      onTap: _doRefresh,
-                      child: const Text('Retry'),
-                    ),
-                  ],
+            if (!reading && !failed)
+              Positioned(
+                left: 16,
+                right: 16,
+                bottom: media.padding.bottom + 10,
+                child: IgnorePointer(
+                  child: Text(
+                    _hint,
+                    key: const ValueKey('reels-hint'),
+                    textAlign: TextAlign.center,
+                    style: _hintStyle,
+                  ),
                 ),
               ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _circleBtn(IconData icon, VoidCallback onTap) {
-    return CmpysPressable(
-      semanticLabel: icon == PhosphorIconsRegular.arrowClockwise
-          ? 'Refresh ideas'
-          : 'Back',
-      onTap: onTap,
-      child: Container(
-        width: 44,
-        height: 44,
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.16),
-          shape: BoxShape.circle,
+          ],
         ),
-        child: Icon(icon, color: Colors.white, size: 20),
       ),
     );
-  }
-
-  void _openComments(CmpysIdea idea) {
-    final store = ref.read(cmpysStoreProvider.notifier);
-    final controller = TextEditingController();
-    showCmpysSheet(
-      context,
-      child: StatefulBuilder(
-        builder: (ctx, setSheet) {
-          final st = ref.read(cmpysStoreProvider).ideaState[idea.id];
-          final merged = [...idea.comments, ...(st?.comments ?? const [])];
-          return Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                merged.isEmpty
-                    ? 'Comments'
-                    : '${merged.length} comment${merged.length == 1 ? "" : "s"}',
-                style: AppTypography.h3,
-              ),
-              const SizedBox(height: 10),
-              Container(
-                padding: const EdgeInsets.only(bottom: 12),
-                decoration: const BoxDecoration(
-                  border: Border(bottom: BorderSide(color: AppColors.hair)),
-                ),
-                child: Text(
-                  '"${idea.text.length > 90 ? '${idea.text.substring(0, 90)}…' : idea.text}"',
-                  style: AppTypography.caption.copyWith(
-                    color: AppColors.ink2,
-                    fontSize: 13.5,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-              if (merged.isEmpty)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 20),
-                  child: Center(
-                    child: Text(
-                      'No comments yet. Start the conversation.',
-                      style: AppTypography.caption.copyWith(
-                        color: AppColors.ink3,
-                      ),
-                    ),
-                  ),
-                )
-              else
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxHeight: 280),
-                  child: ListView.separated(
-                    shrinkWrap: true,
-                    itemCount: merged.length,
-                    separatorBuilder: (_, _) => const SizedBox(height: 12),
-                    itemBuilder: (_, i) {
-                      final c = merged[i];
-                      return Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          CmpysMonogram(
-                            initials: c.who.isNotEmpty
-                                ? c.who[0].toUpperCase()
-                                : '?',
-                            size: 30,
-                            color: AppColors.ink2,
-                            tint: AppColors.paper2,
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  c.who,
-                                  style: AppTypography.captionMedium.copyWith(
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: 13,
-                                  ),
-                                ),
-                                Text(
-                                  c.text,
-                                  style: AppTypography.body.copyWith(
-                                    color: AppColors.ink2,
-                                    fontSize: 14,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      );
-                    },
-                  ),
-                ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: Container(
-                      height: 44,
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      decoration: BoxDecoration(
-                        color: AppColors.card,
-                        borderRadius: BorderRadius.circular(999),
-                        border: Border.all(color: AppColors.hair2, width: 1.5),
-                      ),
-                      child: Center(
-                        child: TextField(
-                          controller: controller,
-                          textAlignVertical: TextAlignVertical.center,
-                          onTapOutside: (_) =>
-                              FocusManager.instance.primaryFocus?.unfocus(),
-                          style: AppTypography.body.copyWith(fontSize: 14),
-                          cursorColor: AppColors.green,
-                          decoration: const InputDecoration(
-                            hintText: 'Add a comment…',
-                            border: InputBorder.none,
-                            isDense: true,
-                            filled: false,
-                            contentPadding: EdgeInsets.zero,
-                          ),
-                          onSubmitted: (_) => _submitComment(
-                            store,
-                            idea.id,
-                            controller,
-                            setSheet,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  // Only the send button tracks the text per keystroke — the
-                  // rest of the sheet doesn't need to rebuild while typing.
-                  ValueListenableBuilder<TextEditingValue>(
-                    valueListenable: controller,
-                    builder: (_, value, _) => CmpysPressable(
-                      semanticLabel: 'Send comment',
-                      onTap: value.text.trim().isEmpty
-                          ? null
-                          : () => _submitComment(
-                              store,
-                              idea.id,
-                              controller,
-                              setSheet,
-                            ),
-                      child: Container(
-                        width: 44,
-                        height: 44,
-                        decoration: BoxDecoration(
-                          color: value.text.trim().isEmpty
-                              ? AppColors.hair2
-                              : AppColors.green,
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(
-                          Icons.arrow_forward_rounded,
-                          color: Colors.white,
-                          size: 18,
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-
-  void _submitComment(
-    CmpysStore store,
-    String id,
-    TextEditingController controller,
-    void Function(void Function()) setSheet,
-  ) {
-    final text = controller.text.trim();
-    if (text.isEmpty) return;
-    final who = ref.read(cmpysStoreProvider).user.name;
-    store.commentIdea(id, (who: who.isEmpty ? 'You' : who, text: text));
-    controller.clear();
-    setSheet(() {});
   }
 }
 
-class _Reel extends ConsumerStatefulWidget {
-  const _Reel({
+class _Skeleton extends StatelessWidget {
+  const _Skeleton({required this.top});
+  final double top;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget bar(double factor, double height, double gap) => Padding(
+      padding: EdgeInsets.only(top: gap),
+      child: FractionallySizedBox(
+        alignment: Alignment.centerLeft,
+        widthFactor: factor,
+        child: V3Skel(dark: true, height: height),
+      ),
+    );
+    return Semantics(
+      label: 'Loading ideas',
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(28, top, 28, 0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            bar(.85, 36, 0),
+            bar(.70, 36, 12),
+            bar(.50, 36, 12),
+            bar(.40, 14, 30),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _LoadError extends StatelessWidget {
+  const _LoadError({required this.onRetry});
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 96),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const V3Icon(V3Icons.wifiOff, size: 36, color: Colors.white),
+            const SizedBox(height: 16),
+            Text(
+              'Couldn’t load your ideas. Check your connection and try again.',
+              textAlign: TextAlign.center,
+              style: AppTypography.sans(
+                16,
+              ).copyWith(color: Colors.white, height: 1.5),
+            ),
+            const SizedBox(height: 22),
+            V3Button(
+              kind: V3ButtonKind.light,
+              icon: V3Icons.refresh,
+              onPressed: onRetry,
+              child: const Text('Try again'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ReelPage extends ConsumerStatefulWidget {
+  const _ReelPage({
     required this.idea,
     required this.active,
-    required this.first,
+    required this.last,
+    required this.reading,
     required this.headerHeight,
+    required this.textBottom,
+    required this.onTap,
+    required this.onSave,
     required this.onComments,
-    this.onPrevious,
-    this.onNext,
+    required this.onShare,
+    required this.onLoadNew,
   });
+
   final CmpysIdea idea;
   final bool active;
-  final bool first;
+
+  /// The last idea carries the "You’re all caught up" end affordance.
+  final bool last;
+  final bool reading;
   final double headerHeight;
+
+  /// Bottom edge of the quote viewport: above the hint (or the rail row).
+  final double textBottom;
+  final ValueChanged<Offset> onTap;
+  final VoidCallback onSave;
   final VoidCallback onComments;
-  final VoidCallback? onPrevious;
-  final VoidCallback? onNext;
+  final VoidCallback onShare;
+  final VoidCallback onLoadNew;
 
   @override
-  ConsumerState<_Reel> createState() => _ReelState();
+  ConsumerState<_ReelPage> createState() => _ReelPageState();
 }
 
-class _ReelState extends ConsumerState<_Reel>
+class _ReelPageState extends ConsumerState<_ReelPage>
     with SingleTickerProviderStateMixin {
-  late final AnimationController _burst;
-  final ScrollController _readingScroll = ScrollController();
-  DateTime? _lastTap;
+  // One timeline for the staggered entrance: tag .5s from .1s, quote .7s
+  // from .15s, attribution .6s from .35s.
+  late final AnimationController _enter = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1000),
+  );
+  final ScrollController _scroll = ScrollController();
 
-  @override
-  void initState() {
-    super.initState();
-    _burst = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 850),
-    );
-  }
+  late final Animation<double> _tag = CurvedAnimation(
+    parent: _enter,
+    curve: const Interval(.1, .6, curve: Curves.ease),
+  );
+  late final Animation<double> _quote = CurvedAnimation(
+    parent: _enter,
+    curve: const Interval(.15, .85, curve: AppMotion.out),
+  );
+  late final Animation<double> _by = CurvedAnimation(
+    parent: _enter,
+    curve: const Interval(.35, .95, curve: Curves.ease),
+  );
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (!MotionConfig.enabled(context)) {
-      _burst.stop();
-      _burst.value = 0;
+    _sync(initial: true);
+  }
+
+  @override
+  void didUpdateWidget(_ReelPage old) {
+    super.didUpdateWidget(old);
+    if (old.active != widget.active) _sync();
+  }
+
+  void _sync({bool initial = false}) {
+    if (!widget.active) {
+      // The idea leaving fades out briefly, as the design's transitions do.
+      if (initial || !MotionConfig.enabled(context)) {
+        _enter.value = 0;
+      } else {
+        _enter.animateBack(0, duration: const Duration(milliseconds: 400));
+      }
+    } else if (!MotionConfig.enabled(context)) {
+      _enter.value = 1;
+    } else if (!initial || _enter.value == 0) {
+      if (!_enter.isAnimating && _enter.value < 1) _enter.forward(from: 0);
     }
   }
 
   @override
   void dispose() {
-    _readingScroll.dispose();
-    _burst.dispose();
+    _enter.dispose();
+    _scroll.dispose();
     super.dispose();
-  }
-
-  void _onTap() {
-    final now = DateTime.now();
-    if (_lastTap != null &&
-        now.difference(_lastTap!) < const Duration(milliseconds: 320)) {
-      final liked =
-          ref.read(cmpysStoreProvider).ideaState[widget.idea.id]?.liked ??
-          false;
-      if (!liked) {
-        ref.read(cmpysStoreProvider.notifier).likeIdea(widget.idea.id);
-        HapticFeedback.lightImpact();
-      }
-      if (MotionConfig.enabled(context)) _burst.forward(from: 0);
-    }
-    _lastTap = now;
   }
 
   @override
   Widget build(BuildContext context) {
     final idea = widget.idea;
+    final media = MediaQuery.of(context);
     final st = ref.watch(
       cmpysStoreProvider.select((s) => s.ideaState[idea.id]),
     );
     final liked = st?.liked ?? false;
     final saved = st?.saved ?? false;
-    final commentCount = idea.comments.length + (st?.comments.length ?? 0);
-    final likeN = idea.likes + (liked ? 1 : 0);
-    final dark = Color.lerp(idea.tone, Colors.black, 0.45)!;
-    final media = MediaQuery.of(context);
-    final compact = media.size.height < 700 || media.textScaler.scale(14) > 16;
-    final readingLayout =
-        media.size.height < 500 || media.textScaler.scale(14) >= 24;
-    final readingBottom = readingLayout
-        ? media.padding.bottom + 95 + media.textScaler.scale(12) * 1.3
-        : media.padding.bottom + (compact ? 92.0 : 130.0);
+    final comments = idea.comments.length + (st?.comments.length ?? 0);
+    final prov = ideaProvenanceOf(idea);
+    final src = _sourceOf(idea);
+    final reading = widget.reading;
+    final textBottom = widget.textBottom;
+    final motion = MotionConfig.enabled(context);
+
+    final rail = [
+      _RailButton(
+        icon: V3Icons.heart,
+        label: 'Like idea',
+        on: liked,
+        color: AppColors.ember,
+        onTap: () => ref.read(cmpysStoreProvider.notifier).likeIdea(idea.id),
+      ),
+      _RailButton(
+        icon: V3Icons.chat,
+        label: 'Comments',
+        count: comments,
+        onTap: widget.onComments,
+      ),
+      _RailButton(
+        icon: V3Icons.bookmark,
+        label: 'Save idea',
+        on: saved,
+        color: AppColors.gold,
+        onTap: widget.onSave,
+      ),
+      _RailButton(
+        icon: V3Icons.share,
+        label: 'Share idea',
+        onTap: widget.onShare,
+      ),
+    ];
 
     return GestureDetector(
-      onTap: _onTap,
-      excludeFromSemantics: true,
+      key: ValueKey('reel-${idea.id}'),
       behavior: HitTestBehavior.opaque,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          // Background gradient
-          DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: const Alignment(-0.4, -1),
-                end: const Alignment(0.4, 1),
-                colors: [idea.tone, dark],
+      excludeFromSemantics: true,
+      onTapUp: (d) => widget.onTap(d.globalPosition),
+      child: ColoredBox(
+        color: Color.lerp(idea.tone, AppColors.night, 0.62)!,
+        child: Stack(
+          clipBehavior: Clip.hardEdge,
+          children: [
+            Positioned(
+              right: -120,
+              top: 120,
+              child: RepaintBoundary(
+                child: _Drift(animate: widget.active && motion),
               ),
             ),
-          ),
-          // radial highlight top-right
-          const DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: RadialGradient(
-                center: Alignment(0.7, -1.05),
-                radius: 1.0,
-                colors: [Color(0x33FFFFFF), Color(0x00FFFFFF)],
-                stops: [0.0, 0.55],
+            const Positioned.fill(child: V3Grain()),
+            Positioned(
+              left: 16,
+              top: media.padding.top + 36,
+              child: ExcludeSemantics(
+                child: Text(
+                  '“',
+                  style: AppTypography.display(
+                    220,
+                  ).copyWith(color: _quoteMark, height: 1),
+                ),
               ),
             ),
-          ),
-
-          // Watermark quote
-          Positioned(
-            top: compact ? 94 : 116,
-            left: compact ? 16 : 20,
-            child: Opacity(
-              opacity: 0.55,
-              child: Icon(
-                PhosphorIconsFill.quotes,
-                size: compact ? 90 : 120,
-                color: Colors.white.withValues(alpha: 0.16),
-              ),
-            ),
-          ),
-
-          // Main text block
-          Positioned(
-            left: compact ? 18 : 24,
-            right: readingLayout ? 18 : (compact ? 76 : 90),
-            top: widget.headerHeight + 12,
-            bottom: readingBottom,
-            child: LayoutBuilder(
-              builder: (context, constraints) => Scrollbar(
-                controller: _readingScroll,
-                thumbVisibility: readingLayout,
-                child: SingleChildScrollView(
-                  controller: _readingScroll,
-                  key: ValueKey('idea-reading-${idea.id}'),
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      minHeight: constraints.maxHeight,
-                    ),
-                    child: Align(
-                      alignment: Alignment.bottomLeft,
-                      child: AnimatedSwitcher(
-                        duration: MotionConfig.enabled(context)
-                            ? const Duration(milliseconds: 450)
-                            : Duration.zero,
-                        transitionBuilder: (child, anim) => FadeTransition(
-                          opacity: anim,
-                          child: SlideTransition(
-                            position:
-                                Tween(
-                                  begin: const Offset(0, 0.12),
-                                  end: Offset.zero,
-                                ).animate(
-                                  CurvedAnimation(
-                                    parent: anim,
-                                    curve: Curves.easeOutCubic,
-                                  ),
-                                ),
-                            child: child,
-                          ),
-                        ),
-                        child: widget.active
-                            ? Column(
-                                key: ValueKey('on-${idea.id}'),
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                mainAxisSize: MainAxisSize.min,
-                                children: _textColumn(
-                                  idea,
-                                  compact: compact,
-                                  pageControls: readingLayout,
-                                ),
-                              )
-                            : Column(
-                                key: ValueKey('off-${idea.id}'),
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                mainAxisSize: MainAxisSize.min,
-                                children: _textColumn(
-                                  idea,
-                                  compact: compact,
-                                  pageControls: readingLayout,
+            Positioned(
+              left: reading ? 18 : 26,
+              right: reading ? 18 : 84,
+              top: widget.headerHeight + 8,
+              bottom: textBottom,
+              child: LayoutBuilder(
+                builder: (context, constraints) => Scrollbar(
+                  controller: _scroll,
+                  thumbVisibility: reading,
+                  child: SingleChildScrollView(
+                    key: ValueKey('idea-reading-${idea.id}'),
+                    controller: _scroll,
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        minHeight: constraints.maxHeight,
+                      ),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            FadeTransition(
+                              opacity: _tag,
+                              // The tag is one 24 pt line; large text on a
+                              // narrow column scales it down, never clips.
+                              child: FittedBox(
+                                fit: BoxFit.scaleDown,
+                                alignment: Alignment.centerLeft,
+                                child: V3Tag(
+                                  color: Colors.white,
+                                  background: _glass,
+                                  icon: prov.icon,
+                                  child: Text(prov.label),
                                 ),
                               ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-
-          // Action rail
-          Positioned(
-            left: readingLayout ? 18 : null,
-            right: readingLayout ? 18 : 12,
-            bottom:
-                media.padding.bottom +
-                (readingLayout ? 16 : (compact ? 82 : 118)),
-            child: GestureDetector(
-              onTap: () {}, // absorb taps so card double-tap doesn't fire
-              excludeFromSemantics: true,
-              child: Flex(
-                direction: readingLayout ? Axis.horizontal : Axis.vertical,
-                mainAxisAlignment: readingLayout
-                    ? MainAxisAlignment.spaceBetween
-                    : MainAxisAlignment.start,
-                crossAxisAlignment: readingLayout
-                    ? CrossAxisAlignment.start
-                    : CrossAxisAlignment.center,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _RailBtn(
-                    label: 'Like idea',
-                    toggled: liked,
-                    icon: PhosphorIconsFill.heart,
-                    outlineIcon: PhosphorIconsRegular.heart,
-                    count: likeN,
-                    active: liked,
-                    activeColor: const Color(0xFFFF5DA2),
-                    onTap: () =>
-                        ref.read(cmpysStoreProvider.notifier).likeIdea(idea.id),
-                  ),
-                  SizedBox(height: readingLayout ? 0 : (compact ? 10 : 16)),
-                  _RailBtn(
-                    label: 'Comments',
-                    icon: PhosphorIconsFill.chatCircle,
-                    outlineIcon: PhosphorIconsRegular.chatCircle,
-                    count: commentCount,
-                    active: false,
-                    activeColor: Colors.white,
-                    onTap: widget.onComments,
-                  ),
-                  SizedBox(height: readingLayout ? 0 : (compact ? 10 : 16)),
-                  _RailBtn(
-                    label: 'Save idea',
-                    toggled: saved,
-                    icon: PhosphorIconsFill.bookmarkSimple,
-                    outlineIcon: PhosphorIconsRegular.bookmarkSimple,
-                    count: null,
-                    active: saved,
-                    activeColor: const Color(0xFFFFD166),
-                    onTap: () {
-                      final now = ref
-                          .read(cmpysStoreProvider.notifier)
-                          .toggleIdeaSave(
-                            id: idea.id,
-                            title: idea.text,
-                            author: idea.author,
-                          );
-                      showCmpysToast(
-                        context,
-                        now ? 'Idea saved' : 'Removed from saved',
-                        icon: now
-                            ? Icons.bookmark_added_outlined
-                            : Icons.bookmark_remove_outlined,
-                        tone: now ? AppColors.green : AppColors.ink3,
-                      );
-                    },
-                  ),
-                  SizedBox(height: readingLayout ? 0 : (compact ? 10 : 16)),
-                  _RailBtn(
-                    label: 'Share idea',
-                    icon: PhosphorIconsFill.shareNetwork,
-                    outlineIcon: PhosphorIconsRegular.shareNetwork,
-                    count: null,
-                    active: false,
-                    activeColor: Colors.white,
-                    onTap: () => showCmpysToast(
-                      context,
-                      'Link copied',
-                      icon: Icons.ios_share_rounded,
-                      tone: AppColors.ink3,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          // Swipe hint (first reel only)
-          if (widget.first &&
-              widget.active &&
-              widget.onNext != null &&
-              !readingLayout)
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: compact ? 22 : 44,
-              child: _SwipeHint(),
-            ),
-
-          // Heart burst
-          AnimatedBuilder(
-            animation: _burst,
-            builder: (_, _) {
-              if (!MotionConfig.enabled(context) || _burst.value == 0) {
-                return const SizedBox.shrink();
-              }
-              final t = _burst.value;
-              final scale = t < 0.25
-                  ? 0.3 + (t / 0.25) * 0.95
-                  : t < 0.55
-                  ? 1.25 - ((t - 0.25) / 0.3) * 0.25
-                  : 1.0 + ((t - 0.55) / 0.45) * 0.1;
-              final opacity = t < 0.55
-                  ? (t / 0.25).clamp(0.0, 1.0)
-                  : 1 - (t - 0.55) / 0.45;
-              final dy = t < 0.55 ? 0.0 : -30 * ((t - 0.55) / 0.45);
-              return IgnorePointer(
-                child: Center(
-                  child: Transform.translate(
-                    offset: Offset(0, dy),
-                    child: Transform.scale(
-                      scale: scale,
-                      child: Opacity(
-                        opacity: opacity.clamp(0.0, 1.0),
-                        child: const Icon(
-                          PhosphorIconsFill.heart,
-                          size: 110,
-                          color: Colors.white,
+                            ),
+                            const SizedBox(height: 18),
+                            AnimatedBuilder(
+                              animation: _quote,
+                              builder: (_, child) => Opacity(
+                                opacity: _quote.value.clamp(0.0, 1.0),
+                                child: Transform.translate(
+                                  offset: Offset(0, 20 * (1 - _quote.value)),
+                                  child: child,
+                                ),
+                              ),
+                              child: Text(
+                                idea.text,
+                                style: AppTypography.read(
+                                  idea.text.length > 80 ? 27 : 34,
+                                ).copyWith(color: Colors.white, height: 1.3),
+                              ),
+                            ),
+                            const SizedBox(height: 22),
+                            FadeTransition(
+                              opacity: _by,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    idea.author,
+                                    style: AppTypography.sans(
+                                      15,
+                                      FontWeight.w600,
+                                    ).copyWith(color: Colors.white),
+                                  ),
+                                  if (src != null) ...[
+                                    const SizedBox(height: 3),
+                                    Text(
+                                      src,
+                                      style: AppTypography.sans(
+                                        12.5,
+                                      ).copyWith(color: AppColors.nink3),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                            if (widget.last)
+                              FadeTransition(
+                                opacity: _by,
+                                child: Padding(
+                                  padding: const EdgeInsets.only(top: 28),
+                                  child: Column(
+                                    key: const ValueKey('reels-end'),
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        'You’re all caught up',
+                                        style: AppTypography.sans(
+                                          13.5,
+                                          FontWeight.w600,
+                                        ).copyWith(color: AppColors.nink2),
+                                      ),
+                                      const SizedBox(height: 10),
+                                      V3Button(
+                                        kind: V3ButtonKind.glass,
+                                        size: V3Size.sm,
+                                        icon: V3Icons.refresh,
+                                        onPressed: widget.onLoadNew,
+                                        child: const Text('Load new ideas'),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                          ],
                         ),
                       ),
                     ),
                   ),
                 ),
-              );
-            },
-          ),
-        ],
+              ),
+            ),
+            if (reading)
+              Positioned(
+                left: 18,
+                right: 18,
+                bottom: media.padding.bottom + 12,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: rail,
+                ),
+              )
+            else
+              Positioned(
+                right: 14,
+                bottom: media.padding.bottom + 86,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (var k = 0; k < rail.length; k++) ...[
+                      if (k > 0) const SizedBox(height: 18),
+                      rail[k],
+                    ],
+                  ],
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
-
-  List<Widget> _textColumn(
-    CmpysIdea idea, {
-    required bool compact,
-    required bool pageControls,
-  }) {
-    return [
-      Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.18),
-          borderRadius: BorderRadius.circular(999),
-        ),
-        child: Text(
-          idea.tag.toUpperCase(),
-          style: AppTypography.kicker.copyWith(
-            color: Colors.white,
-            fontSize: 11,
-            letterSpacing: 1.4,
-          ),
-        ),
-      ),
-      const SizedBox(height: 16),
-      Text(
-        idea.text,
-        // Design uses the reading serif (`className="serif"`) for idea body text.
-        style: AppTypography.readingBold.copyWith(
-          color: Colors.white,
-          fontSize: compact
-              ? (idea.text.length > 90 ? 20 : 23)
-              : (idea.text.length > 90 ? 25 : 29),
-          height: 1.16,
-          letterSpacing: -0.4,
-        ),
-      ),
-      const SizedBox(height: 18),
-      Row(
-        children: [
-          Container(
-            width: 30,
-            height: 30,
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.92),
-              shape: BoxShape.circle,
-            ),
-            alignment: Alignment.center,
-            child: Text(
-              _reelInitials(idea.author),
-              style: TextStyle(
-                color: idea.tone,
-                fontWeight: FontWeight.w800,
-                fontSize: 11.5,
-              ),
-            ),
-          ),
-          const SizedBox(width: 9),
-          Flexible(
-            child: Text(
-              idea.author,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.w700,
-                fontSize: 14.5,
-              ),
-            ),
-          ),
-          if (idea.isSourced) ...[
-            const SizedBox(width: 6),
-            Tooltip(
-              message: idea.isVerified
-                  ? 'Independently cross-checked'
-                  : 'Source-backed quote',
-              child: Icon(
-                idea.isVerified ? Icons.verified : Icons.verified_outlined,
-                size: 17,
-                color: Colors.white.withValues(alpha: 0.88),
-              ),
-            ),
-          ],
-        ],
-      ),
-      if (pageControls &&
-          (widget.onPrevious != null || widget.onNext != null)) ...[
-        const SizedBox(height: 18),
-        Wrap(
-          spacing: 12,
-          runSpacing: 8,
-          children: [
-            if (widget.onPrevious != null)
-              TextButton.icon(
-                onPressed: widget.onPrevious,
-                style: TextButton.styleFrom(
-                  foregroundColor: Colors.white,
-                  minimumSize: const Size(44, 44),
-                ),
-                icon: const Icon(PhosphorIconsRegular.caretUp, size: 18),
-                label: const Text('Previous idea'),
-              ),
-            if (widget.onNext != null)
-              TextButton.icon(
-                onPressed: widget.onNext,
-                style: TextButton.styleFrom(
-                  foregroundColor: Colors.white,
-                  minimumSize: const Size(44, 44),
-                ),
-                icon: const Icon(PhosphorIconsRegular.caretDown, size: 18),
-                label: const Text('Next idea'),
-              ),
-          ],
-        ),
-      ],
-    ];
-  }
-
-  String _reelInitials(String name) {
-    final parts = name.trim().split(RegExp(r'\s+'));
-    return parts
-        .take(2)
-        .map((p) => p.isNotEmpty ? p[0] : '')
-        .join()
-        .toUpperCase();
-  }
 }
 
-class _RailBtn extends StatelessWidget {
-  const _RailBtn({
-    required this.label,
-    this.toggled,
+/// One side-rail action: a 48 pt glass disc, popping when it turns on, with
+/// an optional count underneath.
+class _RailButton extends StatelessWidget {
+  const _RailButton({
     required this.icon,
-    required this.outlineIcon,
-    required this.count,
-    required this.active,
-    required this.activeColor,
+    required this.label,
     required this.onTap,
+    this.on,
+    this.color,
+    this.count = 0,
   });
+
+  final V3Icons icon;
   final String label;
-  final bool? toggled;
-  final IconData icon;
-  final IconData outlineIcon;
-  final int? count;
-  final bool active;
-  final Color activeColor;
   final VoidCallback onTap;
 
+  /// Null for actions that do not toggle.
+  final bool? on;
+  final Color? color;
+  final int count;
+
   @override
-  Widget build(BuildContext context) => Semantics(
-    label: label,
-    value: count == null ? null : '$count',
-    toggled: toggled,
-    button: true,
-    onTap: onTap,
-    child: Tooltip(
-      message: label,
-      excludeFromSemantics: true,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
+  Widget build(BuildContext context) {
+    final active = on ?? false;
+    final tint = active ? color : null;
+    Widget disc = Container(
+      width: 48,
+      height: 48,
+      alignment: Alignment.center,
+      decoration: const BoxDecoration(color: _glass, shape: BoxShape.circle),
+      child: V3Icon(icon, size: 22, color: tint ?? Colors.white, fill: tint),
+    );
+    if (active) {
+      disc = V3Pop(duration: const Duration(milliseconds: 400), child: disc);
+    }
+    return Semantics(
+      container: true,
+      button: true,
+      label: label,
+      value: count > 0 ? '$count' : null,
+      toggled: on,
+      onTap: onTap,
+      child: ExcludeSemantics(
+        child: V3Pressable(
           onTap: onTap,
-          excludeFromSemantics: true,
-          borderRadius: BorderRadius.circular(28),
-          focusColor: Colors.white.withValues(alpha: 0.28),
-          child: ExcludeSemantics(
-            child: Column(
-              children: [
-                AnimatedScale(
-                  duration: MotionConfig.enabled(context)
-                      ? const Duration(milliseconds: 220)
-                      : Duration.zero,
-                  scale: active ? 1.12 : 1.0,
-                  child: Container(
-                    width: 50,
-                    height: 50,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.16),
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: Colors.white.withValues(alpha: 0.18),
-                      ),
-                    ),
-                    child: Icon(
-                      active ? icon : outlineIcon,
-                      size: 24,
-                      color: active ? activeColor : Colors.white,
-                    ),
+          focusRadius: BorderRadius.circular(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              KeyedSubtree(key: ValueKey(active), child: disc),
+              if (count > 0) ...[
+                const SizedBox(height: 4),
+                Text(
+                  '$count',
+                  style: AppTypography.sans(11, FontWeight.w600).copyWith(
+                    color: Colors.white,
+                    fontFeatures: const [FontFeature.tabularFigures()],
                   ),
                 ),
-                if (count != null) ...[
-                  const SizedBox(height: 5),
-                  Text(
-                    '$count',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 12,
-                      shadows: [
-                        Shadow(
-                          color: Color(0x4D000000),
-                          blurRadius: 4,
-                          offset: Offset(0, 1),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
               ],
-            ),
+            ],
           ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }
 
-class _SwipeHint extends StatefulWidget {
+/// The soft light that drifts behind each idea (`drift 9s` keyframes). Still
+/// when motion is reduced or the page is not current.
+class _Drift extends StatefulWidget {
+  const _Drift({required this.animate});
+  final bool animate;
+
   @override
-  State<_SwipeHint> createState() => _SwipeHintState();
+  State<_Drift> createState() => _DriftState();
 }
 
-class _SwipeHintState extends State<_SwipeHint>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _c;
+class _DriftState extends State<_Drift> with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 4500),
+  );
 
   @override
   void initState() {
     super.initState();
-    _c = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1700),
-    );
+    _sync();
   }
 
   @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    if (MotionConfig.enabled(context)) {
+  void didUpdateWidget(_Drift old) {
+    super.didUpdateWidget(old);
+    if (old.animate != widget.animate) _sync();
+  }
+
+  void _sync() {
+    if (widget.animate) {
       if (!_c.isAnimating) _c.repeat(reverse: true);
     } else {
       _c.stop();
-      _c.value = 0;
     }
   }
 
@@ -1160,34 +1005,201 @@ class _SwipeHintState extends State<_SwipeHint>
 
   @override
   Widget build(BuildContext context) {
+    const glow = DecoratedBox(
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: RadialGradient(
+          colors: [Color(0x1FFFFFFF), Color(0x00FFFFFF)],
+          stops: [0, .65],
+        ),
+      ),
+      child: SizedBox(width: 380, height: 380),
+    );
     return IgnorePointer(
       child: AnimatedBuilder(
         animation: _c,
         builder: (_, child) {
           final t = Curves.easeInOut.transform(_c.value);
-          return Opacity(
-            opacity: 0.75 + 0.25 * t,
-            child: Transform.translate(offset: Offset(0, -7 * t), child: child),
+          return Transform.translate(
+            offset: Offset(6 * t, -8 * t),
+            child: child,
           );
         },
-        child: Column(
-          children: [
-            const Icon(
-              Icons.keyboard_arrow_up_rounded,
-              color: Colors.white,
-              size: 22,
+        child: glow,
+      ),
+    );
+  }
+}
+
+/// The double-tap heart (`heart .9s var(--out)` keyframes).
+class _HeartBurst extends StatefulWidget {
+  const _HeartBurst({super.key, required this.onEnd});
+  final VoidCallback onEnd;
+
+  @override
+  State<_HeartBurst> createState() => _HeartBurstState();
+}
+
+class _HeartBurstState extends State<_HeartBurst>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 900),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    _c.forward().whenComplete(() {
+      if (mounted) widget.onEnd();
+    });
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  static double _seg(double t, double a, double b) =>
+      AppMotion.out.transform(((t - a) / (b - a)).clamp(0.0, 1.0));
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: AnimatedBuilder(
+        animation: _c,
+        builder: (_, child) {
+          final t = _c.value;
+          double scale, opacity, dy = 0;
+          if (t < .25) {
+            final p = _seg(t, 0, .25);
+            scale = .2 + 1.0 * p;
+            opacity = p;
+          } else if (t < .6) {
+            scale = 1.2 - .2 * _seg(t, .25, .6);
+            opacity = 1;
+          } else {
+            final p = _seg(t, .6, 1);
+            scale = 1 + .1 * p;
+            opacity = 1 - p;
+            dy = -40 * p;
+          }
+          return Transform.translate(
+            offset: Offset(0, dy),
+            child: Transform.scale(
+              scale: scale,
+              child: Opacity(opacity: opacity.clamp(0.0, 1.0), child: child),
             ),
-            Text(
-              'Swipe up for the next idea',
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.85),
-                fontSize: 12.5,
-                fontWeight: FontWeight.w600,
+          );
+        },
+        child: const V3Icon(
+          V3Icons.heart,
+          size: 100,
+          color: AppColors.ember,
+          fill: AppColors.ember,
+        ),
+      ),
+    );
+  }
+}
+
+/// The on-device comments for one idea (design `Sheet title="Comments"`).
+class _CommentsSheet extends ConsumerStatefulWidget {
+  const _CommentsSheet({required this.idea});
+  final CmpysIdea idea;
+
+  @override
+  ConsumerState<_CommentsSheet> createState() => _CommentsSheetState();
+}
+
+class _CommentsSheetState extends ConsumerState<_CommentsSheet> {
+  final TextEditingController _text = TextEditingController();
+
+  @override
+  void dispose() {
+    _text.dispose();
+    super.dispose();
+  }
+
+  void _post() {
+    final text = _text.text.trim();
+    if (text.isEmpty) return;
+    final name = ref.read(cmpysStoreProvider).user.name.trim();
+    ref.read(cmpysStoreProvider.notifier).commentIdea(widget.idea.id, (
+      who: name.isEmpty ? 'You' : name,
+      text: text,
+    ));
+    _text.clear();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final local = ref.watch(
+      cmpysStoreProvider.select((s) => s.ideaState[widget.idea.id]?.comments),
+    );
+    final comments = [...widget.idea.comments, ...?local];
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (comments.isEmpty)
+          Text(
+            'No comments yet. Add a thought you want to remember.',
+            style: AppTypography.sans(14).copyWith(color: AppColors.ink2),
+          )
+        else
+          for (var k = 0; k < comments.length; k++)
+            V3Rise(
+              duration: const Duration(milliseconds: 400),
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                decoration: k == 0
+                    ? null
+                    : const BoxDecoration(
+                        border: Border(top: BorderSide(color: AppColors.hair)),
+                      ),
+                child: Text.rich(
+                  TextSpan(
+                    children: [
+                      TextSpan(
+                        text: comments[k].who,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      TextSpan(text: ' ${comments[k].text}'),
+                    ],
+                  ),
+                  style: AppTypography.sans(
+                    14.5,
+                  ).copyWith(color: AppColors.ink),
+                ),
+              ),
+            ),
+        const SizedBox(height: 14),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Expanded(
+              child: V3Field(
+                controller: _text,
+                placeholder: 'Add a comment',
+                textInputAction: TextInputAction.send,
+                textCapitalization: TextCapitalization.sentences,
+                onSubmitted: (_) => _post(),
+              ),
+            ),
+            const SizedBox(width: 8),
+            ValueListenableBuilder<TextEditingValue>(
+              valueListenable: _text,
+              builder: (_, value, _) => V3Button(
+                size: V3Size.md,
+                onPressed: value.text.trim().isEmpty ? null : _post,
+                child: const Text('Post'),
               ),
             ),
           ],
         ),
-      ),
+      ],
     );
   }
 }

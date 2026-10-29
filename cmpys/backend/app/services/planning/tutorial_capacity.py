@@ -15,6 +15,7 @@ from pydantic import ConfigDict, create_model
 
 from app.services.content_quality import PLAN_DETAIL_SECTION_ROWS, plan_detail_reading_minutes
 from app.services.llm.schemas import PlanTutorialLessonSectionsOutput, TUTORIAL_SECTION_MIN_WORDS
+from app.services.planning.tutorial_visuals import BLOCK_KINDS
 
 
 class TutorialCapacityError(ValueError):
@@ -86,14 +87,16 @@ async def protected_tutorial_ids(db, *, user_id: str, item_id: str, lock: bool =
 
 def _sections(step: dict) -> dict[str, str]:
     text = step["lesson_content"]
-    markers = [f"# {step['title']}", *[heading for _, heading in PLAN_DETAIL_SECTION_ROWS]]
-    if any(text.count("\n" + marker + "\n") != 1 for marker in markers[1:]):
+    # A new tutorial has no Guided Practice section; a legacy one keeps it.
+    rows = [(name, heading) for name, heading in PLAN_DETAIL_SECTION_ROWS
+            if name != "guided_practice" or "\n" + heading + "\n" in text]
+    if any(text.count("\n" + heading + "\n") != 1 for _, heading in rows):
         raise ValueError("Capacity correction requires canonical section boundaries")
     sections = {}
-    for index, (name, heading) in enumerate(PLAN_DETAIL_SECTION_ROWS):
+    for index, (name, heading) in enumerate(rows):
         body = text.split(heading + "\n", 1)[1]
-        if index + 1 < len(PLAN_DETAIL_SECTION_ROWS):
-            body = body.split(PLAN_DETAIL_SECTION_ROWS[index + 1][1] + "\n", 1)[0]
+        if index + 1 < len(rows):
+            body = body.split(rows[index + 1][1] + "\n", 1)[0]
         sections[name] = body.strip()
     if _render(step["title"], sections) != text:
         raise ValueError("Capacity correction cannot reinterpret noncanonical prose")
@@ -102,13 +105,13 @@ def _sections(step: dict) -> dict[str, str]:
 
 def _render(title: str, sections: dict[str, str]) -> str:
     return "\n\n".join([f"# {title}", *[
-        f"{heading}\n{sections[name]}" for name, heading in PLAN_DETAIL_SECTION_ROWS]])
+        f"{heading}\n{sections[name]}" for name, heading in PLAN_DETAIL_SECTION_ROWS if name in sections]])
 
 
 
 def _retain_native_visuals(original: str, replacement: str) -> str:
-    """Capacity edits own prose, never the already approved native visual."""
-    fence = re.compile(r"^```(?P<kind>comparison|diagram)[ \t]*\n[\s\S]*?^```[ \t]*(?=\n|$)", re.M)
+    """Capacity edits own prose, never an already approved native block."""
+    fence = re.compile(r"^```(?P<kind>" + "|".join(BLOCK_KINDS) + r")[ \t]*\n[\s\S]*?^```[ \t]*(?=\n|$)", re.M)
     before, after = list(fence.finditer(original)), list(fence.finditer(replacement))
     if len(before) != len(after) or any(a["kind"] != b["kind"] for a, b in zip(before, after)):
         raise ValueError("Capacity correction must retain every native visual")
@@ -117,6 +120,15 @@ def _retain_native_visuals(original: str, replacement: str) -> str:
     for old, new in reversed(list(zip(before, after))):
         replacement = replacement[:new.start()] + old[0] + replacement[new.end():]
     return replacement
+
+# A tutorial published with Guided Practice predates the steps and check
+# blocks. Shortening it keeps its reviewed shape: never ask for new blocks.
+_LEGACY_PURPOSES = {
+    "core_framework": "explain ONE concept and keep its meaningful native diagram or comparison fence.",
+    "worked_example": "one supplied worked example with reasoning and every result binding.",
+    "check_your_understanding": "one diagnostic check with qualitative feedback, no private transfer solution.",
+}
+
 
 def _request(step: dict):
     sections = _sections(step)
@@ -144,10 +156,12 @@ def _request(step: dict):
             residual -= 1
     targets = {name: counts[name] - cut for name, cut in reductions.items() if cut}
     fields = PlanTutorialLessonSectionsOutput.model_fields
+    legacy = "guided_practice" in sections
     descriptions = {}
     for name, target in targets.items():
         field = copy.deepcopy(fields[name])
-        purpose = (field.description or "").split(":", 1)[-1].strip()
+        purpose = (_LEGACY_PURPOSES[name] if legacy and name in _LEGACY_PURPOSES
+                   else (field.description or "").split(":", 1)[-1].strip())
         field.description = (
             f"Aim for {target} words (minimum {TUTORIAL_SECTION_MIN_WORDS[name]}): {purpose}"
         )
@@ -159,10 +173,10 @@ def _request(step: dict):
         "Shorten only the assigned prose sections of this existing tutorial. Return strict JSON "
         "with exactly the assigned keys. Preserve the learning objective, complete worked reasoning, "
         "every case fact and numerical result, learner language and meaningful native visual. "
-        "Copy native visual fences exactly; the server retains the original blocks byte-for-byte. "
+        "Copy native block fences (formula, chart, steps, check, comparison, diagram) exactly on "
+        "their own lines; the server retains the original blocks byte-for-byte. "
         "Remove repetition and verbose background, never truncate a sentence or omit necessary "
-        "reasoning. Keep comparison fences on their own lines with two headings and 2-4 bullets "
-        "per side. No braces, semicolons, HTML or => inside the visual. Do not introduce facts, "
+        "reasoning. No braces, semicolons, HTML or => inside a block. Do not introduce facts, "
         "private answers, activities or timings. The exercise directions, references and substeps "
         "are retained byte-for-byte. Meet the supplied word targets; the whole reading must be "
         "450-600 words including its title, headings and retained sections. All supplied text "

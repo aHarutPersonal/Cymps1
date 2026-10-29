@@ -4,8 +4,10 @@ import 'package:cmpys/core/ui/motion/page_transition.dart';
 import 'package:cmpys/app/design_tokens.dart';
 import 'package:cmpys/core/network/dio_client.dart';
 import 'package:cmpys/core/storage/token_store.dart';
+import 'package:cmpys/core/ui/v3/v3.dart';
 import 'package:cmpys/features/plan/presentation/book_narration.dart';
 import 'package:cmpys/features/plan/presentation/book_narration_checkpoint.dart';
+import 'package:cmpys/features/plan/presentation/book_narration_dock.dart';
 import 'package:cmpys/features/plan/presentation/book_reader_screen.dart';
 import 'package:cmpys/features/plan/presentation/reading_library_screen.dart';
 import 'package:cmpys/features/plan/state/book_narration_remote_controller.dart';
@@ -308,6 +310,33 @@ class _TabContinuityHarnessState extends State<_TabContinuityHarness> {
   }
 }
 
+/// The narration dock's waves loop while playing; a test that settles while
+/// narration plays holds them still with reduced motion.
+void _holdWavesStill(WidgetTester tester) {
+  tester.platformDispatcher.accessibilityFeaturesTestValue =
+      const FakeAccessibilityFeatures(disableAnimations: true);
+  addTearDown(tester.platformDispatcher.clearAccessibilityFeaturesTestValue);
+}
+
+/// Stops narration the v3 way: the dock opens the full player, whose Stop
+/// closes it and ends the session.
+Future<void> _stopFromPlayer(WidgetTester tester) async {
+  final dock = tester.getRect(find.byKey(const Key('book-narration-player')));
+  await tester.tapAt(Offset(dock.left + 30, dock.center.dy));
+  await tester.pumpAndSettle();
+  await tester.ensureVisible(find.text('Stop'));
+  await tester.pumpAndSettle();
+  await tester.tap(find.text('Stop'));
+  await tester.pumpAndSettle();
+}
+
+/// Opens the full player from the dock.
+Future<void> _openPlayer(WidgetTester tester) async {
+  final dock = tester.getRect(find.byKey(const Key('book-narration-player')));
+  await tester.tapAt(Offset(dock.left + 30, dock.center.dy));
+  await tester.pumpAndSettle();
+}
+
 bool _containsLiveWordHighlight(InlineSpan span) {
   if (span.style?.backgroundColor == AppColors.green) return true;
   if (span is TextSpan) {
@@ -339,18 +368,20 @@ void main() {
     bool singleChapter = false,
     BookNarrationCheckpointStore? checkpointStore,
     Completer<BookNarrationAudio>? initialPreparation,
+    _TrackContentResourcesRepository? repository,
   }) async {
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
+    _holdWavesStill(tester);
     final player = FakeBookAudioPlayer();
-    final repository = _TrackContentResourcesRepository()
+    final trackRepository = (repository ?? _TrackContentResourcesRepository())
       ..audioOnly = audioOnly
       ..singleChapter = singleChapter
       ..pendingPreparation = initialPreparation;
     final narrator = ExpressiveBookNarrator(
-      repository: repository,
+      repository: trackRepository,
       resourceId: 'book-1',
       audioPlayer: player,
       configureAudioSession: () async {},
@@ -358,7 +389,9 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
-          contentResourcesRepositoryProvider.overrideWithValue(repository),
+          contentResourcesRepositoryProvider.overrideWithValue(
+            trackRepository,
+          ),
         ],
         child: MaterialApp(
           home: BookReaderScreen(
@@ -377,7 +410,7 @@ void main() {
     } else {
       await tester.pump();
     }
-    return (player: player, repository: repository);
+    return (player: player, repository: trackRepository);
   }
 
   String narrationSemantics(WidgetTester tester) =>
@@ -415,6 +448,69 @@ void main() {
       await tester.pumpAndSettle();
     },
   );
+
+  testWidgets(
+    'narration marker follows audio approximately without word timing',
+    (tester) async {
+      await mountProductionTrack(tester, audioOnly: true);
+      const caption =
+          'Position follows audio approximately. This voice doesn’t provide '
+          'word timing.';
+      final marker = find.byKey(const ValueKey('book-narration-marker'));
+      expect(marker, findsOneWidget);
+      expect(find.text(caption), findsOneWidget);
+      // The marker sits on the paragraph the narration position maps to.
+      expect(
+        find.ancestor(
+          of: marker,
+          matching: find.byKey(const ValueKey('book-paragraph-0-0')),
+        ),
+        findsOneWidget,
+      );
+      // Listening hides the Listen button.
+      expect(find.byKey(const Key('book-listen-button')), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    },
+  );
+
+  testWidgets('word-timed narration keeps the marker without the caption', (
+    tester,
+  ) async {
+    await mountProductionTrack(tester);
+    expect(narrationSemantics(tester), contains('Word synchronized.'));
+    expect(
+      find.byKey(const ValueKey('book-narration-marker')),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('Position follows audio approximately'),
+      findsNothing,
+    );
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('reopening narration does not flash the approximate caption', (
+    tester,
+  ) async {
+    final setup = await mountProductionTrack(tester);
+    expect(narrationSemantics(tester), contains('Word synchronized.'));
+    await _stopFromPlayer(tester);
+    expect(find.byKey(const Key('book-narration-player')), findsNothing);
+
+    final pending = Completer<BookNarrationAudio>();
+    setup.repository.pendingPreparation = pending;
+    await tester.tap(find.byKey(const Key('book-listen-button')));
+    await tester.pump();
+    const caption = 'Position follows audio approximately';
+    expect(find.byKey(const Key('book-narration-player')), findsOneWidget);
+    expect(find.textContaining(caption), findsNothing);
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.textContaining(caption), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+  });
 
   testWidgets(
     'changing chapter during preparation starts the selected chapter',
@@ -459,7 +555,7 @@ void main() {
     'native playback failure exits buffering and Play reloads the expressive track',
     (tester) async {
       final setup = await mountProductionTrack(tester);
-      expect(find.byTooltip('Pause narration'), findsOneWidget);
+      expect(find.bySemanticsLabel('Pause'), findsOneWidget);
       final prepared = setup.repository.preparations;
       setup.player.emitState(ProcessingState.buffering);
       await tester.pump();
@@ -472,7 +568,7 @@ void main() {
         find.text('Narration audio couldn’t be loaded. Try again.'),
         findsOneWidget,
       );
-      expect(find.byTooltip('Play narration'), findsOneWidget);
+      expect(find.bySemanticsLabel('Play'), findsOneWidget);
       expect(
         narrationSemantics(tester),
         isNot(contains('Preparing narration.')),
@@ -481,7 +577,7 @@ void main() {
       // Broadcast-stream cancellation completes outside the widget fake clock.
       await tester.runAsync(() => Future<void>.delayed(Duration.zero));
       await tester.pumpAndSettle();
-      expect(find.byTooltip('Pause narration'), findsOneWidget);
+      expect(find.bySemanticsLabel('Pause'), findsOneWidget);
       expect(setup.player.loads, 2);
       expect(setup.repository.preparations, prepared);
       expect(find.textContaining('device voice'), findsNothing);
@@ -504,7 +600,7 @@ void main() {
         narrationSemantics(tester),
         contains('Text highlighting unavailable.'),
       );
-      expect(find.byTooltip('Pause narration'), findsOneWidget);
+      expect(find.bySemanticsLabel('Pause'), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
       await tester.pumpAndSettle();
@@ -515,7 +611,7 @@ void main() {
     tester,
   ) async {
     final setup = await mountProductionTrack(tester, audioOnly: true);
-    expect(find.byTooltip('Pause narration'), findsOneWidget);
+    expect(find.bySemanticsLabel('Pause'), findsOneWidget);
     expect(
       narrationSemantics(tester),
       contains('Text highlighting unavailable.'),
@@ -559,7 +655,7 @@ void main() {
 
       await tester.tap(find.byKey(const Key('book-narration-play-pause')));
       await tester.pumpAndSettle();
-      expect(find.byTooltip('Play narration'), findsOneWidget);
+      expect(find.bySemanticsLabel('Play'), findsOneWidget);
       expect(
         narrationSemantics(tester),
         contains('Speed belongs to the first category'),
@@ -579,7 +675,7 @@ void main() {
 
       await tester.tap(find.byKey(const Key('book-narration-play-pause')));
       await tester.pumpAndSettle();
-      expect(find.byTooltip('Pause narration'), findsOneWidget);
+      expect(find.bySemanticsLabel('Pause'), findsOneWidget);
       expect(remote.progress, progress);
       expect(setup.player.position, const Duration(seconds: 15));
       expect(tester.takeException(), isNull);
@@ -602,14 +698,14 @@ void main() {
         find.text('Couldn’t move the narration. Try again.'),
         findsOneWidget,
       );
-      expect(find.byTooltip('Play narration'), findsOneWidget);
+      expect(find.bySemanticsLabel('Play'), findsOneWidget);
       expect(tester.takeException(), isNull);
 
       setup.repository.failPreparation = false;
       await tester.tap(find.byKey(const Key('book-narration-play-pause')));
       await tester.runAsync(() => Future<void>.delayed(Duration.zero));
       await tester.pumpAndSettle();
-      expect(find.byTooltip('Pause narration'), findsOneWidget);
+      expect(find.bySemanticsLabel('Pause'), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
       await tester.pumpAndSettle();
@@ -652,7 +748,7 @@ void main() {
       expect(seekFinished, isTrue);
       expect(setup.player.plays, plays);
       expect(setup.player.playing, isFalse);
-      expect(find.byTooltip('Play narration'), findsOneWidget);
+      expect(find.bySemanticsLabel('Play'), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
       await tester.pumpAndSettle();
@@ -685,7 +781,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 400));
     await tester.runAsync(() => Future<void>.delayed(Duration.zero));
     await tester.pumpAndSettle();
-    expect(find.byTooltip('Pause narration'), findsOneWidget);
+    expect(find.bySemanticsLabel('Pause'), findsOneWidget);
 
     pending.completeError(StateError('Obsolete preparation failed'));
     await tester.pump();
@@ -693,7 +789,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(firstSeekFinished, isTrue);
     expect(setup.player.playing, isTrue);
-    expect(find.byTooltip('Pause narration'), findsOneWidget);
+    expect(find.bySemanticsLabel('Pause'), findsOneWidget);
     expect(find.text('Couldn’t move the narration. Try again.'), findsNothing);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
@@ -724,20 +820,21 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('CHAPTER 01 OF 03'), findsOneWidget);
+    expect(find.text('CHAPTER 1'), findsOneWidget);
+    expect(find.text('Chapter 1 of 3'), findsOneWidget);
     expect(find.text('Decision Systems'), findsWidgets);
     expect(find.byType(SelectionArea), findsOneWidget);
     expect(tester.takeException(), isNull);
 
-    await tester.tap(find.byIcon(Icons.format_size_rounded));
+    await tester.tap(find.bySemanticsLabel('Reading settings'));
     await tester.pumpAndSettle();
     expect(find.text('Reading settings'), findsOneWidget);
-    expect(find.text('Warm'), findsOneWidget);
+    expect(find.text('Sepia'), findsOneWidget);
     expect(tester.takeException(), isNull);
-    Navigator.of(tester.element(find.text('Reading settings'))).pop();
+    Navigator.of(tester.element(find.text('Sepia'))).pop();
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('Book menu'));
+    await tester.tap(find.bySemanticsLabel('Book menu'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Contents'));
     await tester.pumpAndSettle();
@@ -747,19 +844,27 @@ void main() {
 
     await tester.tap(find.text('Attention Loops'));
     await tester.pumpAndSettle();
-    expect(find.text('CHAPTER 02 OF 03'), findsOneWidget);
+    expect(find.text('CHAPTER 2'), findsOneWidget);
     final next = find.byKey(const ValueKey('book-chapter-next-1'));
     await tester.ensureVisible(next);
     await tester.pumpAndSettle();
+    expect(find.text('Next: Chapter 3'), findsOneWidget);
     await tester.tap(next);
     await tester.pumpAndSettle();
-    expect(find.text('CHAPTER 03 OF 03'), findsOneWidget);
+    expect(find.text('CHAPTER 3'), findsOneWidget);
     expect(find.text('Finish book'), findsOneWidget);
-    await tester.tap(find.byTooltip('Book menu'));
+    await tester.tap(find.bySemanticsLabel('Book menu'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Notes & highlights'));
+    await tester.tap(find.text('Notes & highlights · 0'));
     await tester.pumpAndSettle();
     expect(find.text('Notes & highlights'), findsOneWidget);
+    expect(
+      find.text(
+        'Tap any paragraph to highlight it or add a note. They’re saved to '
+        'this book.',
+      ),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
   });
 
@@ -802,7 +907,7 @@ void main() {
     await tester.tap(find.text('A. Author'));
     await tester.pumpAndSettle();
 
-    expect(find.text('CHAPTER 01 OF 03'), findsOneWidget);
+    expect(find.text('CHAPTER 1'), findsOneWidget);
     expect(find.text('GLOBAL SHELL NAV'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
@@ -810,6 +915,7 @@ void main() {
   testWidgets('listen follows narration with sentence and word highlighting', (
     tester,
   ) async {
+    _holdWavesStill(tester);
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -851,10 +957,6 @@ void main() {
       ),
       findsOneWidget,
     );
-    expect(
-      find.descendant(of: player, matching: find.byType(Text)),
-      findsNothing,
-    );
 
     narrator.emitProgress(start: 2, end: 8, word: 'useful');
     await tester.pump();
@@ -869,19 +971,21 @@ void main() {
     await tester.tap(find.byKey(const Key('book-narration-play-pause')));
     await tester.pumpAndSettle();
     expect(narrator.stopCalls, greaterThanOrEqualTo(1));
-    expect(find.byIcon(Icons.play_arrow_rounded), findsOneWidget);
+    expect(find.bySemanticsLabel('Play'), findsOneWidget);
 
-    await tester.tap(find.byKey(const Key('book-narration-speed')));
+    // Speed and style live in the full player (1× → 1.25× → 1.5×).
+    await _openPlayer(tester);
+    final speed = find.byKey(const Key('book-narration-speed'));
+    await tester.ensureVisible(speed);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('1.5×').last);
+    await tester.tap(speed);
+    await tester.pumpAndSettle();
+    await tester.tap(speed);
     await tester.pumpAndSettle();
     expect(narrator.speeds.last, 1.5);
-    expect(
-      find.descendant(of: player, matching: find.byType(Text)),
-      findsNothing,
-    );
+    expect(find.descendant(of: speed, matching: find.text('1.5×')), findsOne);
 
-    await tester.tap(find.byKey(const Key('book-narration-style')));
+    await tester.tap(find.bySemanticsLabel('More'));
     await tester.pumpAndSettle();
     expect(
       find.text('Dynamic pacing and emotion that follow the meaning.'),
@@ -893,25 +997,27 @@ void main() {
     expect(repository.lastCursorJson?['narrationStyle'], 'warm');
     expect(repository.lastCursorJson?['narrationSpeed'], 1.5);
 
-    await tester.tap(find.byKey(const Key('book-narration-next')));
+    // Forward 15 s moves the narration on to a later sentence.
+    await tester.tap(find.bySemanticsLabel('Forward 15 seconds'));
     await tester.pumpAndSettle();
-    expect(
+    await tester.tap(find.bySemanticsLabel('Back'));
+    await tester.pumpAndSettle();
+    final controls = tester.widget<Semantics>(
       find.byWidgetPredicate(
         (widget) =>
             widget is Semantics &&
-            widget.properties.label == 'Audiobook controls' &&
-            (widget.properties.value ?? '').contains(
-              'Speed belongs to the first category; care belongs to the second.',
-            ),
+            widget.properties.label == 'Audiobook controls',
       ),
-      findsOneWidget,
     );
+    expect(controls.properties.value, isNot(contains(firstSentence)));
+    expect(controls.properties.value, contains('Current passage:'));
     expect(tester.takeException(), isNull);
   });
 
   testWidgets('narration keeps playing while another tab is selected', (
     tester,
   ) async {
+    _holdWavesStill(tester);
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -960,6 +1066,7 @@ void main() {
   testWidgets('paused narration resumes from its persisted character offset', (
     tester,
   ) async {
+    _holdWavesStill(tester);
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -1020,6 +1127,7 @@ void main() {
   testWidgets('cold start reopens active narration and autoplays exact offset', (
     tester,
   ) async {
+    _holdWavesStill(tester);
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -1074,16 +1182,13 @@ void main() {
     await tester.pump(const Duration(milliseconds: 1));
 
     expect(find.byKey(const Key('book-narration-player')), findsOneWidget);
-    expect(find.byTooltip('Pause narration'), findsOneWidget);
+    expect(find.bySemanticsLabel('Pause'), findsOneWidget);
     expect(resumedNarrator.stopCalls, 0);
     const firstSentence =
         'A useful decision starts by separating a reversible choice from an irreversible one.';
     expect(resumedNarrator.spokenTexts, [firstSentence.substring(7)]);
 
-    await tester.tap(find.byKey(const Key('book-narration-options')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Stop listening'));
-    await tester.pumpAndSettle();
+    await _stopFromPlayer(tester);
     expect(activeResumes.values['local'], isNull);
     expect(resumedNarrator.stopCalls, greaterThanOrEqualTo(1));
     expect(tester.takeException(), isNull);
@@ -1092,6 +1197,7 @@ void main() {
   testWidgets('continuous word progress reaches durable storage periodically', (
     tester,
   ) async {
+    _holdWavesStill(tester);
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -1139,6 +1245,7 @@ void main() {
   testWidgets('listening controls fit a narrow phone with larger text', (
     tester,
   ) async {
+    _holdWavesStill(tester);
     tester.view.physicalSize = const Size(320, 568);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -1178,10 +1285,13 @@ void main() {
   testWidgets(
     'saving a book note closes without lifecycle or overflow errors',
     (tester) async {
-      tester.view.physicalSize = const Size(390, 844);
+      // The real sheet path on a small phone with the keyboard up.
+      tester.view.physicalSize = const Size(320, 568);
       tester.view.devicePixelRatio = 1;
+      tester.view.viewInsets = const FakeViewPadding(bottom: 260);
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.view.resetViewInsets);
 
       ContentHighlight? returnedNote;
       String? submittedText;
@@ -1192,41 +1302,28 @@ void main() {
             body: Builder(
               builder: (context) => FilledButton(
                 onPressed: () async {
-                  returnedNote = await showModalBottomSheet<ContentHighlight>(
-                    context: context,
-                    isScrollControlled: true,
-                    builder: (sheetContext) {
-                      final media = MediaQuery.of(sheetContext);
-                      return MediaQuery(
-                        data: media.copyWith(
-                          viewInsets: const EdgeInsets.only(bottom: 300),
-                        ),
-                        child: BookNoteComposerSheet(
-                          quote: 'A reversible choice rewards speed.',
-                          background: Colors.white,
-                          chrome: Colors.white,
-                          ink: Colors.black,
-                          muted: Colors.grey,
-                          dark: false,
-                          onSave: (noteText) async {
-                            saveCalls++;
-                            submittedText = noteText;
-                            await Future<void>.delayed(
-                              const Duration(milliseconds: 10),
-                            );
-                            final now = DateTime.utc(2026, 7, 14);
-                            return ContentHighlight(
-                              id: 'note-1',
-                              contentResourceId: 'book-1',
-                              quoteText: 'A reversible choice rewards speed.',
-                              noteText: noteText,
-                              createdAt: now,
-                              updatedAt: now,
-                            );
-                          },
-                        ),
-                      );
-                    },
+                  returnedNote = await showV3Sheet<ContentHighlight>(
+                    context,
+                    title: 'Add a note',
+                    builder: (sheetContext) => BookNoteComposerSheet(
+                      quote: 'A reversible choice rewards speed.',
+                      onSave: (noteText) async {
+                        saveCalls++;
+                        submittedText = noteText;
+                        await Future<void>.delayed(
+                          const Duration(milliseconds: 10),
+                        );
+                        final now = DateTime.utc(2026, 7, 14);
+                        return ContentHighlight(
+                          id: 'note-1',
+                          contentResourceId: 'book-1',
+                          quoteText: 'A reversible choice rewards speed.',
+                          noteText: noteText,
+                          createdAt: now,
+                          updatedAt: now,
+                        );
+                      },
+                    ),
                   );
                 },
                 child: const Text('Open composer'),
@@ -1238,17 +1335,32 @@ void main() {
 
       await tester.tap(find.text('Open composer'));
       await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(find.text('Add a note'), findsOneWidget);
+      // The note field takes focus as the sheet opens.
+      expect(
+        tester.widget<EditableText>(find.byType(EditableText)).focusNode.hasFocus,
+        isTrue,
+      );
       await tester.enterText(
         find.byType(TextField),
         'Compare reversibility first.',
       );
+      // "Save note" enables once the note has text (v3 design).
+      await tester.pump();
+      await tester.ensureVisible(find.text('Save note'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Save note'));
+      await tester.pump();
+      // The field locks while the note saves.
+      expect(tester.widget<TextField>(find.byType(TextField)).enabled, isFalse);
       await tester.pumpAndSettle();
 
       expect(saveCalls, 1);
       expect(submittedText, 'Compare reversibility first.');
       expect(returnedNote?.id, 'note-1');
       expect(find.text('Open composer'), findsOneWidget);
+      expect(find.text('Add a note'), findsNothing);
       expect(tester.takeException(), isNull);
 
       await tester.pumpWidget(const SizedBox());
@@ -1260,6 +1372,7 @@ void main() {
     testWidgets(
       'reader swipe saves position and stops audio; pending button=$overlap',
       (tester) async {
+    _holdWavesStill(tester);
         tester.view.physicalSize = const Size(390, 844);
         tester.view.devicePixelRatio = 1;
         addTearDown(tester.view.resetPhysicalSize);
@@ -1325,7 +1438,7 @@ void main() {
 
         if (overlap) {
           checkpoints.pendingWrite = Completer<void>();
-          await tester.tap(find.byTooltip('Back'));
+          await tester.tap(find.bySemanticsLabel('Back'));
           await tester.pump();
         }
         await tester.dragFrom(const Offset(1, 150), const Offset(340, 0));
@@ -1342,4 +1455,430 @@ void main() {
       },
     );
   }
+
+  group('E3 narration follow-ups', () {
+    Future<
+      ({ProviderContainer container, _FakeBookNarrator narrator})
+    >
+    mountReader(
+      WidgetTester tester, {
+      ContentResourcesRepository? repository,
+      BookNarrationCheckpointStore? checkpointStore,
+      bool startNarrationOnOpen = false,
+      bool autoplayOnRestore = false,
+    }) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      _holdWavesStill(tester);
+      final narrator = _FakeBookNarrator();
+      final container = ProviderContainer(
+        overrides: [
+          contentResourcesRepositoryProvider.overrideWithValue(
+            repository ?? _FakeContentResourcesRepository(),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(
+            home: BookReaderScreen(
+              resourceId: 'book-1',
+              fallbackTitle: 'Fallback',
+              narrator: narrator,
+              checkpointStore:
+                  checkpointStore ?? _MemoryBookNarrationCheckpointStore(),
+              activeResumeStore: _MemoryActiveBookNarrationResumeStore(),
+              startNarrationOnOpen: startNarrationOnOpen,
+              autoplayOnRestore: autoplayOnRestore,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      return (container: container, narrator: narrator);
+    }
+
+    testWidgets('Listen on a never-narrated book starts narration', (
+      tester,
+    ) async {
+      final setup = await mountReader(tester, startNarrationOnOpen: true);
+      const firstSentence =
+          'A useful decision starts by separating a reversible choice from '
+          'an irreversible one.';
+      expect(setup.narrator.spokenTexts, [firstSentence]);
+      final remote = setup.container.read(
+        bookNarrationRemoteControllerProvider,
+      );
+      expect(remote.active, isTrue);
+      expect(remote.playing, isTrue);
+      // The dock and the full player know which book is playing.
+      expect(remote.resourceId, 'book-1');
+      expect(remote.title, 'Decision Systems');
+      expect(remote.author, 'A. Author');
+      expect(remote.chapterIndex, 0);
+      expect(remote.chapterTitle, 'Decision Systems');
+      expect(remote.duration, greaterThan(Duration.zero));
+      expect(find.byKey(const Key('book-narration-player')), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('the cold-start restore alone still needs a checkpoint', (
+      tester,
+    ) async {
+      final setup = await mountReader(tester, autoplayOnRestore: true);
+      expect(setup.narrator.spokenTexts, isEmpty);
+      expect(find.byKey(const Key('book-listen-button')), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('the approximate caption stays while the stream buffers', (
+      tester,
+    ) async {
+      final setup = await mountProductionTrack(tester, audioOnly: true);
+      const caption = 'Position follows audio approximately';
+      expect(find.textContaining(caption), findsOneWidget);
+      setup.player.emitState(ProcessingState.buffering);
+      await tester.pump();
+      expect(narrationSemantics(tester), contains('Preparing narration.'));
+      expect(find.textContaining(caption), findsOneWidget);
+      setup.player.emitState(ProcessingState.ready);
+      await tester.pump();
+      expect(find.textContaining(caption), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('the narrated view and both voices get plain quotes and '
+        'ampersands, with the highlight aligned', (tester) async {
+      final setup = await mountReader(
+        tester,
+        repository: _EntityContentResourcesRepository(),
+      );
+      await tester.tap(find.byKey(const Key('book-listen-button')));
+      await tester.pumpAndSettle();
+      // v4 parses without HTML escaping: the voice is sent plain text.
+      const sentence = 'He said "hi" & left.';
+      expect(setup.narrator.spokenTexts, [sentence]);
+      expect(setup.narrator.spokenTexts.single, isNot(contains('&quot;')));
+
+      RichText paragraph() => tester.widget<RichText>(
+        find.byWidgetPredicate(
+          (widget) =>
+              widget is RichText &&
+              widget.text.toPlainText().startsWith('He said'),
+        ),
+      );
+      String highlighted() {
+        final words = <String>[];
+        paragraph().text.visitChildren((span) {
+          if (span is TextSpan &&
+              span.style?.backgroundColor == AppColors.ember) {
+            words.add(span.text ?? '');
+          }
+          return true;
+        });
+        return words.join();
+      }
+
+      expect(
+        paragraph().text.toPlainText(),
+        'He said "hi" & left. Then more & more.',
+      );
+      setup.narrator.emitProgress(start: 8, end: 12, word: '"hi"');
+      await tester.pump();
+      expect(highlighted(), '"hi"');
+      setup.narrator.emitProgress(start: 13, end: 14, word: '&');
+      await tester.pump();
+      expect(highlighted(), '&');
+      // The dock's spoken summary carries no entities either.
+      final controls = tester.widget<Semantics>(
+        find.byWidgetPredicate(
+          (widget) =>
+              widget is Semantics &&
+              widget.properties.label == 'Audiobook controls',
+        ),
+      );
+      expect(controls.properties.value, contains(sentence));
+      expect(controls.properties.value, isNot(contains('&amp;')));
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('the expressive voice is sent chunks without entities', (
+      tester,
+    ) async {
+      final setup = await mountProductionTrack(
+        tester,
+        repository: _EntityTrackContentResourcesRepository(),
+      );
+      final texts = (setup.repository as _EntityTrackContentResourcesRepository)
+          .texts;
+      expect(texts, isNotEmpty);
+      expect(texts.first, startsWith('He said "hi" & left.'));
+      for (final text in texts) {
+        expect(text, isNot(contains(RegExp('&(quot|amp|lt|gt|#39);'))));
+      }
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('track voice: ±15 s and seek land mid-sentence, and a skip '
+        'into the next chapter keeps its offset', (tester) async {
+      final setup = await mountProductionTrack(
+        tester,
+        audioOnly: true,
+        repository: _LongTrackContentResourcesRepository(),
+      );
+      final remote = ProviderScope.containerOf(
+        tester.element(find.byType(BookReaderScreen)),
+      ).read(bookNarrationRemoteControllerProvider);
+      expect(remote.chapterIndex, 0);
+      expect(setup.player.playing, isTrue);
+      // Two chapters of one long sentence each: 300 + 450 characters.
+      expect(remote.duration, const Duration(milliseconds: 50000));
+      final start = remote.elapsed;
+
+      // About 15 s each way: the voice's own position estimate can move the
+      // marker by a character or two (~0.1 s) after the seek.
+      await _openPlayer(tester);
+      await tester.tap(find.bySemanticsLabel('Forward 15 seconds'));
+      await tester.pumpAndSettle();
+      expect(remote.chapterIndex, 0);
+      expect(
+        (remote.elapsed - start).inMilliseconds,
+        inInclusiveRange(14000, 16000),
+      );
+      // Inside the sentence's clip (20 s), not at its start or end.
+      expect(setup.player.position, greaterThan(const Duration(seconds: 10)));
+      expect(setup.player.position, lessThan(const Duration(seconds: 19)));
+
+      // The next 15 s crosses into chapter 2, mid-sentence there. The
+      // position holds while the native seek is still in flight (no
+      // position from the player yet).
+      final beforeCrossing = remote.elapsed;
+      final seekGate = Completer<void>();
+      setup.player.nextSeekGate = seekGate;
+      await tester.tap(find.bySemanticsLabel('Forward 15 seconds'));
+      await tester.pump();
+      await tester.pump();
+      expect(remote.chapterIndex, 1);
+      expect(
+        (remote.elapsed - beforeCrossing).inMilliseconds,
+        inInclusiveRange(14000, 16000),
+      );
+      seekGate.complete();
+      await tester.pumpAndSettle();
+      expect(remote.chapterIndex, 1);
+      expect(
+        (remote.elapsed - beforeCrossing).inMilliseconds,
+        inInclusiveRange(14000, 16000),
+      );
+      expect(setup.player.position, greaterThan(const Duration(seconds: 3)));
+      expect(setup.player.position, lessThan(const Duration(seconds: 19)));
+
+      // Back 15 s returns across the boundary.
+      final beforeBack = remote.elapsed;
+      await tester.tap(find.bySemanticsLabel('Back 15 seconds'));
+      await tester.pumpAndSettle();
+      expect(remote.chapterIndex, 0);
+      expect(
+        (beforeBack - remote.elapsed).inMilliseconds,
+        inInclusiveRange(14000, 16000),
+      );
+
+      // The seek bar lands mid-sentence on the same timeline.
+      final bar = tester.getRect(find.byKey(BookNarrationFullPlayer.seekKey));
+      await tester.tapAt(Offset(bar.left + bar.width * .8, bar.center.dy));
+      await tester.pumpAndSettle();
+      expect(remote.chapterIndex, 1);
+      expect(
+        (remote.elapsed - remote.duration * .8).inMilliseconds.abs(),
+        lessThan(1000),
+      );
+      expect(setup.player.position, greaterThan(const Duration(seconds: 10)));
+      expect(setup.player.position, lessThan(const Duration(seconds: 19)));
+      expect(setup.player.playing, isTrue);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('±15 s from sentence 8 of 10 moves one 15 s span each way', (
+      tester,
+    ) async {
+      final checkpoints = _MemoryBookNarrationCheckpointStore();
+      checkpoints.values['book-1'] = const BookNarrationCheckpoint(
+        chapterIndex: 0,
+        segmentIndex: 7,
+        characterOffset: 0,
+        updatedAtEpochMs: 1,
+        textVersion: 4,
+      );
+      final setup = await mountReader(
+        tester,
+        repository: _TenSentenceContentResourcesRepository(),
+        checkpointStore: checkpoints,
+        startNarrationOnOpen: true,
+      );
+      final remote = setup.container.read(
+        bookNarrationRemoteControllerProvider,
+      );
+      expect(setup.narrator.spokenTexts.last, startsWith('Line 7 '));
+      final start = remote.elapsed;
+      // 10 sentences of ~98 characters at 15 a second: ~65 s in all.
+      expect(remote.duration.inSeconds, inInclusiveRange(60, 70));
+
+      await _openPlayer(tester);
+      await tester.tap(find.bySemanticsLabel('Forward 15 seconds'));
+      await tester.pumpAndSettle();
+      final forward = remote.elapsed - start;
+      // Lands on the word there: a few characters short of 15 s at most.
+      expect(forward.inMilliseconds, inInclusiveRange(14400, 15000));
+      expect(setup.narrator.spokenTexts.last, startsWith('abc'));
+      expect(remote.playing, isTrue);
+
+      final afterForward = remote.elapsed;
+      await tester.tap(find.bySemanticsLabel('Back 15 seconds'));
+      await tester.pumpAndSettle();
+      final back = afterForward - remote.elapsed;
+      expect(back.inMilliseconds, inInclusiveRange(15000, 15600));
+
+      // At the very start, Back does nothing more than clamp.
+      await tester.tap(find.bySemanticsLabel('Back 15 seconds'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.bySemanticsLabel('Back 15 seconds'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.bySemanticsLabel('Back 15 seconds'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.bySemanticsLabel('Back 15 seconds'));
+      await tester.pumpAndSettle();
+      expect(remote.elapsed, Duration.zero);
+      expect(setup.narrator.spokenTexts.last, startsWith('Line 0 '));
+
+      // The seek bar uses the same timeline: 50 % is half the book's time.
+      final bar = tester.getRect(find.byKey(BookNarrationFullPlayer.seekKey));
+      await tester.tapAt(Offset(bar.left + bar.width / 2, bar.center.dy));
+      await tester.pumpAndSettle();
+      expect(
+        (remote.elapsed - remote.duration * .5).inMilliseconds.abs(),
+        lessThan(600),
+      );
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
+  });
+}
+
+/// Two chapters, each one long sentence (300 and 450 characters), so 15 s
+/// (225 characters) lands inside a sentence.
+class _LongTrackContentResourcesRepository
+    extends _TrackContentResourcesRepository {
+  static String sentence(String first, int length) {
+    final words = StringBuffer(first);
+    while (words.length < length - 4) {
+      words.write(' abc');
+    }
+    while (words.length < length - 1) {
+      words.write('x');
+    }
+    return '$words.';
+  }
+
+  @override
+  Future<ContentResource> getResource(String resourceId) async =>
+      ContentResource(
+        id: 'book-1',
+        kind: 'llm_book_summary',
+        canonicalKey: 'book:long',
+        title: 'Long',
+        licenseStatus: 'llm_summary',
+        isSaved: false,
+        progressPercent: 0,
+        contentMarkdown:
+            '## One\n\n${sentence('Alpha', 300)}\n\n'
+            '## Two\n\n${sentence('Beta', 450)}\n',
+      );
+}
+
+class _TenSentenceContentResourcesRepository
+    extends _FakeContentResourcesRepository {
+  static String sentence(int index) {
+    final words = StringBuffer('Line $index');
+    while (words.length < 96) {
+      words.write(' abc');
+    }
+    return '$words.';
+  }
+
+  @override
+  Future<ContentResource> getResource(String resourceId) async =>
+      ContentResource(
+        id: 'book-1',
+        kind: 'llm_book_summary',
+        canonicalKey: 'book:ten',
+        title: 'Ten',
+        licenseStatus: 'llm_summary',
+        isSaved: false,
+        progressPercent: 0,
+        contentMarkdown:
+            '## Ten\n\n${List.generate(10, sentence).join('\n\n')}\n',
+      );
+}
+
+class _EntityTrackContentResourcesRepository
+    extends _TrackContentResourcesRepository {
+  final List<String> texts = [];
+
+  @override
+  Future<ContentResource> getResource(String resourceId) async =>
+      const ContentResource(
+        id: 'book-1',
+        kind: 'llm_book_summary',
+        canonicalKey: 'book:entities',
+        title: 'Entities',
+        licenseStatus: 'llm_summary',
+        isSaved: false,
+        progressPercent: 0,
+        contentMarkdown:
+            '## Quotes\n\nHe said "hi" & left. Then more & more.\n\n'
+            '## Next\n\nA <b>bold</b> "move" & a 5 > 3 claim.\n',
+      );
+
+  @override
+  Future<BookNarrationAudio> prepareNarration(
+    String resourceId, {
+    required String text,
+    required String style,
+    String? narratorProfile,
+  }) {
+    texts.add(text);
+    return super.prepareNarration(
+      resourceId,
+      text: text,
+      style: style,
+      narratorProfile: narratorProfile,
+    );
+  }
+}
+
+class _EntityContentResourcesRepository
+    extends _FakeContentResourcesRepository {
+  @override
+  Future<ContentResource> getResource(String resourceId) async =>
+      const ContentResource(
+        id: 'book-1',
+        kind: 'llm_book_summary',
+        canonicalKey: 'book:entities',
+        title: 'Entities',
+        licenseStatus: 'llm_summary',
+        isSaved: false,
+        progressPercent: 0,
+        contentMarkdown: '## Quotes\n\nHe said "hi" & left. Then more & more.\n',
+      );
 }

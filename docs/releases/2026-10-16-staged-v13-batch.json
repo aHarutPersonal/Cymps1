@@ -1,0 +1,221 @@
+{
+  "accounted_usd": 0.2480034,
+  "cap_usd": 3,
+  "cases": [
+    {
+      "accepted": false,
+      "accounted_usd": 0.0841934,
+      "activity_count": 0,
+      "adjudicated": false,
+      "attempts": [],
+      "calls": 3,
+      "elapsed_seconds": 198.93,
+      "failure_count": 1,
+      "pending_reserved_usd": 0,
+      "reported_cost_usd": 0.0841934,
+      "scenario_id": "accounting_novice_missing",
+      "status": "failed",
+      "unknown_reserved_usd": 0,
+      "validation_identity": {
+        "capability_hash": "1815a97ad0c7246f737c493fbec7b9217c6a5dd6a7d96cacd93c0c34b3afe48f",
+        "generation_contract_hash": "1f37436c110fe31533de3e33827d2721d976f00db6362c20f58fc165f016fe23",
+        "package_version": 1,
+        "prompt_hash": "6e6da8e487976c5f25b486b90f9b8b425005ca7a72163a2f709f5f00ebbb92d8",
+        "review_version": 13,
+        "schema_hash": "8cabd250b0f304bad8faba4901741a38cdb98f9a3d70eac996720deaf1e7a177"
+      },
+      "word_count": 0
+    },
+    {
+      "accepted": false,
+      "accounted_usd": 0.1067388,
+      "activity_count": 0,
+      "adjudicated": false,
+      "attempts": [
+        {
+          "error": false,
+          "seconds": 28.019,
+          "stage": "parallel_lesson_step_1_package_preflight"
+        },
+        {
+          "error": true,
+          "seconds": 6.446,
+          "stage": "parallel_lesson_step_1_package_repair"
+        }
+      ],
+      "calls": 6,
+      "elapsed_seconds": 181.559,
+      "failure_count": 1,
+      "pending_reserved_usd": 0,
+      "reported_cost_usd": 0.1067388,
+      "scenario_id": "geometry_novice_missing",
+      "status": "failed",
+      "unknown_reserved_usd": 0,
+      "validation_identity": {
+        "capability_hash": "1815a97ad0c7246f737c493fbec7b9217c6a5dd6a7d96cacd93c0c34b3afe48f",
+        "generation_contract_hash": "1f37436c110fe31533de3e33827d2721d976f00db6362c20f58fc165f016fe23",
+        "package_version": 1,
+        "prompt_hash": "6e6da8e487976c5f25b486b90f9b8b425005ca7a72163a2f709f5f00ebbb92d8",
+        "review_version": 13,
+        "schema_hash": "8cabd250b0f304bad8faba4901741a38cdb98f9a3d70eac996720deaf1e7a177"
+      },
+      "word_count": 0
+    },
+    {
+      "accepted": false,
+      "accounted_usd": 0.0570712,
+      "activity_count": 0,
+      "adjudicated": false,
+      "attempts": [],
+      "calls": 2,
+      "elapsed_seconds": 160.179,
+      "failure_count": 1,
+      "pending_reserved_usd": 0,
+      "reported_cost_usd": 0.0570712,
+      "scenario_id": "writing_novice_missing",
+      "status": "failed",
+      "unknown_reserved_usd": 0,
+      "validation_identity": {
+        "capability_hash": "1815a97ad0c7246f737c493fbec7b9217c6a5dd6a7d96cacd93c0c34b3afe48f",
+        "generation_contract_hash": "1f37436c110fe31533de3e33827d2721d976f00db6362c20f58fc165f016fe23",
+        "package_version": 1,
+        "prompt_hash": "6e6da8e487976c5f25b486b90f9b8b425005ca7a72163a2f709f5f00ebbb92d8",
+        "review_version": 13,
+        "schema_hash": "8cabd250b0f304bad8faba4901741a38cdb98f9a3d70eac996720deaf1e7a177"
+      },
+      "word_count": 0
+    }
+  ],
+  "exit_code": 0,
+  "finished_calls": 11,
+  "pending_calls": 0,
+  "pending_reserved_usd": 0,
+  "release": "20261016-100300-staged-packages",
+  "reported_cost_usd": 0.2480034,
+  "responses": [
+    {
+      "finish_reason": "length",
+      "first_content_ms": 12322.932059993036,
+      "first_event_ms": 4297.573357995134,
+      "response_chars": 6831,
+      "scenario_id": "accounting_novice_missing",
+      "schema": "LessonPackageSeed",
+      "seconds": 76.116,
+      "status": "error",
+      "unknown_usage": false
+    },
+    {
+      "finish_reason": "stop",
+      "first_content_ms": 8284.416607988533,
+      "first_event_ms": 3116.271731996676,
+      "response_chars": 6574,
+      "scenario_id": "accounting_novice_missing",
+      "schema": "LessonPackageSeed",
+      "seconds": 71.338,
+      "status": "completed",
+      "unknown_usage": false
+    },
+    {
+      "finish_reason": "length",
+      "first_content_ms": 7231.3870869984385,
+      "first_event_ms": 2923.2873800210655,
+      "response_chars": 5736,
+      "scenario_id": "accounting_novice_missing",
+      "schema": "LessonPackageActivity",
+      "seconds": 51.27,
+      "status": "error",
+      "unknown_usage": false
+    },
+    {
+      "finish_reason": "stop",
+      "first_content_ms": 4243.858525995165,
+      "first_event_ms": 2705.230933992425,
+      "response_chars": 4130,
+      "scenario_id": "geometry_novice_missing",
+      "schema": "LessonPackageSeed",
+      "seconds": 45.929,
+      "status": "completed",
+      "unknown_usage": false
+    },
+    {
+      "finish_reason": "stop",
+      "first_content_ms": 5050.708177004708,
+      "first_event_ms": 3314.1918309847824,
+      "response_chars": 4056,
+      "scenario_id": "geometry_novice_missing",
+      "schema": "LessonPackageSeed",
+      "seconds": 51.587,
+      "status": "completed",
+      "unknown_usage": false
+    },
+    {
+      "finish_reason": "stop",
+      "first_content_ms": 2515.5626370105892,
+      "first_event_ms": 2509.525750996545,
+      "response_chars": 3769,
+      "scenario_id": "geometry_novice_missing",
+      "schema": "LessonPackageActivity",
+      "seconds": 37.911,
+      "status": "completed",
+      "unknown_usage": false
+    },
+    {
+      "finish_reason": "stop",
+      "first_content_ms": 7782.729887025198,
+      "first_event_ms": 2530.929537024349,
+      "response_chars": 1636,
+      "scenario_id": "geometry_novice_missing",
+      "schema": "PackageReview",
+      "seconds": 11.382,
+      "status": "completed",
+      "unknown_usage": false
+    },
+    {
+      "finish_reason": "stop",
+      "first_content_ms": 24303.65197500214,
+      "first_event_ms": 2801.8293580098543,
+      "response_chars": 2080,
+      "scenario_id": "geometry_novice_missing",
+      "schema": "ReviewEvidencePatch",
+      "seconds": 28.019,
+      "status": "completed",
+      "unknown_usage": false
+    },
+    {
+      "finish_reason": "stop",
+      "first_content_ms": 6443.12227901537,
+      "first_event_ms": 3024.6741020237096,
+      "response_chars": 67,
+      "scenario_id": "geometry_novice_missing",
+      "schema": "PrivatePackageRepair",
+      "seconds": 6.446,
+      "status": "completed",
+      "unknown_usage": false
+    },
+    {
+      "finish_reason": "length",
+      "first_content_ms": 29399.31236402481,
+      "first_event_ms": 3170.5554439977277,
+      "response_chars": 6498,
+      "scenario_id": "writing_novice_missing",
+      "schema": "LessonPackageSeed",
+      "seconds": 80.107,
+      "status": "error",
+      "unknown_usage": false
+    },
+    {
+      "finish_reason": "length",
+      "first_content_ms": 6794.12249600864,
+      "first_event_ms": 2490.1558269921225,
+      "response_chars": 6859,
+      "scenario_id": "writing_novice_missing",
+      "schema": "LessonPackageSeed",
+      "seconds": 80.004,
+      "status": "error",
+      "unknown_usage": false
+    }
+  ],
+  "running": false,
+  "shared_ledger": true,
+  "unknown_reserved_usd": 0
+}

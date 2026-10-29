@@ -1,0 +1,1 @@
+{"image_digest": "sha256:f2ce5270074b2ee1c15ab2811a300bf9832d4456f3f01bbcb657b24e263a0ebb", "release": "20261016-080000-json-protocol", "verified_files": 17, "verified_services": ["web", "worker", "worker-high", "worker-low", "catalog-worker", "catalog-control", "curriculum-worker", "curriculum-control", "beat"]}

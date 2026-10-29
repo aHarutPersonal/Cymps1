@@ -20,3 +20,20 @@ M. Gummere's 1917 public-domain translation of *Moral Letters to Lucilius*,
 Letter 11. Newton is quoted from his 5 February 1676 letter to Robert Hooke,
 with the original spelling of “sholders” modernized to “shoulders.” Buffett is
 quoted from Columbia Business School's 2015 *Fast Forward: Warren Buffett ’51*.
+
+# Third-party fonts
+
+## Geist Sans
+
+- `assets/fonts/geist/Geist-Regular.ttf`, `Geist-Medium.ttf`,
+  `Geist-SemiBold.ttf` and `Geist-Bold.ttf` (weights 400/500/600/700) — the
+  static Geist Sans TrueType files from the `geist` npm package, version
+  1.3.1 (<https://www.npmjs.com/package/geist>,
+  <https://github.com/vercel/geist-font>, <https://vercel.com/font>).
+- License: SIL Open Font License, Version 1.1. The full text ships beside the
+  fonts in `assets/fonts/geist/OFL.txt`; it is also available at
+  <https://openfontlicense.org>.
+- Copyright (c) 2023 Vercel, in collaboration with basement.studio.
+
+Instrument Serif and Literata are loaded through the `google_fonts` package
+(SIL OFL 1.1) and are not bundled.

@@ -35,6 +35,7 @@ from app.services.content_quality import (
     MIN_PLAN_DETAIL_LESSON_WORDS,
 )
 from app.services.llm.schemas import PLAN_DETAIL_REQUIRED_HEADINGS
+from app.services.planning.capacity import effective_weekly_minutes, plan_item_minutes
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,31 @@ def _truncate_for_brief(
     if limit <= 1:
         return "…"[:limit], True, original_chars
     return raw[: limit - 1].rstrip() + "…", True, original_chars
+
+
+def _v2_self_reported_capability(baseline: Mapping[str, Any]) -> str:
+    """Capability line for a v3 (V2 key set) intake.
+
+    v3 sessions no longer ask the free-text ``current_capability`` question. The
+    learner's own rating (``skill_confidence``, a 1-5 scale answered as e.g.
+    "2 of 5") and their ``achievement_inventory`` take its place. Both are
+    self-reports; checked skills are added separately by the caller.
+    """
+
+    def answer(key: str) -> str:
+        record = baseline.get(key)
+        if isinstance(record, Mapping):
+            return str(record.get("answer") or "").strip()
+        return ""
+
+    parts: list[str] = []
+    rating = re.match(r"\s*([1-5])(?!\d)", answer("skill_confidence"))
+    if rating:
+        parts.append(f"Self-rated confidence: {rating.group(1)} of 5.")
+    achievements = answer("achievement_inventory")
+    if achievements:
+        parts.append(f"Achievements: {achievements}")
+    return " ".join(parts)
 
 
 def _escape_markdown_inline(value: Any, *, limit: int = 1_000) -> str:
@@ -770,7 +796,7 @@ def structured_gap_from_plan_item(
         gap_payload.get("satisfied_prerequisite_ids")
         or gap_payload.get("mastered_skill_ids")
     )
-    available_minutes = round(float(getattr(item, "estimated_hours", 0) or 0) * 60)
+    available_minutes = plan_item_minutes(item)
     try:
         return StructuredLearningGap(
             skill_id=str(skill_id),
@@ -904,7 +930,7 @@ async def resolve_structured_gap_from_catalog(
     if explicit is not None:
         return explicit
 
-    available_minutes = round(float(getattr(item, "estimated_hours", 0) or 0) * 60)
+    available_minutes = plan_item_minutes(item)
     if available_minutes < MIN_SESSION_MINUTES:
         return None
     context = dict(session_context or {})
@@ -1196,6 +1222,8 @@ async def build_learner_lesson_brief(
         current_capability = str(capability_record.get("answer") or "")
     else:
         current_capability = str(capability_record or "")
+    if not current_capability and baseline.get("interview_key_set") == "v2":
+        current_capability = _v2_self_reported_capability(baseline)
     if not current_capability and user_profile is not None:
         skills = getattr(user_profile, "skills", None) or {}
         if isinstance(skills, Mapping):
@@ -1422,7 +1450,7 @@ async def build_learner_lesson_brief(
         constraints=constraints,
         achievements=achievements,
         comparison_context=comparison_context,
-        weekly_minutes=int(plan.weekly_hours) * 60,
+        weekly_minutes=effective_weekly_minutes(plan) or 0,
         mentor_id=str(idol.id) if idol is not None else None,
         mentor_name=bounded(
             "mentor_name",
@@ -4484,19 +4512,19 @@ async def _catalog_capacity_by_week(
         PlanItemType.READING,
     }
     daily_types = {PlanItemType.HABIT, PlanItemType.PRACTICE}
-    total_minutes = int(plan.weekly_hours) * 60
+    total_minutes = effective_weekly_minutes(plan) or 0
     capacities: dict[int, int] = {}
     for week in range(start_week, max_week + 1):
         week_items = [
             row for row in items if int(row.week_start) <= week <= int(row.week_end)
         ]
         mission_minutes = sum(
-            int(row.estimated_hours or 0) * 60
+            plan_item_minutes(row)
             for row in week_items
             if row.type in mission_types
         )
         daily_minutes = sum(
-            int(row.estimated_hours or 0) * 60
+            plan_item_minutes(row)
             for row in week_items
             if row.type in daily_types
         )

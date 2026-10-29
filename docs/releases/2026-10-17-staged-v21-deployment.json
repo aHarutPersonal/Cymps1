@@ -1,0 +1,1 @@
+{"release": "20261017-001200-structured-solutions", "image_digest": "sha256:97e972c16a39963bc544ee3860ebc6ce51605dba20192df5cfae95ae55a86d73", "verified_services": ["web", "worker", "worker-high", "worker-low", "catalog-worker", "catalog-control", "curriculum-worker", "curriculum-control", "beat"], "verified_files": 28, "file_hashes_verified_in_every_service": true}

@@ -55,6 +55,11 @@ final sessionControllerProvider =
         authController: ref.watch(authControllerProvider.notifier),
         resetLocalAccountData: () =>
             ref.read(cmpysStoreProvider.notifier).reset(),
+        openLocalAccount: (accountId, unkeyedOwner) => ref
+            .read(cmpysStoreProvider.notifier)
+            .openAccount(accountId, unkeyedOwner: unkeyedOwner),
+        closeLocalAccount: () =>
+            ref.read(cmpysStoreProvider.notifier).closeAccount(),
       );
     });
 
@@ -84,16 +89,32 @@ class SessionController extends StateNotifier<SessionState> {
     required MeRepository meRepository,
     required AuthController authController,
     Future<void> Function()? resetLocalAccountData,
+    Future<void> Function(String accountId, String? unkeyedOwner)?
+    openLocalAccount,
+    Future<void> Function()? closeLocalAccount,
   }) : _tokenStore = tokenStore,
        _meRepository = meRepository,
        _authController = authController,
        _resetLocalAccountData = resetLocalAccountData,
+       _openLocalAccount = openLocalAccount,
+       _closeLocalAccount = closeLocalAccount,
        super(const SessionInitializing());
 
   final TokenStore _tokenStore;
   final MeRepository _meRepository;
   final AuthController _authController;
+
+  /// Clears the signed-in account's data on this device (deliberate logout).
   final Future<void> Function()? _resetLocalAccountData;
+
+  /// Opens an account's data on this device (the store is kept per account,
+  /// owner decision 2). `unkeyedOwner` is the account an older build's
+  /// unkeyed store belongs to (null: no one's, so it isn't adopted).
+  final Future<void> Function(String accountId, String? unkeyedOwner)?
+  _openLocalAccount;
+
+  /// Closes the account's data without deleting it (involuntary sign-out).
+  final Future<void> Function()? _closeLocalAccount;
 
   SharedPreferences? _prefs;
 
@@ -106,13 +127,22 @@ class SessionController extends StateNotifier<SessionState> {
     return message.contains('401') || message.contains('404');
   }
 
-  Future<void> _resetToUnauthenticated() async {
+  /// Signs out. A [deliberate] logout clears the account's data on this
+  /// device. An involuntary sign-out (no token, or a 401/404 for the
+  /// profile) keeps it, with the account's device flags, so the same
+  /// account signing back in gets its data; another account never sees it
+  /// (the store is per account, and the flags are dropped on a switch).
+  Future<void> _resetToUnauthenticated({bool deliberate = false}) async {
     _prefs ??= await SharedPreferences.getInstance();
     await _tokenStore.clear();
-    await _prefs?.remove(SessionKeys.currentIdolId);
-    await _prefs?.remove(SessionKeys.onboardingComplete);
-    await _prefs?.remove(SessionKeys.accountId);
-    await _resetLocalAccountData?.call();
+    if (deliberate) {
+      await _prefs?.remove(SessionKeys.currentIdolId);
+      await _prefs?.remove(SessionKeys.onboardingComplete);
+      await _prefs?.remove(SessionKeys.accountId);
+      await _resetLocalAccountData?.call();
+    } else {
+      await _closeLocalAccount?.call();
+    }
     state = const SessionUnauthenticated();
   }
 
@@ -155,7 +185,17 @@ class SessionController extends StateNotifier<SessionState> {
   }
 
   /// Determine session state based on user profile.
-  Future<void> _determineSessionState(Me user, {bool resetUnowned = false}) async {
+  ///
+  /// The account's data on this device is opened before any state that
+  /// shows a screen. A previous account's device flags never carry over;
+  /// its data stays in its own store. An unkeyed store from an older build
+  /// belongs to the account that was signed in, else to the first account
+  /// that signs in, but never to a [newRegistration].
+  Future<void> _determineSessionState(
+    Me user, {
+    bool resetUnowned = false,
+    bool newRegistration = false,
+  }) async {
     debugPrint('🔑 _determineSessionState called');
 
     final previousAccount = _prefs?.getString(SessionKeys.accountId);
@@ -163,8 +203,11 @@ class SessionController extends StateNotifier<SessionState> {
         (previousAccount == null && resetUnowned)) {
       await _prefs?.remove(SessionKeys.currentIdolId);
       await _prefs?.remove(SessionKeys.onboardingComplete);
-      await _resetLocalAccountData?.call();
     }
+    await _openLocalAccount?.call(
+      user.id,
+      previousAccount ?? (newRegistration ? null : user.id),
+    );
     await _prefs?.setString(SessionKeys.accountId, user.id);
 
     // Check if onboarding is complete
@@ -205,15 +248,15 @@ class SessionController extends StateNotifier<SessionState> {
     debugPrint('🔑 SessionController.onAuthenticated() called');
     _prefs ??= await SharedPreferences.getInstance();
 
-    // Registration always creates a distinct account. Device-local state is
-    // not user-scoped, so carrying it across would make the new user inherit
-    // the previous user's completed-onboarding flag, mentor, name, notes, and
-    // progress and would route them directly to Home. Clear it before /me is
-    // evaluated so the new account deterministically starts onboarding.
+    // Registration always creates a distinct account. The device flags are
+    // not user-scoped, so carrying them across would route the new user
+    // straight to Home with the previous user's onboarding. Clear them
+    // before /me is evaluated so the new account deterministically starts
+    // onboarding. Its data opens in its own, empty store
+    // ([_determineSessionState]); the previous account's stays its own.
     if (isNewRegistration) {
       await _prefs?.remove(SessionKeys.currentIdolId);
       await _prefs?.remove(SessionKeys.onboardingComplete);
-      await _resetLocalAccountData?.call();
     }
 
     // Fetch user profile without resetting state to Initializing
@@ -221,7 +264,11 @@ class SessionController extends StateNotifier<SessionState> {
       debugPrint('🔑 Fetching user profile after auth...');
       final user = await _meRepository.getMe();
       debugPrint('🔑 User profile loaded');
-      await _determineSessionState(user, resetUnowned: !isNewRegistration);
+      await _determineSessionState(
+        user,
+        resetUnowned: !isNewRegistration,
+        newRegistration: isNewRegistration,
+      );
       debugPrint('🔑 Final state after auth: ${state.runtimeType}');
     } on ApiError catch (e) {
       debugPrint('🔑 onAuthenticated ApiError: ${e.message}');
@@ -235,9 +282,10 @@ class SessionController extends StateNotifier<SessionState> {
     }
   }
 
-  /// Called after logout.
+  /// Called after a deliberate logout: the account's data on this device
+  /// is cleared too.
   Future<void> onLogout() async {
-    await _resetToUnauthenticated();
+    await _resetToUnauthenticated(deliberate: true);
   }
 
   /// Update user profile in session.
@@ -306,10 +354,11 @@ class SessionController extends StateNotifier<SessionState> {
     }
   }
 
-  /// Handle auth error (e.g., token expired).
+  /// Handle auth error (e.g., token expired): an involuntary sign-out, so
+  /// the account's data stays on this device.
   Future<void> handleAuthError() async {
     await _authController.logout();
-    await onLogout();
+    await _resetToUnauthenticated();
   }
 
   /// Calculate user's current age.

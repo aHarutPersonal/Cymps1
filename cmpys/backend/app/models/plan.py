@@ -61,7 +61,11 @@ class Plan(Base, UUIDMixin, TimestampMixin):
     
     target_age: Mapped[int] = mapped_column(Integer, nullable=False)
     duration_weeks: Mapped[int] = mapped_column(Integer, nullable=False, default=12)
+    # Legacy whole hours, written as ceil(weekly_minutes / 60).
     weekly_hours: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
+    # Canonical capacity (60-900 for intake v3). NULL only on rows from before
+    # migration p7q8r9s0t1u2; readers fall back to weekly_hours * 60.
+    weekly_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cycle_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

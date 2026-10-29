@@ -109,7 +109,7 @@ async def test_shortening_requires_complete_scoped_prose_and_independent_review(
         assert not error and changed["reading_minutes"] == 3 and changed["estimate_minutes"] == (7 if failure == "retimed" else 6)
         assert changed["practice_minutes"] == (4 if failure == "retimed" else step["practice_minutes"])
         assert changed["substeps"] == step["substeps"] and changed["resources"] == step["resources"]
-        assert _sections(changed)["guided_practice"] == _sections(step)["guided_practice"]
+        assert _sections(changed).get("guided_practice") == _sections(step).get("guided_practice")
         assert _sections(changed)["references"] == _sections(step)["references"]
         assert 450 <= len(changed["lesson_content"].split()) <= 600
         assert review.await_args.args[0] == changed and len(calls) == (3 if failure in {"length_recovered", "section_regressed"} else 2)
@@ -394,8 +394,91 @@ async def test_capacity_editorial_repair_is_scoped_changed_and_reviewed_once(mon
     if failure is None:
         assert result and not error and result["substeps"] == original["substeps"]
         before, after = _sections(original), _sections(result)
-        assert before["guided_practice"] == after["guided_practice"]
+        assert before.get("guided_practice") == after.get("guided_practice")
         assert before["references"] == after["references"]
         assert 450 <= len(result["lesson_content"].split()) <= 600
     else:
         assert result is None and error
+
+
+# ---------------------------------------------------------------------------
+# Published legacy tutorials (with Guided Practice) keep their reviewed shape
+# ---------------------------------------------------------------------------
+
+LEGACY_STEPS_FENCE = ("```steps\ntitle: Invented block\nOne | | A step the lesson never had.\n"
+                      "Two | | Another step the lesson never had.\n```")
+LEGACY_CHECK_FENCE = "```check\nQ: Invented?\n- [ ] No\n- [x] Yes\nWhy: Added by the model.\n```"
+
+
+def legacy_long_tutorial():
+    from tests.test_tutorial_reading_budget import legacy_sections
+    base = legacy_sections()
+    base["core_framework"] += "\n" + " substantive " * 180
+    response = LLMResponse(data=render_public_package_results(base, short_package().writer_context()))
+    _assemble_parallel_lesson_response(response, step=outline(1)["steps"][0],
+        material_titles={"Resource 1"}, target_minutes=7)
+    assert not response.error and response.data["reading_minutes"] == 4
+    assert "## Guided Practice" in response.data["lesson_content"]
+    return response.data
+
+
+def test_legacy_capacity_request_never_asks_for_new_blocks():
+    legacy_source, legacy_targets, legacy_model, _ = _request(legacy_long_tutorial())
+    assert "guided_practice" in legacy_source and "guided_practice" not in legacy_targets
+    new_targets, new_model = _request(long_tutorial())[1:3]
+    for name in ("worked_example", "check_your_understanding"):
+        assert name in legacy_targets and name in new_targets
+        legacy_description = legacy_model.model_fields[name].description
+        assert "steps fence" not in legacy_description and "check fence" not in legacy_description
+    assert "steps fence" in new_model.model_fields["worked_example"].description
+    assert "check fence" in new_model.model_fields["check_your_understanding"].description
+
+
+@pytest.mark.asyncio
+async def test_legacy_tutorial_shortening_succeeds_when_the_model_follows_its_descriptions(monkeypatch):
+    """A literal model adds whatever block a description asks for; legacy text never asks."""
+    from tests.test_tutorial_reading_budget import legacy_sections
+    step = legacy_long_tutorial(); before = copy.deepcopy(step); package = short_package()
+    base = render_public_package_results(legacy_sections(), package.writer_context())
+    descriptions = []
+
+    class Client:
+        model = "offline"
+        async def generate_json(self, **kwargs):
+            data = {}
+            for name, field in kwargs["output_model"].model_fields.items():
+                descriptions.append(field.description)
+                data[name] = base[name].strip()
+                if "steps fence" in field.description:
+                    data[name] += "\n\n" + LEGACY_STEPS_FENCE
+                if "check fence" in field.description:
+                    data[name] += "\n\n" + LEGACY_CHECK_FENCE
+            return LLMResponse(data=data, finish_reason="stop")
+
+    review = AsyncMock(return_value=([], LLMResponse(data={"practice_minutes": 3}), SimpleNamespace(model="review")))
+    monkeypatch.setattr("app.services.planning.lesson_review.review_lesson", review)
+    changed, error = await shorten_tutorial_reading(step, package, {"goal": "Explain motives"},
+        client_factory=lambda **kwargs: Client(), call_records=[])
+    assert error is None and changed is not None
+    assert step == before and descriptions
+    assert "## Guided Practice" in changed["lesson_content"]
+    assert "```steps" not in changed["lesson_content"] and "```check" not in changed["lesson_content"]
+    assert _sections(changed)["guided_practice"] == _sections(step)["guided_practice"]
+    assert _sections(changed)["references"] == _sections(step)["references"]
+    assert 450 <= len(changed["lesson_content"].split()) <= 600
+    assert changed["reading_minutes"] == 3 and review.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy", [True, False])
+async def test_capacity_review_describes_guided_practice_replacement_only_for_new_lessons(legacy):
+    from app.services.planning.lesson_review import review_lesson
+    from tests.test_lesson_review_contract import _review
+    step = legacy_long_tutorial() if legacy else long_tutorial()
+    response = SimpleNamespace(error=None, data=_review(practice_minutes=3))
+    client = SimpleNamespace(generate_json=AsyncMock(return_value=response))
+    await review_lesson(step, client_factory=lambda **kwargs: client,
+                        context={"lesson_format": "tutorial_v1", "lesson_package": short_package().review_context()})
+    system_prompt = client.generate_json.call_args.kwargs["system_prompt"]
+    assert "This is tutorial_v1" in system_prompt
+    assert ("replace the former Guided Practice section" in system_prompt) is not legacy

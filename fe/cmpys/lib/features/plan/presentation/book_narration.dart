@@ -213,9 +213,12 @@ abstract interface class BookNarrationTrackController {
 
   Future<void> pauseTrack();
 
+  /// Moves playback to [segmentIndex] of [chapterIndex], [characterOffset]
+  /// characters into that sentence (its start by default).
   Future<void> seekToSentence({
     required int chapterIndex,
     required int segmentIndex,
+    int characterOffset = 0,
   });
 }
 
@@ -665,12 +668,26 @@ final class ExpressiveBookNarrator
   Future<void> seekToSentence({
     required int chapterIndex,
     required int segmentIndex,
+    int characterOffset = 0,
   }) async {
-    final targetIndex = _trackEntries.indexWhere(
+    // A long sentence can span chunks: prefer the chunk holding the offset.
+    var targetIndex = _trackEntries.indexWhere(
       (entry) =>
           entry.chapterIndex == chapterIndex &&
-          entry.chunk.containsSegment(segmentIndex),
+          entry.chunk.segments.any(
+            (slice) =>
+                slice.segmentIndex == segmentIndex &&
+                characterOffset >= slice.segmentStart &&
+                characterOffset < slice.segmentEnd,
+          ),
     );
+    if (targetIndex < 0) {
+      targetIndex = _trackEntries.indexWhere(
+        (entry) =>
+            entry.chapterIndex == chapterIndex &&
+            entry.chunk.containsSegment(segmentIndex),
+      );
+    }
     if (targetIndex < 0 || targetIndex >= _trackAssets.length) {
       // The reader reloads at this sentence. Do not synthesize every skipped
       // passage merely to preserve a contiguous native playlist.
@@ -693,7 +710,12 @@ final class ExpressiveBookNarrator
       if (run != _trackRun || revision != _trackSeekRevision) return;
       var succeeded = false;
       try {
-        await _seekPreparedSentence(targetIndex, segmentIndex, run: run);
+        await _seekPreparedSentence(
+          targetIndex,
+          segmentIndex,
+          characterOffset: characterOffset,
+          run: run,
+        );
         succeeded = true;
       } finally {
         if (run == _trackRun && revision == _trackSeekRevision) {
@@ -714,6 +736,7 @@ final class ExpressiveBookNarrator
   Future<void> _seekPreparedSentence(
     int targetIndex,
     int segmentIndex, {
+    int characterOffset = 0,
     required int run,
   }) async {
     final targetAvailability = _queuedChunks[targetIndex];
@@ -738,7 +761,12 @@ final class ExpressiveBookNarrator
     _trackQueueIndex = targetIndex;
     _trackSegmentIndex = segmentIndex;
     await _player!.seek(
-      _positionForSegment(asset, entry.chunk, segmentIndex),
+      _positionForSegment(
+        asset,
+        entry.chunk,
+        segmentIndex,
+        characterOffset: characterOffset,
+      ),
       index: targetIndex,
     );
     if (run != _trackRun) return;
@@ -1277,9 +1305,11 @@ final class AdaptiveBookNarrator
   Future<void> seekToSentence({
     required int chapterIndex,
     required int segmentIndex,
+    int characterOffset = 0,
   }) => _expressive.seekToSentence(
     chapterIndex: chapterIndex,
     segmentIndex: segmentIndex,
+    characterOffset: characterOffset,
   );
 
   @override
@@ -1634,6 +1664,28 @@ final class SystemBookNarrator implements BookNarrator {
   }
 }
 
+/// Spoken pace used to estimate listening time: about 150 words a minute,
+/// or 15 characters a second at 1×.
+const double bookNarrationCharactersPerSecond = 15;
+
+/// Estimated listening time of [documents] at 1×, from the characters their
+/// narration speaks. The audio length is only known clip by clip, so the
+/// player's elapsed and remaining times are estimates.
+Duration estimateBookNarrationDuration(
+  Iterable<BookNarrationDocument> documents,
+) {
+  var characters = 0;
+  for (final document in documents) {
+    for (final segment in document.segments) {
+      characters += segment.text.length;
+    }
+  }
+  return Duration(
+    milliseconds: (characters / bookNarrationCharactersPerSecond * 1000)
+        .round(),
+  );
+}
+
 enum BookNarrationBlockKind {
   paragraph,
   heading,
@@ -1738,17 +1790,54 @@ class BookNarrationDocument {
     required this.chunks,
     this.legacyDocument,
     this.previousDocument,
-  });
+  }) : _escapedSource = null;
 
+  const BookNarrationDocument._parsed({
+    required this.blocks,
+    required this.segments,
+    required this.chunks,
+    this.legacyDocument,
+    this.previousDocument,
+    _NarrationMarkdown? escapedSource,
+  }) : _escapedSource = escapedSource;
+
+  /// The narration text version this parse produces (checkpoints store it).
+  ///
+  /// v1 and v2 predate semantic diagrams and comparisons; v3 kept the
+  /// Markdown parser's HTML escaping (`&quot;`, `&amp;`) in the text, so the
+  /// voices were sent entities. v4 parses with `encodeHtml: false`.
+  static const int textVersion = 4;
+
+  /// Parses [markdown] into narration blocks, sentences and chunks.
+  ///
+  /// [encodeHtml] is only for rebuilding the escaped v1–v3 documents that
+  /// saved positions are remapped from.
   factory BookNarrationDocument.fromMarkdown(
     String markdown, {
     bool semanticComparisons = true,
     bool semanticDiagrams = true,
+    bool encodeHtml = false,
+  }) => _parse(
+    markdown,
+    semanticComparisons: semanticComparisons,
+    semanticDiagrams: semanticDiagrams,
+    encodeHtml: encodeHtml,
+    history: true,
+  );
+
+  static BookNarrationDocument _parse(
+    String markdown, {
+    required bool semanticComparisons,
+    required bool semanticDiagrams,
+    required bool encodeHtml,
+    required bool history,
   }) {
     final nodes = md.Document(
       extensionSet: md.ExtensionSet.gitHubFlavored,
+      encodeHtml: encodeHtml,
     ).parse(markdown);
     final drafts = <_NarrationBlockDraft>[];
+    // Whether the escaped v1/v2 text of a code block differs from this one.
     var changedCodeText = false;
 
     void appendNode(md.Node node, {String? listMarker}) {
@@ -1822,9 +1911,11 @@ class BookNarrationDocument {
           );
           // Keep historical v1/v2 documents byte-compatible for saved cursors.
           final source = semanticDiagrams
-              ? markdownCodeText(node.textContent)
+              ? markdownCodeText(node.textContent, encoded: encodeHtml)
               : node.textContent;
-          changedCodeText |= source != node.textContent;
+          changedCodeText |= encodeHtml
+              ? source != node.textContent
+              : node.textContent.contains(_escapedCodeCharacter);
           final comparison = semanticComparisons
               ? LearningComparison.parse(source, language: language)
               : null;
@@ -1935,26 +2026,45 @@ class BookNarrationDocument {
         ),
       );
     }
-    return BookNarrationDocument(
+    return BookNarrationDocument._parsed(
       blocks: blocks,
       segments: segments,
       chunks: _buildNarrationChunks(blocks, segments),
+      // The escaped histories are built with `encodeHtml: true`, exactly as
+      // v1–v3 were, so their saved positions can be mapped onto this text.
       legacyDocument:
-          changedCodeText ||
-              drafts.any(
-                (draft) => draft.comparison != null || draft.diagram != null,
-              )
-          ? BookNarrationDocument.fromMarkdown(
+          history &&
+              (changedCodeText ||
+                  drafts.any(
+                    (draft) =>
+                        draft.comparison != null || draft.diagram != null,
+                  ))
+          ? _parse(
               markdown,
               semanticComparisons: false,
               semanticDiagrams: false,
+              encodeHtml: true,
+              history: false,
             )
           : null,
       previousDocument:
-          changedCodeText || drafts.any((draft) => draft.diagram != null)
-          ? BookNarrationDocument.fromMarkdown(
+          history &&
+              (changedCodeText || drafts.any((draft) => draft.diagram != null))
+          ? _parse(
               markdown,
+              semanticComparisons: true,
               semanticDiagrams: false,
+              encodeHtml: true,
+              history: false,
+            )
+          : null,
+      // The escaped v3 text is parsed only if a checkpoint needs it.
+      escapedSource:
+          history && !encodeHtml && markdown.contains(_escapedCodeCharacter)
+          ? _NarrationMarkdown(
+              markdown,
+              semanticComparisons: semanticComparisons,
+              semanticDiagrams: semanticDiagrams,
             )
           : null,
     );
@@ -1963,27 +2073,68 @@ class BookNarrationDocument {
   final List<BookNarrationBlock> blocks;
   final List<BookNarrationSegment> segments;
   final List<BookNarrationChunk> chunks;
+
+  /// The v1 text (no semantic blocks, escaped), when it differs.
   final BookNarrationDocument? legacyDocument;
+
+  /// The v2 text (semantic comparisons only, escaped), when it differs.
   final BookNarrationDocument? previousDocument;
 
+  final _NarrationMarkdown? _escapedSource;
+
+  static final Expando<BookNarrationDocument> _encodedDocuments =
+      Expando<BookNarrationDocument>('v3 narration text');
+
+  /// The v3 text (escaped prose), when the Markdown has a character the
+  /// parser escaped. Parsed on first use, which is a v1–v3 checkpoint being
+  /// remapped, and kept.
+  BookNarrationDocument? get encodedDocument {
+    final source = _escapedSource;
+    if (source == null) return null;
+    return _encodedDocuments[this] ??= _parse(
+      source.markdown,
+      semanticComparisons: source.semanticComparisons,
+      semanticDiagrams: source.semanticDiagrams,
+      encodeHtml: true,
+      history: false,
+    );
+  }
+
   /// Migrate old saved segment indices without jumping past a transformed box.
-  /// The block count/order is unchanged; only its framing and whitespace differ.
+  /// The block count/order is unchanged; only its framing, whitespace and
+  /// (before v4) HTML escaping differ.
   (int, int) remapLegacyPosition(
     int segmentIndex,
     int characterOffset, {
     int textVersion = 1,
   }) {
-    final legacy = textVersion == 2 ? previousDocument : legacyDocument;
-    if (legacy == null || legacy.segments.isEmpty) {
+    // v1/v2 histories keep code escaped. Without one of its own, a v1/v2
+    // text equals v3's, whose code was already unescaped once.
+    final history = switch (textVersion) {
+      1 => legacyDocument,
+      2 => previousDocument,
+      _ => null,
+    };
+    final escapedCode = history != null;
+    final source = history ?? (textVersion <= 3 ? encodedDocument : null);
+    if (source == null || source.segments.isEmpty) {
       return (segmentIndex, characterOffset);
     }
     final old =
-        legacy.segments[segmentIndex.clamp(0, legacy.segments.length - 1)];
-    final oldText = legacy.blocks[old.blockIndex].text;
+        source.segments[segmentIndex.clamp(0, source.segments.length - 1)];
+    if (old.blockIndex >= blocks.length) {
+      return (segmentIndex, characterOffset);
+    }
+    final oldText = source.blocks[old.blockIndex].text;
     final block = blocks[old.blockIndex];
     final oldOffset = old.start + characterOffset.clamp(0, old.text.length);
     var offset = oldOffset;
-    if (block.comparison != null || block.diagram != null) {
+    if (_proseKinds.contains(block.kind)) {
+      // Prose was escaped by v1–v3: count the plain characters before it.
+      offset = _plainPrefixLength(oldText, oldOffset);
+    } else if (!escapedCode) {
+      offset = oldOffset;
+    } else if (block.comparison != null || block.diagram != null) {
       final formatting = RegExp(r'[\s+|\-=\[\]<>─━│▼►▶→←├└┌┐┘┤┬┴┼]');
       final retained = markdownCodeText(
         oldText.substring(0, oldOffset),
@@ -2000,6 +2151,7 @@ class BookNarrationDocument {
     } else if (block.kind == BookNarrationBlockKind.code) {
       offset = markdownCodeText(oldText.substring(0, oldOffset)).length;
     }
+    offset = offset.clamp(0, block.text.length).toInt();
     final candidates = segments
         .skip(block.firstSegmentIndex)
         .take(block.segmentCount);
@@ -2009,6 +2161,75 @@ class BookNarrationDocument {
     );
     return (target.index, (offset - target.start).clamp(0, target.text.length));
   }
+}
+
+/// Characters `encodeHtml` escapes in code (`escapeApos: false`). Prose
+/// escaping also starts from these (an apostrophe alone stays plain).
+final RegExp _escapedCodeCharacter = RegExp(r'[&<>"]');
+
+const Set<BookNarrationBlockKind> _proseKinds = {
+  BookNarrationBlockKind.paragraph,
+  BookNarrationBlockKind.heading,
+  BookNarrationBlockKind.listItem,
+  BookNarrationBlockKind.quote,
+};
+
+/// The length of [escaped]'s first [end] characters once its HTML escaping
+/// is undone (one pass, as [unescapeNarrationText]). An [end] inside an
+/// entity counts the entity's character as not yet reached.
+int _plainPrefixLength(String escaped, int end) {
+  var prefix = escaped.substring(0, end.clamp(0, escaped.length));
+  final partial = RegExp(r'&[#a-zA-Z0-9]*$').firstMatch(prefix);
+  if (partial != null) prefix = prefix.substring(0, partial.start);
+  return unescapeNarrationText(prefix).length;
+}
+
+/// Undoes HTML character references once: `&amp;quot;` becomes `&quot;`.
+/// Unknown references are left as they are.
+String unescapeNarrationText(String value) {
+  if (!value.contains('&')) return value;
+  return value.replaceAllMapped(
+    RegExp(r'&(#[xX][0-9a-fA-F]+|#[0-9]+|quot|amp|lt|gt|apos|nbsp);'),
+    (match) {
+      final entity = match.group(1)!;
+      switch (entity) {
+        case 'quot':
+          return '"';
+        case 'amp':
+          return '&';
+        case 'lt':
+          return '<';
+        case 'gt':
+          return '>';
+        case 'apos':
+          return "'";
+        case 'nbsp':
+          return '\u00a0';
+      }
+      final hex = entity.startsWith('#x') || entity.startsWith('#X');
+      final code = int.tryParse(
+        entity.substring(hex ? 2 : 1),
+        radix: hex ? 16 : 10,
+      );
+      if (code == null || code > 0x10FFFF) return match[0]!;
+      return String.fromCharCode(code);
+    },
+  );
+}
+
+/// The Markdown a document was parsed from, kept to parse its escaped v3
+/// text lazily.
+@immutable
+final class _NarrationMarkdown {
+  const _NarrationMarkdown(
+    this.markdown, {
+    required this.semanticComparisons,
+    required this.semanticDiagrams,
+  });
+
+  final String markdown;
+  final bool semanticComparisons;
+  final bool semanticDiagrams;
 }
 
 const _narrationChunkMinCharacters = 600;

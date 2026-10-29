@@ -147,9 +147,12 @@ async def test_builder_uses_short_prompts_and_workload_without_removing_private_
     from app.services.planning import package_builder as builder
     from tests.test_staged_package_builder import Factory, components
 
+    from tests.lesson_package_fixtures import multi_choice_first
+
     seed, activities = components()
     for activity in activities.values():
         activity.update(minutes_min=1, minutes_max=2)
+        multi_choice_first(activity)  # new tutorials need a number or multi_choice answer
     factory = Factory({"seed": [seed], **{key: [value] for key, value in activities.items()}})
     monkeypatch.setattr(builder, "record_llm_response", AsyncMock(return_value=True))
     package, response, _ = await builder.generate_initial_package(

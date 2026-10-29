@@ -1,84 +1,52 @@
-// CMPYS record / achievements data + helpers — ported verbatim from
-// record-data.jsx so the dual timeline, classifier, and idol reactions behave
-// exactly like the prototype.
-
-import 'package:flutter/material.dart';
-
-import '../../../app/design_tokens.dart';
+// CMPYS record data: the win model, the old → v3 dimension mapping, the
+// local-entry rule, the seeded mentors' documented ledgers (the Record's
+// fallback timeline), the mentor's canned reactions to a win, and the
+// dimension a claimed comparison milestone is filed under.
 
 // ─────────────────────────────────────────────────────────────────────────────
-// The five comparison dimensions, as life areas for wins.
-// id ≠ label for `habits` (shown as "Discipline").
+// Dimensions. The record files every win under a v3 dimension id
+// (`knowledge`, `practice`, `capital`, `network`, `judgment`; labels and
+// tints are `winDims` in core/ui/v3/win_sheet.dart).
 // ─────────────────────────────────────────────────────────────────────────────
 
-class CmpysDim {
-  const CmpysDim({
-    required this.id,
-    required this.label,
-    required this.color,
-    required this.tint,
-    required this.deep,
-  });
-  final String id;
-  final String label;
-  final Color color;
-  final Color tint;
-  final Color deep;
-}
+/// The v3 dimension id for a win's stored dimension. This is the one mapping
+/// from the ids older builds stored:
+///
+/// | Stored | v3 |
+/// |---|---|
+/// | `knowledge`, `capital`, `network` | unchanged |
+/// | `habits` (shown as "Discipline") | `practice` |
+/// | `clarity` | `judgment` |
+/// | `practice`, `judgment` | unchanged |
+/// | `know`, `prac`, `cap`, `net`, `judg` (design prototype) | the full id |
+///
+/// Case and outer whitespace are ignored. Anything else (or nothing) reads
+/// as `knowledge`, the store's own default for a win without a dimension.
+String recordDimId(String id) => switch (id.trim().toLowerCase()) {
+  'knowledge' || 'know' => 'knowledge',
+  'practice' || 'prac' || 'habits' => 'practice',
+  'capital' || 'cap' => 'capital',
+  'network' || 'net' => 'network',
+  'judgment' || 'judg' || 'clarity' => 'judgment',
+  _ => 'knowledge',
+};
 
-const cmpysDims = <CmpysDim>[
-  CmpysDim(
-    id: 'capital',
-    label: 'Capital',
-    color: AppColors.green,
-    tint: AppColors.greenSoft,
-    deep: AppColors.green2,
-  ),
-  CmpysDim(
-    id: 'knowledge',
-    label: 'Knowledge',
-    color: AppColors.lilac,
-    tint: AppColors.lilacSoft,
-    deep: Color(0xFF4C3FD6),
-  ),
-  CmpysDim(
-    id: 'habits',
-    label: 'Discipline',
-    color: AppColors.ochre,
-    tint: AppColors.ochreSoft,
-    deep: AppColors.ochre2,
-  ),
-  CmpysDim(
-    id: 'network',
-    label: 'Network',
-    color: AppColors.blue,
-    tint: AppColors.blueSoft,
-    deep: Color(0xFF1D5FD6),
-  ),
-  CmpysDim(
-    id: 'clarity',
-    label: 'Clarity',
-    color: AppColors.pink,
-    tint: AppColors.pinkSoft,
-    deep: Color(0xFFD63E84),
-  ),
-];
-
-CmpysDim dimOf(String id) =>
-    cmpysDims.firstWhere((d) => d.id == id, orElse: () => cmpysDims[1]);
-
-class CmpysImpact {
-  const CmpysImpact(this.v, this.label, this.sub);
-  final int v;
-  final String label;
-  final String sub;
-}
-
-const cmpysImpacts = <CmpysImpact>[
-  CmpysImpact(1, 'Quiet win', 'A small kept promise'),
-  CmpysImpact(2, 'Solid win', 'Real, measurable progress'),
-  CmpysImpact(3, 'Big move', 'Changed your trajectory'),
-];
+/// Whether a record win is a local entry the learner can delete from the
+/// Record: an entry made on this device that has **no server copy**.
+///
+/// Local: `manual` (the v2 add-win sheet), `chat` and `milestone` (a claimed
+/// milestone) wins that are not [CmpysWin.synced].
+///
+/// Not local:
+/// - any [CmpysWin.synced] win: Log a win and Report a win (both saved as a
+///   server achievement by `saveReportedWin`), and the tutorial's and the
+///   mission's "Add to record" (`auto`). Deleting only the device copy would
+///   leave the server's, so the Record deletes such a win only together with
+///   its server achievement, when it has a [CmpysWin.serverId].
+/// - `auto` ("Recorded from plan completion"), `intake` and any source this
+///   build doesn't know, synced or not.
+bool recordWinIsLocal(CmpysWin win) =>
+    !win.synced && const {'manual', 'chat', 'milestone'}.contains(win.source);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Idol ledgers, by age (for the dual timeline)
@@ -132,7 +100,7 @@ const Map<String, List<LedgerEntry>> cmpysIdolLedgers = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Win model + seed achievements
+// Win model
 // ─────────────────────────────────────────────────────────────────────────────
 
 class CmpysWin {
@@ -147,6 +115,9 @@ class CmpysWin {
     this.note = '',
     this.idolNote,
     this.photo = false,
+    this.synced = false,
+    this.milestoneId,
+    this.serverId,
   });
 
   final String id;
@@ -160,6 +131,52 @@ class CmpysWin {
   final String? idolNote;
   final bool photo;
 
+  /// The win was also saved to the server as an achievement. It is not a
+  /// local entry ([recordWinIsLocal]): the Record deletes it only together
+  /// with its server copy, which needs [serverId]. False for wins stored
+  /// before this flag existed.
+  final bool synced;
+
+  /// The comparison milestone a `milestone` (claim) win claims, so deleting
+  /// the claim clears the milestone's claimed state. Null for older claims.
+  final String? milestoneId;
+
+  /// The server achievement's id (`POST /achievements` → `id`) for a
+  /// [synced] win, so "Delete entry" can delete the server copy too. Null for
+  /// device-only wins and for synced wins stored before the id was kept
+  /// (those stay non-deletable).
+  final String? serverId;
+
+  /// A copy with the given fields replaced (null keeps the current value).
+  CmpysWin copyWith({
+    String? title,
+    String? dim,
+    int? age,
+    int? impact,
+    String? source,
+    bool? assessed,
+    String? note,
+    String? idolNote,
+    bool? photo,
+    bool? synced,
+    String? milestoneId,
+    String? serverId,
+  }) => CmpysWin(
+    id: id,
+    title: title ?? this.title,
+    dim: dim ?? this.dim,
+    age: age ?? this.age,
+    impact: impact ?? this.impact,
+    source: source ?? this.source,
+    assessed: assessed ?? this.assessed,
+    note: note ?? this.note,
+    idolNote: idolNote ?? this.idolNote,
+    photo: photo ?? this.photo,
+    synced: synced ?? this.synced,
+    milestoneId: milestoneId ?? this.milestoneId,
+    serverId: serverId ?? this.serverId,
+  );
+
   Map<String, dynamic> toJson() => {
         'id': id,
         'title': title,
@@ -171,26 +188,52 @@ class CmpysWin {
         'note': note,
         'idolNote': idolNote,
         'photo': photo,
+        'synced': synced,
+        'milestoneId': milestoneId,
+        'serverId': serverId,
       };
 
-  factory CmpysWin.fromJson(Map<String, dynamic> j) => CmpysWin(
-        id: j['id'] as String,
-        title: j['title'] as String? ?? '',
-        dim: j['dim'] as String? ?? 'knowledge',
-        age: (j['age'] as num?)?.toInt() ?? 24,
-        impact: (j['impact'] as num?)?.toInt() ?? 1,
-        source: j['source'] as String? ?? 'manual',
-        assessed: j['assessed'] as bool? ?? false,
-        note: j['note'] as String? ?? '',
-        idolNote: j['idolNote'] as String?,
-        photo: j['photo'] as bool? ?? false,
-      );
+  /// Parses a stored win. Every field but the id is read tolerantly (a
+  /// wrong type reads as the default), so one odd field never loses the
+  /// win; a win without a string id throws ([tryParse] skips it).
+  factory CmpysWin.fromJson(Map<String, dynamic> j) {
+    String? text(Object? v) => v is String ? v : null;
+    final id = j['id'];
+    if (id is! String || id.isEmpty) {
+      throw const FormatException('A stored win has no id.');
+    }
+    return CmpysWin(
+      id: id,
+      title: text(j['title']) ?? '',
+      dim: text(j['dim']) ?? 'knowledge',
+      age: j['age'] is num ? (j['age'] as num).toInt() : 24,
+      impact: j['impact'] is num ? (j['impact'] as num).toInt() : 1,
+      source: text(j['source']) ?? 'manual',
+      assessed: j['assessed'] == true,
+      note: text(j['note']) ?? '',
+      idolNote: text(j['idolNote']),
+      photo: j['photo'] == true,
+      synced: j['synced'] == true,
+      milestoneId: text(j['milestoneId']),
+      serverId: text(j['serverId']),
+    );
+  }
+
+  /// A stored win, or null when it can't be read (not a map, or no id).
+  static CmpysWin? tryParse(Object? raw) {
+    if (raw is! Map) return null;
+    try {
+      return CmpysWin.fromJson(raw.cast<String, dynamic>());
+    } catch (_) {
+      return null;
+    }
+  }
 }
 
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Idol reactions, classifier, milestone mapping, source meta
+// Idol reactions, milestone mapping
 // ─────────────────────────────────────────────────────────────────────────────
 
 const Map<String, List<String>> _winReactions = {
@@ -202,7 +245,7 @@ const Map<String, List<String>> _winReactions = {
     'Knowledge compounds quietly, then all at once. Keep feeding it.',
     'That’s another brick in the library. Nobody can take it from you.',
   ],
-  'habits': [
+  'practice': [
     'Small promises, kept daily — that’s the whole secret. I mean it.',
     'Discipline is choosing what you want most over what you want now. Well chosen.',
   ],
@@ -210,51 +253,24 @@ const Map<String, List<String>> _winReactions = {
     'Associate with people better than you and you’ll drift in that direction. You just did.',
     'Trust builds at the speed of kept commitments. That was one.',
   ],
-  'clarity': [
+  'judgment': [
     'Knowing what you’re trying to do puts you ahead of most people twice your age.',
     'A decision written down is worth ten kept in your head. Good.',
   ],
 };
 
 String idolReaction(String dim, String seed) {
-  final arr = _winReactions[dim] ?? _winReactions['knowledge']!;
+  final arr = _winReactions[recordDimId(dim)] ?? _winReactions['knowledge']!;
   return arr[seed.length % arr.length];
 }
 
-/// Naive keyword classifier — order matters, default = clarity.
-String classifyWin(String text) {
-  final t = text.toLowerCase();
-  final tests = <(String, RegExp)>[
-    ('capital', RegExp(r'sav(e|ed|ing)|invest|money|\$|salary|paid|debt|budget|stock|fund')),
-    ('habits', RegExp(r'streak|every day|daily|habit|woke|gym|routine|quit|discipline|consisten')),
-    ('network', RegExp(r'mentor|met |coffee|reached out|message|friend|boss|team|network|talk')),
-    ('clarity', RegExp(r'decid|plan|goal|wrote down|philosophy|direction|clarit|vision')),
-    ('knowledge', RegExp(r'read|book|course|learn|stud|finish|chapter|article|class')),
-  ];
-  for (final (dim, re) in tests) {
-    if (re.hasMatch(t)) return dim;
-  }
-  return 'clarity';
-}
-
+/// The v3 dimension a claimed comparison milestone is filed under, by its
+/// position id, when the Record couldn't match it to a categorised mentor
+/// timeline event (the backend's milestones carry no dimension).
 const Map<String, String> cmpysMilestoneDim = {
-  'm1': 'clarity',
+  'm1': 'judgment',
   'm2': 'capital',
   'm3': 'knowledge',
   'm4': 'network',
-  'm5': 'habits',
-};
-
-class CmpysSourceMeta {
-  const CmpysSourceMeta(this.label, this.icon);
-  final String label;
-  final IconData icon;
-}
-
-const Map<String, CmpysSourceMeta> cmpysSourceMeta = {
-  'auto': CmpysSourceMeta('Auto-captured', Icons.auto_awesome_rounded),
-  'chat': CmpysSourceMeta('Told to your mentor', Icons.chat_bubble_outline_rounded),
-  'milestone': CmpysSourceMeta('Milestone claimed', Icons.check_rounded),
-  'intake': CmpysSourceMeta('From your intake', Icons.chat_bubble_outline_rounded),
-  'manual': CmpysSourceMeta('Logged by you', Icons.edit_outlined),
+  'm5': 'practice',
 };

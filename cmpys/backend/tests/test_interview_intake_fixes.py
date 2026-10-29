@@ -128,17 +128,25 @@ class TestCompletionSignals:
 def test_interview_prompt_requires_every_plan_ready_input_before_completion():
     prompt = load_prompt("interview_system.xml") + load_prompt("interview_question")
 
-    for answer_key in (
-        "achievement_inventory",
-        "current_capability",
-        "weekly_hours",
-        "target_outcome",
-        "constraints_resources",
-        "learning_habits_support",
-    ):
+    from app.services.interview_inputs import (
+        INTERVIEW_ANSWER_KEYS_V1,
+        INTERVIEW_ANSWER_KEYS_V2,
+    )
+
+    # Both question sets are described: v3 for new sessions, the 8-key set for
+    # sessions that began before it.
+    for answer_key in {*INTERVIEW_ANSWER_KEYS_V1, *INTERVIEW_ANSWER_KEYS_V2}:
         assert answer_key in prompt
     assert "1-3 achievements" in prompt
     assert '"none yet"' in prompt
     assert "next twelve weeks" in prompt
-    assert "min 3, max 60, step 1, initial 8" in prompt
     assert "do not close" in prompt
+    # Server-owned controls are attached by the server, never by the model.
+    assert "{required_control_contract}" in prompt
+    assert "Server-owned control: append NO trailer" in prompt
+    assert "min 3, max 60" not in prompt
+    # One example per control kind, and honest final options.
+    for kind in ("text", "single_choice", "multi_choice", "scale", "number"):
+        assert f'<CMPYS_RESPONSE_UI>{{"version":1,"kind":"{kind}"' in prompt
+    assert "Prefer not to say" in prompt
+    assert "don’t know / not yet" in prompt

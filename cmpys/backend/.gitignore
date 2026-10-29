@@ -55,6 +55,9 @@ logs/
 media/book_narration_*.mp3
 media/book_narration_*.json
 
+# Generated tutorial illustrations (content-addressed, rebuilt on demand)
+media/tutorials/
+
 # Database
 *.db
 *.sqlite3

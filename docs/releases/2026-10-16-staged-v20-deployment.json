@@ -1,0 +1,1 @@
+{"release": "20261016-153858-scoped-preflight", "image_digest": "sha256:1eafe22d991943427ccb28eee78bff5ef09c455c22400145cf4ffaa55063613e", "verified_services": ["web", "worker", "worker-high", "worker-low", "catalog-worker", "catalog-control", "curriculum-worker", "curriculum-control", "beat"], "verified_files": 24, "file_hashes_verified_in_every_service": true}

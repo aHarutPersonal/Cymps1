@@ -1,0 +1,521 @@
+{
+  "accounted_usd": 0.6740372,
+  "cap_usd": 2.75,
+  "cases": [
+    {
+      "accepted": true,
+      "accounted_usd": 0.4049426,
+      "activity_count": 2,
+      "adjudicated": false,
+      "attempts": [
+        {
+          "error": false,
+          "seconds": 27.289,
+          "stage": "parallel_lesson_step_1_package_preflight"
+        },
+        {
+          "error": false,
+          "seconds": 14.173,
+          "stage": "parallel_lesson_step_1_package_repair"
+        },
+        {
+          "error": false,
+          "seconds": 8.118,
+          "stage": "parallel_lesson_step_1_package_preflight_recheck"
+        },
+        {
+          "error": false,
+          "seconds": 33.671,
+          "stage": "parallel_lesson_step_1_draft_1_framing_1"
+        },
+        {
+          "error": false,
+          "seconds": 45.634,
+          "stage": "parallel_lesson_step_1_draft_1_mechanism_1"
+        },
+        {
+          "error": false,
+          "seconds": 36.651,
+          "stage": "parallel_lesson_step_1_draft_1_worked_1"
+        },
+        {
+          "error": false,
+          "seconds": 53.442,
+          "stage": "parallel_lesson_step_1_draft_1_practice_1"
+        },
+        {
+          "error": false,
+          "seconds": 7.947,
+          "stage": "parallel_lesson_step_1_review_1"
+        }
+      ],
+      "calls": 13,
+      "elapsed_seconds": 296.581,
+      "failure_count": 0,
+      "pending_reserved_usd": 0,
+      "reported_cost_usd": 0.4049426,
+      "scenario_id": "accounting_novice_missing",
+      "status": "accepted",
+      "unknown_reserved_usd": 0,
+      "validation_identity": {
+        "capability_hash": "1815a97ad0c7246f737c493fbec7b9217c6a5dd6a7d96cacd93c0c34b3afe48f",
+        "generation_contract_hash": "4bf37f47909750bf87c5127ec209e94424731504b93a853fd7ce27b83e38f5a5",
+        "package_version": 1,
+        "prompt_hash": "6a4f58e687d89154276c3c7ffa6477547b05aa12beab2fb817127058c7a09d60",
+        "review_version": 14,
+        "schema_hash": "a674c36775b6c6133b2e842795d5b4252a8e3463022a41d7b0bf9f83df2aff1a"
+      },
+      "word_count": 2048
+    },
+    {
+      "accepted": false,
+      "accounted_usd": 0.1331584,
+      "activity_count": 0,
+      "adjudicated": false,
+      "attempts": [
+        {
+          "error": false,
+          "seconds": 31.048,
+          "stage": "parallel_lesson_step_1_package_preflight"
+        },
+        {
+          "error": false,
+          "seconds": 9.129,
+          "stage": "parallel_lesson_step_1_package_repair"
+        },
+        {
+          "error": true,
+          "seconds": 21.62,
+          "stage": "parallel_lesson_step_1_package_preflight_recheck"
+        }
+      ],
+      "calls": 7,
+      "elapsed_seconds": 141.051,
+      "failure_count": 1,
+      "pending_reserved_usd": 0,
+      "reported_cost_usd": 0.1331584,
+      "scenario_id": "geometry_novice_missing",
+      "status": "failed",
+      "unknown_reserved_usd": 0,
+      "validation_identity": {
+        "capability_hash": "1815a97ad0c7246f737c493fbec7b9217c6a5dd6a7d96cacd93c0c34b3afe48f",
+        "generation_contract_hash": "4bf37f47909750bf87c5127ec209e94424731504b93a853fd7ce27b83e38f5a5",
+        "package_version": 1,
+        "prompt_hash": "6a4f58e687d89154276c3c7ffa6477547b05aa12beab2fb817127058c7a09d60",
+        "review_version": 14,
+        "schema_hash": "a674c36775b6c6133b2e842795d5b4252a8e3463022a41d7b0bf9f83df2aff1a"
+      },
+      "word_count": 0
+    },
+    {
+      "accepted": false,
+      "accounted_usd": 0.1359362,
+      "activity_count": 0,
+      "adjudicated": false,
+      "attempts": [
+        {
+          "error": false,
+          "seconds": 18.7,
+          "stage": "parallel_lesson_step_1_package_preflight"
+        },
+        {
+          "error": true,
+          "seconds": 7.095,
+          "stage": "parallel_lesson_step_1_package_repair"
+        }
+      ],
+      "calls": 6,
+      "elapsed_seconds": 130.692,
+      "failure_count": 1,
+      "pending_reserved_usd": 0,
+      "reported_cost_usd": 0.1359362,
+      "scenario_id": "writing_novice_missing",
+      "status": "failed",
+      "unknown_reserved_usd": 0,
+      "validation_identity": {
+        "capability_hash": "1815a97ad0c7246f737c493fbec7b9217c6a5dd6a7d96cacd93c0c34b3afe48f",
+        "generation_contract_hash": "4bf37f47909750bf87c5127ec209e94424731504b93a853fd7ce27b83e38f5a5",
+        "package_version": 1,
+        "prompt_hash": "6a4f58e687d89154276c3c7ffa6477547b05aa12beab2fb817127058c7a09d60",
+        "review_version": 14,
+        "schema_hash": "a674c36775b6c6133b2e842795d5b4252a8e3463022a41d7b0bf9f83df2aff1a"
+      },
+      "word_count": 0
+    }
+  ],
+  "exit_code": 0,
+  "finished_calls": 26,
+  "pending_calls": 0,
+  "pending_reserved_usd": 0,
+  "release": "20261016-110500-typed-math",
+  "reported_cost_usd": 0.6740372,
+  "responses": [
+    {
+      "completion_tokens": 2735,
+      "finish_reason": "stop",
+      "first_content_ms": 4354.244964022655,
+      "first_event_ms": 4347.792009008117,
+      "prompt_tokens": 1632,
+      "response_chars": 3837,
+      "scenario_id": "accounting_novice_missing",
+      "schema": "LessonPackageSeed",
+      "seconds": 34.47,
+      "status": "completed",
+      "thoughts_tokens": 44,
+      "unknown_usage": false
+    },
+    {
+      "completion_tokens": 4897,
+      "finish_reason": "stop",
+      "first_content_ms": 2100.772142992355,
+      "first_event_ms": 2096.750194003107,
+      "prompt_tokens": 5932,
+      "response_chars": 6626,
+      "scenario_id": "accounting_novice_missing",
+      "schema": "LessonPackageActivity",
+      "seconds": 37.276,
+      "status": "completed",
+      "thoughts_tokens": 30,
+      "unknown_usage": false
+    },
+    {
+      "completion_tokens": 5220,
+      "finish_reason": "stop",
+      "first_content_ms": 4900.7761249959,
+      "first_event_ms": 2611.1992609803565,
+      "prompt_tokens": 6143,
+      "response_chars": 5660,
+      "scenario_id": "accounting_novice_missing",
+      "schema": "LessonPackageActivity",
+      "seconds": 51.535,
+      "status": "completed",
+      "thoughts_tokens": 184,
+      "unknown_usage": false
+    },
+    {
+      "completion_tokens": 2605,
+      "finish_reason": "stop",
+      "first_content_ms": 19665.995596005814,
+      "first_event_ms": 2630.5474110122304,
+      "prompt_tokens": 16589,
+      "response_chars": 4374,
+      "scenario_id": "accounting_novice_missing",
+      "schema": "PackageReview",
+      "seconds": 27.289,
+      "status": "completed",
+      "thoughts_tokens": 1394,
+      "unknown_usage": false
+    },
+    {
+      "completion_tokens": 1591,
+      "finish_reason": "stop",
+      "first_content_ms": 2281.247856997652,
+      "first_event_ms": 2278.2642700185534,
+      "prompt_tokens": 13475,
+      "response_chars": 2023,
+      "scenario_id": "accounting_novice_missing",
+      "schema": "PrivatePackageRepair",
+      "seconds": 14.173,
+      "status": "completed",
+      "thoughts_tokens": 21,
+      "unknown_usage": false
+    },
+    {
+      "completion_tokens": 1648,
+      "finish_reason": "stop",
+      "first_content_ms": 12490.330673987046,
+      "first_event_ms": 2896.382785984315,
+      "prompt_tokens": 16411,
+      "response_chars": 3252,
+      "scenario_id": "accounting_novice_missing",
+      "schema": "PackageReview",
+      "seconds": 17.781,
+      "status": "completed",
+      "thoughts_tokens": 740,
+      "unknown_usage": false
+    },
+    {
+      "completion_tokens": 712,
+      "finish_reason": "stop",
+      "first_content_ms": 6660.506213986082,
+      "first_event_ms": 2575.0488890043925,
+      "prompt_tokens": 13902,
+      "response_chars": 1103,
+      "scenario_id": "accounting_novice_missing",
+      "schema": "ReviewEvidencePatch",
+      "seconds": 8.118,
+      "status": "completed",
+      "thoughts_tokens": 411,
+      "unknown_usage": false
+    },
+    {
+      "completion_tokens": 3188,
+      "finish_reason": "stop",
+      "first_content_ms": 2849.43461601506,
+      "first_event_ms": 1985.591076023411,
+      "prompt_tokens": 8859,
+      "response_chars": 3159,
+      "scenario_id": "accounting_novice_missing",
+      "schema": "LessonSectionGroup_framing",
+      "seconds": 33.671,
+      "status": "completed",
+      "thoughts_tokens": 105,
+      "unknown_usage": false
+    },
+    {
+      "completion_tokens": 3784,
+      "finish_reason": "stop",
+      "first_content_ms": 2345.7356950093526,
+      "first_event_ms": 2338.2992169936188,
+      "prompt_tokens": 8726,
+      "response_chars": 3851,
+      "scenario_id": "accounting_novice_missing",
+      "schema": "LessonSectionGroup_mechanism",
+      "seconds": 45.634,
+      "status": "completed",
+      "thoughts_tokens": 54,
+      "unknown_usage": false
+    },
+    {
+      "completion_tokens": 3506,
+      "finish_reason": "stop",
+      "first_content_ms": 2288.343319989508,
+      "first_event_ms": 2283.0464050057344,
+      "prompt_tokens": 8844,
+      "response_chars": 3730,
+      "scenario_id": "accounting_novice_missing",
+      "schema": "LessonSectionGroup_worked",
+      "seconds": 36.651,
+      "status": "completed",
+      "thoughts_tokens": 39,
+      "unknown_usage": false
+    },
+    {
+      "completion_tokens": 5919,
+      "finish_reason": "stop",
+      "first_content_ms": 3465.540556004271,
+      "first_event_ms": 2653.553444019053,
+      "prompt_tokens": 9092,
+      "response_chars": 7213,
+      "scenario_id": "accounting_novice_missing",
+      "schema": "LessonSectionGroup_practice",
+      "seconds": 53.442,
+      "status": "completed",
+      "thoughts_tokens": 81,
+      "unknown_usage": false
+    },
+    {
+      "completion_tokens": 2823,
+      "finish_reason": "stop",
+      "first_content_ms": 23968.78146097879,
+      "first_event_ms": 3557.8844779811334,
+      "prompt_tokens": 40681,
+      "response_chars": 4432,
+      "scenario_id": "accounting_novice_missing",
+      "schema": "PackagedLessonReview",
+      "seconds": 35.598,
+      "status": "completed",
+      "thoughts_tokens": 1417,
+      "unknown_usage": false
+    },
+    {
+      "completion_tokens": 689,
+      "finish_reason": "stop",
+      "first_content_ms": 4624.178786005359,
+      "first_event_ms": 2292.1198520052712,
+      "prompt_tokens": 15391,
+      "response_chars": 1607,
+      "scenario_id": "accounting_novice_missing",
+      "schema": "ReviewEvidencePatch",
+      "seconds": 7.947,
+      "status": "completed",
+      "thoughts_tokens": 197,
+      "unknown_usage": false
+    },
+    {
+      "completion_tokens": 1761,
+      "finish_reason": "stop",
+      "first_content_ms": 4015.24881797377,
+      "first_event_ms": 2775.616094993893,
+      "prompt_tokens": 1623,
+      "response_chars": 1981,
+      "scenario_id": "geometry_novice_missing",
+      "schema": "LessonPackageSeed",
+      "seconds": 24.055,
+      "status": "completed",
+      "thoughts_tokens": 141,
+      "unknown_usage": false
+    },
+    {
+      "completion_tokens": 2761,
+      "finish_reason": "stop",
+      "first_content_ms": 2420.9890130150598,
+      "first_event_ms": 2414.986342017073,
+      "prompt_tokens": 4653,
+      "response_chars": 3454,
+      "scenario_id": "geometry_novice_missing",
+      "schema": "LessonPackageActivity",
+      "seconds": 25.729,
+      "status": "completed",
+      "thoughts_tokens": 45,
+      "unknown_usage": false
+    },
+    {
+      "completion_tokens": 2320,
+      "finish_reason": "stop",
+      "first_content_ms": 2304.502544022398,
+      "first_event_ms": 2297.255078010494,
+      "prompt_tokens": 4765,
+      "response_chars": 2808,
+      "scenario_id": "geometry_novice_missing",
+      "schema": "LessonPackageActivity",
+      "seconds": 22.949,
+      "status": "completed",
+      "thoughts_tokens": 54,
+      "unknown_usage": false
+    },
+    {
+      "completion_tokens": 2933,
+      "finish_reason": "stop",
+      "first_content_ms": 26768.610517989146,
+      "first_event_ms": 2425.247381994268,
+      "prompt_tokens": 9603,
+      "response_chars": 2348,
+      "scenario_id": "geometry_novice_missing",
+      "schema": "PackageReview",
+      "seconds": 31.048,
+      "status": "completed",
+      "thoughts_tokens": 2198,
+      "unknown_usage": false
+    },
+    {
+      "completion_tokens": 925,
+      "finish_reason": "stop",
+      "first_content_ms": 1815.0762870209292,
+      "first_event_ms": 1812.2956640145276,
+      "prompt_tokens": 7104,
+      "response_chars": 1084,
+      "scenario_id": "geometry_novice_missing",
+      "schema": "PrivatePackageRepair",
+      "seconds": 9.129,
+      "status": "completed",
+      "thoughts_tokens": 18,
+      "unknown_usage": false
+    },
+    {
+      "completion_tokens": 2595,
+      "finish_reason": "stop",
+      "first_content_ms": 24623.109164007474,
+      "first_event_ms": 2181.354066997301,
+      "prompt_tokens": 9821,
+      "response_chars": 2396,
+      "scenario_id": "geometry_novice_missing",
+      "schema": "PackageReview",
+      "seconds": 29.342,
+      "status": "completed",
+      "thoughts_tokens": 1798,
+      "unknown_usage": false
+    },
+    {
+      "completion_tokens": 2141,
+      "finish_reason": "stop",
+      "first_content_ms": 16177.47284300276,
+      "first_event_ms": 2596.494826982962,
+      "prompt_tokens": 9031,
+      "response_chars": 2720,
+      "scenario_id": "geometry_novice_missing",
+      "schema": "ReviewEvidencePatch",
+      "seconds": 21.62,
+      "status": "completed",
+      "thoughts_tokens": 1235,
+      "unknown_usage": false
+    },
+    {
+      "completion_tokens": 1289,
+      "finish_reason": "stop",
+      "first_content_ms": 4608.739348012023,
+      "first_event_ms": 4605.396430008113,
+      "prompt_tokens": 1627,
+      "response_chars": 1416,
+      "scenario_id": "writing_novice_missing",
+      "schema": "LessonPackageSeed",
+      "seconds": 25.451,
+      "status": "completed",
+      "thoughts_tokens": 24,
+      "unknown_usage": false
+    },
+    {
+      "completion_tokens": 4821,
+      "finish_reason": "stop",
+      "first_content_ms": 1888.4129300131463,
+      "first_event_ms": 1888.4082940057851,
+      "prompt_tokens": 4329,
+      "response_chars": 5631,
+      "scenario_id": "writing_novice_missing",
+      "schema": "LessonPackageActivity",
+      "seconds": 40.891,
+      "status": "completed",
+      "thoughts_tokens": 0,
+      "unknown_usage": false
+    },
+    {
+      "completion_tokens": 4695,
+      "finish_reason": "stop",
+      "first_content_ms": 3751.760323997587,
+      "first_event_ms": 2426.5630249865353,
+      "prompt_tokens": 4311,
+      "response_chars": 5213,
+      "scenario_id": "writing_novice_missing",
+      "schema": "LessonPackageActivity",
+      "seconds": 48.104,
+      "status": "completed",
+      "thoughts_tokens": 129,
+      "unknown_usage": false
+    },
+    {
+      "completion_tokens": 1517,
+      "finish_reason": "stop",
+      "first_content_ms": 10031.40026400797,
+      "first_event_ms": 2479.5521610067226,
+      "prompt_tokens": 13888,
+      "response_chars": 1220,
+      "scenario_id": "writing_novice_missing",
+      "schema": "PackageReview",
+      "seconds": 18.7,
+      "status": "completed",
+      "thoughts_tokens": 597,
+      "unknown_usage": false
+    },
+    {
+      "completion_tokens": 2571,
+      "finish_reason": "stop",
+      "first_content_ms": 13936.237813992193,
+      "first_event_ms": 2492.796639999142,
+      "prompt_tokens": 11507,
+      "response_chars": 2217,
+      "scenario_id": "writing_novice_missing",
+      "schema": "PrivatePackageRepair",
+      "seconds": 31.241,
+      "status": "completed",
+      "thoughts_tokens": 662,
+      "unknown_usage": false
+    },
+    {
+      "completion_tokens": 376,
+      "finish_reason": "stop",
+      "first_content_ms": 5113.359520997619,
+      "first_event_ms": 2753.4484709904063,
+      "prompt_tokens": 13447,
+      "response_chars": 821,
+      "scenario_id": "writing_novice_missing",
+      "schema": "PrivatePackageRepair",
+      "seconds": 7.095,
+      "status": "completed",
+      "thoughts_tokens": 215,
+      "unknown_usage": false
+    }
+  ],
+  "running": false,
+  "shared_ledger": true,
+  "unknown_reserved_usd": 0
+}

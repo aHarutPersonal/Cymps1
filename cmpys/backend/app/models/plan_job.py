@@ -34,7 +34,10 @@ class PlanGenerationJob(Base, UUIDMixin, TimestampUpdateMixin):
     # Optional parameters used for generation
     target_age: Mapped[int] = mapped_column(Integer, nullable=False)
     duration_weeks: Mapped[int] = mapped_column(Integer, nullable=False, default=12)
+    # Legacy whole hours, written as ceil(weekly_minutes / 60).
     weekly_hours: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
+    # Canonical capacity; NULL rows fall back to weekly_hours * 60.
+    weekly_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cycle_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     previous_plan_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False), nullable=True

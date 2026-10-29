@@ -1,0 +1,97 @@
+{
+  "date": "2026-10-15",
+  "tls_verified": true,
+  "synthetic_account": true,
+  "paid_model_calls": 0,
+  "checks": [
+    {
+      "method": "GET",
+      "path": "/ready",
+      "status": 200,
+      "expected": 200,
+      "elapsed_ms": 691,
+      "passed": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "status": 201,
+      "expected": 201,
+      "elapsed_ms": 1138,
+      "passed": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/login",
+      "status": 200,
+      "expected": 200,
+      "elapsed_ms": 967,
+      "passed": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/refresh",
+      "status": 200,
+      "expected": 200,
+      "elapsed_ms": 675,
+      "passed": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/me",
+      "status": 200,
+      "expected": 200,
+      "elapsed_ms": 681,
+      "passed": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/current",
+      "status": 200,
+      "expected": 200,
+      "elapsed_ms": 675,
+      "passed": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sessions/latest",
+      "status": 200,
+      "expected": 200,
+      "elapsed_ms": 685,
+      "passed": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/content-resources/library",
+      "status": 200,
+      "expected": 200,
+      "elapsed_ms": 703,
+      "passed": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/content-resources/continue-reading",
+      "status": 200,
+      "expected": 200,
+      "elapsed_ms": 688,
+      "passed": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/auth/password-reset/availability",
+      "status": 200,
+      "expected": 200,
+      "elapsed_ms": 679,
+      "passed": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/me",
+      "status": 401,
+      "expected": 401,
+      "elapsed_ms": 665,
+      "passed": true
+    }
+  ],
+  "all_passed": true
+}

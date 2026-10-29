@@ -38,6 +38,20 @@ from app.services.llm.schemas import (
 )
 from app.services.llm.telemetry import record_llm_response
 from app.services.llm.tracing import traced_operation
+from app.services.planning.capacity import (
+    LOW_CAPACITY_MINUTES,
+    MAX_MISSION_MINUTES,
+    MIN_MISSION_MINUTES,
+    MULTI_MISSION_MINUTES,
+    CapacitySplit,
+    capacity_prompt_params,
+    capacity_split,
+    format_hours,
+    hours_value,
+    legacy_weekly_hours,
+    mission_allocations,
+    rhythm_cadence,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +131,58 @@ def _resolve_estimated_hours(task_hours, hours_per_week, num_tasks) -> int:
     return max(1, hours_per_week // max(1, num_tasks))
 
 
+def _capacity_minutes(hours_per_week=None, weekly_minutes=None) -> int:
+    """The weekly capacity in minutes; ``hours_per_week`` is the legacy input."""
+    if weekly_minutes is not None:
+        return int(weekly_minutes)
+    if hours_per_week is None:
+        raise TypeError("weekly_minutes is required")
+    return round(float(hours_per_week) * 60)
+
+
+def _task_unit_minutes(weekly_minutes: int) -> int:
+    """Storage resolution of a task estimate.
+
+    Whole-hour weeks of 3 hours or more keep the historical whole-hour
+    rounding. Half-hour and short weeks resolve to quarter hours, so a 15
+    minute rhythm or a 3.5 hour mission is stored as planned.
+    """
+    if weekly_minutes >= LOW_CAPACITY_MINUTES and weekly_minutes % 60 == 0:
+        return 60
+    return 15
+
+
+def _resolve_task_minutes(task_hours, weekly_minutes: int, num_tasks: int) -> int:
+    """A task's stored minutes: never zero, derived from the model's hours."""
+    unit = _task_unit_minutes(weekly_minutes)
+    if task_hours and task_hours > 0:
+        if unit == 60:
+            return _resolve_estimated_hours(task_hours, 0, num_tasks) * 60
+        return max(unit, round(float(task_hours) * 60 / unit) * unit)
+    return max(unit, (weekly_minutes // max(1, num_tasks)) // unit * unit)
+
+
+def _mission_minutes_bounds(weekly_minutes: int) -> tuple[int, int]:
+    """Allowed minutes for one mission task in a week of this size."""
+    if weekly_minutes < LOW_CAPACITY_MINUTES:
+        exact = capacity_split(weekly_minutes).mission_minutes
+        return exact, exact
+    return MIN_MISSION_MINUTES, MAX_MISSION_MINUTES
+
+
+def _daily_minimum_minutes(weekly_minutes: int) -> int:
+    if weekly_minutes < LOW_CAPACITY_MINUTES:
+        return capacity_split(weekly_minutes).rhythm_minutes
+    return 60
+
+
+def _mission_range_text(weekly_minutes: int) -> str:
+    low, high = _mission_minutes_bounds(weekly_minutes)
+    if low == high:
+        return f"exactly {format_hours(low)} hours ({low} minutes) in a week under 3 hours"
+    return f"{format_hours(low)}-{format_hours(high)}"
+
+
 def _resolve_success_metric(task) -> str:
     """Use the model's success_metric; fall back to something derived from the
     description — never the useless 'Task completed: <title>' placeholder."""
@@ -152,10 +218,20 @@ def validate_plan_contract(
     plan: PlanGenerationResponse,
     *,
     duration_weeks: int,
-    hours_per_week: int,
+    hours_per_week: int | float | None = None,
     start_week: int = 1,
+    require_cycle_fields: bool = True,
+    weekly_minutes: int | None = None,
 ) -> list[str]:
-    """Validate the prompt's dynamic execution contract before persistence."""
+    """Validate the prompt's dynamic execution contract before persistence.
+
+    Week expansion inherits thesis and anti-goals from the backbone, so its
+    response need not repeat them (``require_cycle_fields=False``).
+    Capacity is accounted in minutes; whole-hour weeks of 3 hours or more
+    keep their historical whole-hour rounding and 2-8 hour mission range.
+    """
+    capacity = _capacity_minutes(hours_per_week, weekly_minutes)
+    mission_low, mission_high = _mission_minutes_bounds(capacity)
     issues: list[str] = []
     ordered_weeks = list(range(start_week, start_week + duration_weeks))
     expected_weeks = set(ordered_weeks)
@@ -168,14 +244,14 @@ def validate_plan_contract(
         issues.append(f"weeks must be exactly {ordered_weeks}; got {week_numbers}")
     if len(week_numbers) != len(set(week_numbers)):
         issues.append("week_number values must be unique")
-    if not plan.roadmap_thesis.strip():
+    if require_cycle_fields and not plan.roadmap_thesis.strip():
         issues.append("roadmap_thesis must be non-empty")
-    if not plan.anti_goals:
+    if require_cycle_fields and not plan.anti_goals:
         issues.append("anti_goals must contain at least one domain-specific item")
 
     mission_types = {"project", "course", "reading"}
     daily_types = {"habit", "practice"}
-    low_capacity = hours_per_week < 6
+    low_capacity = capacity < MULTI_MISSION_MINUTES
     for week in plan.weeks:
         missions = [task for task in week.binary_tasks if task.type in mission_types]
         daily = [task for task in week.binary_tasks if task.type in daily_types]
@@ -206,29 +282,32 @@ def validate_plan_contract(
             issues.append(f"week {week.week_number} primary_mission is empty")
 
         rounded_total = sum(
-            _resolve_estimated_hours(
+            _resolve_task_minutes(
                 task.estimated_hours,
-                hours_per_week,
+                capacity,
                 len(week.binary_tasks),
             )
             for task in week.binary_tasks
         )
-        if rounded_total != hours_per_week:
+        if rounded_total != capacity:
             issues.append(
-                f"week {week.week_number} stores {rounded_total} hours; it must "
-                f"fill the {hours_per_week}-hour weekly capacity"
+                f"week {week.week_number} stores {format_hours(rounded_total)} hours; "
+                f"it must fill the {format_hours(capacity)}-hour weekly capacity"
             )
 
         for task in week.binary_tasks:
-            resolved_hours = _resolve_estimated_hours(
+            resolved_minutes = _resolve_task_minutes(
                 task.estimated_hours,
-                hours_per_week,
+                capacity,
                 len(week.binary_tasks),
             )
-            if task.type in mission_types and not 2 <= resolved_hours <= 8:
+            if task.type in mission_types and not (
+                mission_low <= resolved_minutes <= mission_high
+            ):
                 issues.append(
                     f"week {week.week_number} mission '{task.title}' stores "
-                    f"{resolved_hours} hours; mission range is 2-8"
+                    f"{format_hours(resolved_minutes)} hours; mission range is "
+                    f"{_mission_range_text(capacity)}"
                 )
             description_words = len(task.description.split())
             minimum_words = 50 if task.type in mission_types else 30
@@ -257,9 +336,13 @@ def validate_plan_backbone(
     backbone: PlanBackboneResponse,
     *,
     duration_weeks: int,
-    hours_per_week: int,
+    hours_per_week: int | float | None = None,
+    weekly_minutes: int | None = None,
 ) -> list[str]:
     """Validate the compact cycle before any week is expanded."""
+    capacity = _capacity_minutes(hours_per_week, weekly_minutes)
+    mission_low, mission_high = _mission_minutes_bounds(capacity)
+    daily_minimum = _daily_minimum_minutes(capacity)
     issues: list[str] = []
     expected_weeks = list(range(1, duration_weeks + 1))
     actual_weeks = [week.week_number for week in backbone.weeks]
@@ -270,7 +353,7 @@ def validate_plan_backbone(
 
     mission_types = {"project", "course", "reading"}
     daily_types = {"habit", "practice"}
-    low_capacity = hours_per_week < 6
+    low_capacity = capacity < MULTI_MISSION_MINUTES
     expected_phases = {
         **{week: "foundation" for week in range(1, 4)},
         **{week: "core_skills" for week in range(4, 7)},
@@ -295,36 +378,43 @@ def validate_plan_backbone(
             not low_capacity and not 1 <= len(daily) <= 2
         ):
             issues.append(f"week {week.week_number} has invalid daily task count")
-        minimum_hours = 2 * len(missions) + len(daily)
-        if minimum_hours > hours_per_week:
+        # A week under 3 hours has one exact split; its task counts are
+        # checked above, so this whole-hour feasibility hint does not apply.
+        minimum_minutes = mission_low * len(missions) + daily_minimum * len(daily)
+        if capacity >= LOW_CAPACITY_MINUTES and minimum_minutes > capacity:
             issues.append(
-                f"week {week.week_number} task count requires at least {minimum_hours} hours, "
-                f"exceeding capacity {hours_per_week}; use at most "
-                f"{max(0, (hours_per_week - len(daily)) // 2)} missions and preserve the weekly outcome"
+                f"week {week.week_number} task count requires at least "
+                f"{format_hours(minimum_minutes)} hours, exceeding capacity "
+                f"{format_hours(capacity)}; use at most "
+                f"{max(0, (capacity - daily_minimum * len(daily)) // mission_low)} "
+                "missions and preserve the weekly outcome"
             )
-        stored_hours = sum(
-            _resolve_estimated_hours(
+        stored_minutes = sum(
+            _resolve_task_minutes(
                 task.estimated_hours,
-                hours_per_week,
+                capacity,
                 len(week.tasks),
             )
             for task in week.tasks
         )
-        if stored_hours != hours_per_week:
+        if stored_minutes != capacity:
             issues.append(
-                f"week {week.week_number} stores {stored_hours} hours; it must "
-                f"fill the {hours_per_week}-hour weekly capacity"
+                f"week {week.week_number} stores {format_hours(stored_minutes)} hours; "
+                f"it must fill the {format_hours(capacity)}-hour weekly capacity"
             )
         for task in week.tasks:
-            resolved_hours = _resolve_estimated_hours(
+            resolved_minutes = _resolve_task_minutes(
                 task.estimated_hours,
-                hours_per_week,
+                capacity,
                 len(week.tasks),
             )
-            if task.type in mission_types and not 2 <= resolved_hours <= 8:
+            if task.type in mission_types and not (
+                mission_low <= resolved_minutes <= mission_high
+            ):
                 issues.append(
                     f"week {week.week_number} mission '{task.title}' stores "
-                    f"{resolved_hours} hours; mission range is 2-8"
+                    f"{format_hours(resolved_minutes)} hours; mission range is "
+                    f"{_mission_range_text(capacity)}"
                 )
             normalized_title = task.title.strip().casefold()
             if normalized_title in week_titles or (
@@ -344,44 +434,64 @@ def validate_plan_backbone(
 def _normalize_backbone_workload(
     backbone: PlanBackboneResponse,
     *,
-    hours_per_week: int,
+    hours_per_week: int | float | None = None,
+    weekly_minutes: int | None = None,
 ) -> tuple[PlanBackboneResponse, list[dict]]:
-    """Correct a one-hour scheduling slip before lesson content is written.
+    """Correct a small scheduling slip before lesson content is written.
 
-    Models select the learning work; integer workload accounting is server
+    Models select the learning work; workload accounting is server
     arithmetic. Keep all identities and pedagogical text, reject infeasible
     task counts, and leave larger discrepancies for a quality review.
+    A week under three hours has exactly one valid split (``capacity_split``),
+    so its one mission and one rhythm are set to that split.
     """
+    capacity = _capacity_minutes(hours_per_week, weekly_minutes)
+    mission_low, mission_high = _mission_minutes_bounds(capacity)
+    daily_minimum = _daily_minimum_minutes(capacity)
     candidate = backbone.model_copy(deep=True)
     adjustments: list[dict] = []
     for week in candidate.weeks:
         missions = [i for i, task in enumerate(week.tasks) if task.type in {"project", "course", "reading"}]
         daily = [i for i, task in enumerate(week.tasks) if task.type in {"habit", "practice"}]
-        low_capacity = hours_per_week < 6
+        low_capacity = capacity < MULTI_MISSION_MINUTES
         if (
             (low_capacity and (len(missions), len(daily)) != (1, 1))
             or (not low_capacity and not (2 <= len(missions) <= 3 and 1 <= len(daily) <= 2))
             or len(missions) + len(daily) != len(week.tasks)
         ):
             continue
-        hours = [_resolve_estimated_hours(task.estimated_hours, hours_per_week, len(week.tasks)) for task in week.tasks]
-        if any(not 2 <= hours[index] <= 8 for index in missions):
+        if capacity < LOW_CAPACITY_MINUTES:
+            split = capacity_split(capacity)
+            for index, target in ((missions[0], split.mission_minutes), (daily[0], split.rhythm_minutes)):
+                previous = round(float(week.tasks[index].estimated_hours) * 60)
+                if previous != target:
+                    week.tasks[index].estimated_hours = hours_value(target)
+                    adjustments.append({"week": week.week_number, "task_index": index,
+                                        "from_hours": hours_value(previous), "to_hours": hours_value(target)})
             continue
-        difference = hours_per_week - sum(hours)
-        if abs(difference) != 1:
+        minutes = [_resolve_task_minutes(task.estimated_hours, capacity, len(week.tasks)) for task in week.tasks]
+        if any(not mission_low <= minutes[index] <= mission_high for index in missions):
+            continue
+        difference = capacity - sum(minutes)
+        # One hour at most: whole-hour weeks correct exactly a one-hour slip.
+        if difference == 0 or abs(difference) > 60:
             continue
         if difference > 0:
-            eligible = sorted((index for index in missions if hours[index] < 8), key=lambda index: hours[index])
-            eligible += sorted(daily, key=lambda index: hours[index])
+            eligible = sorted((index for index in missions if minutes[index] + difference <= mission_high),
+                              key=lambda index: minutes[index])
+            eligible += sorted(daily, key=lambda index: minutes[index])
         else:
-            eligible = sorted((index for index in daily if hours[index] > 1), key=lambda index: -hours[index])
-            eligible += sorted((index for index in missions if hours[index] > 2), key=lambda index: -hours[index])
+            eligible = sorted((index for index in daily if minutes[index] + difference >= daily_minimum),
+                              key=lambda index: -minutes[index])
+            eligible += sorted((index for index in missions if minutes[index] + difference >= mission_low),
+                               key=lambda index: -minutes[index])
         if not eligible:
             continue
         index = eligible[0]
-        previous = hours[index]
-        week.tasks[index].estimated_hours = previous + difference
-        adjustments.append({"week": week.week_number, "task_index": index, "from_hours": previous, "to_hours": previous + difference})
+        previous = minutes[index]
+        week.tasks[index].estimated_hours = hours_value(previous + difference)
+        adjustments.append({"week": week.week_number, "task_index": index,
+                            "from_hours": hours_value(previous), "to_hours": hours_value(previous + difference)})
     return candidate, adjustments
 
 
@@ -399,8 +509,14 @@ def daily_workload_issues(task: BinaryTask) -> list[str]:
 def validate_week_against_backbone(
     week: PlanWeek,
     backbone_week: PlanBackboneWeek,
+    *,
+    weekly_minutes: int | None = None,
 ) -> list[str]:
-    """Ensure enrichment cannot silently change the approved cycle shape."""
+    """Ensure enrichment cannot silently change the approved cycle shape.
+
+    With ``weekly_minutes`` the estimates are compared at that week's
+    storage resolution (quarter hours below 3 hours or for half-hour weeks).
+    """
     issues: list[str] = []
     if len(week.primary_mission.split()) < 35:
         issues.append(
@@ -423,9 +539,13 @@ def validate_week_against_backbone(
             issues.append(
                 f"task {index + 1} type must remain {backbone_task.type}; got {task.type}"
             )
-        if _resolve_estimated_hours(
-            task.estimated_hours, 168, 1
-        ) != _resolve_estimated_hours(backbone_task.estimated_hours, 168, 1):
+        if (
+            _resolve_task_minutes(task.estimated_hours, weekly_minutes, 1)
+            != _resolve_task_minutes(backbone_task.estimated_hours, weekly_minutes, 1)
+            if weekly_minutes is not None
+            else _resolve_estimated_hours(task.estimated_hours, 168, 1)
+            != _resolve_estimated_hours(backbone_task.estimated_hours, 168, 1)
+        ):
             issues.append(
                 f"task {index + 1} estimated_hours must remain "
                 f"{backbone_task.estimated_hours}; got {task.estimated_hours}"
@@ -458,20 +578,52 @@ def validate_week_against_backbone(
 # =============================================================================
 
 
+def _rhythm_copy(rhythm_minutes: int) -> tuple[str, str, str, str]:
+    """Cadence wording for the deterministic daily rhythm.
+
+    Weeks of at least an hour of rhythm keep the historical copy. A shorter
+    rhythm states its real cadence instead of promising ten-to-twenty
+    minute sessions the learner does not have.
+    """
+    if rhythm_minutes >= 60:
+        return (
+            "ten to twenty focused minutes on four days this week",
+            "Four dated practice logs with an output and adjustment are complete.",
+            "Use the minimum ten-minute version and record the result",
+            "Set a ten-to-twenty-minute timer",
+        )
+    sessions, per_session = rhythm_cadence(rhythm_minutes)
+    count = {2: "two", 3: "three", 4: "four"}.get(sessions, str(sessions))
+    return (
+        f"{per_session} focused minutes on {count} days this week",
+        f"{count.capitalize()} dated practice logs with an output and adjustment are complete.",
+        f"Use the {per_session}-minute version and record the result",
+        f"Set a {per_session}-minute timer",
+    )
+
+
 def _generate_deterministic_items(
-    weekly_hours: int,
+    weekly_hours: int | None = None,
     duration_weeks: int = 12,
     *,
+    weekly_minutes: int | None = None,
     idol_name: str = "the selected mentor",
     user_goal: str = "personal and professional growth",
 ) -> PlanRoadmap:
     """
     Generate deterministic plan items as fallback.
 
-    NO LLM USED - pure template-based generation.
+    NO LLM USED - pure template-based generation. The workload follows
+    ``capacity_split``: whole-hour weeks of 3 hours or more keep their
+    historical shape, and a week under 3 hours is one short mission plus a
+    short rhythm. Each item records its exact ``estimated_minutes``.
     """
     items: list[PlanItemData] = []
-    weekly_hours = max(3, weekly_hours)
+    capacity = _capacity_minutes(weekly_hours, weekly_minutes)
+    split = capacity_split(capacity)
+    rhythm_text, rhythm_metric, rhythm_solution, rhythm_timer = _rhythm_copy(
+        split.rhythm_minutes
+    )
 
     for week in range(1, duration_weeks + 1):
         if week <= 3:
@@ -482,17 +634,8 @@ def _generate_deterministic_items(
             phase = "Applied Practice"
         else:
             phase = "Integration"
-        available_for_missions = weekly_hours - 1
-        mission_count = (
-            1 if weekly_hours < 6 else min(3, max(2, (available_for_missions + 7) // 8))
-        )
-        mission_budget = min(available_for_missions, mission_count * 8)
-        daily_hours = weekly_hours - mission_budget
-        base_hours, remainder = divmod(mission_budget, mission_count)
-        allocated_hours = [
-            base_hours + (1 if index < remainder else 0)
-            for index in range(mission_count)
-        ]
+        mission_count = split.mission_count
+        allocated_minutes = mission_allocations(split)
         mission_templates = [
             ("Build", "proof", PlanItemType.PROJECT),
             ("Test", "method", PlanItemType.READING),
@@ -502,7 +645,7 @@ def _generate_deterministic_items(
             (
                 f"Week {week}: {verb} the {phase.lower()} {noun}",
                 item_type,
-                allocated_hours[index],
+                allocated_minutes[index],
             )
             for index, (verb, noun, item_type) in enumerate(
                 mission_templates[:mission_count]
@@ -528,11 +671,12 @@ def _generate_deterministic_items(
                         "One finished artifact, one written rationale, and one documented "
                         "revision pass are saved for review."
                     ),
-                    estimated_hours=estimated,
+                    estimated_hours=legacy_weekly_hours(estimated),
                     meta_json={
                         "primary_mission": f"Produce a verifiable {phase.lower()} outcome",
                         "predicted_friction": "The first useful version may feel incomplete",
                         "friction_solution": "Time-box the draft, then improve it against one rubric",
+                        "estimated_minutes": estimated,
                     },
                 )
             )
@@ -542,26 +686,27 @@ def _generate_deterministic_items(
                 title=f"Week {week}: Daily {phase.lower()} drill",
                 type=PlanItemType.PRACTICE,
                 description=(
-                    f"Practice one domain-specific component of {user_goal} for ten to "
-                    "twenty focused minutes on four days this week. Log the input, the "
+                    f"Practice one domain-specific component of {user_goal} for "
+                    f"{rhythm_text}. Log the input, the "
                     "observable result, and one adjustment after every repetition so the "
                     "routine compounds instead of becoming passive repetition."
                 ),
                 week_start=week,
                 week_end=week,
-                success_metric="Four dated practice logs with an output and adjustment are complete.",
-                estimated_hours=daily_hours,
+                success_metric=rhythm_metric,
+                estimated_hours=legacy_weekly_hours(split.rhythm_minutes),
                 meta_json={
                     "primary_mission": f"Produce a verifiable {phase.lower()} outcome",
                     "predicted_friction": "Skipping a day after an imperfect session",
-                    "friction_solution": "Use the minimum ten-minute version and record the result",
+                    "friction_solution": rhythm_solution,
                     "daily_instructions": (
-                        "Set a ten-to-twenty-minute timer and choose one small component of "
+                        f"{rhythm_timer} and choose one small component of "
                         "this week's mission. Produce a visible attempt without switching "
                         "tools. Compare it with yesterday's attempt or the stated rubric, "
                         "write one sentence about the difference, and log the next adjustment. "
                         "You are done when the attempt and adjustment are both saved."
                     ),
+                    "estimated_minutes": split.rhythm_minutes,
                 },
             )
         )
@@ -589,10 +734,12 @@ async def _generate_plan_backbone(
     system_prompt: str,
     user_prompt: str,
     duration_weeks: int,
-    hours_per_week: int,
+    hours_per_week: int | float | None = None,
     telemetry_context: dict | None = None,
     candidate_callback=None,
+    weekly_minutes: int | None = None,
 ) -> PlanBackboneResponse:
+    weekly_minutes = _capacity_minutes(hours_per_week, weekly_minutes)
     telemetry_context = telemetry_context or {}
     active_client = _plan_client(
         timeout=90 if settings.llm_provider == "zai" else PLAN_BACKBONE_TIMEOUT_SECONDS,
@@ -614,13 +761,13 @@ async def _generate_plan_backbone(
     workload_adjustments = []
     if validated is not None:
         validated, workload_adjustments = _normalize_backbone_workload(
-            validated, hours_per_week=hours_per_week
+            validated, weekly_minutes=weekly_minutes
         )
     issues = (
         validate_plan_backbone(
             validated,
             duration_weeks=duration_weeks,
-            hours_per_week=hours_per_week,
+            weekly_minutes=weekly_minutes,
         )
         if validated is not None
         else [str(response.error or "backbone schema validation failed")]
@@ -698,13 +845,13 @@ async def _generate_plan_backbone(
         response.retried = True
         if validated is not None:
             validated, workload_adjustments = _normalize_backbone_workload(
-                validated, hours_per_week=hours_per_week
+                validated, weekly_minutes=weekly_minutes
             )
         issues = (
             validate_plan_backbone(
                 validated,
                 duration_weeks=duration_weeks,
-                hours_per_week=hours_per_week,
+                weekly_minutes=weekly_minutes,
             )
             if validated is not None
             else [str(response.error or "backbone schema validation failed")]
@@ -735,7 +882,9 @@ async def _generate_plan_backbone(
 
 
 async def _checkpointed_backbone(*, store, system_prompt, user_prompt,
-                                 duration_weeks, hours_per_week, telemetry_context):
+                                 duration_weeks, hours_per_week=None, telemetry_context,
+                                 weekly_minutes=None):
+    weekly_minutes = _capacity_minutes(hours_per_week, weekly_minutes)
     async def remember(candidate, response, issues):
         await store.put("backbone", candidate.model_dump(mode="json"),
                         provider=getattr(response, "provider", None),
@@ -745,7 +894,7 @@ async def _checkpointed_backbone(*, store, system_prompt, user_prompt,
         try:
             return await _generate_plan_backbone(
                 system_prompt=system_prompt, user_prompt=user_prompt,
-                duration_weeks=duration_weeks, hours_per_week=hours_per_week,
+                duration_weeks=duration_weeks, weekly_minutes=weekly_minutes,
                 telemetry_context=telemetry_context, candidate_callback=remember)
         except ValueError:
             saved = store.load("backbone")
@@ -753,10 +902,10 @@ async def _checkpointed_backbone(*, store, system_prompt, user_prompt,
                 raise
     candidate = PlanBackboneResponse.model_validate(saved["payload"])
     candidate, workload_adjustments = _normalize_backbone_workload(
-        candidate, hours_per_week=hours_per_week
+        candidate, weekly_minutes=weekly_minutes
     )
     issues = validate_plan_backbone(candidate, duration_weeks=duration_weeks,
-                                    hours_per_week=hours_per_week)
+                                    weekly_minutes=weekly_minutes)
     if not issues:
         if workload_adjustments:
             await store.put("backbone", candidate.model_dump(mode="json"),
@@ -807,9 +956,9 @@ async def _checkpointed_backbone(*, store, system_prompt, user_prompt,
     else:
         replacements = {w.week_number: w for w in result.weeks}
         merged = candidate.model_copy(update={"weeks": [replacements.get(w.week_number, w) for w in candidate.weeks]})
-        merged, _ = _normalize_backbone_workload(merged, hours_per_week=hours_per_week)
+        merged, _ = _normalize_backbone_workload(merged, weekly_minutes=weekly_minutes)
         repair_issues = validate_plan_backbone(merged, duration_weeks=duration_weeks,
-                                              hours_per_week=hours_per_week)
+                                              weekly_minutes=weekly_minutes)
     await record_llm_response(operation="plan_backbone_targeted_repair", response=response,
         model=getattr(client, "model", None), result_status="failed" if repair_issues else "schema_valid",
         metadata={**(telemetry_context or {}), "repaired_weeks": sorted(numbers), "contract_issues": repair_issues})
@@ -830,12 +979,14 @@ async def generate_plan_week_from_backbone(
     idol_name: str,
     idol_domain: str,
     user_goal: str,
-    hours_per_week: int,
+    hours_per_week: int | float | None = None,
     user_context: str = "",
     session_context: str = "",
     telemetry_context: dict | None = None,
+    weekly_minutes: int | None = None,
 ) -> PlanWeek:
     """Expand one stable backbone week into execution-ready task copy."""
+    weekly_minutes = _capacity_minutes(hours_per_week, weekly_minutes)
     telemetry_context = telemetry_context or {}
     backbone_week = PlanBackboneWeek.model_validate(backbone_week)
     system_prompt = load_prompt("planner_system")
@@ -843,7 +994,7 @@ async def generate_plan_week_from_backbone(
         load_prompt("plan_week_generate"),
         {
             "user_goal": sanitize_untrusted_input(user_goal),
-            "hours_per_week": str(hours_per_week),
+            **capacity_prompt_params(weekly_minutes),
             "user_context": sanitize_untrusted_input(user_context)
             if user_context
             else "",
@@ -879,12 +1030,15 @@ async def generate_plan_week_from_backbone(
         contract_issues = validate_plan_contract(
             result,
             duration_weeks=1,
-            hours_per_week=hours_per_week,
+            weekly_minutes=weekly_minutes,
             start_week=backbone_week.week_number,
+            require_cycle_fields=False,
         )
         if len(result.weeks) == 1:
             contract_issues.extend(
-                validate_week_against_backbone(result.weeks[0], backbone_week)
+                validate_week_against_backbone(
+                    result.weeks[0], backbone_week, weekly_minutes=weekly_minutes
+                )
             )
         return contract_issues
 
@@ -982,8 +1136,10 @@ def _roadmap_from_backbone(
     backbone: PlanBackboneResponse,
     *,
     expanded_week: PlanWeek,
-    hours_per_week: int,
+    hours_per_week: int | float | None = None,
+    weekly_minutes: int | None = None,
 ) -> PlanRoadmap:
+    capacity = _capacity_minutes(hours_per_week, weekly_minutes)
     type_map = {
         "project": PlanItemType.PROJECT,
         "course": PlanItemType.COURSE,
@@ -1003,6 +1159,11 @@ def _roadmap_from_backbone(
                 else None
             )
             title = task.title if task else backbone_task.title
+            task_minutes = _resolve_task_minutes(
+                backbone_task.estimated_hours,
+                capacity,
+                len(week.tasks),
+            )
             description = (
                 task.description
                 if task
@@ -1023,11 +1184,9 @@ def _roadmap_from_backbone(
                         if task
                         else backbone_task.success_metric
                     ),
-                    estimated_hours=_resolve_estimated_hours(
-                        backbone_task.estimated_hours,
-                        hours_per_week,
-                        len(week.tasks),
-                    ),
+                    # Legacy readers get whole hours (rounded up); every
+                    # capacity computation reads estimated_minutes.
+                    estimated_hours=legacy_weekly_hours(task_minutes),
                     meta_json={
                         "primary_mission": (
                             expanded_week.primary_mission
@@ -1047,6 +1206,7 @@ def _roadmap_from_backbone(
                         "daily_instructions": task.daily_instructions if task else None,
                         "backbone_task_index": index,
                         "week_content_status": "ready" if task else "backbone",
+                        "estimated_minutes": task_minutes,
                     },
                 )
             )
@@ -1062,7 +1222,7 @@ def _roadmap_from_backbone(
 async def _generate_llm_items(
     idol_name: str,
     user_goal: str,
-    hours_per_week: int,
+    hours_per_week: int | float | None = None,
     duration_weeks: int = 12,
     target_age: int | None = None,
     user_context: str = "",
@@ -1081,6 +1241,7 @@ async def _generate_llm_items(
     save_generation_checkpoint=None,
     on_generation_stage=None,
     recovery_response=None,
+    weekly_minutes: int | None = None,
 ) -> PlanRoadmap:
     """
     Generate plan items using LLM.
@@ -1092,6 +1253,7 @@ async def _generate_llm_items(
     reserved for explicit deterministic mode; silently publishing one from an
     LLM-mode outage would mislabel a degraded artifact as a personalized plan.
     """
+    weekly_minutes = _capacity_minutes(hours_per_week, weekly_minutes)
     recovery_token = _plan_recovery_response.set(recovery_response)
     active_token = _plan_run_active.set(True)
     try:
@@ -1102,7 +1264,7 @@ async def _generate_llm_items(
                 "duration_weeks": str(duration_weeks),
                 "user_goal": sanitize_untrusted_input(user_goal),
                 "idol_name": idol_name,
-                "hours_per_week": str(hours_per_week),
+                **capacity_prompt_params(weekly_minutes),
                 "target_age": str(target_age or "null"),
                 "user_context": sanitize_untrusted_input(user_context)
                 if user_context
@@ -1137,14 +1299,15 @@ async def _generate_llm_items(
             "openlux_quality_model": settings.openlux_quality_model,
             "gemini_model": settings.gemini_model, "gemini_quality_model": settings.gemini_quality_model,
             "week_prompt": load_prompt("plan_week_generate"),
-            "duration_weeks": duration_weeks, "hours_per_week": hours_per_week,
+            # Whole hours keep their historical identity value (an int).
+            "duration_weeks": duration_weeks, "hours_per_week": hours_value(weekly_minutes),
         }), save_generation_checkpoint)
         previous_backbone = store.load("backbone")
         if previous_backbone is not None:
             candidate = PlanBackboneResponse.model_validate(previous_backbone["payload"])
-            candidate, _ = _normalize_backbone_workload(candidate, hours_per_week=hours_per_week)
+            candidate, _ = _normalize_backbone_workload(candidate, weekly_minutes=weekly_minutes)
             previous_issues = validate_plan_backbone(
-                candidate, duration_weeks=duration_weeks, hours_per_week=hours_per_week
+                candidate, duration_weeks=duration_weeks, weekly_minutes=weekly_minutes
             )
             if previous_issues and (
                 previous_backbone.get("repair_attempts", 0) >= 1
@@ -1160,7 +1323,7 @@ async def _generate_llm_items(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             duration_weeks=duration_weeks,
-            hours_per_week=hours_per_week,
+            weekly_minutes=weekly_minutes,
             telemetry_context=telemetry_context,
         )
         # A stored draft can still require repair. Publish this milestone only
@@ -1171,10 +1334,11 @@ async def _generate_llm_items(
         backbone_hash = sha256_json(backbone.model_dump(mode="json"))
         if saved_week is not None and saved_week.get("backbone_hash") == backbone_hash:
             first_week = PlanWeek.model_validate(saved_week["payload"])
-            week_issues = validate_week_against_backbone(first_week, backbone.weeks[0])
+            week_issues = validate_week_against_backbone(
+                first_week, backbone.weeks[0], weekly_minutes=weekly_minutes)
             week_issues += validate_plan_contract(PlanGenerationResponse(weeks=[first_week],
                 roadmap_thesis=backbone.roadmap_thesis, anti_goals=backbone.anti_goals),
-                duration_weeks=1, hours_per_week=hours_per_week, start_week=1)
+                duration_weeks=1, weekly_minutes=weekly_minutes, start_week=1)
             if week_issues:
                 raise ValueError("Saved first week violates its contract: " + "; ".join(week_issues))
         else:
@@ -1188,7 +1352,7 @@ async def _generate_llm_items(
                     else "general"
                 ),
                 user_goal=user_goal,
-                hours_per_week=hours_per_week,
+                weekly_minutes=weekly_minutes,
                 user_context=user_context,
                 # The transcript already shaped the backbone. Repeating it in the
                 # Week 1 expansion adds prompt latency without new information;
@@ -1211,7 +1375,7 @@ async def _generate_llm_items(
         return _roadmap_from_backbone(
             backbone,
             expanded_week=first_week,
-            hours_per_week=hours_per_week,
+            weekly_minutes=weekly_minutes,
         )
 
     except Exception as exc:
@@ -1238,11 +1402,15 @@ async def generate_plan(
     force_llm: bool = False,
     user_context: str = "",
     previous_cycle_block: str = "",
+    weekly_minutes: int | None = None,
     # Legacy params kept for backward compat (ignored by new prompt)
     **kwargs,
 ) -> PlanRoadmap:
     """
     Generate a strategic 12-week plan.
+
+    Capacity is ``weekly_minutes``; ``weekly_hours`` is the legacy whole-hour
+    input, used only when minutes are not supplied.
 
     PROMPTS USED (when LLM mode):
     - System: planner_system.txt
@@ -1257,6 +1425,7 @@ async def generate_plan(
     Returns:
         PlanRoadmap with roadmap_thesis, anti_goals, and items
     """
+    weekly_minutes = _capacity_minutes(weekly_hours, weekly_minutes)
     use_llm = (
         settings.plan_generator_mode == "llm" and settings.llm_configured
     ) or force_llm
@@ -1269,7 +1438,7 @@ async def generate_plan(
         return await _generate_llm_items(
             idol_name=idol_name,
             user_goal=user_goal,
-            hours_per_week=weekly_hours,
+            weekly_minutes=weekly_minutes,
             duration_weeks=duration_weeks,
             target_age=kwargs.get("target_age"),
             user_context=user_context,
@@ -1292,8 +1461,8 @@ async def generate_plan(
     else:
         logger.info("Generating plan using deterministic templates")
         return _generate_deterministic_items(
-            weekly_hours,
-            duration_weeks,
+            duration_weeks=duration_weeks,
+            weekly_minutes=weekly_minutes,
             idol_name=idol_name,
             user_goal=user_goal,
         )

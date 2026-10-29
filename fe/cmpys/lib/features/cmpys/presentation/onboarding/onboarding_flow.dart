@@ -11,19 +11,19 @@ import '../../data/cmpys_seed.dart';
 import '../../state/cmpys_store.dart';
 import '../../state/cmpys_backend_sync.dart';
 import 'discovery_step.dart';
-import 'idol_preview_step.dart';
 import 'intake_step.dart';
 import 'mentor_lab_step.dart';
 import 'personalize_step.dart';
 
 /// CMPYS post-auth onboarding orchestrator.
 ///
-/// Routes the user through: personalize → discovery → idol preview → idol-led
-/// intake → automatic mentor lab (comparison + blueprint + plan) → main app.
+/// Routes the user through: personalize → discovery (whose mentor preview
+/// opens over it as a route) → idol-led intake → automatic mentor lab
+/// (comparison + blueprint + plan) → main app.
 ///
 /// All sub-screens are local widgets that update a single [CmpysOnboardingDraft]
 /// + selected [CmpysIdol] held in this orchestrator's state.
-enum _OnboardingRoute { personalize, discovery, preview, intake, mentorLab }
+enum _OnboardingRoute { personalize, discovery, intake, mentorLab }
 
 class CmpysOnboardingFlow extends ConsumerStatefulWidget {
   const CmpysOnboardingFlow({super.key});
@@ -36,7 +36,6 @@ class CmpysOnboardingFlow extends ConsumerStatefulWidget {
 class _CmpysOnboardingFlowState extends ConsumerState<CmpysOnboardingFlow> {
   _OnboardingRoute _route = _OnboardingRoute.personalize;
   final CmpysOnboardingDraft _draft = CmpysOnboardingDraft();
-  CmpysIdol? _previewIdol;
   CmpysIdol? _selectedIdol;
   bool _restoring = true;
   bool _restoreFailed = false;
@@ -98,7 +97,9 @@ class _CmpysOnboardingFlowState extends ConsumerState<CmpysOnboardingFlow> {
     }
   }
 
-  Future<void> _finish() async {
+  /// Completes onboarding and enters the app: the Today tab, or the Plan tab
+  /// when the learner chose "See the full plan" in the mentor lab.
+  Future<void> _finish({bool toPlan = false}) async {
     // Seed the CMPYS store with the user's onboarding answers, chosen idol,
     // backend session id, and the LLM-generated comparison + blueprint so the
     // main app renders real AI content everywhere.
@@ -133,7 +134,7 @@ class _CmpysOnboardingFlowState extends ConsumerState<CmpysOnboardingFlow> {
     // scores and the completed plan replace any prior account/session cache.
     ref.invalidate(cmpysBackendSyncProvider);
     if (!mounted) return;
-    context.go(AppRoutes.home);
+    context.go(toPlan ? AppRoutes.plan : AppRoutes.home);
   }
 
   @override
@@ -190,20 +191,13 @@ class _CmpysOnboardingFlowState extends ConsumerState<CmpysOnboardingFlow> {
           interests: _draft.interests,
           age: _draft.age,
           goalId: _draft.goalId,
+          goal: _draft.goal,
+          situation: _draft.situation,
+          situationNote: _draft.situationNote,
           existingSessionId: _draft.sessionId,
           onSessionCreated: (id) => _draft.sessionId = id,
+          // Chosen in the preview that opens over discovery.
           onPick: (idol) => setState(() {
-            _previewIdol = idol;
-            _route = _OnboardingRoute.preview;
-          }),
-        );
-      case _OnboardingRoute.preview:
-        final idol = _previewIdol ?? defaultIdol();
-        return CmpysIdolPreviewStep(
-          key: ValueKey('preview-${idol.id}'),
-          idol: idol,
-          onBack: () => setState(() => _route = _OnboardingRoute.discovery),
-          onChoose: (idol) => setState(() {
             _selectedIdol = idol;
             _route = _OnboardingRoute.intake;
           }),
@@ -223,6 +217,7 @@ class _CmpysOnboardingFlowState extends ConsumerState<CmpysOnboardingFlow> {
           idol: idol,
           draft: _draft,
           onDone: _finish,
+          onPlan: () => _finish(toPlan: true),
         );
     }
   }

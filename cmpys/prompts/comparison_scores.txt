@@ -15,11 +15,21 @@ THE PROSE COMPARISON ALREADY DELIVERED (context only; it is not evidence):
 
 THIS IS AN EVIDENCE CLASSIFICATION, NOT A PERCENTAGE CALCULATION.
 Classify these EXACT five dimension ids:
-- "capital"   — money/assets demonstrably deployed and producing value
-- "knowledge" — demonstrated domain knowledge, not untested confidence
-- "habits"    — a past track record of the right repeated actions, not future intent
-- "network"   — demonstrated mentors/peers/collaborators who compound growth
-- "clarity"   — a concrete decision system or strategy, not a wish alone
+- "knowledge" — understanding shown by diagnostics, confidence and completed study, not untested confidence alone
+- "practice"  — finished pieces of work and accepted practice, counted as volume; never planned hours or intent
+- "capital"   — money, tools or resources the person can put toward the goal; never a figure the person did not give
+- "network"   — people the learner can ask for feedback or help (mentors, peers, collaborators); a wish for contacts is not a network
+- "judgment"  — written analyses or decisions written down; a view held only in the head is not written judgment
+
+WHICH INTERVIEW ANSWERS SPEAK FOR WHICH DIMENSION (keys of the learner baseline):
+- knowledge: achievement_inventory, foundation_check, application_check, skill_confidence
+- practice:  practice_volume, achievement_inventory
+- capital:   resources_capital
+- network:   network_support
+- judgment:  work_sample, self_check_method
+An older eight-question interview maps current_capability, achievement_inventory, constraints_resources,
+learning_habits_support and target_outcome to knowledge, practice, capital, network and judgment, in that order.
+A key listed in missing_evidence_keys is missing evidence for its dimension.
 
 ORDINAL EVIDENCE LEVELS — use only integers 0 through 4:
 - 0: explicit absence, or no evidence from which a level can be earned
@@ -41,10 +51,10 @@ EVIDENCE PROVENANCE — choose exactly one per side:
 
 STRICT RULES:
 1. Evidence status beats encouragement. Never award points for potential, age, motivation, planned hours, or a promise about future behavior.
-2. If the person skipped an assessment and gave no work sample, knowledge is "insufficient_user_evidence"; do not turn missing evidence into a low-but-precise score.
-3. A weekly-hours commitment is capacity, not a discipline track record.
-4. A goal such as "become rich" is intent, not a demonstrated strategy or decision system.
-5. Cash saved but not demonstrably invested is capital available, not "capital at work."
+2. If the person skipped the diagnostics, gave no confidence rating and reported no completed study or work, knowledge is "insufficient_user_evidence"; do not turn missing evidence into a low-but-precise score.
+3. A weekly-hours commitment is capacity, not practice volume.
+4. A goal such as "become rich", or an intention to write analyses, is intent, not written judgment. Only analyses or decisions actually written down count.
+5. Money, tools or resources the person has are resources available, not proof that they were put to work.
 6. For capital, classify each side with exactly one metric kind:
    - "unknown"
    - "personal_cash_savings"
@@ -58,88 +68,43 @@ STRICT RULES:
 9. Use the lowest level the evidence supports. Do not invent facts or promote self-report to verified evidence.
 10. "comparison_basis" must name the shared construct when comparable, or explain the mismatch/missing evidence in at most 14 words.
 11. Each note must state one concrete fact in at most 18 words. Do not disguise inference as fact.
+12. A declined, empty or zero answer is not evidence: "Prefer not to say" (money or resources), "I don't really check" (how they check their own work), a work sample of "I don't have one yet" or "none yet", and a count of 0 finished pieces of work or 0 people to ask. Do not count it as evidence. If no other answer for that dimension supports it, use "insufficient_user_evidence", "you_evidence": "none" and "you_level": 0. That means unscored, not scored at zero: an unscored dimension is not a zero. An answer listed in missing_evidence_keys always leaves its own dimension unscored.
+13. "comparison_basis", "you_note" and "idol_note" are shown to the learner word for word. Write plain
+    sentences for the person, never snake_case values, status words, field or key names (such as
+    needs_review or missing_evidence_keys) or scorer shorthand such as "facts at 24 not supplied".
+    When {idol_name}'s side is missing, write "No verified record of {idol_name} at {user_age} for this yet."
+    When the person's side is missing, write "You haven’t shared this yet."
 
 Also return up to five specific milestones supported by the supplied facts at or before age {user_age}. Return fewer, including an empty milestones array, when the evidence is insufficient. Never guess a milestone or age to reach a count. Each milestone is a short factual accomplishment, not something the person is presumed to have matched.
 
-OUTPUT (strict JSON, no markdown, no commentary):
+OUTPUT (strict JSON, no markdown, no commentary). Return exactly five dimension
+objects, in this order and with these ids and labels: knowledge "Knowledge base",
+practice "Practice volume", capital "Capital & resources", network "Network",
+judgment "Written judgment". Decide every status, level, provenance and metric kind
+from the evidence alone; the placeholders below list allowed values, not defaults.
 {
-  "version": 2,
+  "version": 3,
   "dimensions": [
     {
-      "id": "capital",
-      "label": "Capital at work",
-      "status": "different_basis",
-      "comparison_basis": "personal savings versus business capital raised",
-      "you_level": 0,
-      "idol_level": 4,
-      "you_evidence": "self_reported",
-      "idol_evidence": "verified",
-      "you_metric_kind": "personal_cash_savings",
-      "idol_metric_kind": "business_capital_raised",
-      "you_note": "...",
-      "idol_note": "..."
-    },
-    {
-      "id": "knowledge",
-      "label": "Knowledge base",
-      "status": "insufficient_user_evidence",
-      "comparison_basis": "no demonstrated user knowledge sample",
-      "you_level": 0,
-      "idol_level": 0,
-      "you_evidence": "none",
-      "idol_evidence": "verified",
-      "you_metric_kind": "unknown",
-      "idol_metric_kind": "unknown",
-      "you_note": "...",
-      "idol_note": "..."
-    },
-    {
-      "id": "habits",
-      "label": "Daily discipline",
-      "status": "insufficient_user_evidence",
-      "comparison_basis": "future commitment is not a past habit record",
-      "you_level": 0,
-      "idol_level": 0,
-      "you_evidence": "none",
-      "idol_evidence": "verified",
-      "you_metric_kind": "unknown",
-      "idol_metric_kind": "unknown",
-      "you_note": "...",
-      "idol_note": "..."
-    },
-    {
-      "id": "network",
-      "label": "Trusted network",
-      "status": "comparable",
-      "comparison_basis": "demonstrated growth relationships",
-      "you_level": 0,
-      "idol_level": 0,
-      "you_evidence": "self_reported",
-      "idol_evidence": "verified",
-      "you_metric_kind": "unknown",
-      "idol_metric_kind": "unknown",
-      "you_note": "...",
-      "idol_note": "..."
-    },
-    {
-      "id": "clarity",
-      "label": "Strategic clarity",
-      "status": "comparable",
-      "comparison_basis": "demonstrated decision system",
-      "you_level": 0,
-      "idol_level": 0,
-      "you_evidence": "self_reported",
-      "idol_evidence": "verified",
-      "you_metric_kind": "unknown",
-      "idol_metric_kind": "unknown",
-      "you_note": "...",
-      "idol_note": "..."
+      "id": "<dimension id>",
+      "label": "<its label>",
+      "status": "<comparable | different_basis | insufficient_user_evidence | insufficient_idol_evidence>",
+      "comparison_basis": "<shared construct, or the mismatch/missing evidence, at most 14 words>",
+      "you_level": "<integer 0-4>",
+      "idol_level": "<integer 0-4>",
+      "you_evidence": "<none | self_reported | documented | verified>",
+      "idol_evidence": "<none | self_reported | documented | verified>",
+      "you_metric_kind": "<unknown, or a capital metric kind from rule 6>",
+      "idol_metric_kind": "<unknown, or a capital metric kind from rule 6>",
+      "you_note": "<one concrete fact, at most 18 words>",
+      "idol_note": "<one concrete fact, at most 18 words>"
     }
   ],
   "milestones": [
-    {"text": "...", "hit_by_age": 0}
+    {"text": "<supported accomplishment>", "hit_by_age": "<integer age>"}
   ]
 }
+Levels are JSON integers, not strings.
 
 
 PLACEMENT AND INTERVIEW EVIDENCE:
@@ -148,10 +113,8 @@ PLACEMENT AND INTERVIEW EVIDENCE:
 - Use answer_evidence_status and skill_diagnostics from the learner baseline. Unknown,
   not_assessed, and needs_review must remain uncertain. A correct brief item supports
   only its named skill, not a broad tier equivalent to the mentor's career achievements.
-- Explain a practical next learning step for the user's actual goal. Never prescribe
-  generic beginner work solely because the mentor has accomplished more.
 - User prose is self-reported, even when it contains a claimed credential or work sample.
-  Do not relabel it verified. Do not treat a future time commitment as observed discipline.
+  Do not relabel it verified. Do not treat a future time commitment as observed practice.
 - Treat the comparison as context and direction, not a ranking of personal worth or a
   calibrated placement test. Historical evidence may be incomplete; avoid implying that
   every displayed fact occurred at exactly the user's age unless sources establish that.

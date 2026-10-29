@@ -1,20 +1,23 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:phosphor_flutter/phosphor_flutter.dart';
 
 import '../../../app/design_tokens.dart';
 import '../../../core/ui/app_shell.dart';
 import '../../../core/ui/cmpys/cmpys_markdown.dart';
-import '../../../core/ui/cmpys/cmpys_primitives.dart';
-import '../../../core/ui/motion/entrance.dart';
+import '../../../core/ui/motion/motion_config.dart';
 import '../../../core/ui/motion/page_transition.dart';
-import '../../../core/ui/motion/skeleton.dart';
-import '../../plan/data/plan_repository.dart';
+import '../../../core/ui/v3/v3.dart';
 import '../../plan/models/plan_models.dart';
 import '../../plan/presentation/backend_plan_widgets.dart';
 import '../../plan/state/current_plan_provider.dart';
 import '../data/cmpys_seed.dart';
 import '../state/cmpys_store.dart';
+import '../state/habit_toggle.dart';
+import '../state/plan_data.dart';
+import '../state/plan_providers.dart';
+import '../state/today_data.dart';
 
 typedef _PlanStoreView = ({
   CmpysIdol idol,
@@ -23,22 +26,129 @@ typedef _PlanStoreView = ({
   Map<String, bool> tasks,
 });
 
-/// CMPYS Plan tab — Roadmap (generated 12-week plan) / Daily habits split.
+/// CMPYS Plan tab (`PlanTab` in `v3/plan.jsx`): the "N weeks with X" header
+/// with the overall ring, the hours and week tags, and a Roadmap / Daily
+/// habits split.
 ///
-/// The roadmap renders the backend-generated plan (weeks 1–12, primary
-/// missions + daily rhythm per week) once it exists; while the generation job
-/// runs it shows live progress, and it falls back to the seeded pillars when
-/// no plan is available.
+/// Data: [currentPlanProvider] (the plan, its weeks and missions, and the
+/// generation progress); each mission's tutorials, through the cards in
+/// `backend_plan_widgets.dart` ([todayMissionDetailProvider] for the mission
+/// to work on, exactly as Today reads it, and [planMissionPeekProvider], a
+/// read that never starts generation, for the rest);
+/// [todayViewProvider] (the habits) with [habitDailyStatusProvider] (each
+/// habit's own week; [todayStreakProvider] stands in if that fails); and the
+/// store's blueprint markdown. While a plan is being written the tab
+/// shows its progress; with none, it says so.
 class CmpysPlanScreen extends ConsumerStatefulWidget {
-  const CmpysPlanScreen({super.key});
+  const CmpysPlanScreen({super.key, this.clock});
+
+  /// The local time to render for; defaults to [DateTime.now]. For tests.
+  final DateTime Function()? clock;
 
   @override
   ConsumerState<CmpysPlanScreen> createState() => _CmpysPlanScreenState();
 }
 
-class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
+class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen>
+    with HabitToggleMixin<CmpysPlanScreen> {
   int _view = 0; // 0 = Roadmap, 1 = Daily habits
-  final Set<String> _pendingDailyTasks = {};
+
+  bool _onScreen = true;
+
+  DateTime get _now => widget.clock?.call() ?? DateTime.now();
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Coming back to this tab: tutorials that were still being written when
+    // it was last on screen may be ready now. (Today polls its own mission
+    // while it is visible; this tab re-reads once on return.)
+    final onScreen = TickerMode.of(context);
+    if (onScreen && !_onScreen) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _refreshPreparing();
+      });
+    }
+    _onScreen = onScreen;
+  }
+
+  void _refreshPreparing() {
+    final plan = ref.read(currentPlanProvider).plan;
+    if (plan == null) return;
+    final week = plan.focusWeek;
+    final missions = plan.missionsForWeek(week);
+    final statuses = planMissionStatuses(plan, week);
+    for (var i = 0; i < missions.length; i++) {
+      final provider = planMissionDetailProvider(
+        missions[i].id,
+        peek: statuses[i] != PlanMissionStatus.current,
+        peekSupported: planSupportsPeek(plan),
+      );
+      if (provider == null) continue;
+      final detail = ref.read(provider).valueOrNull;
+      if (detail != null &&
+          tutorialRowStates(
+            detail,
+          ).any((s) => s == TutorialRowState.preparing)) {
+        ref.invalidate(provider);
+      }
+    }
+  }
+
+  // The week's mission reads are autoDispose and watched only by the roadmap,
+  // so switching to Daily habits would drop them and the next switch back
+  // would read every mission again. A manual listener per read keeps each
+  // alive while this tab is mounted.
+  final Map<String, ProviderSubscription<Object?>> _held = {};
+  String _heldFor = '';
+
+  void _holdWeekReads(BackendPlan? plan) {
+    final wanted = <String, AutoDisposeFutureProvider<PlanItemDetailed>>{};
+    if (plan != null && !plan.allMissionWorkComplete) {
+      final week = plan.focusWeek;
+      final missions = plan.missionsForWeek(week);
+      final statuses = planMissionStatuses(plan, week);
+      for (var i = 0; i < missions.length; i++) {
+        final peek = statuses[i] != PlanMissionStatus.current;
+        final provider = planMissionDetailProvider(
+          missions[i].id,
+          peek: peek,
+          peekSupported: planSupportsPeek(plan),
+        );
+        if (provider == null) continue;
+        wanted['${peek ? 'peek' : 'read'}:${missions[i].id}'] = provider;
+      }
+    }
+    final signature = (wanted.keys.toList()..sort()).join(',');
+    if (signature == _heldFor) return;
+    _heldFor = signature;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      for (final key in _held.keys.toList()) {
+        if (!wanted.containsKey(key)) _held.remove(key)?.close();
+      }
+      for (final entry in wanted.entries) {
+        _held.putIfAbsent(
+          entry.key,
+          () => ref.listenManual<AsyncValue<PlanItemDetailed>>(
+            entry.value,
+            (previous, next) {},
+          ),
+        );
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    for (final subscription in _held.values) {
+      subscription.close();
+    }
+    _held.clear();
+    super.dispose();
+  }
+
+  // ── build ──
 
   @override
   Widget build(BuildContext context) {
@@ -52,325 +162,351 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
         ),
       ),
     );
+    watchFreshHabits();
     final planState = ref.watch(currentPlanProvider);
+    final plan = planState.status == CurrentPlanStatus.ready
+        ? planState.plan
+        : null;
+    _holdWeekReads(plan);
+
     return Scaffold(
       backgroundColor: AppColors.paper,
-      body: SafeArea(
-        bottom: false,
-        child: EntranceScope(
-          child: ListView(
-            padding: EdgeInsets.fromLTRB(
-              AppSpacing.pageGutter(MediaQuery.sizeOf(context).width),
-              14,
-              AppSpacing.pageGutter(MediaQuery.sizeOf(context).width),
-              AppShell.bottomNavClearance(context),
+      body: SingleChildScrollView(
+        padding: EdgeInsets.only(bottom: AppShell.bottomNavClearance(context)),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _header(context, st, plan),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+              child: V3Rise(
+                delay: const Duration(milliseconds: 180),
+                child: V3Seg<int>(
+                  items: const [
+                    V3SegItem(0, 'Roadmap'),
+                    V3SegItem(1, 'Daily habits'),
+                  ],
+                  value: _view,
+                  onChanged: (v) => setState(() => _view = v),
+                ),
+              ),
             ),
-            children: EntranceGroup.wrap([
-              _header(st, planState.plan),
-              const SizedBox(height: 18),
-              _viewToggle(),
-              const SizedBox(height: 18),
-              if (_view == 0) ..._roadmap(st, planState) else ..._habits(st),
-            ]),
-          ),
+            if (_view == 0)
+              ..._roadmap(st, planState)
+            else
+              ..._habits(st, planState),
+          ],
         ),
       ),
     );
   }
 
-  Widget _header(_PlanStoreView st, BackendPlan? plan) {
-    // Never fall back to the seed plan's title — it names the demo idol.
-    final title = plan != null
-        ? 'Your ${plan.durationWeeks}-week path'
-        : 'Your path with ${st.idol.short}';
-    final subtitle = plan != null
-        ? 'With ${plan.idolName ?? st.idol.short} · ${plan.weeklyHours}h a week'
-        : 'A personalized plan, written with ${st.idol.short}';
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        CmpysKicker('Your growth plan'),
-        const SizedBox(height: 4),
-        Text(
-          title,
-          style: AppTypography.display.copyWith(
-            fontSize: 30,
-            letterSpacing: -0.5,
-            height: 1.1,
-          ),
-        ),
-        const SizedBox(height: 6),
-        Text(subtitle, style: AppTypography.bodyDim.copyWith(fontSize: 14.5)),
-      ],
-    );
-  }
+  // ── header ──
 
-  Widget _viewToggle() {
-    return Container(
-      padding: const EdgeInsets.all(5),
-      decoration: BoxDecoration(
-        color: AppColors.paper2,
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Row(
+  Widget _header(BuildContext context, _PlanStoreView st, BackendPlan? plan) {
+    final top = math.max(MediaQuery.paddingOf(context).top + 8, 20.0);
+    final weeks = plan?.durationWeeks ?? 12;
+    final mentor = st.idol.id == cmpysPlaceholderIdol.id
+        ? ''
+        : st.idol.short.trim();
+    final progress = plan == null ? 0.0 : planOverallProgress(plan);
+    return Padding(
+      padding: EdgeInsets.fromLTRB(20, top, 20, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(child: _toggleChip('Roadmap', 0)),
-          Expanded(child: _toggleChip('Daily habits', 1)),
+          V3Rise(child: Text('YOUR PLAN', style: AppTypography.kick)),
+          const SizedBox(height: 10),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(
+                child: V3Rise(
+                  delay: const Duration(milliseconds: 50),
+                  child: Text.rich(
+                    TextSpan(
+                      children: [
+                        TextSpan(text: '$weeks weeks'),
+                        if (mentor.isNotEmpty) ...[
+                          const TextSpan(text: '\n'),
+                          TextSpan(
+                            text: 'with $mentor',
+                            style: AppTypography.displayItalic(42),
+                          ),
+                        ],
+                      ],
+                    ),
+                    style: AppTypography.display(
+                      42,
+                    ).copyWith(color: AppColors.ink),
+                  ),
+                ),
+              ),
+              if (plan != null)
+                V3Rise(
+                  delay: const Duration(milliseconds: 100),
+                  child: V3Ring(
+                    value: progress,
+                    size: 64,
+                    strokeWidth: 5,
+                    child: V3CountUp(
+                      to: (progress * 100).round(),
+                      format: (v) => '${v.round()}%',
+                      style: AppTypography.sans(
+                        15,
+                        FontWeight.w700,
+                      ).merge(AppTypography.tnum).copyWith(color: AppColors.ink),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          if (plan != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 14),
+              child: V3Rise(
+                delay: const Duration(milliseconds: 140),
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _fitted(
+                      V3Tag(
+                        icon: V3Icons.clock,
+                        child: Text(
+                          '${formatHalfHours(planWeeklyMinutes(plan))} h / week',
+                        ),
+                      ),
+                    ),
+                    _fitted(
+                      V3Tag(
+                        icon: V3Icons.flag,
+                        child: Text(
+                          'Week ${plan.focusWeek} of ${plan.durationWeeks}',
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
         ],
       ),
     );
   }
 
-  Widget _toggleChip(String label, int idx) {
-    final active = _view == idx;
-    return Semantics(
-      selected: active,
-      child: CmpysPressable(
-        onTap: () => setState(() => _view = idx),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          constraints: const BoxConstraints(minHeight: 48),
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: active ? AppColors.card : Colors.transparent,
-            borderRadius: BorderRadius.circular(999),
-            boxShadow: active
-                ? [
-                    const BoxShadow(
-                      color: Color(0x1416161C),
-                      blurRadius: 8,
-                      offset: Offset(0, 2),
-                    ),
-                  ]
-                : null,
-          ),
-          child: Text(
-            label,
-            textAlign: TextAlign.center,
-            style: AppTypography.bodyMedium.copyWith(
-              fontSize: 14,
-              color: active ? AppColors.ink : AppColors.ink2,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
+  /// Keeps a one-line pill inside narrow or large-text layouts.
+  Widget _fitted(Widget child) => FittedBox(
+    fit: BoxFit.scaleDown,
+    alignment: Alignment.centerLeft,
+    child: child,
+  );
 
-  // ─── Roadmap ───
+  // ── roadmap ──
+
   List<Widget> _roadmap(_PlanStoreView st, CurrentPlanState planState) {
-    final blueprint = <Widget>[
-      if (st.blueprintMd != null && st.blueprintMd!.trim().isNotEmpty) ...[
-        _blueprintCard(st),
-        const SizedBox(height: 14),
-      ],
-    ];
-
+    final blueprint = _blueprint(st);
     switch (planState.status) {
       case CurrentPlanStatus.ready:
-        final roadmap = backendPlanRoadmapBlocks(planState.plan!);
+        final plan = planState.plan!;
         return [
-          // The active focus must be the first actionable surface on this
-          // page. Supporting blueprint/progress context follows it.
-          roadmap.first,
-          if (st.blueprintMd != null && st.blueprintMd!.trim().isNotEmpty) ...[
-            const SizedBox(height: 14),
-            _blueprintCard(st),
-          ],
-          // Spread so each week card is its own ListView child (lazy build).
-          ...roadmap.skip(1),
-          const SizedBox(height: 18),
-          Center(
-            child: Text(
-              '"The whole secret is small things, done daily."',
-              style: AppTypography.readingQuote.copyWith(
-                color: AppColors.ink3,
-                fontSize: 15,
-              ),
+          V3Rise(
+            delay: const Duration(milliseconds: 220),
+            child: PlanWeekStrip(plan: plan, onTapWeek: _tapWeek(plan)),
+          ),
+          if (blueprint != null) blueprint,
+          V3Rise(
+            delay: const Duration(milliseconds: 300),
+            child: V3Section(
+              title: 'This week',
+              child: plan.allMissionWorkComplete
+                  ? PlanCompleteCard(plan: plan)
+                  : PlanThisWeek(plan: plan),
+            ),
+          ),
+          V3Rise(
+            delay: const Duration(milliseconds: 340),
+            child: V3Section(
+              title: 'All weeks',
+              child: PlanAllWeeks(plan: plan),
             ),
           ),
         ];
       case CurrentPlanStatus.generating:
         return [
-          ...blueprint,
-          PlanGeneratingCard(
-            progress: planState.jobProgress,
-            line: planState.jobLine,
+          if (blueprint != null) blueprint,
+          _statusPad(
+            PlanGeneratingCard(
+              progress: planState.jobProgress,
+              line: planState.jobLine,
+            ),
           ),
         ];
       case CurrentPlanStatus.loading:
-        return [
-          ...blueprint,
-          const CmpysSkeleton.block(height: 120),
-          const SizedBox(height: 12),
-          const CmpysSkeleton.block(height: 120),
-          const SizedBox(height: 12),
-          const CmpysSkeleton.block(height: 120),
-        ];
+        return [if (blueprint != null) blueprint, _statusPad(_skeletonBlocks())];
       case CurrentPlanStatus.failed:
         return [
-          ...blueprint,
-          CmpysCardSurface(
-            onTap: () => ref.read(currentPlanProvider.notifier).refresh(),
-            child: Row(
-              children: [
-                const Icon(
-                  Icons.refresh_rounded,
-                  size: 18,
-                  color: AppColors.ink3,
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    'Couldn’t load your 12-week plan — tap to retry.',
-                    style: AppTypography.caption.copyWith(
-                      color: AppColors.ink2,
-                      fontSize: 13.5,
-                    ),
-                  ),
-                ),
-              ],
+          if (blueprint != null) blueprint,
+          _statusPad(
+            _noticeCard(
+              icon: V3Icons.refresh,
+              onTap: () => ref.read(currentPlanProvider.notifier).refresh(),
+              title: 'Couldn’t load your 12-week plan — tap to retry.',
             ),
           ),
         ];
       case CurrentPlanStatus.empty:
         // No generated plan for the active idol yet. Never fall back to the
-        // seeded demo plan here — it belongs to a different mentor.
+        // seeded demo plan: it belongs to a different mentor.
         return [
-          ...blueprint,
-          _planPendingCard(st),
-          if (st.custom.isNotEmpty) ...[
-            const SizedBox(height: 18),
-            CmpysKicker('Added from your chats with ${st.idol.short}'),
-            const SizedBox(height: 10),
-            CmpysCardSurface(
-              pad: const EdgeInsets.all(6),
-              child: Column(
-                children: [
-                  for (var i = 0; i < st.custom.length; i++)
-                    _customRow(st, st.custom[i], first: i == 0),
-                ],
-              ),
-            ),
-          ],
+          if (blueprint != null) blueprint,
+          _statusPad(_pendingCard(st)),
+          if (st.custom.isNotEmpty) _customTasks(st),
         ];
     }
   }
 
-  /// Empty state: the plan for the active idol hasn't been generated (or
-  /// hasn't landed) yet. Tapping re-checks and re-enqueues when possible.
-  Widget _planPendingCard(_PlanStoreView st) {
-    return CmpysCardSurface(
-      onTap: () => ref.read(currentPlanProvider.notifier).retry(),
-      child: Row(
-        children: [
-          const Icon(
-            PhosphorIconsRegular.sparkle,
-            size: 18,
-            color: AppColors.ink3,
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Your plan with ${st.idol.short} isn’t ready yet.',
-                  style: AppTypography.bodyMedium.copyWith(
-                    color: AppColors.ink,
-                    fontSize: 14.5,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  'Tap to check again.',
-                  style: AppTypography.caption.copyWith(
-                    color: AppColors.ink3,
-                    fontSize: 12.5,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget _statusPad(Widget child) => Padding(
+    padding: const EdgeInsets.fromLTRB(20, 18, 20, 0),
+    child: V3Rise(delay: const Duration(milliseconds: 220), child: child),
+  );
 
-  /// The LLM-written blueprint from onboarding — the mentor's own roadmap.
-  Widget _blueprintCard(_PlanStoreView st) {
-    final idol = st.idol;
-    return CmpysPressable(
-      onTap: () => Navigator.of(context).push(
-        CmpysPageRoute(
-          builder: (_) => CmpysMarkdownScreen(
-            kicker: 'From ${idol.short}',
-            title: 'Your blueprint',
-            markdown: st.blueprintMd!,
-          ),
-        ),
-      ),
+  Widget _skeletonBlocks() => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      for (var i = 0; i < 3; i++) ...[
+        if (i > 0) const SizedBox(height: 12),
+        const V3Skel(height: 120, radius: AppRadii.r),
+      ],
+    ],
+  );
+
+  /// A tappable hairline card with an icon and a title (and optional note).
+  Widget _noticeCard({
+    required V3Icons icon,
+    required VoidCallback onTap,
+    required String title,
+    String? note,
+  }) {
+    return V3Pressable(
+      onTap: onTap,
+      minTapTarget: 0,
+      focusRadius: AppRadii.brR,
       child: Container(
-        padding: const EdgeInsets.all(18),
-        decoration: BoxDecoration(
-          gradient: AppColors.gradGreen,
-          borderRadius: AppRadii.card,
-          boxShadow: [
-            BoxShadow(
-              color: AppColors.green2.withValues(alpha: 0.25),
-              blurRadius: 18,
-              offset: const Offset(0, 8),
-            ),
-          ],
-        ),
+        constraints: const BoxConstraints(minHeight: kV3TapTarget),
+        padding: const EdgeInsets.all(16),
+        decoration: v3Card(),
         child: Row(
           children: [
-            CmpysMentorAvatar(
-              slug: idol.slug,
-              initials: idol.initials,
-              color: idol.color,
-              tint: Colors.white,
-              size: 44,
-              border: Border.all(color: Colors.white, width: 2),
-            ),
-            const SizedBox(width: 13),
+            V3Icon(icon, size: 18, color: AppColors.ink3),
+            const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'WRITTEN BY ${idol.short.toUpperCase()}',
-                    style: AppTypography.kicker.copyWith(
-                      color: Colors.white.withValues(alpha: 0.75),
+                    title,
+                    style: AppTypography.sans(14, FontWeight.w500).copyWith(
+                      color: note == null ? AppColors.ink2 : AppColors.ink,
+                      height: 1.4,
                     ),
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Your blueprint — read it in full',
-                    style: AppTypography.h4.copyWith(
-                      color: Colors.white,
-                      fontSize: 16,
-                      height: 1.25,
+                  if (note != null) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      note,
+                      style: AppTypography.sans(
+                        12.5,
+                      ).copyWith(color: AppColors.ink3),
                     ),
-                  ),
+                  ],
                 ],
               ),
             ),
-            Container(
-              width: 32,
-              height: 32,
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.18),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.arrow_forward_rounded,
-                size: 16,
-                color: Colors.white,
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Empty state: the plan for the active idol hasn't been generated (or
+  /// hasn't landed) yet. Tapping re-checks and re-enqueues when possible.
+  Widget _pendingCard(_PlanStoreView st) => _noticeCard(
+    icon: V3Icons.sparkle,
+    onTap: () => ref.read(currentPlanProvider.notifier).retry(),
+    title: 'Your plan with ${st.idol.short} isn’t ready yet.',
+    note: 'Tap to check again.',
+  );
+
+  /// The blueprint card, or null without a blueprint. It opens in place; the
+  /// full markdown stays one tap away.
+  Widget? _blueprint(_PlanStoreView st) {
+    final markdown = st.blueprintMd;
+    final parsed = parseBlueprint(markdown);
+    if (markdown == null || parsed == null) return null;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 0),
+      child: V3Rise(
+        delay: const Duration(milliseconds: 260),
+        child: PlanBlueprintCard(
+          blueprint: parsed,
+          onReadFull: () => Navigator.of(context).push(
+            CmpysPageRoute<void>(
+              builder: (_) => CmpysMarkdownScreen(
+                kicker: 'From ${st.idol.short}',
+                title: 'Your blueprint',
+                markdown: markdown,
               ),
             ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Week chips: locked weeks toast, the current one opens its mission and a
+  /// finished one opens its first mission for review.
+  void Function(int, PlanWeekState) _tapWeek(BackendPlan plan) {
+    return (week, state) {
+      switch (state) {
+        case PlanWeekState.locked:
+          showV3Toast(
+            context,
+            'Week $week unlocks after week ${week - 1}',
+            icon: V3Icons.lock,
+            tone: V3ToastTone.warn,
+          );
+        case PlanWeekState.current:
+          final mission = plan.focusedItemForWeek(week);
+          if (mission != null) _openItem(mission.id);
+        case PlanWeekState.done:
+          final missions = plan.missionsForWeek(week);
+          if (missions.isNotEmpty) _openItem(missions.first.id);
+      }
+    };
+  }
+
+  Future<void> _openItem(String itemId) async {
+    await openBackendPlanItemById(context, itemId);
+    if (!mounted) return;
+    ref.invalidate(todayViewProvider);
+    ref.invalidate(todayStreakProvider);
+    ref.invalidate(habitDailyStatusProvider(itemId));
+    ref.invalidate(todayMissionDetailProvider(itemId));
+    ref.invalidate(planMissionPeekProvider(itemId));
+  }
+
+  /// Habits suggested in chat, kept on this device.
+  Widget _customTasks(_PlanStoreView st) {
+    return V3Section(
+      title: 'Added from your chats with ${st.idol.short}',
+      child: Container(
+        decoration: v3Card(),
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Column(
+          children: [
+            for (var i = 0; i < st.custom.length; i++)
+              _customRow(st, st.custom[i], first: i == 0),
           ],
         ),
       ),
@@ -389,383 +525,303 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen> {
             ? null
             : const Border(top: BorderSide(color: AppColors.hair)),
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+      padding: const EdgeInsets.fromLTRB(9, 4, 16, 4),
       child: Row(
         children: [
-          CmpysPressable(
+          V3CheckDot(
+            done: done,
             semanticLabel: c.title,
-            toggled: done,
-            onTap: () => ref.read(cmpysStoreProvider.notifier).toggleTask(c.id),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              width: 26,
-              height: 26,
-              decoration: BoxDecoration(
-                color: done ? AppColors.green : Colors.transparent,
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: done ? AppColors.green : AppColors.hair2,
-                  width: 2,
-                ),
-              ),
-              child: done
-                  ? const Icon(
-                      Icons.check_rounded,
-                      size: 15,
-                      color: Colors.white,
-                    )
-                  : null,
-            ),
+            onPressed: () =>
+                ref.read(cmpysStoreProvider.notifier).toggleTask(c.id),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 5),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   c.title,
-                  style: AppTypography.bodyMedium.copyWith(
-                    fontSize: 15,
+                  style: AppTypography.sans(15, FontWeight.w500).copyWith(
                     color: done ? AppColors.ink3 : AppColors.ink,
-                    decoration: done ? TextDecoration.lineThrough : null,
+                    decoration: done
+                        ? TextDecoration.lineThrough
+                        : TextDecoration.none,
+                    decorationColor: AppColors.hair2,
                   ),
                 ),
                 const SizedBox(height: 2),
                 Text(
                   'Suggested in chat',
-                  style: AppTypography.caption.copyWith(
-                    color: AppColors.ink3,
-                    fontSize: 12,
-                  ),
+                  style: AppTypography.sans(12).copyWith(color: AppColors.ink3),
                 ),
               ],
             ),
           ),
-          const Icon(
-            PhosphorIconsRegular.chatTeardrop,
-            size: 16,
-            color: AppColors.hair2,
-          ),
+          const V3Icon(V3Icons.chat, size: 16, color: AppColors.hair2),
         ],
       ),
     );
   }
 
-  // ─── Daily habits view ───
-  List<Widget> _habits(_PlanStoreView st) {
-    // Backend-generated daily rhythm (current plan week). Mirrors the
-    // roadmap's status handling — the seeded demo rituals never show, since
-    // they belong to a different mentor than the one the user chose.
-    final planState = ref.watch(currentPlanProvider);
+  // ── daily habits ──
+
+  List<Widget> _habits(_PlanStoreView st, CurrentPlanState planState) {
     switch (planState.status) {
       case CurrentPlanStatus.ready:
         final todayState = ref.watch(todayViewProvider);
-        if (todayState.hasError) {
-          return [
-            CmpysCardSurface(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('Couldn’t load your daily habits.'),
-                  const SizedBox(height: 12),
-                  CmpysButton(
-                    onTap: () => ref.invalidate(todayViewProvider),
-                    child: const Text('Try again'),
-                  ),
-                ],
-              ),
-            ),
-          ];
-        }
-        if (todayState.isLoading) {
-          return [const CmpysSkeleton.block(height: 96)];
-        }
         final today = todayState.valueOrNull;
-        if (today == null || today.items.isEmpty) {
+        if (today == null && todayState.hasError) {
           return [
-            Text(
-              'No daily rhythm tasks this week — check the roadmap.',
-              style: AppTypography.bodyDim,
-            ),
-          ];
-        }
-        return _backendHabits(today);
-      case CurrentPlanStatus.generating:
-        return [
-          PlanGeneratingCard(
-            progress: planState.jobProgress,
-            line: planState.jobLine,
-          ),
-        ];
-      case CurrentPlanStatus.loading:
-        return [
-          const CmpysSkeleton.block(height: 96),
-          const SizedBox(height: 12),
-          const CmpysSkeleton.block(height: 220),
-        ];
-      case CurrentPlanStatus.failed:
-        return [
-          CmpysCardSurface(
-            onTap: () => ref.read(currentPlanProvider.notifier).refresh(),
-            child: Row(
-              children: [
-                const Icon(
-                  Icons.refresh_rounded,
-                  size: 18,
-                  color: AppColors.ink3,
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    'Couldn’t load your daily rhythm — tap to retry.',
-                    style: AppTypography.caption.copyWith(
-                      color: AppColors.ink2,
-                      fontSize: 13.5,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ];
-      case CurrentPlanStatus.empty:
-        return [_planPendingCard(st)];
-    }
-  }
-
-  Widget _streakChip(int streak) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.18),
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            PhosphorIconsFill.flame,
-            size: 15,
-            color: const Color(0xFFFFD166),
-          ),
-          const SizedBox(width: 6),
-          Text(
-            '$streak-day streak',
-            style: AppTypography.captionMedium.copyWith(
-              color: Colors.white,
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  List<Widget> _backendHabits(TodayView today) {
-    final done = today.items.where((i) => i.completedToday).length;
-    final total = today.items.length;
-    final pct = total == 0 ? 0.0 : done / total * 100;
-
-    return [
-      Container(
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          gradient: AppColors.gradViolet,
-          borderRadius: AppRadii.lg,
-          boxShadow: [
-            BoxShadow(
-              color: AppColors.lilac.withValues(alpha: 0.28),
-              blurRadius: 20,
-              offset: const Offset(0, 10),
-            ),
-          ],
-        ),
-        child: Row(
-          children: [
-            CmpysRing(
-              value: pct,
-              size: 76,
-              stroke: 7,
-              color: Colors.white,
-              track: Colors.white.withValues(alpha: 0.25),
-              child: Text(
-                '$done/$total',
-                style: AppTypography.h3.copyWith(
-                  color: Colors.white,
-                  fontSize: 18,
-                  height: 1,
-                ),
-              ),
-            ),
-            const SizedBox(width: 18),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Your daily rhythm',
-                    style: AppTypography.h4.copyWith(
-                      color: Colors.white,
-                      fontSize: 17,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'These reset every day. The roadmap moves forward — these keep you moving.',
-                    style: AppTypography.caption.copyWith(
-                      color: Colors.white.withValues(alpha: 0.85),
-                      fontSize: 13,
-                      height: 1.4,
-                    ),
-                  ),
-                  if (today.streak > 0) ...[
-                    const SizedBox(height: 10),
-                    _streakChip(today.streak),
-                  ],
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-      const SizedBox(height: 18),
-      const Padding(
-        padding: EdgeInsets.only(left: 2),
-        child: CmpysKicker('Every day'),
-      ),
-      const SizedBox(height: 10),
-      CmpysCardSurface(
-        pad: const EdgeInsets.all(6),
-        child: Column(
-          children: [
-            for (var i = 0; i < today.items.length; i++)
-              _backendRitualRow(today.items[i], first: i == 0),
-          ],
-        ),
-      ),
-    ];
-  }
-
-  Future<void> _toggleDaily(TodayTaskItem item) async {
-    if (!_pendingDailyTasks.add(item.id)) return;
-    setState(() {});
-    final wasDone = item.completedToday;
-    try {
-      await ref.read(planRepositoryProvider).toggleDailyTask(item.id);
-      if (!mounted) return;
-      ref.invalidate(todayViewProvider);
-      await ref.read(todayViewProvider.future);
-      if (!wasDone && mounted) {
-        showCmpysToast(
-          context,
-          'Nice. Kept your word.',
-          icon: Icons.check_rounded,
-          tone: AppColors.green,
-        );
-      }
-    } catch (_) {
-      if (mounted) {
-        showCmpysToast(
-          context,
-          'Couldn’t update — try again.',
-          icon: Icons.error_outline_rounded,
-          tone: AppColors.ink2,
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _pendingDailyTasks.remove(item.id));
-    }
-  }
-
-  Widget _backendRitualRow(TodayTaskItem item, {required bool first}) {
-    final done = item.completedToday;
-    return Container(
-      decoration: BoxDecoration(
-        border: first
-            ? null
-            : const Border(top: BorderSide(color: AppColors.hair)),
-      ),
-      child: Row(
-        children: [
-          CmpysPressable(
-            key: ValueKey('toggle-daily-${item.id}'),
-            semanticLabel: item.title,
-            toggled: done,
-            onTap: _pendingDailyTasks.contains(item.id)
-                ? null
-                : () => _toggleDaily(item),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(8, 14, 12, 14),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                width: 26,
-                height: 26,
-                decoration: BoxDecoration(
-                  color: done ? AppColors.green : Colors.transparent,
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: done ? AppColors.green : AppColors.hair2,
-                    width: 2,
-                  ),
-                ),
-                child: _pendingDailyTasks.contains(item.id)
-                    ? const Center(
-                        child: SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                      )
-                    : done
-                    ? const Icon(
-                        Icons.check_rounded,
-                        size: 15,
-                        color: Colors.white,
-                      )
-                    : null,
-              ),
-            ),
-          ),
-          Expanded(
-            child: CmpysPressable(
-              onTap: () => openBackendPlanItemById(context, item.id),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 12),
+            _statusPad(
+              Container(
+                decoration: v3Card(),
+                padding: const EdgeInsets.all(16),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      item.title,
-                      style: AppTypography.bodyMedium.copyWith(
-                        fontSize: 15,
-                        color: done ? AppColors.ink3 : AppColors.ink,
-                        decoration: done ? TextDecoration.lineThrough : null,
-                      ),
+                      'Couldn’t load your daily habits.',
+                      style: AppTypography.sans(
+                        14,
+                        FontWeight.w500,
+                      ).copyWith(color: AppColors.ink),
                     ),
-                    const SizedBox(height: 2),
-                    Text(
-                      'Daily · ~${item.estimatedHours}h this week',
-                      style: AppTypography.caption.copyWith(
-                        color: AppColors.ink3,
-                        fontSize: 12,
-                      ),
+                    const SizedBox(height: 12),
+                    V3Button(
+                      kind: V3ButtonKind.dark,
+                      size: V3Size.md,
+                      onPressed: () => ref.invalidate(todayViewProvider),
+                      child: const Text('Try again'),
                     ),
                   ],
                 ),
               ),
             ),
-          ),
-          const Padding(
-            padding: EdgeInsets.only(right: 6),
-            child: Icon(
-              Icons.chevron_right_rounded,
-              size: 18,
-              color: AppColors.hair2,
+          ];
+        }
+        if (today == null) {
+          return [
+            _statusPad(
+              Container(
+                decoration: v3Card(),
+                padding: const EdgeInsets.all(16),
+                child: const Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    V3Skel(height: 16),
+                    SizedBox(height: 14),
+                    V3Skel(height: 16, width: 220),
+                    SizedBox(height: 14),
+                    V3Skel(height: 16, width: 180),
+                  ],
+                ),
+              ),
+            ),
+          ];
+        }
+        if (today.items.isEmpty) {
+          return [
+            _statusPad(
+              Text(
+                'No daily rhythm tasks this week — check the roadmap.',
+                style: AppTypography.sans(
+                  14,
+                ).copyWith(color: AppColors.ink2, height: 1.5),
+              ),
+            ),
+          ];
+        }
+        return [_habitsList(today)];
+      case CurrentPlanStatus.generating:
+        return [
+          _statusPad(
+            PlanGeneratingCard(
+              progress: planState.jobProgress,
+              line: planState.jobLine,
             ),
           ),
+        ];
+      case CurrentPlanStatus.loading:
+        return [_statusPad(_skeletonBlocks())];
+      case CurrentPlanStatus.failed:
+        return [
+          _statusPad(
+            _noticeCard(
+              icon: V3Icons.refresh,
+              onTap: () => ref.read(currentPlanProvider.notifier).refresh(),
+              title: 'Couldn’t load your daily rhythm — tap to retry.',
+            ),
+          ),
+        ];
+      case CurrentPlanStatus.empty:
+        return [_statusPad(_pendingCard(st))];
+    }
+  }
+
+  Widget _habitsList(TodayView view) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          V3Rise(
+            child: Text(
+              'Habits repeat daily for this week. Tap one to open it, or check '
+              'it off right here. It counts for today only.',
+              style: AppTypography.sans(
+                13.5,
+              ).copyWith(color: AppColors.ink2, height: 1.5),
+            ),
+          ),
+          const SizedBox(height: 14),
+          for (var i = 0; i < view.items.length; i++) ...[
+            if (i > 0) const SizedBox(height: 10),
+            V3Rise(
+              delay: Duration(milliseconds: 60 + i * 60),
+              child: _habitCard(view, view.items[i]),
+            ),
+          ],
         ],
       ),
+    );
+  }
+
+  Widget _habitCard(TodayView view, TodayTaskItem item) {
+    final on = isHabitDone(item);
+    final week = watchHabitWeek(ref, item.id, _now);
+    final motion = MotionConfig.enabled(context);
+    final instructions = item.dailyInstructions?.trim() ?? '';
+    return V3Pressable(
+      key: Key('plan-habit-${item.id}'),
+      onTap: () => _openItem(item.id),
+      minTapTarget: 0,
+      focusRadius: AppRadii.brR,
+      child: AnimatedContainer(
+        duration: motion ? const Duration(milliseconds: 300) : Duration.zero,
+        padding: const EdgeInsets.fromLTRB(9, 9, 16, 16),
+        decoration: v3Card(
+          borderColor: on ? AppColors.sage : AppColors.hair,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                V3CheckDot(
+                  key: ValueKey('toggle-daily-${item.id}'),
+                  done: on,
+                  onPressed: () => toggleHabit(view, item, toastOnUndo: true),
+                ),
+                const SizedBox(width: 5),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 7),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        AnimatedDefaultTextStyle(
+                          duration: motion
+                              ? const Duration(milliseconds: 300)
+                              : Duration.zero,
+                          style: AppTypography.sans(15.5, FontWeight.w600)
+                              .copyWith(
+                                color: on ? AppColors.ink3 : AppColors.ink,
+                                decoration: on
+                                    ? TextDecoration.lineThrough
+                                    : TextDecoration.none,
+                                decorationColor: AppColors.hair2,
+                              ),
+                          child: Text(item.title),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          instructions.isNotEmpty
+                              ? instructions
+                              : '${habitSessionMinutes(item)} min',
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppTypography.sans(13).copyWith(
+                            color: AppColors.ink2,
+                            height: 1.45,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.only(top: 11, left: 8),
+                  child: V3Icon(V3Icons.right, size: 16, color: AppColors.ink3),
+                ),
+              ],
+            ),
+            Padding(
+              padding: const EdgeInsets.only(top: 14, left: 7),
+              child: _weekGrid(item.id, week, todayDone: on),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static const _letters = 'MTWTFSS';
+
+  /// Monday to Sunday: sage for a day in the streak run, today from the
+  /// habit itself. /streak keeps no per-habit history, so earlier days show
+  /// the days with any habit done.
+  Widget _weekGrid(String itemId, List<bool?> week, {required bool todayDone}) {
+    return Row(
+      children: [
+        for (var k = 0; k < 7; k++) ...[
+          if (k > 0) const SizedBox(width: 4),
+          Expanded(child: _gridDay(itemId, k, week[k], todayDone)),
+        ],
+      ],
+    );
+  }
+
+  Widget _gridDay(String itemId, int k, bool? past, bool todayDone) {
+    final today = past == null;
+    final done = today ? todayDone : past;
+    final Widget cell = today && !done
+        ? const PlanDashedCell(height: 26)
+        : AnimatedContainer(
+            duration: const Duration(milliseconds: 400),
+            height: 26,
+            decoration: BoxDecoration(
+              color: done ? AppColors.sage : AppColors.paper2,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: done
+                ? const Center(
+                    child: V3Icon(
+                      V3Icons.check,
+                      size: 12,
+                      strokeWidth: 3,
+                      color: Colors.white,
+                    ),
+                  )
+                : null,
+          );
+    return Column(
+      children: [
+        V3Pop(
+          key: Key('plan-habit-$itemId-day-$k'),
+          child: cell,
+        ),
+        const SizedBox(height: 4),
+        Text(
+          today ? 'Today' : _letters[k],
+          maxLines: 1,
+          softWrap: false,
+          overflow: TextOverflow.clip,
+          style: AppTypography.sans(10, FontWeight.w600).copyWith(
+            color: today ? AppColors.ink : AppColors.ink3,
+          ),
+        ),
+      ],
     );
   }
 }

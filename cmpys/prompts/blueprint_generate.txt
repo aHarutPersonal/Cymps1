@@ -13,7 +13,7 @@ COMPARISON VERDICT:
 SUPPLIED VERIFIED FACTS ABOUT {idol_name}:
 {idol_facts_json}
 
-AVAILABLE CAPACITY: approximately {weekly_hours} focused hours per week.
+AVAILABLE CAPACITY: {weekly_capacity_label}; {weekly_minutes} focused minutes per week.
 
 PRODUCT BOUNDARY — NON-NEGOTIABLE:
 - This blueprint is the mentor's STRATEGIC VERDICT, not a second roadmap.
@@ -47,5 +47,5 @@ QUALITY RULES:
 1. Personalize the verdict from the interview and comparison; generic self-help language is failure.
 2. Keep the gap trainable and contextual. Never shame, insult, moralize, or treat different eras and circumstances as equivalent.
 3. Attribute no quotation, anecdote, achievement, date, or method to {idol_name} unless it appears in the supplied verified facts.
-4. Match ambition to roughly {weekly_hours} hours per week, but do not allocate those hours into tasks here.
+4. Match ambition to {weekly_capacity_label}, but do not allocate that time into tasks here. A week under 3 hours is honest capacity, not a failure: scale the outcome to it instead of demanding more time.
 5. Output Markdown only, with the exact headings above and no JSON wrapper.

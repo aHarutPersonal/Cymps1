@@ -6,7 +6,12 @@ import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:markdown/markdown.dart' as md;
 import '../../reading/learning_comparison.dart';
 import '../../reading/learning_diagram.dart';
+import '../../reading/lesson_fences.dart';
 import '../../reading/markdown_code_text.dart';
+import '../v3/lesson_blocks/formula_stack.dart';
+import '../v3/lesson_blocks/quick_check.dart';
+import '../v3/lesson_blocks/waterfall_chart.dart';
+import '../v3/lesson_blocks/worked_steps.dart';
 import 'learning_diagram_view.dart';
 import 'cmpys_primitives.dart';
 import 'learning_comparison_view.dart';
@@ -14,7 +19,13 @@ import 'learning_comparison_view.dart';
 import '../../../app/design_tokens.dart';
 
 /// Markdown body using the CMPYS type system. [onDark] flips ink → white for
-/// use on color-block surfaces.
+/// use on color-block surfaces. [readerTheme] (the tutorial reader) takes the
+/// text colours from that reading theme instead.
+///
+/// Code fences are routed by kind: the native lesson blocks (formula, chart,
+/// steps, check, diagram, comparison) render through [LessonFenceBlock];
+/// other fences keep the legacy diagram/comparison detection and otherwise
+/// show as code.
 class CmpysMarkdown extends StatelessWidget {
   const CmpysMarkdown(
     this.data, {
@@ -22,30 +33,40 @@ class CmpysMarkdown extends StatelessWidget {
     this.onDark = false,
     this.fontSize = 15.5,
     this.lineHeight = 1.6,
+    this.readerTheme,
   });
   final String data;
   final bool onDark;
   final double fontSize;
   final double lineHeight;
+  final ReaderTheme? readerTheme;
 
   @override
   Widget build(BuildContext context) {
-    final ink = onDark ? Colors.white : AppColors.ink;
-    final ink2 = onDark ? Colors.white.withValues(alpha: 0.8) : AppColors.ink2;
+    final theme = readerTheme;
+    final dark = onDark || theme == ReaderTheme.dark;
+    final ink = theme?.fg ?? (onDark ? Colors.white : AppColors.ink);
+    final ink2 =
+        theme?.fg2 ??
+        (onDark ? Colors.white.withValues(alpha: 0.8) : AppColors.ink2);
+    // The tutorial reader reads in Literata (the design's `.serif`).
+    final body = theme != null
+        ? AppTypography.read(fontSize)
+        : AppTypography.reading;
     return MarkdownBody(
       data: data,
       selectable: false,
       fitContent: false,
       builders: {
-        'pre': _LearningBlockBuilder(fontSize: fontSize, dark: onDark),
+        'pre': _LearningBlockBuilder(
+          fontSize: fontSize,
+          dark: dark,
+          theme: theme ?? (onDark ? ReaderTheme.dark : ReaderTheme.light),
+        ),
       },
       styleSheet: MarkdownStyleSheet(
         codeblockDecoration: const BoxDecoration(),
-        p: AppTypography.reading.copyWith(
-          fontSize: fontSize,
-          height: lineHeight,
-          color: ink,
-        ),
+        p: body.copyWith(fontSize: fontSize, height: lineHeight, color: ink),
         h1: AppTypography.h2.copyWith(
           fontSize: fontSize + 8.5,
           color: ink,
@@ -61,28 +82,25 @@ class CmpysMarkdown extends StatelessWidget {
           color: ink,
           height: 1.3,
         ),
-        strong: AppTypography.readingBold.copyWith(
-          fontSize: fontSize,
-          color: ink,
-        ),
-        em: AppTypography.reading.copyWith(
+        strong: (theme != null
+                ? body.copyWith(fontWeight: FontWeight.w600)
+                : AppTypography.readingBold)
+            .copyWith(fontSize: fontSize, color: ink),
+        em: body.copyWith(
           fontSize: fontSize,
           fontStyle: FontStyle.italic,
           color: ink,
         ),
-        listBullet: AppTypography.reading.copyWith(
-          fontSize: fontSize,
-          color: ink2,
-        ),
+        listBullet: body.copyWith(fontSize: fontSize, color: ink2),
         blockquote: AppTypography.readingQuote.copyWith(
           fontSize: fontSize + 1,
           color: ink,
           height: 1.45,
         ),
         blockquoteDecoration: BoxDecoration(
-          color: onDark
+          color: dark
               ? Colors.white.withValues(alpha: 0.08)
-              : AppColors.greenSoft,
+              : theme?.card ?? AppColors.greenSoft,
           borderRadius: BorderRadius.circular(12),
           border: const Border(
             left: BorderSide(color: AppColors.green, width: 3),
@@ -173,10 +191,116 @@ class CmpysMarkdownScreen extends StatelessWidget {
   }
 }
 
+/// One native lesson fence, parsed with the A6 grammar mirror
+/// (lesson_fences.dart): a formula stack, a waterfall or bar chart, worked
+/// steps or a quick check; the legacy diagram and comparison views; and, for
+/// a body that breaks its grammar, the body as plain lines so the lesson
+/// never loses its text.
+class LessonFenceBlock extends StatelessWidget {
+  const LessonFenceBlock({
+    super.key,
+    required this.kind,
+    required this.body,
+    this.theme = ReaderTheme.light,
+    this.fontSize = 17.5,
+  });
+
+  final String kind;
+  final String body;
+  final ReaderTheme theme;
+  final double fontSize;
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = theme == ReaderTheme.dark;
+    final block = switch (kind) {
+      'formula' => switch (parseFormulaFence(body)) {
+        final b? => FormulaStack(block: b, theme: theme),
+        null => null,
+      },
+      'chart' => switch (parseChartFence(body)) {
+        final b? => WaterfallChart(block: b, theme: theme),
+        null => null,
+      },
+      'steps' => switch (parseStepsFence(body)) {
+        final b? => WorkedSteps(block: b, theme: theme, fontSize: fontSize),
+        null => null,
+      },
+      'check' => switch (parseCheckFence(body)) {
+        final b? => QuickCheck(block: b, theme: theme),
+        null => null,
+      },
+      'comparison' => switch (LearningComparison.parse(
+        body,
+        language: 'comparison',
+      )) {
+        final c? => LearningComparisonView(
+          comparison: c,
+          fontSize: fontSize,
+          dark: dark,
+        ),
+        null => null,
+      },
+      'diagram' => switch (LearningDiagram.parse(body, language: 'diagram')) {
+        final d? => LearningDiagramView(
+          diagram: d,
+          fontSize: fontSize,
+          dark: dark,
+        ),
+        null => null,
+      },
+      _ => null,
+    };
+    return block ??
+        _FencePlainLines(body: body, theme: theme, fontSize: fontSize);
+  }
+}
+
+/// A fence body that breaks its grammar, shown line by line as reading text.
+class _FencePlainLines extends StatelessWidget {
+  const _FencePlainLines({
+    required this.body,
+    required this.theme,
+    required this.fontSize,
+  });
+
+  final String body;
+  final ReaderTheme theme;
+  final double fontSize;
+
+  @override
+  Widget build(BuildContext context) {
+    final lines = [
+      for (final line in body.split(RegExp(r'\r\n|\r|\n')))
+        if (line.trim().isNotEmpty) line.trim(),
+    ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (final line in lines)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Text(
+              line,
+              style: AppTypography.read(
+                fontSize,
+              ).copyWith(height: 1.55, color: theme.fg),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
 class _LearningBlockBuilder extends MarkdownElementBuilder {
-  _LearningBlockBuilder({required this.fontSize, required this.dark});
+  _LearningBlockBuilder({
+    required this.fontSize,
+    required this.dark,
+    required this.theme,
+  });
   final double fontSize;
   final bool dark;
+  final ReaderTheme theme;
   @override
   bool isBlockElement() => true;
   @override
@@ -191,6 +315,14 @@ class _LearningBlockBuilder extends MarkdownElementBuilder {
     );
     // FlutterMarkdown already constructs Document(encodeHtml: false).
     final source = markdownCodeText(element.textContent, encoded: false);
+    if (lessonFenceKinds.contains(language)) {
+      return LessonFenceBlock(
+        kind: language,
+        body: source,
+        theme: theme,
+        fontSize: fontSize,
+      );
+    }
     final comparison = LearningComparison.parse(source, language: language);
     if (comparison != null) {
       return LearningComparisonView(

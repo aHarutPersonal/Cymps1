@@ -169,6 +169,32 @@ void main() {
     expect(daily.item.isDailyRhythm, isTrue);
     expect(daily.dailyInstructions, 'Run the drill once.');
     expect(daily.completedToday, isTrue);
+    // A server that predates `session_minutes` sends none.
+    expect(daily.sessionMinutes, isNull);
+  });
+
+  test('PlanItemDetailed reads the habit’s optional session minutes', () {
+    PlanItemDetailed parse(Map<String, dynamic> extra, {Map? item}) =>
+        PlanItemDetailed.fromJson({
+          'item': {
+            'id': 'daily-1',
+            'title': 'Practice',
+            'type': 'habit',
+            'estimatedMinutes': 70,
+            ...?item,
+          },
+          'details_status': 'available',
+          'progress': const <String, dynamic>{},
+          ...extra,
+        });
+
+    // On the response (the daily branch of /detailed) …
+    expect(parse({'session_minutes': 10}).sessionMinutes, 10);
+    // … or on its item payload, in either spelling.
+    expect(parse({}, item: {'session_minutes': 12}).sessionMinutes, 12);
+    expect(parse({}, item: {'sessionMinutes': 8}).sessionMinutes, 8);
+    expect(parse({'session_minutes': null}).sessionMinutes, isNull);
+    expect(parse({}).sessionMinutes, isNull);
   });
 
   test('PlanMaterialDetail extracts YouTube ids and in-app content', () {
@@ -278,6 +304,12 @@ class _PlanJobRepository implements AgenticSessionRepository {
   Future<List<Map<String, dynamic>>> learningMessages(String sessionId) async => [];
   @override
   Future<List<Map<String, dynamic>>> discoverMentors(String query) async => [];
+  @override
+  Future<IdolImportResult> importIdol(String name) {
+    throw UnimplementedError();
+  }
+  @override
+  Future<List<IdolTimelineEntry>> idolTimeline(String idolName) async => [];
 
   @override
   Stream<Map<String, dynamic>> generateResults(String sessionId) async* {
@@ -330,6 +362,7 @@ class _PlanJobRepository implements AgenticSessionRepository {
     String content, {
     bool isKickoff = false,
     String? questionId,
+    bool missingEvidence = false,
   }) {
     throw UnimplementedError();
   }

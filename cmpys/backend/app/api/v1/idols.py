@@ -18,7 +18,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from google import genai
 from google.genai import types
 from pydantic import BaseModel
 from sqlalchemy import and_, func, or_, select
@@ -56,8 +55,75 @@ from app.schemas.idol import (
     TimelineEventResponse,
     TimelineResponse,
 )
+from app.services.genai_client import IMAGEN_MODEL, build_genai_client
 
 logger = logging.getLogger(__name__)
+
+# Ingestion is paid (several extraction calls). A user may start this many new
+# imports per rolling 24 hours (the window below); returning an existing job is
+# always free.
+IMPORT_DAILY_LIMIT_PER_USER = 5
+IMPORT_REUSE_WINDOW = timedelta(hours=24)
+IMPORT_LIMIT_DETAIL = (
+    f"You can prepare up to {IMPORT_DAILY_LIMIT_PER_USER} new mentor profiles "
+    "in 24 hours. Choose a mentor who is already prepared, or try again tomorrow."
+)
+
+
+def _utc(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+# /idols/{id}/select writes a "done"/"selected" bookkeeping row; it is no import.
+_SELECTION_STEP = "selected"
+_READY_IMPORT_STATUSES = frozenset({"completed", "published"})
+
+
+def _reusable_import_job(jobs):
+    """The job to return instead of paying for another ingestion, if any.
+
+    The latest import decides: completed or published is returned as it
+    stands (fresh queued/running jobs are returned before this). A failed
+    latest import never blocks a retry; the per-user daily cap bounds cost.
+    With no import at all, the idol was selectable already: return its
+    latest selection record rather than paying to ingest it.
+    """
+    imports = [job for job in jobs if getattr(job, "step", None) != _SELECTION_STEP]
+    if not imports:
+        return max(jobs, key=lambda job: _utc(job.created_at)) if jobs else None
+    latest = max(imports, key=lambda job: _utc(job.created_at))
+    return latest if latest.status in _READY_IMPORT_STATUSES else None
+
+
+def _imports_in_last_day_statement(user_id: str, now: datetime):
+    """This user's imports actually started in the last 24 hours.
+
+    Selection bookkeeping rows are not imports, and a job that failed while
+    still queued never reached a worker, so neither counts against the cap.
+    """
+    return (
+        select(func.count())
+        .select_from(IdolImportJob)
+        .where(
+            IdolImportJob.user_id == user_id,
+            IdolImportJob.created_at >= now - IMPORT_REUSE_WINDOW,
+            or_(IdolImportJob.step.is_(None), IdolImportJob.step != _SELECTION_STEP),
+            or_(
+                IdolImportJob.status != "failed",
+                IdolImportJob.step.is_(None),
+                IdolImportJob.step != "queued",
+            ),
+        )
+    )
+
+
+async def _enforce_daily_import_limit(db: AsyncSession, user_id: str, now: datetime) -> None:
+    started = await db.scalar(_imports_in_last_day_statement(user_id, now))
+    if (started or 0) >= IMPORT_DAILY_LIMIT_PER_USER:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=IMPORT_LIMIT_DETAIL,
+        )
 
 router = APIRouter(prefix="/idols", tags=["idols"])
 
@@ -299,9 +365,13 @@ async def import_idol(
     - timeline_normalize.txt (timeline normalization)
     - persona_pack.txt (chat persona generation)
     
-    If the external ID already exists, returns the existing idol.
-    Otherwise creates a new idol and queues an import job.
+    If the external ID already exists, returns the existing idol with its
+    fresh queued/running job, or its latest import when that completed or was
+    published; when the latest import failed it queues a new (paid) import.
+    New imports are capped at IMPORT_DAILY_LIMIT_PER_USER started per user
+    per 24 hours (429).
     """
+    now = datetime.now(timezone.utc)
     # Check if external ID already exists
     stmt = (
         select(IdolExternalId)
@@ -319,7 +389,6 @@ async def import_idol(
     if existing:
         # Staleness threshold: jobs not updated in 10 minutes are considered stale
         STALE_THRESHOLD_MINUTES = 10
-        now = datetime.now(timezone.utc)
         stale_cutoff = now - timedelta(minutes=STALE_THRESHOLD_MINUTES)
         
         # Check if there's an active (non-stale) job
@@ -362,6 +431,24 @@ async def import_idol(
                 status=fresh_jobs[0].status,
             )
         
+        # Never pay to re-ingest a prepared idol; a failed import may retry.
+        previous = _reusable_import_job(existing.idol.import_jobs)
+        if previous is not None:
+            # A published idol is ready to use whatever its last job's status
+            # says; the app's isPublished branch keys on this value.
+            reused_status = (
+                CatalogStatus.PUBLISHED.value
+                if existing.idol.status == CatalogStatus.PUBLISHED
+                else previous.status
+            )
+            return IdolImportResponse(
+                idolId=existing.idol_id,
+                jobId=previous.id,
+                status=reused_status,
+            )
+
+        await _enforce_daily_import_limit(db, current_user.id, now)
+
         # Create new job for existing idol (either no active jobs or all were stale)
         job = IdolImportJob(
             user_id=current_user.id,
@@ -390,6 +477,8 @@ async def import_idol(
             jobId=job.id,
             status="queued",
         )
+
+    await _enforce_daily_import_limit(db, current_user.id, now)
 
     # Fetch entity details from provider
     if data.provider == "wikidata":
@@ -929,7 +1018,7 @@ async def generate_idol_image(
         )
 
     try:
-        client = genai.Client(api_key=settings.gemini_api_key)
+        client = build_genai_client()
         
         # Step 4a: Pre-process the prompt to extract historically accurate physical attributes
         try:
@@ -961,7 +1050,7 @@ async def generate_idol_image(
         # 5. Call Gemini Imagen 4
         print(f"FINAL PROMPT TO IMAGEN: {prompt}")
         response = await client.aio.models.generate_images(
-            model="imagen-4.0-generate-001",
+            model=IMAGEN_MODEL,
             prompt=prompt,
             config=types.GenerateImagesConfig(
                 number_of_images=1,

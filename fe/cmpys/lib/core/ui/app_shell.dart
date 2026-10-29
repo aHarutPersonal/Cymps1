@@ -1,18 +1,31 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../app/design_tokens.dart';
+import '../../features/cmpys/data/cmpys_seed.dart';
+import '../../features/cmpys/data/record_restore.dart';
 import '../../features/cmpys/state/cmpys_backend_sync.dart';
+import '../../features/cmpys/state/cmpys_store.dart';
 import '../../features/plan/presentation/book_narration_dock.dart';
 import '../../features/plan/state/book_narration_remote_controller.dart';
+import '../../features/plan/state/current_plan_provider.dart';
 import 'cmpys/cmpys_nav_icons.dart';
+import 'haptics.dart';
 import 'motion/motion_config.dart';
+import 'narration_dock_page.dart';
+import 'v3/icons.dart';
+import 'v3/motion.dart';
+import 'v3/surfaces.dart';
+import 'v3/tab_bar.dart';
 
-/// One bottom surface: labelled navigation, or controls for active listening.
-/// The floating dock is an overlay; branches reserve its measured height via
-/// [AppShell.bottomNavClearance], including enlarged accessibility text.
+/// One bottom surface: the floating v3 tab bar, or controls for active
+/// listening. Both float over the branches; [AppShell.bottomNavClearance]
+/// tells a branch how much room to leave under its content.
 @visibleForTesting
 class AppShellDestination {
   const AppShellDestination({required this.glyph, required this.label});
@@ -22,94 +35,138 @@ class AppShellDestination {
 }
 
 // Router branch order is: home / plan / chat / vault / profile.
-// CMPYS design tabs (verbatim): Today · Plan · Chat · Compare · You.
+// CMPYS v3 tabs (verbatim from `v3/app.jsx`): Today · Plan · Mentor · Compare ·
+// You. The centre tab keeps its `chat` glyph; the bar itself shows the
+// mentor's portrait there.
 @visibleForTesting
 const appShellDestinations = [
   AppShellDestination(glyph: CmpysNavGlyph.today, label: 'Today'),
   AppShellDestination(glyph: CmpysNavGlyph.plan, label: 'Plan'),
-  AppShellDestination(glyph: CmpysNavGlyph.chat, label: 'Chat'),
+  AppShellDestination(glyph: CmpysNavGlyph.chat, label: 'Mentor'),
   AppShellDestination(glyph: CmpysNavGlyph.compare, label: 'Compare'),
   AppShellDestination(glyph: CmpysNavGlyph.you, label: 'You'),
 ];
 
+/// Index of the Mentor (chat) branch: no paper fades, centre of the bar.
+const int _kMentorBranch = 2;
+
+final List<V3TabItem> _tabItems = [
+  for (final destination in appShellDestinations)
+    V3TabItem(
+      label: destination.label,
+      icon: destination.glyph == CmpysNavGlyph.chat
+          ? null
+          : destination.glyph.icon,
+      // The design fills the active glyph on every tab but Plan and Compare.
+      fillWhenActive:
+          destination.glyph != CmpysNavGlyph.plan &&
+          destination.glyph != CmpysNavGlyph.compare,
+    ),
+];
+
+/// Tells the shell whether a full-screen page sits on top of a branch's root
+/// page, so the tab bar can slide away and the paper fades step aside.
+///
+/// Attach one to each `StatefulShellBranch` (`observers: [ShellPushObserver()]`).
+/// Only page routes count: a dialog, menu or sheet is not a detail screen.
+/// Routes pushed on the root navigator are not seen here; they cover the whole
+/// shell and need no help.
+class ShellPushObserver extends NavigatorObserver {
+  final ValueNotifier<bool> _pushed = ValueNotifier<bool>(false);
+  final ValueNotifier<Route<dynamic>?> _top = ValueNotifier<Route<dynamic>?>(
+    null,
+  );
+
+  /// Pushed pages, bottom to top.
+  final List<Route<dynamic>> _pages = <Route<dynamic>>[];
+
+  /// True while at least one page route is above the branch's root page.
+  ValueListenable<bool> get pushed => _pushed;
+
+  /// The page route on top of the branch's root page; null on the root.
+  ValueListenable<Route<dynamic>?> get top => _top;
+
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    // The first route is the branch's own page.
+    if (previousRoute != null && route is PageRoute) _pages.add(route);
+    _publish();
+  }
+
+  @override
+  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    _pages.remove(route);
+    _publish();
+  }
+
+  @override
+  void didRemove(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    _pages.remove(route);
+    _publish();
+  }
+
+  @override
+  void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) {
+    // A pushed page stays a pushed page; a replaced root page stays the root.
+    final index = oldRoute == null ? -1 : _pages.indexOf(oldRoute);
+    if (index >= 0) {
+      if (newRoute is PageRoute) {
+        _pages[index] = newRoute;
+      } else {
+        _pages.removeAt(index);
+      }
+    }
+    _publish();
+  }
+
+  /// Navigators report changes while they build (declarative pages) as well as
+  /// from event handlers. Listeners rebuild widgets, so outside an idle frame
+  /// the notification waits for the end of the frame.
+  void _publish() {
+    final binding = SchedulerBinding.instance;
+    void publish() {
+      _pushed.value = _pages.isNotEmpty;
+      _top.value = _pages.isEmpty ? null : _pages.last;
+    }
+
+    if (binding.schedulerPhase == SchedulerPhase.idle) {
+      publish();
+      return;
+    }
+    binding
+      ..addPostFrameCallback((_) => publish())
+      ..ensureVisualUpdate();
+  }
+}
+
+/// The five-tab shell: the router's branches with the floating [V3TabBar] over
+/// them and, while a book is narrated, the narration dock above the bar.
+///
+/// The bar goes compact while a tab scrolls down and slides away while a page
+/// is pushed on the branch (see [ShellPushObserver]); the dock then drops to
+/// the bar's place (design: dock bottom 90 over the bar, 30 without it). The
+/// dock stays off the Mentor tab. Tab screens also get top and bottom paper
+/// fades, except the Mentor (chat) tab.
 class AppShell extends ConsumerStatefulWidget {
   const AppShell({super.key, required this.navigationShell});
   final StatefulNavigationShell navigationShell;
 
-  static const _labelStyle = TextStyle(
-    fontFamily: 'Plus Jakarta Sans',
-    inherit: false,
-    fontSize: 11,
-    fontWeight: FontWeight.w600,
-    letterSpacing: 0,
-    height: 1.2,
-  );
+  /// Distance from the bottom of the screen to the narration dock: 70 pt
+  /// above the tab bar's baseline while the bar shows (design 90 over its
+  /// 20), 10 pt above it when the bar is hidden (design 30).
+  static double _dockBottom(double safeBottom, {required bool lifted}) =>
+      V3TabBar.bottomOffsetFor(safeBottom) + (lifted ? 70 : 10);
 
-  static bool _largeLabels(BuildContext context) =>
-      MediaQuery.textScalerOf(context).scale(11) > 16;
-  static double _sideMargin(BuildContext context) =>
-      _largeLabels(context) ? 4 : 12;
-  static double _dockPadding(BuildContext context) =>
-      _largeLabels(context) ? 2 : 6;
-
-  static double _dockWidth(BuildContext context) =>
-      (MediaQuery.sizeOf(context).width -
-              MediaQuery.paddingOf(context).horizontal -
-              _sideMargin(context) * 2)
-          .clamp(0.0, 560.0);
-
-  static ({double height, List<double> widths}) _layout(BuildContext context) {
-    final available = _dockWidth(context) - _dockPadding(context) * 2 - 2;
-    final painters = [
-      for (final destination in appShellDestinations)
-        TextPainter(
-          text: TextSpan(text: destination.label, style: _labelStyle),
-          textDirection: Directionality.of(context),
-          textScaler: MediaQuery.textScalerOf(context),
-        )..layout(),
-    ];
-    final desired = [
-      for (final painter in painters)
-        (painter.width + 5).clamp(48.0, double.infinity),
-    ];
-    final total = desired.fold<double>(0, (sum, width) => sum + width);
-    final extra = (available - 240).clamp(0.0, double.infinity);
-    final widths = [
-      for (final width in desired)
-        total <= available
-            ? width + (available - total) / 5
-            : 48 + extra * (width - 48) / (total - 240),
-    ];
-    var labelHeight = 0.0;
-    for (var i = 0; i < painters.length; i++) {
-      painters[i].layout(maxWidth: (widths[i] - 4).clamp(1.0, double.infinity));
-      if (painters[i].height > labelHeight) labelHeight = painters[i].height;
-      painters[i].dispose();
-    }
-    return (
-      height: 40 + _dockPadding(context) * 2 + labelHeight,
-      widths: widths,
-    );
-  }
-
-  static double _pillHeight(BuildContext context) => _layout(context).height;
-
-  /// Gap between the floating nav and the bottom safe-area edge.
+  /// Vertical space the floating bar occupies at the bottom of the screen.
   ///
-  /// Shared by [_FloatingPillNav] (its outer margin) and
-  /// [bottomNavClearance] so the two never drift apart.
-  static double _bottomMargin(BuildContext context) {
-    final bottomSafe = MediaQuery.of(context).padding.bottom;
-    return bottomSafe > 0 ? bottomSafe + 6.0 : 18.0;
-  }
-
-  /// Vertical space the floating pill nav occupies at the bottom of the screen.
-  ///
-  /// The nav is a `Stack` overlay (see class docs), so it sits *on top* of the
+  /// The bar is a `Stack` overlay (see class docs), so it sits *on top* of the
   /// branch content rather than reserving layout space. Any scroll view or
   /// bottom-pinned control inside a shell screen must add this as bottom
-  /// padding so its last item / button clears the nav instead of hiding
+  /// padding so its last item / button clears the bar instead of hiding
   /// underneath it. Pass [extra] for additional breathing room.
+  ///
+  /// The value does not change when the bar goes compact or slides away, so
+  /// content never jumps while scrolling.
   static double bottomNavClearance(BuildContext context, {double extra = 0}) {
     // The floating nav is hidden while the keyboard is open. Keeping its full
     // clearance would leave a large dead zone above text fields/composers.
@@ -118,6 +175,11 @@ class AppShell extends ConsumerStatefulWidget {
     if (scope == null) return MediaQuery.paddingOf(context).bottom + 24 + extra;
     return scope.bottomClearance + extra;
   }
+
+  /// The shell's App menu, which switches tabs while a pushed reader stays
+  /// mounted and keeps narrating; null outside the shell.
+  static Future<void> Function()? appMenuOf(BuildContext context) =>
+      context.getInheritedWidgetOfExactType<_AppShellScope>()?.openAppMenu;
 
   /// Whether [context] belongs to one of the state-preserving shell branches.
   ///
@@ -131,16 +193,102 @@ class AppShell extends ConsumerStatefulWidget {
 }
 
 class _AppShellState extends ConsumerState<AppShell> {
-  bool _hidden = false;
-  double _scrollDistance = 0;
+  /// Tab bar compact: scrolling down more than 8 px past 60 px.
+  bool _compact = false;
+  double _compactRun = 0;
+
   int? _lastBranch;
-  bool? _lastListening;
+  bool? _lastPushed;
+
+  /// Per-branch [ShellPushObserver], null where the router has none.
+  List<ShellPushObserver?> _observers = const [];
+
+  /// The dock's measured height: 66 pt, taller with large text.
+  double _dockHeight = BookNarrationDock.preferredHeight;
 
   StatefulNavigationShell get navigationShell => widget.navigationShell;
 
-  void _showDock() {
-    _scrollDistance = 0;
-    if (_hidden) setState(() => _hidden = false);
+  @override
+  void initState() {
+    super.initState();
+    _attachObservers();
+    NarrationDockPage.changes.addListener(_onPushedChanged);
+  }
+
+  @override
+  void didUpdateWidget(AppShell oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.navigationShell.route != navigationShell.route) {
+      _attachObservers();
+    }
+  }
+
+  @override
+  void dispose() {
+    _detachObservers();
+    NarrationDockPage.changes.removeListener(_onPushedChanged);
+    super.dispose();
+  }
+
+  void _attachObservers() {
+    _detachObservers();
+    _observers = [
+      for (final branch in navigationShell.route.branches)
+        branch.observers?.whereType<ShellPushObserver>().firstOrNull,
+    ];
+    for (final observer in _observers) {
+      observer?.top.addListener(_onPushedChanged);
+    }
+  }
+
+  void _detachObservers() {
+    for (final observer in _observers) {
+      observer?.top.removeListener(_onPushedChanged);
+    }
+  }
+
+  void _onPushedChanged() {
+    if (mounted) setState(() {});
+  }
+
+  /// A page sits above the current branch's root page.
+  bool get _pushed => _topPage != null;
+
+  /// The page on top of the current branch's root page.
+  Route<dynamic>? get _topPage {
+    final index = navigationShell.currentIndex;
+    return index < _observers.length ? _observers[index]?.top.value : null;
+  }
+
+  void _setCompact(bool value) {
+    _compactRun = 0;
+    if (_compact != value) setState(() => _compact = value);
+  }
+
+  /// `Compact tab bar when scrolling down >8px past 60px in a tab's scroll
+  /// view, restored on scroll up or near the bottom` (v3/app.jsx).
+  void _trackCompact(ScrollUpdateNotification notification) {
+    final delta = notification.scrollDelta ?? 0;
+    if (delta == 0 || _pushed) return;
+    if (_compactRun.sign != delta.sign) _compactRun = 0;
+    _compactRun += delta;
+    final metrics = notification.metrics;
+    final bool? wanted;
+    if (metrics.extentAfter < 20 || _compactRun <= -8) {
+      wanted = false;
+    } else if (_compactRun >= 8 && metrics.pixels > 60) {
+      wanted = true;
+    } else {
+      wanted = null;
+    }
+    if (wanted == null || wanted == _compact) return;
+    // Sheets, dialogs and menus can sit in the branch navigator too; only the
+    // branch's own pages drive the bar.
+    final scrollContext = notification.context;
+    if (scrollContext != null && ModalRoute.of(scrollContext) is! PageRoute) {
+      return;
+    }
+    _setCompact(wanted);
   }
 
   bool _onScroll(ScrollNotification notification) {
@@ -148,72 +296,86 @@ class _AppShellState extends ConsumerState<AppShell> {
         notification.metrics.axis != Axis.vertical) {
       return false;
     }
-    // Only deliberate finger scrolling changes the dock. Narration autoscroll,
-    // page transitions, and layout changes must not hide playback controls.
-    if (notification is ScrollUpdateNotification &&
-        notification.dragDetails != null) {
-      final delta = notification.scrollDelta ?? 0;
-      if (delta == 0) return false;
-      if (_scrollDistance.sign != delta.sign) _scrollDistance = 0;
-      _scrollDistance += delta;
-      if (notification.metrics.pixels <= notification.metrics.minScrollExtent ||
-          _scrollDistance <= -24) {
-        _showDock();
-      } else if (_scrollDistance >= 32 && !_hidden) {
-        setState(() => _hidden = true);
-      }
-    }
-    if (notification is ScrollEndNotification) _scrollDistance = 0;
+    if (notification is ScrollUpdateNotification) _trackCompact(notification);
     return false;
   }
 
-  Widget _dockVisibility(Widget child) => IgnorePointer(
-    ignoring: _hidden,
-    child: ExcludeSemantics(
-      excluding: _hidden,
-      child: AnimatedSlide(
-        offset: _hidden ? const Offset(0, 1.7) : Offset.zero,
-        duration: MotionConfig.enabled(context)
-            ? const Duration(milliseconds: 180)
-            : Duration.zero,
-        curve: Curves.easeOutCubic,
-        child: AnimatedOpacity(
-          opacity: _hidden ? 0 : 1,
-          duration: MotionConfig.enabled(context)
-              ? const Duration(milliseconds: 140)
-              : Duration.zero,
-          child: child,
-        ),
-      ),
-    ),
-  );
+  /// The centre tab's portrait: a network photo when the idol has one, else
+  /// the bundled portrait, else null (the bar then shows initials). Mirrors
+  /// `CmpysMentorAvatar` so both places resolve a mentor the same way.
+  ImageProvider? _mentorImage(CmpysIdol idol) {
+    final explicit = idol.imageUrl?.trim();
+    final remote = explicit != null && explicit.isNotEmpty
+        ? explicit
+        : (idol.slug.startsWith('https://') ? idol.slug : null);
+    if (remote != null && remote.isNotEmpty) return NetworkImage(remote);
+    final slug = idol.slug.trim();
+    if (slug.isEmpty || slug == '__llm__') return null;
+    return AssetImage('assets/images/mentors/$slug.png');
+  }
 
   @override
   Widget build(BuildContext context) {
     // Hydrate mentor + AI results from the backend on app entry, regardless
     // of which tab the user lands on first.
     ref.watch(cmpysBackendSyncProvider);
-    final narrationRemote = ref.watch(bookNarrationRemoteControllerProvider);
+    // Restore the account's synced wins into the Record (once per sign-in
+    // and per cold start).
+    ref.watch(cmpysRecordRestoreProvider);
+    // Only the session's start and end matter here; the dock listens to the
+    // remote itself, so word events do not rebuild the shell.
+    final narrationActive = ref.watch(
+      bookNarrationRemoteControllerProvider.select((remote) => remote.active),
+    );
+    final narrationRemote = ref.read(bookNarrationRemoteControllerProvider);
+    final mentor = ref.watch(cmpysStoreProvider.select((s) => s.idol));
+    // The Today badge: habits not done today. Hidden until the plan and
+    // today's view have loaded; previous data stays while it refreshes.
+    final habitsLeft = ref.watch(
+      todayViewProvider.select(
+        (today) =>
+            today.valueOrNull?.items.where((i) => !i.completedToday).length ??
+            0,
+      ),
+    );
 
     final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
-    final listeningDockVisible = narrationRemote.active && !keyboardOpen;
+    final branch = navigationShell.currentIndex;
+    final pushed = _pushed;
+    final safe = MediaQuery.paddingOf(context);
+    // `Narration dock shows on tabs (except chat)` and on pushed pages; it is
+    // lifted above the tab bar while the bar shows (v3/app.jsx).
+    // …and only over the book, library, mission and record pages.
+    final topPage = _topPage;
+    final listeningDockVisible =
+        narrationActive &&
+        !keyboardOpen &&
+        (topPage == null
+            ? branch != _kMentorBranch
+            : NarrationDockPage.allows(topPage));
+    final dockBottom = AppShell._dockBottom(safe.bottom, lifted: !pushed);
+    final motion = MotionConfig.enabled(context);
 
-    if (_lastBranch != navigationShell.currentIndex ||
-        _lastListening != narrationRemote.active ||
+    // The bar always restores on a tab change, when a page is pushed or
+    // popped, and for screen readers.
+    if (_lastBranch != branch ||
+        _lastPushed != pushed ||
         MediaQuery.accessibleNavigationOf(context)) {
-      _hidden = false;
-      _scrollDistance = 0;
+      _compact = false;
+      _compactRun = 0;
     }
-    _lastBranch = navigationShell.currentIndex;
-    _lastListening = narrationRemote.active;
+    _lastBranch = branch;
+    _lastPushed = pushed;
+
+    // Paper fades belong to the tab screens: not the Mentor tab, which has its
+    // own composer, and not a page pushed over a tab.
+    final fades = branch != _kMentorBranch && !pushed;
 
     return _AppShellScope(
-      bottomClearance:
-          (listeningDockVisible
-              ? BookNarrationDock.preferredHeight
-              : AppShell._pillHeight(context)) +
-          AppShell._bottomMargin(context) +
-          22,
+      openAppMenu: _openAppMenu,
+      bottomClearance: listeningDockVisible
+          ? dockBottom + _dockHeight + 22
+          : V3TabBar.clearanceFor(safe.bottom),
       child: AnnotatedRegion<SystemUiOverlayStyle>(
         value: const SystemUiOverlayStyle(
           statusBarColor: Colors.transparent,
@@ -234,69 +396,89 @@ class _AppShellState extends ConsumerState<AppShell> {
               Positioned.fill(
                 child: NotificationListener<ScrollNotification>(
                   onNotification: _onScroll,
-                  child: _TabFade(
-                    index: navigationShell.currentIndex,
-                    child: navigationShell,
-                  ),
+                  child: _TabFade(index: branch, child: navigationShell),
                 ),
               ),
-              if (!keyboardOpen && !listeningDockVisible)
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                // An opaque paper ground under the status bar, so scrolled
+                // content never collides with the clock, then an 11 pt fade
+                // just under it (which never veils a screen's top bar).
+                // Without a status bar, the design's 58 pt fade.
+                height: safe.top > 0 ? safe.top + 11 : 58,
+                child: _PaperFade(
+                  fadeKey: const Key('tab-fade-top'),
+                  top: true,
+                  visible: fades,
+                  ground: safe.top,
+                ),
+              ),
+              Positioned(
+                bottom: 0,
+                left: 0,
+                right: 0,
+                height: 104,
+                child: _PaperFade(
+                  fadeKey: const Key('tab-fade-bottom'),
+                  top: false,
+                  visible: fades,
+                ),
+              ),
+              if (!keyboardOpen)
                 Positioned(
                   left: 0,
                   right: 0,
                   bottom: 0,
-                  child: _dockVisibility(
-                    _FloatingPillNav(
-                      currentIndex: navigationShell.currentIndex,
-                      onTap: (index) {
-                        HapticFeedback.selectionClick();
-                        navigationShell.goBranch(
-                          index,
-                          initialLocation:
-                              index == navigationShell.currentIndex,
-                        );
-                      },
+                  child: V3TabBar(
+                    items: _tabItems,
+                    index: branch,
+                    mentor: V3TabBarMentor(
+                      image: _mentorImage(mentor),
+                      initials: mentor.initials,
+                      tint: mentor.tint,
                     ),
+                    todayLeft: habitsLeft,
+                    compact: _compact,
+                    hidden: pushed,
+                    bottomOffset: V3TabBar.bottomOffsetFor(safe.bottom),
+                    onTap: (index) {
+                      playHaptic(context, AppHaptic.selection);
+                      navigationShell.goBranch(
+                        index,
+                        initialLocation: index == navigationShell.currentIndex,
+                      );
+                    },
                   ),
                 ),
               if (listeningDockVisible)
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: AppShell._bottomMargin(context),
-                  child: _dockVisibility(
-                    SafeArea(
-                      top: false,
-                      bottom: false,
-                      child: BookNarrationDock(
-                        controller: narrationRemote,
-                        maxWidth: 560,
-                        margin: const EdgeInsets.symmetric(horizontal: 12),
-                        onOpenNavigation: () => _openNavigation(context),
-                      ),
-                    ),
-                  ),
-                ),
-              if (_hidden && !keyboardOpen)
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: MediaQuery.paddingOf(context).bottom,
+                AnimatedPositioned(
+                  left: 12,
+                  right: 12,
+                  bottom: dockBottom,
+                  // `transition: bottom .4s var(--out)`.
+                  duration: motion
+                      ? const Duration(milliseconds: 400)
+                      : Duration.zero,
+                  curve: AppMotion.out,
                   child: Center(
-                    child: GestureDetector(
-                      onVerticalDragUpdate: (details) {
-                        if (details.delta.dy < -2) _showDock();
-                      },
-                      child: IconButton(
-                        key: const Key('reveal-bottom-menu'),
-                        tooltip: 'Show bottom controls',
-                        onPressed: _showDock,
-                        style: IconButton.styleFrom(
-                          backgroundColor: AppColors.card,
-                          minimumSize: const Size(64, 44),
-                          side: const BorderSide(color: AppColors.hair),
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 560),
+                      // `animation: rise .5s var(--spring)`.
+                      child: V3Rise(
+                        duration: const Duration(milliseconds: 500),
+                        child: _ReportHeight(
+                          onHeight: (height) {
+                            if (mounted && height != _dockHeight) {
+                              setState(() => _dockHeight = height);
+                            }
+                          },
+                          child: BookNarrationDock(
+                            controller: narrationRemote,
+                            onOpenAppMenu: _openAppMenu,
+                          ),
                         ),
-                        icon: const Icon(Icons.keyboard_arrow_up_rounded),
                       ),
                     ),
                   ),
@@ -308,293 +490,173 @@ class _AppShellState extends ConsumerState<AppShell> {
     );
   }
 
-  Future<void> _openNavigation(BuildContext context) async {
-    final destination = await showModalBottomSheet<int>(
-      context: context,
-      useRootNavigator: true,
-      useSafeArea: true,
-      isScrollControlled: true,
-      backgroundColor: AppColors.card,
-      constraints: const BoxConstraints(maxWidth: 560),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-      ),
-      builder: (sheetContext) => SafeArea(
-        top: false,
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxHeight: MediaQuery.sizeOf(sheetContext).height * .8,
-          ),
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Row(
+  /// The App menu (restored from v2, in the v3 sheet): pick a tab while a
+  /// pushed reader stays mounted in its branch and keeps narrating.
+  Future<void> _openAppMenu() async {
+    final current = navigationShell.currentIndex;
+    final destination = await showV3Sheet<int>(
+      context,
+      title: 'App menu',
+      builder: (sheetContext) => Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (var i = 0; i < appShellDestinations.length; i++)
+            V3Pressable(
+              key: ValueKey('listening-nav-item-$i'),
+              selected: current == i,
+              focusRadius: AppRadii.br12,
+              onTap: () => Navigator.of(sheetContext).pop(i),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Row(
                   children: [
-                    const SizedBox(width: 12),
+                    CmpysNavIcon(
+                      appShellDestinations[i].glyph,
+                      color: current == i ? AppColors.ember : AppColors.ink2,
+                    ),
+                    const SizedBox(width: 14),
                     Expanded(
-                      child: Text('App menu', style: AppTypography.bodyMedium),
+                      child: Text(
+                        appShellDestinations[i].label,
+                        style: AppTypography.sans(
+                          15.5,
+                          FontWeight.w500,
+                        ).copyWith(color: AppColors.ink),
+                      ),
                     ),
-                    IconButton(
-                      tooltip: 'Close app menu',
-                      onPressed: () => Navigator.pop(sheetContext),
-                      icon: const Icon(Icons.close_rounded),
-                    ),
+                    if (current == i)
+                      const V3Icon(
+                        V3Icons.check,
+                        size: 18,
+                        color: AppColors.ember,
+                      ),
                   ],
                 ),
-                for (var i = 0; i < appShellDestinations.length; i++)
-                  ListTile(
-                    key: ValueKey('listening-nav-item-$i'),
-                    selected: navigationShell.currentIndex == i,
-                    selectedColor: AppColors.green2,
-                    selectedTileColor: AppColors.greenSoft,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    leading: CmpysNavIcon(
-                      appShellDestinations[i].glyph,
-                      color: navigationShell.currentIndex == i
-                          ? AppColors.green2
-                          : AppColors.ink2,
-                    ),
-                    title: Text(appShellDestinations[i].label),
-                    trailing: navigationShell.currentIndex == i
-                        ? const Icon(Icons.check_rounded, size: 20)
-                        : null,
-                    onTap: () => Navigator.pop(sheetContext, i),
-                  ),
-              ],
+              ),
             ),
-          ),
-        ),
+        ],
       ),
     );
-    if (!context.mounted || destination == null) return;
-    HapticFeedback.selectionClick();
-    // Preserve the reader route, even when its currently selected tab is tapped.
-    // Resetting that branch would dispose the owner and interrupt narration.
+    if (!mounted || destination == null) return;
+    playHaptic(context, AppHaptic.selection);
+    // Keep the reader route, even when its own tab is picked: resetting that
+    // branch would dispose the reader and interrupt narration.
     navigationShell.goBranch(destination);
   }
 }
 
+/// Reports its child's laid-out height after the frame (the dock grows with
+/// large text, and the content clearance under it must follow).
+class _ReportHeight extends SingleChildRenderObjectWidget {
+  const _ReportHeight({required this.onHeight, required super.child});
+
+  final ValueChanged<double> onHeight;
+
+  @override
+  RenderObject createRenderObject(BuildContext context) =>
+      _RenderReportHeight(onHeight);
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    _RenderReportHeight renderObject,
+  ) => renderObject.onHeight = onHeight;
+}
+
+class _RenderReportHeight extends RenderProxyBox {
+  _RenderReportHeight(this.onHeight);
+
+  ValueChanged<double> onHeight;
+  double? _reported;
+
+  @override
+  void performLayout() {
+    super.performLayout();
+    final height = size.height;
+    if (height == _reported) return;
+    _reported = height;
+    SchedulerBinding.instance.addPostFrameCallback((_) => onHeight(height));
+  }
+}
+
 class _AppShellScope extends InheritedWidget {
-  const _AppShellScope({required this.bottomClearance, required super.child});
+  const _AppShellScope({
+    required this.bottomClearance,
+    required this.openAppMenu,
+    required super.child,
+  });
 
   final double bottomClearance;
+  final Future<void> Function() openAppMenu;
 
   @override
   bool updateShouldNotify(_AppShellScope oldWidget) =>
       bottomClearance != oldWidget.bottomClearance;
 }
 
-class _FloatingPillNav extends StatefulWidget {
-  const _FloatingPillNav({required this.currentIndex, required this.onTap});
-  final int currentIndex;
-  final ValueChanged<int> onTap;
+/// A paper-coloured fade over the top or bottom of a tab screen: content
+/// scrolls under the status bar and under the tab bar without a hard edge.
+/// Never takes touches.
+class _PaperFade extends StatelessWidget {
+  const _PaperFade({
+    required this.fadeKey,
+    required this.top,
+    required this.visible,
+    this.ground = 0,
+  });
 
-  @override
-  State<_FloatingPillNav> createState() => _FloatingPillNavState();
-}
+  /// Goes on the [IgnorePointer] that wraps the fade, so a test can read both
+  /// its size and that it ignores touches.
+  final Key fadeKey;
+  final bool top;
+  final bool visible;
 
-class _FloatingPillNavState extends State<_FloatingPillNav>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _selectorController = AnimationController(
-    vsync: this,
-    duration: AppDurations.normal,
-    value: 1,
-  );
-  late double _selectorFrom;
-  late double _selectorTo;
-  bool _motionEnabled = true;
+  /// Height of an opaque paper ground at the top (the status bar's inset):
+  /// the fade runs below it. 0 for none.
+  final double ground;
 
-  @override
-  void initState() {
-    super.initState();
-    _selectorFrom = widget.currentIndex.toDouble();
-    _selectorTo = _selectorFrom;
-  }
-
-  double get _selectorPosition {
-    final eased = AppCurves.easeOut.transform(_selectorController.value);
-    return _selectorFrom + (_selectorTo - _selectorFrom) * eased;
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final enabled = MotionConfig.enabled(context);
-    if (_motionEnabled && !enabled) {
-      final target = widget.currentIndex.toDouble();
-      _selectorController.stop();
-      _selectorFrom = target;
-      _selectorTo = target;
-      _selectorController.value = 1;
-    }
-    _motionEnabled = enabled;
-  }
-
-  @override
-  void didUpdateWidget(_FloatingPillNav oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.currentIndex == widget.currentIndex) return;
-
-    final target = widget.currentIndex.toDouble();
-    if (!_motionEnabled) {
-      _selectorController.stop();
-      _selectorFrom = target;
-      _selectorTo = target;
-      _selectorController.value = 1;
-      return;
-    }
-
-    final current = _selectorPosition;
-    final distance = (target - current).abs();
-    final extraDistance = (distance - 1).clamp(0, 3);
-    _selectorFrom = current;
-    _selectorTo = target;
-    _selectorController.duration = Duration(
-      milliseconds:
-          AppDurations.normal.inMilliseconds + (extraDistance * 45).round(),
-    );
-    _selectorController.forward(from: 0);
-  }
-
-  @override
-  void dispose() {
-    _selectorController.dispose();
-    super.dispose();
-  }
+  static const _stops = [0.0, 0.3, 0.65, 1.0];
+  static const _alphas = [1.0, 0.82, 0.38, 0.0];
 
   @override
   Widget build(BuildContext context) {
-    final layout = AppShell._layout(context);
-    return SafeArea(
-      top: false,
-      bottom: false,
-      child: Padding(
-        padding: EdgeInsets.only(
-          bottom: AppShell._bottomMargin(context),
-          left: AppShell._sideMargin(context),
-          right: AppShell._sideMargin(context),
-        ),
-        child: Center(
-          child: Container(
-            width: AppShell._dockWidth(context),
-            height: layout.height,
-            padding: EdgeInsets.all(AppShell._dockPadding(context)),
-            decoration: BoxDecoration(
-              color: AppColors.card,
-              borderRadius: BorderRadius.circular(28),
-              border: Border.all(color: AppColors.hair),
-              boxShadow: AppShadows.tabPill,
-            ),
-            child: AnimatedBuilder(
-              animation: _selectorController,
-              builder: (context, _) {
-                final lower = _selectorPosition.floor().clamp(0, 4);
-                final upper = _selectorPosition.ceil().clamp(0, 4);
-                final fraction = _selectorPosition - lower;
-                final start = layout.widths
-                    .take(lower)
-                    .fold<double>(0, (sum, w) => sum + w);
-                return Stack(
-                  children: [
-                    PositionedDirectional(
-                      start:
-                          start +
-                          (upper == lower
-                              ? 0
-                              : layout.widths[lower] * fraction),
-                      top: 0,
-                      width:
-                          layout.widths[lower] +
-                          (layout.widths[upper] - layout.widths[lower]) *
-                              fraction,
-                      bottom: 0,
-                      child: DecoratedBox(
-                        key: const ValueKey('floating-nav-selector'),
-                        decoration: BoxDecoration(
-                          color: AppColors.greenSoft,
-                          borderRadius: BorderRadius.circular(21),
-                        ),
-                      ),
-                    ),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        for (var i = 0; i < appShellDestinations.length; i++)
-                          SizedBox(
-                            key: ValueKey('floating-nav-item-$i'),
-                            width: layout.widths[i],
-                            child: _NavChip(
-                              glyph: appShellDestinations[i].glyph,
-                              label: appShellDestinations[i].label,
-                              selected: widget.currentIndex == i,
-                              onTap: () => widget.onTap(i),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ],
-                );
-              },
-            ),
-          ),
+    final colors = [
+      for (final alpha in top ? _alphas : _alphas.reversed)
+        AppColors.paper.withValues(alpha: alpha),
+    ];
+    final fade = DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: colors,
+          stops: top ? _stops : _stops.reversed.map((s) => 1 - s).toList(),
         ),
       ),
     );
-  }
-}
-
-class _NavChip extends StatelessWidget {
-  const _NavChip({
-    required this.glyph,
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final CmpysNavGlyph glyph;
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final foreground = selected ? AppColors.green2 : AppColors.ink2;
-    return Semantics(
-      label: label,
-      button: true,
-      selected: selected,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(21),
-          child: ExcludeSemantics(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 6),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
+    return IgnorePointer(
+      key: fadeKey,
+      child: AnimatedOpacity(
+        opacity: visible ? 1 : 0,
+        duration: MotionConfig.enabled(context)
+            ? const Duration(milliseconds: 300)
+            : Duration.zero,
+        child: top && ground > 0
+            ? Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  CmpysNavIcon(
-                    glyph,
-                    size: 22,
-                    color: foreground,
-                    strokeWidth: selected ? 2 : 1.7,
+                  SizedBox(
+                    height: ground,
+                    child: const ColoredBox(
+                      key: Key('tab-ground-top'),
+                      color: AppColors.paper,
+                    ),
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    label,
-                    textAlign: TextAlign.center,
-                    style: AppShell._labelStyle.copyWith(color: foreground),
-                  ),
+                  Expanded(child: fade),
                 ],
-              ),
-            ),
-          ),
-        ),
+              )
+            : fade,
       ),
     );
   }

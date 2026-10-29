@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:ui' show Tristate;
 
 import 'package:cmpys/app/theme.dart';
@@ -6,24 +5,18 @@ import 'package:cmpys/core/ui/cmpys/cmpys_primitives.dart';
 import 'package:cmpys/features/cmpys/data/cmpys_ideas_provider.dart';
 import 'package:cmpys/features/cmpys/data/cmpys_seed.dart';
 import 'package:cmpys/features/cmpys/presentation/reels_screen.dart';
-import 'package:cmpys/features/cmpys/presentation/onboarding/analysis_step.dart';
-import 'package:cmpys/features/cmpys/presentation/onboarding/plan_gen_step.dart';
 import 'package:cmpys/features/cmpys/state/cmpys_store.dart';
-import 'package:cmpys/features/session/data/session_repository.dart';
+import 'package:cmpys/features/plan/data/plan_repository.dart';
+import 'package:cmpys/features/plan/models/plan_models.dart';
+import 'package:cmpys/features/plan/state/current_plan_provider.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:phosphor_flutter/phosphor_flutter.dart';
+import 'package:cmpys/core/ui/v3/v3.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'support/design_capture.dart';
-
-class _WaitingSession extends Fake implements SessionRepository {
-  final events = StreamController<Map<String, dynamic>>();
-  @override
-  Stream<Map<String, dynamic>> generateResults(String id) => events.stream;
-}
 
 Future<void> _mount(
   WidgetTester tester,
@@ -47,6 +40,25 @@ Future<void> _mount(
       ),
     ),
   );
+}
+
+class _NoPlanRepository implements PlanRepository {
+  @override
+  Future<BackendPlan?> getCurrentPlan() async => null;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+/// The reels read the plan's focus week; these tests have no plan.
+class _NoPlanController extends CurrentPlanController {
+  _NoPlanController()
+    : super(repo: _NoPlanRepository(), readJobId: () => null) {
+    state = const CurrentPlanState(status: CurrentPlanStatus.empty);
+  }
+
+  @override
+  Future<void> refresh() async {}
 }
 
 void main() {
@@ -129,41 +141,6 @@ void main() {
     },
   );
 
-  for (final analysis in [true, false]) {
-    testWidgets(
-      '${analysis ? 'analysis' : 'blueprint'} waiting screen stops decorative loops',
-      (tester) async {
-        final draft = CmpysOnboardingDraft()..sessionId = 'motion-test';
-        final repo = _WaitingSession();
-        await _mount(
-          tester,
-          ProviderScope(
-            overrides: [sessionRepositoryProvider.overrideWithValue(repo)],
-            child: analysis
-                ? CmpysAnalysisStep(
-                    idol: cmpysIdols.first,
-                    draft: draft,
-                    onDone: () {},
-                  )
-                : CmpysPlanGenStep(
-                    idol: cmpysIdols.first,
-                    draft: draft,
-                    onDone: () {},
-                  ),
-          ),
-        );
-        await tester.pumpAndSettle();
-        expect(tester.binding.transientCallbackCount, 0);
-        expect(tester.takeException(), isNull);
-        if (analysis) {
-          await repo.events.close();
-          await tester.pump();
-        }
-        await tester.pumpWidget(const SizedBox());
-      },
-    );
-  }
-
   testWidgets(
     'Ideas actions announce labels and toggle state and support keyboard activation',
     (tester) async {
@@ -180,6 +157,7 @@ void main() {
       final container = ProviderContainer(
         overrides: [
           cmpysIdeasProvider.overrideWith((ref) async => const [idea]),
+          currentPlanProvider.overrideWith((ref) => _NoPlanController()),
         ],
       );
       addTearDown(container.dispose);
@@ -192,6 +170,8 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(tester.binding.transientCallbackCount, 0);
+      // No plan: the bar reads "Ideas", without a week.
+      expect(find.text('Ideas'), findsOneWidget);
       final like = find.bySemanticsLabel('Like idea');
       final save = find.bySemanticsLabel('Save idea');
       final comments = find.bySemanticsLabel('Comments');
@@ -205,7 +185,11 @@ void main() {
         isFalse,
       );
       Focus.of(
-        tester.element(find.byIcon(PhosphorIconsRegular.heart)),
+        tester.element(
+          find.byWidgetPredicate(
+            (widget) => widget is V3Icon && widget.icon == V3Icons.heart,
+          ),
+        ),
       ).requestFocus();
       await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
@@ -271,17 +255,28 @@ void main() {
               cmpysIdeasProvider.overrideWith(
                 (ref) async => const [first, second],
               ),
+              currentPlanProvider.overrideWith((ref) => _NoPlanController()),
             ],
             child: const CmpysReelsScreen(),
           ),
           textScale: largeText ? 2 : 1,
           reduced: largeText,
         );
-        await tester.pumpAndSettle();
+        // With motion on, the v3 page light drifts forever (design `drift
+        // 9s infinite`), so settle with timed pumps.
+        Future<void> settle() async {
+          await tester.pump();
+          await tester.pump(const Duration(seconds: 2));
+        }
+        await settle();
         final reading = find.byKey(const ValueKey('idea-reading-read-first'));
-        final header = tester.getRect(find.text('For you · 1 of 2'));
+        // No plan: the bar reads "Ideas", without a week.
+        expect(find.text('Ideas'), findsOneWidget);
+        final header = tester.getRect(find.text('Ideas'));
         final viewport = tester.getRect(reading);
-        final actions = tester.getRect(find.byTooltip('Like idea').first);
+        final actions = tester.getRect(
+          find.bySemanticsLabel('Like idea').first,
+        );
         expect(viewport.top, greaterThan(header.bottom));
         expect(viewport.bottom, lessThan(actions.top));
         expect(tester.widget<Text>(find.text(first.text)).maxLines, isNull);
@@ -290,30 +285,26 @@ void main() {
           matching: find.byType(Scrollable),
         );
         await tester.scrollUntilVisible(
-          find.text('Next idea'),
+          find.text('First mentor'),
           160,
           scrollable: scroll,
         );
-        await tester.pumpAndSettle();
+        await settle();
         await captureDesign(
           tester,
           'ideas-${largeText ? "200-text" : "landscape"}-reading-end',
         );
-        expect(find.text('Next idea').hitTestable(), findsOneWidget);
-        await tester.tap(find.text('Next idea'));
-        await tester.pumpAndSettle();
-        expect(find.text('For you · 2 of 2'), findsOneWidget);
-        await tester.scrollUntilVisible(
-          find.text('Previous idea'),
-          160,
-          scrollable: find.descendant(
-            of: find.byKey(const ValueKey('idea-reading-read-second')),
-            matching: find.byType(Scrollable),
-          ),
+        expect(find.text('First mentor').hitTestable(), findsOneWidget);
+        // The v3 top bar's up/down buttons page between ideas.
+        await tester.tap(find.bySemanticsLabel('Next'));
+        await settle();
+        expect(
+          find.byKey(const ValueKey('idea-reading-read-second')).hitTestable(),
+          findsOneWidget,
         );
-        await tester.tap(find.text('Previous idea'));
-        await tester.pumpAndSettle();
-        expect(find.text('For you · 1 of 2'), findsOneWidget);
+        await tester.tap(find.bySemanticsLabel('Previous'));
+        await settle();
+        expect(reading.hitTestable(), findsOneWidget);
         expect(tester.takeException(), isNull);
         await tester.pumpWidget(const SizedBox());
       },

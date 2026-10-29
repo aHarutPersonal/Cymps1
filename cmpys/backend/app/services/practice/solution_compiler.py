@@ -159,6 +159,12 @@ def compile_worked_solution(activity: Activity | Mapping) -> CompiledSolution:
         elif field.kind == "choice":
             choice = next(choice for choice in field.choices if choice.id == field.correct_choice)
             append(choice.label)
+        elif field.kind == "multi_choice":
+            # Each correct label is its own authored block, in the order the
+            # learner sees the choices.
+            for choice in field.choices:
+                if choice.id in field.correct_choices:
+                    append(choice.label)
         append(step.explanation)
     text = "\n\n".join(blocks)
     return CompiledSolution(text, tuple(records), source_hash, _hash_text(text))

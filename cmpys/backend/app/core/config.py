@@ -68,6 +68,9 @@ class Settings(BaseSettings):
     zai_quality_model: str = "glm-5.3"
     # GLM's max_tokens includes hidden reasoning. Reserve it explicitly.
     zai_reasoning_token_reserve: int = Field(default=2048, ge=0, le=8192)
+    # Operation -> off/low/high/max. Empty keeps every call's coded level; add
+    # an operation only after the eval promotion rule passes for its stage.
+    zai_reasoning_overrides: dict[str, str] = {}
     # OpenLux is configured independently: old Yunwu credentials and pricing
     # assumptions must not be silently carried into a different account route.
     openlux_api_key: str | None = Field(default=None, repr=False, exclude=True)
@@ -161,6 +164,12 @@ class Settings(BaseSettings):
     # through to the existing bespoke lesson generator.
     lesson_catalog_first_enabled: bool = False
 
+    # One Imagen 4 hero illustration per published tutorial (no text in the image).
+    # Off until the owner enables it: every image is a paid call. The cap counts
+    # images written to media/tutorials/ today; reused images never count.
+    tutorial_illustrations_enabled: bool = False
+    tutorial_illustration_daily_cap: int = Field(default=200, ge=0)
+
     # Local LLM (Spec 2 — inert until then)
     local_llm_base_url: str | None = None  # e.g. http://gpu-box:8000/v1 (Spec 2)
     local_llm_model: str | None = None  # e.g. qwen2.5-32b-instruct (Spec 2)
@@ -244,6 +253,14 @@ class Settings(BaseSettings):
     adaptive_routing_canary_percent: int = 10
     adaptive_routing_min_success_rate: float = 0.90
     adaptive_routing_min_quality_score: float = 0.90
+
+    @model_validator(mode="after")
+    def validate_reasoning_overrides(self):
+        invalid = {op: level for op, level in self.zai_reasoning_overrides.items()
+                   if level not in {"off", "low", "high", "max"}}
+        if invalid:
+            raise ValueError(f"Unsupported zai_reasoning_overrides levels: {sorted(invalid)}")
+        return self
 
     @model_validator(mode="after")
     def load_openlux_credential(self):

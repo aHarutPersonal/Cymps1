@@ -6,7 +6,6 @@ import 'package:go_router/go_router.dart';
 import '../core/ui/app_shell.dart';
 import '../core/ui/motion/page_transition.dart';
 import '../features/auth/presentation/auth_screen.dart';
-import '../features/auth/presentation/forgot_password_screen.dart';
 import '../features/auth/presentation/splash_screen.dart';
 import '../features/cmpys/presentation/chat_screen.dart';
 import '../features/cmpys/presentation/compare_screen.dart';
@@ -27,6 +26,14 @@ import '../features/plan/presentation/book_reader_screen.dart';
 abstract final class AppRoutes {
   static const String splash = '/splash';
   static const String auth = '/auth';
+
+  /// Auth in a given mode (`?mode=up` creates an account, `?mode=in` signs
+  /// in); the splash opens these from its two buttons.
+  static const String authSignUp = '/auth?mode=up';
+  static const String authSignIn = '/auth?mode=in';
+
+  /// Opens auth in sign-in mode with the password-recovery sheet up, so a
+  /// saved `/forgot-password` link still lands on the recovery flow.
   static const String forgotPassword = '/forgot-password';
 
   /// AI-driven onboarding: personalize → discover mentor → interview →
@@ -44,6 +51,7 @@ abstract final class AppRoutes {
   static const String profile = '/profile'; // You tab
 
   static const String bookRouteSegment = 'book/:resourceId';
+  static const String homeBook = '/home/book/:resourceId';
   static const String planBook = '/plan/book/:resourceId';
   static const String profileBook = '/profile/book/:resourceId';
 
@@ -68,12 +76,13 @@ abstract final class AppRoutes {
     }
 
     final branchSegment = switch (branchIndex) {
+      ActiveBookNarrationResume.todayBranchIndex => 'home',
       ActiveBookNarrationResume.planBranchIndex => 'plan',
       ActiveBookNarrationResume.profileBranchIndex => 'profile',
       _ => throw ArgumentError.value(
         branchIndex,
         'branchIndex',
-        'must identify the Plan or Profile shell branch',
+        'must identify the Today, Plan or Profile shell branch',
       ),
     };
     return Uri(
@@ -127,14 +136,21 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: AppRoutes.auth,
         pageBuilder: (context, state) => CmpysPageTransition.page(
           key: state.pageKey,
-          child: const AuthScreen(),
+          child: AuthScreen(
+            initialMode: state.uri.queryParameters['mode'] == 'up'
+                ? AuthMode.signUp
+                : AuthMode.signIn,
+          ),
         ),
       ),
       GoRoute(
         path: AppRoutes.forgotPassword,
         pageBuilder: (context, state) => CmpysPageTransition.page(
           key: state.pageKey,
-          child: const ForgotPasswordScreen(),
+          child: const AuthScreen(
+            initialMode: AuthMode.signIn,
+            startRecovery: true,
+          ),
         ),
       ),
       GoRoute(
@@ -160,6 +176,8 @@ final routerProvider = Provider<GoRouter>((ref) {
         },
         branches: [
           StatefulShellBranch(
+            // Lets the shell tuck the tab bar away while a detail page is open.
+            observers: [ShellPushObserver()],
             routes: [
               GoRoute(
                 path: AppRoutes.home,
@@ -167,10 +185,17 @@ final routerProvider = Provider<GoRouter>((ref) {
                   key: state.pageKey,
                   child: const CmpysTodayScreen(),
                 ),
+                routes: [
+                  _bookReaderRoute(
+                    branchIndex: ActiveBookNarrationResume.todayBranchIndex,
+                  ),
+                ],
               ),
             ],
           ),
           StatefulShellBranch(
+            // Lets the shell tuck the tab bar away while a detail page is open.
+            observers: [ShellPushObserver()],
             routes: [
               GoRoute(
                 path: AppRoutes.plan,
@@ -187,6 +212,8 @@ final routerProvider = Provider<GoRouter>((ref) {
             ],
           ),
           StatefulShellBranch(
+            // Lets the shell tuck the tab bar away while a detail page is open.
+            observers: [ShellPushObserver()],
             routes: [
               GoRoute(
                 path: AppRoutes.chat,
@@ -198,6 +225,8 @@ final routerProvider = Provider<GoRouter>((ref) {
             ],
           ),
           StatefulShellBranch(
+            // Lets the shell tuck the tab bar away while a detail page is open.
+            observers: [ShellPushObserver()],
             routes: [
               GoRoute(
                 path: AppRoutes.vault,
@@ -209,6 +238,8 @@ final routerProvider = Provider<GoRouter>((ref) {
             ],
           ),
           StatefulShellBranch(
+            // Lets the shell tuck the tab bar away while a detail page is open.
+            observers: [ShellPushObserver()],
             routes: [
               GoRoute(
                 path: AppRoutes.profile,

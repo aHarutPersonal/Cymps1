@@ -15,8 +15,11 @@ class ZaiLLMClient(OpenLuxLLMClient):
             raise ValueError("Z.ai requires its direct HTTPS API endpoint")
         if self.model not in {"glm-5.3", "glm-5.3-flash"}:
             raise ValueError("Unsupported Z.ai model; validate its protocol before enabling")
+        # "off" is explicit opt-in only (per-operation overrides after eval);
+        # legacy "none"/"minimal" callers keep low reasoning.
         self.thinking_level = (
-            "low" if thinking_level in {"none", "minimal", "low"}
+            "off" if thinking_level == "off"
+            else "low" if thinking_level in {"none", "minimal", "low"}
             else "max" if thinking_level in {"max", "xhigh"}
             else "high"
         )
@@ -43,6 +46,11 @@ class ZaiLLMClient(OpenLuxLLMClient):
             "reasoning_effort": self.thinking_level,
             "extra_body": {"thinking": {"type": "enabled"}},
         }
+        if self.thinking_level == "off":
+            # No hidden reasoning shares the ceiling, so no reserve is added.
+            kwargs.pop("reasoning_effort")
+            kwargs["max_tokens"] = min(self.max_tokens or 4096, 128000)
+            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
         if schema is not None:
             kwargs["response_format"] = {"type": "json_object"}
         self._effective_parameters = {k: v for k, v in kwargs.items() if k not in {"messages", "stream"}}

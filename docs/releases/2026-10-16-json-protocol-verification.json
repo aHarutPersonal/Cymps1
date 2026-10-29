@@ -1,0 +1,35 @@
+{
+  "release": "20261016-080000-json-protocol",
+  "image_digest": "sha256:f2ce5270074b2ee1c15ab2811a300bf9832d4456f3f01bbcb657b24e263a0ebb",
+  "full_suite": {
+    "passed": 2490,
+    "skipped": 4,
+    "warnings": 1,
+    "seconds": 24.73
+  },
+  "exact_image_suite": {
+    "passed": 661,
+    "skipped": 1,
+    "seconds": 11.08,
+    "network": "disabled"
+  },
+  "independent_review": {
+    "blocking_findings": 0,
+    "focused_tests_passed": 333,
+    "real_sdk_transport_replay": true
+  },
+  "exact_capture_replay": {
+    "category": "JSONProtocolError",
+    "duplicate_properties": 1,
+    "finish_reason": "stop",
+    "new_provider_requests": 0,
+    "draft_exported": false
+  },
+  "live_test": {
+    "completed_prior_release_test": true,
+    "reported_usd": 0.035077,
+    "unknown_reserved_usd": 0,
+    "accepted_lesson": false,
+    "new_test_authorized": false
+  }
+}

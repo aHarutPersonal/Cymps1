@@ -32,8 +32,25 @@ class AuthUnauthenticated extends AuthState {
 }
 
 class AuthError extends AuthState {
-  const AuthError({required this.message});
+  const AuthError({
+    required this.message,
+    this.statusCode,
+    this.fieldErrors = const [],
+  });
+
+  /// The server's or the client's message. For a 422 it can be the
+  /// validator's raw text: show [fieldErrors] instead (see the auth screen).
   final String message;
+  final int? statusCode;
+
+  /// The fields a 422 validation failure names.
+  final List<ApiFieldError> fieldErrors;
+
+  factory AuthError.fromApi(ApiError e) => AuthError(
+    message: e.message,
+    statusCode: e.statusCode,
+    fieldErrors: e.fieldErrors,
+  );
 }
 
 /// Auth controller provider.
@@ -85,7 +102,7 @@ class AuthController extends StateNotifier<AuthState> {
       state = AuthAuthenticated(accessToken: response.accessToken);
       return response;
     } on ApiError catch (e) {
-      state = AuthError(message: e.message);
+      state = AuthError.fromApi(e);
       return null;
     } catch (e) {
       state = AuthError(message: e.toString());
@@ -113,7 +130,7 @@ class AuthController extends StateNotifier<AuthState> {
       );
       return response;
     } on ApiError catch (e) {
-      state = AuthError(message: e.message);
+      state = AuthError.fromApi(e);
       return null;
     } catch (e) {
       state = AuthError(message: e.toString());
@@ -136,7 +153,7 @@ class AuthController extends StateNotifier<AuthState> {
       state = AuthAuthenticated(accessToken: response.accessToken);
       return response;
     } on ApiError catch (e) {
-      state = AuthError(message: e.message);
+      state = AuthError.fromApi(e);
       return null;
     } catch (e) {
       state = AuthError(message: e.toString());
