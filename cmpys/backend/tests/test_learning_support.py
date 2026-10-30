@@ -190,6 +190,40 @@ def test_video_identity_rejects_arbitrary_hosts_and_malformed_ids(url, expected)
 
 
 @pytest.mark.asyncio
+async def test_video_verification_calls_real_oembed_helper(monkeypatch):
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        if request.url.path == "/oembed":
+            assert request.url.params["url"] == (
+                "https://www.youtube.com/watch?v=abcdefghijk"
+            )
+            return httpx.Response(200, json={
+                "title": "Demonstration",
+                "author_name": "Creator",
+                "html": '<iframe src="https://www.youtube.com/embed/abcdefghijk"></iframe>',
+            })
+        return httpx.Response(200, text="var ytInitialPlayerResponse = " + json.dumps({
+            "playabilityStatus": {"status": "OK", "playableInEmbed": True},
+            "videoDetails": {
+                "videoId": "abcdefghijk", "lengthSeconds": "420",
+                "shortDescription": SOURCE * 10,
+            },
+        }))
+
+    client_type = httpx.AsyncClient
+    transport = httpx.MockTransport(respond)
+    monkeypatch.setattr(sources.httpx, "AsyncClient", lambda **kw: client_type(
+        transport=transport, **kw
+    ))
+    result = await sources.verify_video_source("https://youtu.be/abcdefghijk")
+    assert result["title"] == "Demonstration"
+    assert result["seconds"] == 420
+    assert [r.url.path for r in requests] == ["/oembed", "/watch"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "failure", ["none", "age_gate", "wrong_embed", "wrong_video", "snippet_only"]
 )

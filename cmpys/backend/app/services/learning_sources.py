@@ -96,7 +96,8 @@ async def verify_video_source(url: str, source: dict | None = None) -> dict | No
     if not video_id:
         return None
     canonical = f"https://www.youtube.com/watch?v={video_id}"
-    metadata = await _youtube_oembed_metadata(canonical)
+    async with httpx.AsyncClient(timeout=12, follow_redirects=False) as client:
+        metadata = await _youtube_oembed_metadata(client, canonical)
     if not metadata or not metadata.get("title") or not metadata.get("author_name"):
         return None
     offered = re.search(
