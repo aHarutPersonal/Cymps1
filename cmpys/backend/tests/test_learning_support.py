@@ -126,6 +126,24 @@ def test_companion_cache_rechecks_content_hash_and_publication():
     assert not books.companion_ready(resource)
 
 
+def test_multiple_distinct_quotes_can_support_one_lesson_source_pair():
+    candidate, verdict = draft(), review()
+    another = "The author also describes how a recognizable situation makes a small action easier to start."
+    second = copy.deepcopy(verdict.evidence[0])
+    second.support_quote = another
+    verdict.evidence.append(second)
+    assert books.validate_review(candidate, [{"id": "s1", "text": SOURCE + " " + another}], verdict)
+
+
+def test_evidence_normalizes_typography_without_changing_words():
+    quoted = 'The author says "choose a concrete cue" and describes a small action.'
+    source = 'The author says “choose a **concrete cue**” and describes a small action.'
+    assert books._normal(quoted) in books._normal(source)
+    invented = quoted.replace('concrete cue', 'large reward')
+    assert books._normal(invented) not in books._normal(source)
+    assert books._normal('x*y*z') == 'x*y*z'
+
+
 @pytest.mark.asyncio
 async def test_catalog_snippets_never_trigger_book_generation(monkeypatch):
     monkeypatch.setattr(

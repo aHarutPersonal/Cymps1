@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from html import unescape
 import json
 import math
 import re
@@ -25,7 +26,7 @@ from app.services.llm.telemetry import record_llm_response
 from app.services.planning.lesson_package import digest
 from app.services.practice.contracts import StrictModel
 
-VERSION = 3
+VERSION = 4
 
 
 class CompanionLesson(StrictModel):
@@ -150,6 +151,11 @@ async def structured_call(operation, model, system, data, *, max_tokens=6000):
 
 
 def _normal(text: str) -> str:
+    # Compare the words the reader sees, retaining their order and punctuation.
+    # Public pages use curly quotes and Markdown emphasis; these are formatting,
+    # not changes to the attributed statement. Do not use fuzzy word matching.
+    text = unescape(text).translate(str.maketrans({"“": '"', "”": '"', "‘": "'", "’": "'"}))
+    text = re.sub(r"(?<!\w)(\*\*?)(?=\S)(.+?)(?<=\S)\1(?!\w)", r"\2", text)
     return " ".join(text.casefold().split())
 
 
@@ -169,6 +175,7 @@ def validate_review(
         return False
     inventory = {s["id"]: s for s in sources}
     covered = set()
+    evidence_rows = set()
     for evidence in review.evidence:
         if (
             evidence.lesson_index >= len(draft.lessons)
@@ -184,8 +191,10 @@ def validate_review(
         ):
             return False
         pair = (evidence.lesson_index, evidence.source_id)
-        if pair in covered:
+        row = (*pair, quote)
+        if row in evidence_rows:
             return False
+        evidence_rows.add(row)
         covered.add(pair)
     expected = {
         (i, sid) for i, lesson in enumerate(draft.lessons) for sid in lesson.source_ids

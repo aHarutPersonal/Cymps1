@@ -30,7 +30,7 @@ from app.services.planning.artifact_identity import (
 from app.services.planning.lesson_package import current_package_approval, digest
 from app.services.practice.contracts import StrictModel
 
-VERSION = 3
+VERSION = 4
 
 
 def support_input(item, step_id: str | None, book_title: str | None) -> dict:
