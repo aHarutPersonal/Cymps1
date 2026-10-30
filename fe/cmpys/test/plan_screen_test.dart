@@ -1050,8 +1050,8 @@ void main() {
 
       expect(
         find.text(
-          'Habits repeat daily for this week. Tap one to open it, or check '
-          'it off right here. It counts for today only.',
+          'Open a routine to practise, check your answers and record a correction. '
+          'Rest days are part of your schedule.',
         ),
         findsOneWidget,
       );

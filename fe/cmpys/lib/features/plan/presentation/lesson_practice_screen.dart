@@ -33,6 +33,8 @@ class LessonPracticeScreen extends ConsumerStatefulWidget {
     this.dark = false,
     this.isTutorial = false,
     this.tutorialNumber,
+    this.isReview = false,
+    this.reviewSeconds,
   });
   final String itemId, stepId, lessonTitle, lessonContent;
   final String? artifactJobId;
@@ -42,6 +44,8 @@ class LessonPracticeScreen extends ConsumerStatefulWidget {
   /// paper in every reader theme, as in the design.
   final bool dark;
   final bool isTutorial;
+  final bool isReview;
+  final int? reviewSeconds;
 
   /// The tutorial's number in its mission: the top bar reads "Practice ·
   /// Tutorial n".
@@ -86,7 +90,16 @@ const _danger = AppColors.danger;
 
 class _LessonPracticeScreenState extends ConsumerState<LessonPracticeScreen>
     with WidgetsBindingObserver {
-  String get _unit => widget.isTutorial ? 'tutorial' : 'lesson';
+  String get _unit => widget.isReview
+      ? 'session'
+      : widget.isTutorial
+      ? 'tutorial'
+      : 'lesson';
+  DateTime? _reviewEnds;
+  Timer? _reviewClock;
+  int get _reviewLeft => _reviewEnds == null
+      ? 0
+      : _reviewEnds!.difference(DateTime.now()).inSeconds.clamp(0, 86400);
   LessonPracticeState? _state;
   late String? _artifactJobId = widget.artifactJobId;
   final _controllers = <String, TextEditingController>{};
@@ -131,6 +144,14 @@ class _LessonPracticeScreenState extends ConsumerState<LessonPracticeScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _decimal = _deviceDecimal();
+    if (widget.isReview && widget.reviewSeconds != null) {
+      _reviewEnds = DateTime.now().add(
+        Duration(seconds: widget.reviewSeconds!),
+      );
+      _reviewClock = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (mounted) setState(() {});
+      });
+    }
     unawaited(_load());
   }
 
@@ -164,6 +185,7 @@ class _LessonPracticeScreenState extends ConsumerState<LessonPracticeScreen>
 
   @override
   void dispose() {
+    _reviewClock?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _debounce?.cancel();
     _tickTimer?.cancel();
@@ -812,7 +834,9 @@ class _LessonPracticeScreenState extends ConsumerState<LessonPracticeScreen>
                 V3TopBar(
                   solid: true,
                   onBack: () => _leave(),
-                  title: widget.isTutorial && widget.tutorialNumber != null
+                  title: widget.isReview
+                      ? 'Practice and review'
+                      : widget.isTutorial && widget.tutorialNumber != null
                       ? 'Practice · Tutorial ${widget.tutorialNumber}'
                       : 'Practice',
                   // At most 42% of the bar, so the title keeps its room on a
@@ -826,20 +850,39 @@ class _LessonPracticeScreenState extends ConsumerState<LessonPracticeScreen>
                       children: [
                         if (ready) Flexible(child: _draftPill()),
                         const SizedBox(width: 6),
-                        V3IconButton(
-                          icon: V3Icons.book,
-                          label: 'Refer to $_unit',
-                          onPressed: _showLesson,
-                        ),
+                        if (!widget.isReview)
+                          V3IconButton(
+                            icon: V3Icons.book,
+                            label: 'Refer to $_unit',
+                            onPressed: _showLesson,
+                          ),
                       ],
                     ),
                   ),
                 ),
                 if (ready) _stepper(s, blocked),
+                if (widget.isReview)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+                    child: Text(
+                      _reviewLeft > 0
+                          ? 'Recall before checking. ${_reviewLeft ~/ 60}:${(_reviewLeft % 60).toString().padLeft(2, '0')} left in this session.'
+                          : 'Session budget reached. Save your work and return next time.',
+                      style: AppTypography.sans(
+                        12.5,
+                      ).copyWith(color: AppColors.ink2),
+                    ),
+                  ),
               ],
             ),
             footer: _loading
                 ? const SizedBox.shrink()
+                : widget.isReview && _reviewLeft == 0
+                ? V3Button(
+                    full: true,
+                    onPressed: blocked ? null : () => _leave(),
+                    child: const Text('Save and return'),
+                  )
                 : activity == null
                 ? _prepareButton(s)
                 : _cta(s!, activity, attempt, phase, blocked),
@@ -1090,8 +1133,11 @@ class _LessonPracticeScreenState extends ConsumerState<LessonPracticeScreen>
     );
   }
 
-  String _kindLabel(PracticeActivity a) =>
-      a.isTransfer ? 'Independent' : 'Guided';
+  String _kindLabel(PracticeActivity a) => widget.isReview
+      ? 'Review'
+      : a.isTransfer
+      ? 'Independent'
+      : 'Guided';
 
   // ── footer ────────────────────────────────────────────────────────────────
 
@@ -1171,7 +1217,7 @@ class _LessonPracticeScreenState extends ConsumerState<LessonPracticeScreen>
             iconRight: V3Icons.arrowR,
             onPressed: blocked ? null : () => _selectActivity(_index + 1),
             child: Text(
-              s.activities[_index + 1].isTransfer
+              !widget.isReview && s.activities[_index + 1].isTransfer
                   ? 'Continue to independent case'
                   : 'Continue to the next case',
             ),
@@ -1332,7 +1378,11 @@ class _LessonPracticeScreenState extends ConsumerState<LessonPracticeScreen>
       _Phase.result => total,
     };
     final editable = phase == _Phase.edit && !blocked && !s.complete;
-    final canSolve = a.isTransfer ? passed : attempts.isNotEmpty;
+    final canSolve = widget.isReview
+        ? attempts.isNotEmpty
+        : a.isTransfer
+        ? passed
+        : attempts.isNotEmpty;
     final solution = _solutionFor(s, a);
     final guided = !a.isTransfer;
     final legacyHints = [
@@ -1480,7 +1530,7 @@ class _LessonPracticeScreenState extends ConsumerState<LessonPracticeScreen>
               ],
             ),
           ),
-        if (a.isTransfer && !passed)
+        if (a.isTransfer && !passed && !widget.isReview)
           Padding(
             padding: const EdgeInsets.only(top: 14),
             child: Row(
@@ -1503,7 +1553,9 @@ class _LessonPracticeScreenState extends ConsumerState<LessonPracticeScreen>
           Padding(
             padding: const EdgeInsets.only(top: 18),
             child: Text(
-              s.evidenceStatus == 'transfer_without_hint'
+              widget.isReview
+                  ? 'Review saved. This checks retention on familiar cases. Your lessons provide new applications.'
+                  : s.evidenceStatus == 'transfer_without_hint'
                   ? 'New case passed without an in-app hint. This result can guide future ${_unit}s.'
                   : s.evidenceStatus == 'completed_with_support'
                   ? 'Practice completed with support on the new case. Future ${_unit}s can include another independent check.'

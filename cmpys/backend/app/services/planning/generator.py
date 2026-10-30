@@ -323,6 +323,7 @@ def validate_plan_contract(
                     "success_metric"
                 )
             if task.type in daily_types:
+                issues.extend(daily_workload_issues(task))
                 instruction_words = len((task.daily_instructions or "").split())
                 if instruction_words < 40:
                     issues.append(
@@ -502,8 +503,17 @@ def daily_workload_issues(task: BinaryTask) -> list[str]:
     # Verify explicit weekly totals; do not interpret a single session as a week.
     totals = re.findall(r"\b(\d+(?:\.\d+)?)\s*minutes?\s+(?:per|a|each)\s+week\b", text, re.IGNORECASE)
     expected = float(task.estimated_hours) * 60
-    return [f"Daily task '{task.title}' claims {v} minutes per week but stores {expected:g}; make the cadence and workload agree."
-            for v in totals if abs(float(v) - expected) > 0.01]
+    from app.services.planning.habit_schedule import cadence_claims
+    issues = [f"Daily task '{task.title}' claims {v} minutes per week but stores {expected:g}; make the cadence and workload agree."
+              for v in totals if abs(float(v) - expected) > 0.01]
+    for count, minutes in cadence_claims(text):
+        if abs(count * minutes - expected) > .01:
+            issues.append(f"Daily task '{task.title}' prescribes {count} × {minutes:g} = {count * minutes:g} minutes, but stores {expected:g}.")
+    if re.search(r"whichever (?:comes|is) later", text, re.I):
+        issues.append("Stop and save at the session time limit; never use whichever comes later.")
+    if re.search(r"(?:supplied|provided) (?:worked (?:match )?example|(?:fictional )?(?:mini-)?dataset|answer key)", text, re.I):
+        issues.append("Use the prepared lesson review; do not promise a supplied example, dataset or answer key inside habit prose.")
+    return issues
 
 
 def validate_week_against_backbone(

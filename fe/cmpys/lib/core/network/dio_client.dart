@@ -97,6 +97,10 @@ class DioClient {
   /// Auth interceptor - automatically adds Authorization header.
   InterceptorsWrapper get _authInterceptor => InterceptorsWrapper(
     onRequest: (options, handler) async {
+      options.headers['X-Learning-UTC-Offset'] = DateTime.now()
+          .timeZoneOffset
+          .inMinutes
+          .toString();
       // Skip auth for public endpoints
       if (options.extra['skipAuth'] == true) {
         return handler.next(options);

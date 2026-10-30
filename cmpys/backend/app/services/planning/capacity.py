@@ -161,12 +161,14 @@ def plan_item_mission_hours(item: Any) -> int | float:
     return hours_value(plan_item_minutes(item))
 
 
+DEFAULT_PRACTICE_WEEKDAYS = (0, 2, 4)
+
 _COUNT_WORDS = {2: "two", 3: "three", 4: "four", 5: "five"}
 
 
 def rhythm_cadence(rhythm_minutes: int) -> tuple[int, int | float]:
     """Sessions per week and minutes per session for a daily rhythm."""
-    sessions = 3 if rhythm_minutes < 60 else 4
+    sessions = min(len(DEFAULT_PRACTICE_WEEKDAYS), max(1, rhythm_minutes))
     per_session = rhythm_minutes / sessions
     return sessions, int(per_session) if per_session == int(per_session) else per_session
 
@@ -175,7 +177,6 @@ def capacity_rule(weekly_minutes: int) -> str:
     """The capacity rule a plan prompt must follow for this week size."""
     if weekly_minutes < LOW_CAPACITY_MINUTES:
         split = capacity_split(weekly_minutes)
-        sessions, per_session = rhythm_cadence(split.rhythm_minutes)
         return (
             f"This is a short week of {weekly_minutes} minutes, under 3 hours, and it is "
             "a real plan. Use exactly one mission task of "
@@ -185,8 +186,8 @@ def capacity_rule(weekly_minutes: int) -> str:
             f"{format_hours(split.rhythm_minutes)}). The 2-hour mission minimum, the "
             "1-hour daily minimum and the whole-hour rule do not apply to this week. "
             "Scope the mission to a few short 5-8 minute tutorials with their practice, "
-            f"and the rhythm to {_COUNT_WORDS.get(sessions, str(sessions))} "
-            f"{per_session}-minute sessions."
+            "and let the runtime divide the rhythm's minutes among the learner's "
+            "practice days. Do not hard-code a separate per-session timer."
         )
     if weekly_minutes % 60:
         return (

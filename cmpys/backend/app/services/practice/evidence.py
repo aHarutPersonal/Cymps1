@@ -4,7 +4,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 
 from app.models.lesson_practice import LessonPractice
-from app.models.plan import Plan, PlanItem
+from app.models.plan import Plan, PlanItem, PlanItemType
 from app.services.practice.contracts import Workbook, lesson_version
 
 
@@ -66,6 +66,13 @@ def practice_summary(row, workbook: Workbook) -> dict:
             }
         )
     transfer = [a for a in activities if a["kind"] == "transfer"]
+    if getattr(workbook, "purpose", None) == "review":
+        # Repeating a known case checks retention; it is not a new transfer test.
+        first = [next((a for a in (row.attempts_json or []) if a.get("activity_id") == activity.id), {})
+                 for activity in workbook.activities]
+        return {"status": "in_progress" if not any(first) else "reviewed_without_hint" if all(a.get("passed") is True and a.get("assisted") is False for a in first)
+                else "review_needs_practice", "activities": activities,
+                "scope": "Review of previously attempted cases. This measures retention on these cases, not novel transfer or broad mastery."}
     if all(a["status"].startswith("passed_") for a in activities):
         status = (
             "transfer_without_hint"
@@ -107,6 +114,7 @@ async def load_recent_practice_evidence(
             Plan.idol_id == idol_id,
             Plan.roadmap_json["source_session_id"].as_string() == session_id,
             LessonPractice.state == "ready",
+            PlanItem.type.notin_((PlanItemType.HABIT, PlanItemType.PRACTICE)),
         )
         .order_by(LessonPractice.updated_at.desc(), LessonPractice.id.desc())
         .limit(8)

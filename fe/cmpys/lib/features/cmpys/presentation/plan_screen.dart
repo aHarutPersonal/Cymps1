@@ -715,8 +715,8 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen>
         children: [
           V3Rise(
             child: Text(
-              'Habits repeat daily for this week. Tap one to open it, or check '
-              'it off right here. It counts for today only.',
+              'Open a routine to practise, check your answers and record a correction. '
+              'Rest days are part of your schedule.',
               style: AppTypography.sans(
                 13.5,
               ).copyWith(color: AppColors.ink2, height: 1.5),
@@ -758,7 +758,9 @@ class _CmpysPlanScreenState extends ConsumerState<CmpysPlanScreen>
                 V3CheckDot(
                   key: ValueKey('toggle-daily-${item.id}'),
                   done: on,
-                  onPressed: () => toggleHabit(view, item, toastOnUndo: true),
+                  onPressed: () => on || !item.requiresReview
+                      ? toggleHabit(view, item, toastOnUndo: true)
+                      : _openItem(item.id),
                 ),
                 const SizedBox(width: 5),
                 Expanded(

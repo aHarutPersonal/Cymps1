@@ -768,9 +768,10 @@ class _CmpysTodayScreenState extends ConsumerState<CmpysTodayScreen>
         style: AppTypography.sans(14).copyWith(color: AppColors.ink2),
       );
     }
-    final done = items.where(isHabitDone).length;
+    final scheduled = items.where((i) => i.isDue).toList();
+    final done = scheduled.where(isHabitDone).length;
     final left = items
-        .where((i) => !isHabitDone(i))
+        .where((i) => i.isDue && !isHabitDone(i))
         .fold<int>(0, (sum, i) => sum + habitSessionMinutes(i));
     return Container(
       decoration: v3Card(),
@@ -786,12 +787,12 @@ class _CmpysTodayScreenState extends ConsumerState<CmpysTodayScreen>
             child: Row(
               children: [
                 V3Ring(
-                  value: done / items.length,
+                  value: scheduled.isEmpty ? 0 : done / scheduled.length,
                   size: 38,
                   strokeWidth: 3.5,
                   color: AppColors.sage2,
                   child: Text(
-                    '$done/${items.length}',
+                    '$done/${scheduled.length}',
                     style: AppTypography.sans(
                       12,
                       FontWeight.w700,
@@ -801,8 +802,14 @@ class _CmpysTodayScreenState extends ConsumerState<CmpysTodayScreen>
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    done == items.length
-                        ? 'All done. Counted for today only.'
+                    scheduled.isEmpty
+                        ? items.any((i) => i.scheduledToday)
+                              ? 'No review due. Continue your lessons.'
+                              : 'Rest day. Your next practice is scheduled.'
+                        : done == scheduled.length
+                        ? items.any((i) => i.requiresReview)
+                              ? 'Scheduled practice logged.'
+                              : 'All done. Counted for today only.'
                         : 'About $left minutes left',
                     style: AppTypography.sans(
                       13.5,
@@ -844,7 +851,9 @@ class _CmpysTodayScreenState extends ConsumerState<CmpysTodayScreen>
                 children: [
                   V3CheckDot(
                     done: on,
-                    onPressed: () => toggleHabit(view, item),
+                    onPressed: () => (on || !item.requiresReview)
+                        ? toggleHabit(view, item)
+                        : _openPlanItem(item.id),
                   ),
                   const SizedBox(width: 7),
                   Expanded(
@@ -867,7 +876,8 @@ class _CmpysTodayScreenState extends ConsumerState<CmpysTodayScreen>
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          '${habitSessionMinutes(item)} min',
+                          item.scheduleLabel ??
+                              '${habitSessionMinutes(item)} min',
                           style: AppTypography.sans(12)
                               .merge(AppTypography.tnum)
                               .copyWith(color: AppColors.ink3),
@@ -961,11 +971,19 @@ class _CmpysTodayScreenState extends ConsumerState<CmpysTodayScreen>
     required bool wide,
   }) {
     final summary = ref.watch(todayStreakProvider).valueOrNull;
-    final current = summary?.current ?? view.streak;
-    final best = math.max(summary?.longest ?? 0, current);
-    final habitsTotal = view.items.length;
-    final habitsDone = view.items.where((i) => isHabitDone(i)).length;
+    final calendar = summary?.totalPracticeDays != null;
+    final current = calendar
+        ? summary!.days.where((d) => d.completed).length
+        : summary?.current ?? view.streak;
+    final best = calendar
+        ? summary!.totalPracticeDays!
+        : math.max(summary?.longest ?? 0, current);
+    final habitsTotal = view.items.where((i) => i.isDue).length;
+    final habitsDone = view.items
+        .where((i) => i.isDue && isHabitDone(i))
+        .length;
     final streak = _StreakCard(
+      calendar: calendar,
       current: current,
       best: best,
       week: streakWeek(summary, now),
@@ -1909,6 +1927,7 @@ class _NextUpCardState extends State<_NextUpCard>
 
 class _StreakCard extends StatelessWidget {
   const _StreakCard({
+    this.calendar = false,
     required this.current,
     required this.best,
     required this.week,
@@ -1918,6 +1937,7 @@ class _StreakCard extends StatelessWidget {
 
   final int current;
   final int best;
+  final bool calendar;
 
   /// Monday → Sunday from [streakWeek]; null is today.
   final List<bool?> week;
@@ -1956,7 +1976,9 @@ class _StreakCard extends StatelessWidget {
           ),
           const SizedBox(height: 2),
           Text(
-            'day streak · best $best',
+            calendar
+                ? 'practice days this week · $best total'
+                : 'day streak · best $best',
             style: AppTypography.sans(12).copyWith(color: AppColors.ink3),
           ),
           const SizedBox(height: 12),

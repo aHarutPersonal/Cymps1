@@ -52,6 +52,17 @@ class BookReadingAccess {
 /// API access for the generated 12-week plan: current plan, generation-job
 /// polling, and per-item lesson details.
 class PlanRepository {
+  Future<void> saveReviewReflection(
+    String itemId,
+    String text,
+    String date,
+  ) async {
+    await _dioClient.put(
+      '/plan-items/$itemId/reflection',
+      data: {'text': text, 'session_date': date},
+    );
+  }
+
   Future<void> saveDailyReflection(String itemId, String text) async {
     await _dioClient.put(
       '/plan-items/$itemId/reflection',
@@ -223,6 +234,17 @@ class PlanRepository {
   Future<DailyStatus> getDailyStatus(String itemId) async {
     final response = await _dioClient.get('/plan-items/$itemId/daily-status');
     return DailyStatus.fromJson(response.data as Map<String, dynamic>);
+  }
+
+  Future<void> savePracticeSchedule(
+    String itemId,
+    List<int> weekdays,
+    String cue,
+  ) async {
+    await _dioClient.put(
+      '/plan-items/$itemId/practice-schedule',
+      data: {'weekdays': weekdays, 'cue': cue},
+    );
   }
 
   /// Explicitly retry a mission lesson after the backend reports generation

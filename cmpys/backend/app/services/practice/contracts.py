@@ -264,6 +264,24 @@ class Workbook(StrictModel):
         return self
 
 
+class ReviewWorkbook(Workbook):
+    """Server-only retention session; never part of a lesson-generation schema."""
+    purpose: Literal["review"] = "review"
+    activities: list[Activity] = Field(min_length=1, max_length=3)
+    review: dict
+
+    @model_validator(mode="after")
+    def check_sequence(self):
+        if len({a.id for a in self.activities}) != len(self.activities):
+            raise ValueError("Duplicate activity ids")
+        return self
+
+
+def read_workbook(payload: dict) -> Workbook:
+    model = ReviewWorkbook if payload.get("purpose") == "review" else Workbook
+    return model.model_validate(payload)
+
+
 def check_generated_fields(activity_id: str, fields) -> None:
     """Rules for NEWLY generated activities; stored workbooks never run this.
 
@@ -392,6 +410,11 @@ def lesson_version(item, step: dict) -> str:
 
 def public_workbook(workbook: Workbook) -> dict:
     result = workbook.model_dump()
+    # Source lesson text and private identities are used only for checking.
+    if "review" in result:
+        result["review"] = {k: v for k, v in workbook.review.items() if k in {
+            "date", "budget_minutes", "source_titles", "recall_prompt", "next_review_date"
+        }}
     for activity in result["activities"]:
         activity.pop("hint")
         activity.pop("worked_solution")

@@ -62,7 +62,7 @@ BACKBONE CONTRACT:
 - Mission types are project, course, or reading. Daily types are habit or
   practice. Every week must contain both categories.
   A weekly interview, experiment, workshop or guided application is a project
-  mission. The type practice is reserved for a short REPEATED DAILY rhythm;
+  mission. The type practice is reserved for a short recurring learning-review routine;
   never use practice as one of the two required weekly mission slots.
 - Every mission task receives 2-8 estimated hours. This is the complete weekly
   mission block, including its right-sized guided lessons and deliberate practice.
@@ -72,6 +72,10 @@ BACKBONE CONTRACT:
   Use whole integer hours unless the CAPACITY RULE allows half or quarter
   hours: other fractions are rounded for storage and cannot be used to
   squeeze extra tasks into the learner's weekly capacity.
+- Prefer ONE anchor review routine. Add a second only for a distinct purpose
+  that fits the same weekly budget. Its reviews reuse attempted lesson exercises,
+  include corrections, and carry prior concepts across weeks. The server owns
+  practice days and session duration; do not prescribe a competing schedule.
 - Titles name the exact domain skill, artifact, book, course, or practice.
   Do not use generic self-help language.
 - success_metric is binary and names the artifact, quantity, or demonstrated

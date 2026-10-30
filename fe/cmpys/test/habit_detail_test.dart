@@ -8,6 +8,8 @@ import 'package:cmpys/core/ui/narration_dock_page.dart';
 import 'package:cmpys/core/ui/v3/v3.dart';
 import 'package:cmpys/features/cmpys/state/today_data.dart';
 import 'package:cmpys/features/plan/data/plan_repository.dart';
+import 'package:cmpys/features/plan/data/practice_repository.dart';
+import 'package:cmpys/features/plan/models/practice_models.dart';
 import 'package:cmpys/features/plan/models/plan_models.dart';
 import 'package:cmpys/features/plan/presentation/habit_detail_view.dart';
 import 'package:cmpys/features/plan/presentation/plan_item_detail_screen.dart';
@@ -21,6 +23,8 @@ PlanItemDetailed _habit({
   int? minutes = 14,
   int? sessionMinutes = 2,
   String reflection = '',
+  Map<String, dynamic>? schedule,
+  Map<String, dynamic>? review,
 }) => PlanItemDetailed(
   item: BackendPlanItem(
     id: 'h1',
@@ -40,6 +44,8 @@ PlanItemDetailed _habit({
   dailyInstructions: 'Open a blank page and write for the whole timer.',
   dailyReflection: reflection,
   completedToday: doneToday,
+  habitSchedule: schedule,
+  habitReview: review,
 );
 
 class _HabitRepo extends Fake implements PlanRepository {
@@ -72,6 +78,10 @@ class _HabitRepo extends Fake implements PlanRepository {
     if (failSaves) throw Exception('offline');
     saved.add(text);
   }
+
+  @override
+  Future<void> saveReviewReflection(String itemId, String text, String date) =>
+      saveDailyReflection(itemId, text);
 
   @override
   Future<DailyStatus> getDailyStatus(String itemId) async {
@@ -132,7 +142,183 @@ void _tallScreen(WidgetTester tester) {
   addTearDown(tester.view.reset);
 }
 
+class _ReviewRepo extends Fake implements PracticeRepository {
+  int preparations = 0;
+  final state = LessonPracticeState.fromJson({
+    'state': 'ready',
+    'revision': 1,
+    'lesson_version': 'review-version',
+    'answers': <String, String>{},
+    'attempts': [],
+    'hints': [],
+    'workbook': {
+      'title': 'Practice and review',
+      'purpose': 'review',
+      'activities': [
+        {
+          'id': 'review_case',
+          'title': 'A familiar case',
+          'kind': 'transfer',
+          'instructions':
+              'Use the supplied figures to calculate the remaining units.',
+          'minutes_min': 3,
+          'minutes_max': 6,
+          'data': [
+            {'id': 'received', 'label': 'Received', 'value': 12},
+          ],
+          'fields': [
+            {
+              'id': 'answer',
+              'label': 'How many units remain?',
+              'kind': 'number',
+            },
+          ],
+        },
+      ],
+    },
+  });
+  @override
+  Future<LessonPracticeState> load(
+    String item,
+    String step,
+    String? artifact,
+  ) async => state;
+}
+
 void main() {
+  const schedule = <String, dynamic>{
+    'weekdays': [0, 2, 4],
+    'label': 'Mon, Wed, Fri · 20 min',
+    'scheduled_today': false,
+    'next_date': '2026-11-02',
+    'cue': 'After breakfast',
+  };
+
+  testWidgets('rest day has exact cadence and no empty completion shortcut', (
+    tester,
+  ) async {
+    _tallScreen(tester);
+    final repo = _HabitRepo();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: _overrides(repo),
+        child: MaterialApp(
+          home: HabitDetailView(
+            detailed: _habit(
+              minutes: 60,
+              sessionMinutes: 20,
+              schedule: schedule,
+              review: {
+                'date': '2026-10-31',
+                'available': false,
+                'attempted': false,
+                'message': 'Rest day. Your next practice day is 2026-11-02.',
+              },
+            ),
+            onReload: () async {},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Mon, Wed, Fri · 20 min'), findsOneWidget);
+    expect(find.text('20:00'), findsOneWidget);
+    expect(find.text('Rest day'), findsOneWidget);
+    expect(find.text('of 3 practice days logged'), findsOneWidget);
+    expect(find.text('Mark done for today'), findsNothing);
+    expect(find.text('No review ready'), findsOneWidget);
+    expect(find.text('After breakfast'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets(
+    'a habit opens its dated exercise with inputs and answer fields',
+    (tester) async {
+      _tallScreen(tester);
+      final repo = _HabitRepo();
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            ..._overrides(repo),
+            practiceRepositoryProvider.overrideWithValue(_ReviewRepo()),
+          ],
+          child: MaterialApp(
+            home: HabitDetailView(
+              detailed: _habit(
+                minutes: 60,
+                sessionMinutes: 20,
+                schedule: {...schedule, 'scheduled_today': true},
+                review: {
+                  'date': '2026-10-30',
+                  'step_id': 'review_2026-10-30',
+                  'available': true,
+                  'attempted': false,
+                },
+              ),
+              onReload: () async {},
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Start review'));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.text('A familiar case'), findsOneWidget);
+      expect(find.text('How many units remain?'), findsOneWidget);
+      expect(find.text('Received'), findsOneWidget);
+      expect(find.text('Review'), findsWidgets);
+      expect(find.text('Independent'), findsNothing);
+      expect(repo.toggles, 0);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'a failed review asks for a correction before participation can be logged',
+    (tester) async {
+      _tallScreen(tester);
+      final repo = _HabitRepo();
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: _overrides(repo),
+          child: MaterialApp(
+            home: HabitDetailView(
+              detailed: _habit(
+                minutes: 60,
+                sessionMinutes: 20,
+                schedule: schedule,
+                review: {
+                  'date': '2026-10-30',
+                  'available': true,
+                  'attempted': true,
+                  'needs_correction': true,
+                },
+              ),
+              onReload: () async {},
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      V3Button button() => tester.widget<V3Button>(
+        find.ancestor(
+          of: find.text('Log practice session'),
+          matching: find.byType(V3Button),
+        ),
+      );
+      expect(button().onPressed, isNull);
+      await tester.enterText(
+        find.byType(TextField),
+        'I subtracted the expense from revenue, rather than adding it.',
+      );
+      await tester.pump(const Duration(seconds: 1));
+      expect(button().onPressed, isNotNull);
+      expect(repo.saved.single, contains('subtracted'));
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
   testWidgets('timer_counts_down_and_resets', (tester) async {
     final repo = _HabitRepo();
     var now = DateTime(2026, 10, 27, 9);
@@ -194,7 +380,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('DAILY HABIT 1 OF 2 · WEEK 3'), findsOneWidget);
-    expect(find.text('Due today'), findsOneWidget);
+    expect(find.text('Practice day'), findsOneWidget);
     expect(find.text('2 min'), findsOneWidget);
 
     await tester.tap(find.text('Mark done for today'));
@@ -203,7 +389,7 @@ void main() {
     expect(find.text('Mark as not done'), findsOneWidget);
     expect(find.text('Done today'), findsOneWidget);
     expect(
-      find.text('Counted for today. It’ll be back tomorrow.'),
+      find.text('Session logged. Return on your next scheduled practice day.'),
       findsOneWidget,
     );
     expect(find.text('Start timer'), findsNothing);
@@ -240,7 +426,7 @@ void main() {
 
     expect(find.byKey(const ValueKey('habit-day-done')), findsNothing);
     expect(find.byKey(const ValueKey('habit-day-today')), findsOneWidget);
-    expect(find.text('of 7 days done'), findsOneWidget);
+    expect(find.text('of 7 practice days logged'), findsOneWidget);
     expect(find.text('0'), findsOneWidget);
   });
 
@@ -299,7 +485,7 @@ void main() {
     await tester.pumpWidget(_screen(repo));
     await tester.pumpAndSettle();
 
-    expect(find.text('of 7 days done'), findsOneWidget);
+    expect(find.text('of 7 practice days logged'), findsOneWidget);
     expect(find.byKey(const ValueKey('habit-day-today')), findsOneWidget);
   });
 
@@ -473,7 +659,7 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('an older server’s habit shows a seventh of its week', (
+  testWidgets('an older server’s habit preserves its legacy fallback', (
     tester,
   ) async {
     Future<void> show(int weekly) async {

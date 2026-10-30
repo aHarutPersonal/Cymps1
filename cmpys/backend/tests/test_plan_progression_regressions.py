@@ -578,7 +578,8 @@ async def test_generic_item_routes_hide_rows_for_invalid_modern_status(
 
 
 @pytest.mark.asyncio
-async def test_daily_detail_is_immediate_and_uses_daily_completion() -> None:
+async def test_daily_detail_is_immediate_and_uses_daily_completion(monkeypatch) -> None:
+    monkeypatch.setattr("app.services.practice.habit_review.review_status", AsyncMock(return_value={"available": False}))
     item = _item(
         "practice-1",
         PlanItemType.PRACTICE,
@@ -601,7 +602,9 @@ async def test_daily_detail_is_immediate_and_uses_daily_completion() -> None:
     assert response.details_status == DetailsStatus.AVAILABLE
     assert response.job_id is None
     assert response.completed_today is True
-    assert response.daily_instructions == "Practice the drill for twenty minutes."
+    assert "Open your review" in response.daily_instructions
+    assert item.meta_json["daily_instructions"] == "Practice the drill for twenty minutes."
+    assert response.habit_review == {"available": False}
     db.execute.assert_not_awaited()
 
 
@@ -1477,7 +1480,8 @@ async def test_manual_daily_item_persists_script_without_detail_generation(
     created_item = db.add.call_args.args[0]
     assert response.id == "daily-new"
     assert created_item.meta_json == {
-        "daily_instructions": "Practice deliberately for 20 minutes."
+        "daily_instructions": "Practice deliberately for 20 minutes.",
+        "practice_mode": "manual",
     }
     assert db.add.call_count == 1
     db.flush.assert_awaited_once_with()

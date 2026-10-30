@@ -3,12 +3,13 @@ Daily task completion endpoints for habits and practices.
 
 LLM USAGE: NONE (database operations only)
 """
+
 import logging
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
-from sqlalchemy import and_, distinct, func, select
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import and_, distinct, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Annotated
 
@@ -16,7 +17,15 @@ from app.api.dependencies import get_current_user
 from app.core.db import get_db
 from app.models.daily_task_completion import DailyTaskCompletion
 from app.models.plan import Plan, PlanItem, PlanItemCompletion, PlanItemType
-from app.services.planning.capacity import plan_item_minutes, rhythm_cadence
+from app.services.planning.capacity import plan_item_minutes
+from app.services.planning.habit_schedule import (
+    DEFAULT_DAYS,
+    learning_today,
+    practice_instructions,
+    schedule_for,
+    scheduled_streak,
+    uses_checked_review,
+)
 from app.services.planning.artifact_identity import (
     current_item_completion_query_predicates,
 )
@@ -34,10 +43,13 @@ DAILY_TYPES = {PlanItemType.HABIT, PlanItemType.PRACTICE}
 # Helpers
 # =============================================================================
 
+
 async def _get_item_for_user(
     db: AsyncSession,
     item_id: str,
     user_id: str,
+    *,
+    lock: bool = False,
 ) -> PlanItem:
     """Get a plan item, verifying ownership via the parent plan."""
     stmt = (
@@ -50,6 +62,8 @@ async def _get_item_for_user(
             )
         )
     )
+    if lock:
+        stmt = stmt.with_for_update(of=PlanItem)
     result = await db.execute(stmt)
     item = result.scalar_one_or_none()
 
@@ -70,47 +84,58 @@ def _validate_habit_or_practice(item: PlanItem) -> None:
         )
 
 
-async def calculate_streak(db: AsyncSession, user_id: str) -> int:
-    """
-    Calculate the user's current consecutive-day streak.
-
-    Counts consecutive days ending today (or yesterday if no completions today)
-    where the user has at least one DailyTaskCompletion.
-    """
-    today = date.today()
-
-    # Get distinct completed dates descending. The streak walk stops at the
-    # first gap, so a current streak can never exceed the rows scanned before
-    # that gap — cap the fetch instead of loading the user's whole history
-    # (this runs on every Today-screen request).
-    stmt = (
+async def _streak_snapshot(db: AsyncSession, user_id: str) -> dict:
+    plan = (
+        await db.execute(
+            select(Plan)
+            .where(Plan.user_id == user_id)
+            .order_by(Plan.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if plan is None:
+        return {
+            "current_streak": 0,
+            "longest_streak": 0,
+            "last_active_date": None,
+            "days": [],
+            "total_practice_days": 0,
+        }
+    rows = await db.execute(
         select(distinct(DailyTaskCompletion.completed_date))
-        .where(DailyTaskCompletion.user_id == user_id)
-        .order_by(DailyTaskCompletion.completed_date.desc())
-        .limit(400)
+        .join(PlanItem, PlanItem.id == DailyTaskCompletion.plan_item_id)
+        .where(DailyTaskCompletion.user_id == user_id, PlanItem.plan_id == plan.id)
     )
-    result = await db.execute(stmt)
-    dates = [row[0] for row in result.fetchall()]
+    dates = {row[0] for row in rows.fetchall()}
+    today = learning_today()
+    history = (plan.roadmap_json or {}).get("habit_schedule_history") or []
+    current, longest = scheduled_streak(dates, set(DEFAULT_DAYS), today, history)
+    monday, _ = _get_week_start_end(today)
+    days = []
+    for i in range(7):
+        day = monday + timedelta(days=i)
+        weekdays = next(
+            (h["weekdays"] for h in reversed(history) if h["from"] <= day.isoformat()),
+            DEFAULT_DAYS,
+        )
+        days.append(
+            {
+                "date": day.isoformat(),
+                "completed": day in dates,
+                "scheduled": day.weekday() in weekdays,
+            }
+        )
+    return {
+        "current_streak": current,
+        "longest_streak": longest,
+        "last_active_date": max(dates).isoformat() if dates else None,
+        "days": days,
+        "total_practice_days": len(dates),
+    }
 
-    if not dates:
-        return 0
 
-    # Streak must start from today or yesterday
-    if dates[0] != today and dates[0] != today - timedelta(days=1):
-        return 0
-
-    streak = 0
-    expected = dates[0]
-    for d in dates:
-        if d == expected:
-            streak += 1
-            expected -= timedelta(days=1)
-        elif d < expected:
-            # Gap found — stop counting
-            break
-        # d > expected shouldn't happen since we ordered desc
-
-    return streak
+async def calculate_streak(db: AsyncSession, user_id: str) -> int:
+    return (await _streak_snapshot(db, user_id))["current_streak"]
 
 
 def _get_current_plan_week(plan_created_at: datetime) -> int:
@@ -149,9 +174,7 @@ async def _items_and_execution_week(
     plan: Plan,
     user_id: str,
 ) -> tuple[list[PlanItem], int]:
-    items_result = await db.execute(
-        select(PlanItem).where(PlanItem.plan_id == plan.id)
-    )
+    items_result = await db.execute(select(PlanItem).where(PlanItem.plan_id == plan.id))
     items = list(items_result.scalars().all())
     mission_ids = [str(item.id) for item in items if item.type in MISSION_TYPES]
     completed_item_ids: set[str] = set()
@@ -189,6 +212,7 @@ def _get_week_start_end(ref_date: date) -> tuple[date, date]:
 # Schemas
 # =============================================================================
 
+
 class DailyToggleResponse(BaseModel):
     completed: bool
     date: str
@@ -196,6 +220,9 @@ class DailyToggleResponse(BaseModel):
 
 
 class TodayItemResponse(BaseModel):
+    requires_review: bool = True
+    review_available: bool = False
+    review_message: str | None = None
     id: str
     title: str
     type: str
@@ -207,6 +234,8 @@ class TodayItemResponse(BaseModel):
     session_minutes: int | None = None
     completed_today: bool
     daily_instructions: str | None = None
+    schedule: dict | None = None
+    scheduled_today: bool = True
 
 
 class TodayViewResponse(BaseModel):
@@ -218,6 +247,7 @@ class TodayViewResponse(BaseModel):
 
 
 class DayDotResponse(BaseModel):
+    scheduled: bool = True
     date: str
     day_name: str
     completed: bool
@@ -233,6 +263,8 @@ class DailyStatusResponse(BaseModel):
 
 
 class StreakResponse(BaseModel):
+    total_practice_days: int = 0
+    days: list[dict] = Field(default_factory=list)
     current_streak: int
     longest_streak: int
     last_active_date: str | None = None
@@ -254,34 +286,93 @@ class DailyFocusResponse(BaseModel):
     streak: int
 
 
-def _session_minutes(item: PlanItem) -> int:
-    """Minutes of one session of a daily rhythm, at least one.
+class PracticeScheduleRequest(BaseModel):
+    weekdays: list[int] = Field(min_length=1, max_length=7)
+    cue: str = Field(default="", max_length=200)
 
-    The item's minutes are a weekly allocation practised in the sessions
-    ``rhythm_cadence`` gives (three under an hour, else four); halves round up.
-    """
-    _, per_session = rhythm_cadence(plan_item_minutes(item))
-    return max(1, int(per_session + 0.5))
+    @field_validator("weekdays")
+    @classmethod
+    def valid_days(cls, days):
+        if len(set(days)) != len(days) or any(d not in range(7) for d in days):
+            raise ValueError("Choose distinct weekdays from Monday (0) to Sunday (6)")
+        return sorted(days)
+
+
+@router.put("/plan-items/{item_id}/practice-schedule")
+async def update_practice_schedule(
+    item_id: str,
+    data: PracticeScheduleRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    # Lock the parent first for all schedule edits, then its habits in ID order.
+    plan = (
+        await db.execute(
+            select(Plan)
+            .join(PlanItem, PlanItem.plan_id == Plan.id)
+            .where(PlanItem.id == item_id, Plan.user_id == current_user.id)
+            .with_for_update(of=Plan)
+        )
+    ).scalar_one_or_none()
+    if plan is None:
+        raise HTTPException(404, "Plan item not found")
+    items = list(
+        (
+            await db.execute(
+                select(PlanItem)
+                .where(PlanItem.plan_id == plan.id, PlanItem.type.in_(DAILY_TYPES))
+                .order_by(PlanItem.id)
+                .with_for_update()
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not any(str(item.id) == item_id for item in items):
+        raise HTTPException(422, "Schedules belong to practice routines")
+    if any(plan_item_minutes(item) < len(data.weekdays) for item in items):
+        raise HTTPException(
+            422, "Choose fewer days so each session has at least one minute"
+        )
+    today = learning_today()
+    # Keep the current week's allocation intact. Changing a 3×20 schedule
+    # to 2×30 midweek could otherwise add 30 minutes after 20 were spent.
+    effective = (today + timedelta(days=7 - today.weekday())).isoformat()
+    change = {"from": effective, "weekdays": data.weekdays, "cue": data.cue.strip()}
+    history = [
+        h
+        for h in (plan.roadmap_json or {}).get("habit_schedule_history", [])
+        if h["from"] < effective
+    ]
+    history.append(change)
+    plan.roadmap_json = {**(plan.roadmap_json or {}), "habit_schedule_history": history}
+    for item in items:
+        item.meta_json = {**(item.meta_json or {}), "habit_schedule_history": history}
+    await db.commit()
+    return {
+        "effective_from": effective,
+        "weekdays": data.weekdays,
+        "cue": data.cue.strip(),
+    }
+
+
+def _session_minutes(item: PlanItem) -> int:
+    return schedule_for(item)["session_minutes"]
 
 
 def _daily_instructions_for_item(item: PlanItem) -> str | None:
-    """Return the daily script from plan metadata, falling back to detail metadata."""
-    if item.meta_json and isinstance(item.meta_json, dict):
-        value = item.meta_json.get("daily_instructions")
-        if value:
-            return str(value)
-
-    if item.details_json and isinstance(item.details_json, dict):
-        value = item.details_json.get("daily_instructions")
-        if value:
-            return str(value)
-
-    return None
+    """Old saved prose cannot promise missing datasets or a conflicting timer."""
+    if not uses_checked_review(item):
+        return (item.meta_json or {}).get("daily_instructions") or (
+            item.details_json or {}
+        ).get("daily_instructions")
+    return practice_instructions(item)
 
 
 # =============================================================================
 # Endpoints
 # =============================================================================
+
 
 @router.post(
     "/plan-items/{item_id}/daily-toggle",
@@ -298,20 +389,17 @@ async def toggle_daily_completion(
     If already completed today → removes the completion (uncheck).
     If not completed today → creates a completion (check).
     """
-    item = await _get_item_for_user(db, item_id, current_user.id)
+    item = await _get_item_for_user(db, item_id, current_user.id, lock=True)
     _validate_habit_or_practice(item)
 
-    today = date.today()
+    today = learning_today()
 
     # Check if already completed today
-    stmt = (
-        select(DailyTaskCompletion)
-        .where(
-            and_(
-                DailyTaskCompletion.user_id == current_user.id,
-                DailyTaskCompletion.plan_item_id == item_id,
-                DailyTaskCompletion.completed_date == today,
-            )
+    stmt = select(DailyTaskCompletion).where(
+        and_(
+            DailyTaskCompletion.user_id == current_user.id,
+            DailyTaskCompletion.plan_item_id == item_id,
+            DailyTaskCompletion.completed_date == today,
         )
     )
     result = await db.execute(stmt)
@@ -323,6 +411,26 @@ async def toggle_daily_completion(
         await db.commit()
         completed = False
     else:
+        if uses_checked_review(item):
+            # Participation requires a real attempt, not a timer or a checkbox.
+            from app.services.practice.habit_review import load_review, session_key
+
+            _, _, review, _ = await load_review(
+                db, item, str(current_user.id), session_key(today)
+            )
+            if review is None or not review.attempts_json:
+                raise HTTPException(
+                    409, "Try and check a review exercise before logging this session."
+                )
+            last = review.attempts_json[-1]
+            reflection = ((item.meta_json or {}).get("daily_reflections") or {}).get(
+                today.isoformat(), ""
+            )
+            if not last.get("passed") and len(reflection.strip()) < 10:
+                raise HTTPException(
+                    409,
+                    "Correct your answer or save a note explaining the correction before logging this session.",
+                )
         # Check — create a new record
         completion = DailyTaskCompletion(
             user_id=current_user.id,
@@ -358,13 +466,10 @@ async def get_today_view(
     streak and completion counts.
     """
     # Verify plan ownership and get the plan
-    plan_stmt = (
-        select(Plan)
-        .where(
-            and_(
-                Plan.id == plan_id,
-                Plan.user_id == current_user.id,
-            )
+    plan_stmt = select(Plan).where(
+        and_(
+            Plan.id == plan_id,
+            Plan.user_id == current_user.id,
         )
     )
     plan_result = await db.execute(plan_stmt)
@@ -384,13 +489,12 @@ async def get_today_view(
         plan=plan,
         user_id=current_user.id,
     )
-    today = date.today()
+    today = learning_today()
 
     items = [
         item
         for item in plan_items
-        if item.type in DAILY_TYPES
-        and item.week_start <= current_week <= item.week_end
+        if item.type in DAILY_TYPES and item.week_start <= current_week <= item.week_end
     ]
 
     # Get all completions for today for these items
@@ -398,14 +502,11 @@ async def get_today_view(
     completed_today_set: set[str] = set()
 
     if item_ids:
-        completions_stmt = (
-            select(DailyTaskCompletion.plan_item_id)
-            .where(
-                and_(
-                    DailyTaskCompletion.user_id == current_user.id,
-                    DailyTaskCompletion.plan_item_id.in_(item_ids),
-                    DailyTaskCompletion.completed_date == today,
-                )
+        completions_stmt = select(DailyTaskCompletion.plan_item_id).where(
+            and_(
+                DailyTaskCompletion.user_id == current_user.id,
+                DailyTaskCompletion.plan_item_id.in_(item_ids),
+                DailyTaskCompletion.completed_date == today,
             )
         )
         completions_result = await db.execute(completions_stmt)
@@ -415,6 +516,14 @@ async def get_today_view(
     response_items = []
     for item in items:
         daily_instructions = _daily_instructions_for_item(item)
+        from app.services.practice.habit_review import review_status
+
+        checked = uses_checked_review(item)
+        review = (
+            await review_status(db, item, str(current_user.id), on=today)
+            if checked
+            else {"available": True}
+        )
 
         response_items.append(
             TodayItemResponse(
@@ -426,11 +535,22 @@ async def get_today_view(
                 session_minutes=_session_minutes(item),
                 completed_today=item.id in completed_today_set,
                 daily_instructions=daily_instructions,
+                schedule=schedule_for(item, today),
+                scheduled_today=schedule_for(item, today)["scheduled_today"],
+                requires_review=checked,
+                review_available=bool(
+                    review["available"] or item.id in completed_today_set
+                ),
+                review_message=review.get("message"),
             )
         )
 
-    total_today = len(response_items)
-    completed_count = sum(1 for i in response_items if i.completed_today)
+    total_today = sum(i.scheduled_today and i.review_available for i in response_items)
+    completed_count = sum(
+        1
+        for i in response_items
+        if i.completed_today and i.scheduled_today and i.review_available
+    )
     streak = await calculate_streak(db, current_user.id)
 
     return TodayViewResponse(
@@ -459,19 +579,16 @@ async def get_daily_status(
     item = await _get_item_for_user(db, item_id, current_user.id)
     _validate_habit_or_practice(item)
 
-    today = date.today()
+    today = learning_today()
     week_start, week_end = _get_week_start_end(today)
 
     # Get completions for this item within the current week
-    stmt = (
-        select(DailyTaskCompletion.completed_date)
-        .where(
-            and_(
-                DailyTaskCompletion.user_id == current_user.id,
-                DailyTaskCompletion.plan_item_id == item_id,
-                DailyTaskCompletion.completed_date >= week_start,
-                DailyTaskCompletion.completed_date <= week_end,
-            )
+    stmt = select(DailyTaskCompletion.completed_date).where(
+        and_(
+            DailyTaskCompletion.user_id == current_user.id,
+            DailyTaskCompletion.plan_item_id == item_id,
+            DailyTaskCompletion.completed_date >= week_start,
+            DailyTaskCompletion.completed_date <= week_end,
         )
     )
     result = await db.execute(stmt)
@@ -485,13 +602,14 @@ async def get_daily_status(
     for i in range(7):
         day = week_start + timedelta(days=i)
         is_completed = day in completed_dates
-        if is_completed:
+        if is_completed and day.weekday() in schedule_for(item, day)["weekdays"]:
             completed_count += 1
         days.append(
             DayDotResponse(
                 date=day.isoformat(),
                 day_name=day_names[i],
                 completed=is_completed,
+                scheduled=day.weekday() in schedule_for(item, day)["weekdays"],
             )
         )
 
@@ -501,7 +619,7 @@ async def get_daily_status(
         week_end=week_end.isoformat(),
         days=days,
         completed_count=completed_count,
-        total_days=7,
+        total_days=len(schedule_for(item, today)["weekdays"]),
     )
 
 
@@ -510,41 +628,8 @@ async def get_streak(
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> StreakResponse:
-    """Get the user's current and longest daily streak."""
-    current = await calculate_streak(db, current_user.id)
-
-    # Calculate longest streak
-    dates_stmt = (
-        select(distinct(DailyTaskCompletion.completed_date))
-        .where(DailyTaskCompletion.user_id == current_user.id)
-        .order_by(DailyTaskCompletion.completed_date.asc())
-    )
-    dates_result = await db.execute(dates_stmt)
-    all_dates = [row[0] for row in dates_result.fetchall()]
-
-    longest = 0
-    if all_dates:
-        longest = 1
-        current_run = 1
-        for i in range(1, len(all_dates)):
-            if all_dates[i] == all_dates[i - 1] + timedelta(days=1):
-                current_run += 1
-                longest = max(longest, current_run)
-            else:
-                current_run = 1
-
-    # Get last active date
-    last_stmt = select(func.max(DailyTaskCompletion.completed_date)).where(
-        DailyTaskCompletion.user_id == current_user.id
-    )
-    last_result = await db.execute(last_stmt)
-    last_active = last_result.scalar()
-
-    return StreakResponse(
-        current_streak=current,
-        longest_streak=longest,
-        last_active_date=last_active.isoformat() if last_active else None,
-    )
+    """Practice-day streak; scheduled rest days never reset it."""
+    return StreakResponse(**await _streak_snapshot(db, str(current_user.id)))
 
 
 @router.get("/daily-focus", response_model=DailyFocusResponse)
@@ -572,7 +657,7 @@ async def get_daily_focus(
             plan=plan,
             user_id=current_user.id,
         )
-        today = date.today()
+        today = learning_today()
 
         # Get habit/practice items for the current week that aren't completed today
         items = sorted(
@@ -589,21 +674,29 @@ async def get_daily_focus(
         completed_ids: set[str] = set()
         item_ids = [item.id for item in items]
         if item_ids:
-            comp_stmt = (
-                select(DailyTaskCompletion.plan_item_id)
-                .where(
-                    and_(
-                        DailyTaskCompletion.user_id == current_user.id,
-                        DailyTaskCompletion.plan_item_id.in_(item_ids),
-                        DailyTaskCompletion.completed_date == today,
-                    )
+            comp_stmt = select(DailyTaskCompletion.plan_item_id).where(
+                and_(
+                    DailyTaskCompletion.user_id == current_user.id,
+                    DailyTaskCompletion.plan_item_id.in_(item_ids),
+                    DailyTaskCompletion.completed_date == today,
                 )
             )
             comp_result = await db.execute(comp_stmt)
             completed_ids = {row[0] for row in comp_result.fetchall()}
 
         for item in items:
-            if item.id not in completed_ids:
+            if (
+                item.id not in completed_ids
+                and schedule_for(item, today)["scheduled_today"]
+            ):
+                if uses_checked_review(item):
+                    from app.services.practice.habit_review import review_status
+
+                    review = await review_status(
+                        db, item, str(current_user.id), on=today
+                    )
+                    if not review["available"]:
+                        continue
                 daily_instructions = _daily_instructions_for_item(item)
                 focus_item = DailyFocusItemResponse(
                     id=item.id,
@@ -618,15 +711,11 @@ async def get_daily_focus(
 
     # Generate a reflection prompt based on streak
     reflection_prompts = [
-        "What would your idol refuse to optimize today?",
-        "What's one thing you can do in 15 minutes that moves you closer to your goal?",
-        "Which of your habits is hardest to maintain, and why?",
-        "What did you learn this week that surprised you?",
-        "If your idol were reviewing your progress, what would they focus on?",
-        "What's the smallest action you can take today to build momentum?",
-        "What assumption are you making that your idol would question?",
+        "Which rule did you recall before checking the lesson?",
+        "What did you get wrong, and what is the corrected rule?",
+        "What clue will help you choose the right method next time?",
     ]
-    prompt_index = date.today().timetuple().tm_yday % len(reflection_prompts)
+    prompt_index = learning_today().timetuple().tm_yday % len(reflection_prompts)
     reflection_prompt = reflection_prompts[prompt_index]
 
     return DailyFocusResponse(

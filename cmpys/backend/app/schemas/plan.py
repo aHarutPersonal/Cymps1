@@ -244,6 +244,8 @@ class PlanItemDetailedResponse(BaseModel):
     daily_instructions: str | None = None
     daily_reflection: str = ""
     completed_today: bool | None = None
+    habit_schedule: dict | None = None
+    habit_review: dict | None = None
 
 
 class ToggleCompleteResponse(BaseModel):

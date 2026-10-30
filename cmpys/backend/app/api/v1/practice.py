@@ -18,6 +18,7 @@ from app.services.practice.contracts import (
     DraftRequest,
     SubmitRequest,
     Workbook,
+    read_workbook,
     canonical_answers,
     combine_review,
     grade_fixed,
@@ -77,7 +78,7 @@ def _can_retry_preparation(row):
 def view(row):
     if row is None:
         return {"state": "not_started"}
-    workbook = Workbook.model_validate(row.workbook_json) if row.workbook_json else None
+    workbook = read_workbook(row.workbook_json) if row.workbook_json else None
     passed = passed_activities(row, workbook) if workbook else []
     state = row.state
     if state in {"preparing", "reviewing"} and not _busy(row):
@@ -119,6 +120,9 @@ async def _load(db, user_id, item_id, step_id, artifact, *, lock=False):
     )
 
     item = await _get_item_for_user(db, item_id, user_id, for_update=lock)
+    from app.services.practice.habit_review import DAILY_TYPES, load_review
+    if getattr(item, "type", None) in DAILY_TYPES:
+        return await load_review(db, item, user_id, step_id)
     await _validate_expected_artifact(
         db, item, user_id=user_id, expected_job_id=artifact
     )
@@ -164,6 +168,11 @@ async def _load(db, user_id, item_id, step_id, artifact, *, lock=False):
 
 async def _canonical_workbook(db, item, step):
     """Load private answers only from the already-authorized immutable catalog row."""
+    from app.services.practice.habit_review import DAILY_TYPES, compose_review, PREFIX
+    if getattr(item, "type", None) in DAILY_TYPES:
+        from datetime import date
+        workbook, _ = await compose_review(db, item, step["_review_user_id"], date.fromisoformat(step["id"].removeprefix(PREFIX)))
+        return workbook
     from app.models.curriculum import ModuleSession
     from app.services.curriculum.hashing import sha256_json
 
@@ -193,7 +202,7 @@ def _ready(row):
         raise HTTPException(
             409, "A practice operation is already running. Refresh shortly."
         )
-    return Workbook.model_validate(row.workbook_json)
+    return read_workbook(row.workbook_json)
 
 
 def _revision(row, revision):
@@ -245,6 +254,9 @@ async def prepare_practice(
     if row and (row.workbook_json or _busy(row)):
         return view(row)
     prepared = await _canonical_workbook(db, item, step)
+    from app.services.practice.habit_review import DAILY_TYPES
+    if getattr(item, "type", None) in DAILY_TYPES and prepared is None:
+        raise HTTPException(409, "No review is due yet. Complete a lesson practice, then return on a scheduled practice day.")
     if prepared is None and row and row.generation_attempts >= PREPARATION_ATTEMPT_LIMIT:
         if not _can_retry_preparation(row):
             retry_at = _preparation_retry_at(row)
@@ -281,7 +293,8 @@ async def prepare_practice(
     # versions retain their old completion semantics until they opt in.
     meta = dict(item.meta_json or {})
     required = dict(meta.get("practice_versions") or {})
-    required[step_id] = version
+    if getattr(item, "type", None) not in DAILY_TYPES:
+        required[step_id] = version
     item.meta_json = {**meta, "practice_versions": required}
     context = {
         "mission": item.title,
@@ -318,6 +331,14 @@ async def prepare_practice(
         failures.pop(step_id, None)
     item.meta_json = {**(item.meta_json or {}), "practice_preparation_failures": failures}
     if generated is not None:
+        if getattr(generated, "purpose", None) == "review":
+            resumed = generated.review.pop("resume_answers", {})
+            validate_answers(generated, resumed)
+            row.answers_json = resumed
+            row.hints_json = [
+                {"activity_id": activity_id, "kind": "resumed_draft", "content": "Continued a saved attempt; this is not a fresh recall test."}
+                for activity_id in sorted({key.split(".", 1)[0] for key in resumed})
+            ]
         row.workbook_json = generated.model_dump()
     row.revision += 1
     await db.commit()
@@ -490,8 +511,11 @@ async def submit_practice(
             if any(f.kind == "text" for f in activity.fields):
                 kwargs = {"recovery_response": recovery} if recovery is not None else {}
                 from app.services.llm.admission import admission_scope
+                context = step.get("lesson_content", "")
+                if getattr(workbook, "purpose", None) == "review":
+                    context = workbook.review.get("sources", {}).get(activity.id, {}).get("lesson_content", "")
                 with admission_scope("foreground", user_id):
-                    review = await review_text(activity, answers, step.get("lesson_content", ""), **kwargs)
+                    review = await review_text(activity, answers, context, **kwargs)
             feedback = combine_review(activity, fixed, review)
     except Exception:
         failed = True

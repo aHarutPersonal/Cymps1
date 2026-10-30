@@ -41,7 +41,8 @@ def _item(item_type: PlanItemType, *, minutes: int, hours: int) -> PlanItem:
 async def _detail(item: PlanItem):
     db = AsyncMock()
     db.scalar.return_value = 0
-    with patch.object(plans, "_get_item_for_user", AsyncMock(return_value=item)):
+    with (patch.object(plans, "_get_item_for_user", AsyncMock(return_value=item)),
+          patch("app.services.practice.habit_review.review_status", AsyncMock(return_value={"available": False}))):
         return await plans.get_plan_item_detailed(
             item.id, db, SimpleNamespace(id="user-1")
         )
@@ -52,11 +53,11 @@ async def _detail(item: PlanItem):
     ("item_type", "minutes", "hours", "expected"),
     [
         # 60 weekly minutes: four 15-minute sessions (not round(60 / 7) = 9).
-        (PlanItemType.HABIT, 60, 1, 15),
+        (PlanItemType.HABIT, 60, 1, 20),
         # Under an hour: three sessions.
         (PlanItemType.PRACTICE, 45, 1, 15),
         # 105 weekly minutes: four sessions of 26.25, halves round up -> 26.
-        (PlanItemType.HABIT, 105, 2, 26),
+        (PlanItemType.HABIT, 105, 2, 35),
     ],
 )
 async def test_daily_detail_item_carries_todays_session_minutes(

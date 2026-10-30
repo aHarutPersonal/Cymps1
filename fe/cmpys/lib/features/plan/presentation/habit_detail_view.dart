@@ -18,11 +18,12 @@ import '../data/plan_repository.dart';
 import '../models/plan_models.dart';
 import '../state/current_plan_provider.dart';
 import 'backend_plan_widgets.dart' show PlanDashedCell;
+import 'lesson_practice_screen.dart';
 
 /// The reflection question. The server has no per-habit prompt, so every
 /// habit asks the app's standing question.
 const habitReflectionPrompt =
-    'What did you try, what did you notice, and what will you change?';
+    'Which rule did you recall? What did you get wrong, and how will you distinguish it next time?';
 
 /// The timer's glow: oklch(0.55 0.16 42 / .45).
 const _emberGlow = Color(0x73BA480D);
@@ -70,7 +71,7 @@ class _HabitDetailViewState extends ConsumerState<HabitDetailView>
   late final PlanRepository _repo;
 
   // Focus timer: seconds left, and the wall-clock end while running.
-  late final int _total;
+  late int _total;
   late int _left;
   DateTime? _endsAt;
   Timer? _ticker;
@@ -99,6 +100,121 @@ class _HabitDetailViewState extends ConsumerState<HabitDetailView>
   /// `session_minutes`, else a seventh of the week's allocation (never the
   /// whole week's).
   int get _minutes => widget.detailed.sessionMinutesOrWeekShare;
+  Map<String, dynamic>? get _review => widget.detailed.habitReview;
+  Map<String, dynamic>? get _schedule => widget.detailed.habitSchedule;
+  bool get _scheduled => _schedule?['scheduled_today'] != false;
+
+  Future<void> _openReview() async {
+    final step = _review?['step_id'] as String?;
+    if (step == null || _review?['available'] != true) return;
+    if (!_running && _left > 0) _startOrPause();
+    await Navigator.of(context).push(
+      MaterialPageRoute<bool>(
+        builder: (_) => LessonPracticeScreen(
+          itemId: _id,
+          stepId: step,
+          lessonTitle: 'Practice and review',
+          lessonContent: '',
+          isReview: true,
+          reviewSeconds: _left,
+        ),
+      ),
+    );
+    if (!mounted) return;
+    if (_running) _startOrPause();
+    await widget.onReload();
+  }
+
+  Future<void> _editSchedule() async {
+    final editing = (_schedule?['pending'] as Map?) ?? _schedule;
+    final chosen = ((editing?['weekdays'] as List?) ?? [0, 2, 4])
+        .cast<int>()
+        .toSet();
+    final cue = TextEditingController(text: editing?['cue'] as String? ?? '');
+    final saved = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (context, update) => SafeArea(
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+              20,
+              24,
+              20,
+              20 + MediaQuery.viewInsetsOf(context).bottom,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'Your practice schedule',
+                  style: AppTypography.display(26),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Choose days that fit your week. Your weekly minutes stay the same. Changes start next Monday.',
+                  style: AppTypography.sans(14),
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 6,
+                  children: [
+                    for (var d = 0; d < 7; d++)
+                      FilterChip(
+                        label: Text(_dayNames[d].substring(0, 3)),
+                        selected: chosen.contains(d),
+                        onSelected: (on) => update(() {
+                          if (on) {
+                            chosen.add(d);
+                          } else {
+                            chosen.remove(d);
+                          }
+                        }),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: cue,
+                  maxLength: 200,
+                  decoration: const InputDecoration(
+                    labelText: 'When will you start?',
+                    hintText: 'For example, after breakfast',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                V3Button(
+                  full: true,
+                  onPressed: chosen.isEmpty
+                      ? null
+                      : () => Navigator.pop(sheetContext, true),
+                  child: const Text('Save schedule'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    final cueText = cue.text;
+    cue.dispose();
+    if (saved != true || !mounted) return;
+    try {
+      await _repo.savePracticeSchedule(_id, chosen.toList()..sort(), cueText);
+      if (!mounted) return;
+      showV3Toast(context, 'Schedule saved. Starts next Monday.');
+      await widget.onReload();
+    } catch (_) {
+      if (mounted) {
+        showV3Toast(
+          context,
+          'Couldn’t save the schedule. Please try again.',
+          tone: V3ToastTone.warn,
+        );
+      }
+    }
+  }
 
   @override
   void initState() {
@@ -123,6 +239,11 @@ class _HabitDetailViewState extends ConsumerState<HabitDetailView>
     if (oldWidget.detailed != widget.detailed && !_localBusy) {
       _localDone = null;
     }
+    if (oldWidget.detailed.sessionMinutesOrWeekShare != _minutes) {
+      _stopTicker();
+      _total = _minutes * 60;
+      _left = _total;
+    }
   }
 
   @override
@@ -132,9 +253,7 @@ class _HabitDetailViewState extends ConsumerState<HabitDetailView>
     // Leaving mid-pause, or after a failed save, still keeps what was typed.
     _noteDebounce?.cancel();
     if (_note.text != _savedNote) {
-      unawaited(
-        _repo.saveDailyReflection(_id, _note.text).catchError((Object _) {}),
-      );
+      unawaited(_persistNote(_note.text).catchError((Object _) {}));
     }
     _note.dispose();
     super.dispose();
@@ -213,6 +332,10 @@ class _HabitDetailViewState extends ConsumerState<HabitDetailView>
   }
 
   Future<void> _toggle(TodayView? view) async {
+    if (_note.text != _savedNote) {
+      await _saveNote();
+      if (!mounted || _note.text != _savedNote) return;
+    }
     final item = _todayItem(view);
     // A tap the toggle would ignore (one already in flight) changes nothing.
     if (_localBusy || (item != null && isHabitInFlight(item.id))) return;
@@ -306,7 +429,7 @@ class _HabitDetailViewState extends ConsumerState<HabitDetailView>
     _noteSaveInFlight = true;
     setState(() => _noteState = _NoteState.saving);
     try {
-      await _repo.saveDailyReflection(_id, text);
+      await _persistNote(text);
       _savedNote = text;
     } catch (_) {
       _noteSaveInFlight = false;
@@ -323,6 +446,13 @@ class _HabitDetailViewState extends ConsumerState<HabitDetailView>
     setState(
       () => _noteState = text.isEmpty ? _NoteState.idle : _NoteState.saved,
     );
+  }
+
+  Future<void> _persistNote(String text) {
+    final date = _review?['date'] as String?;
+    return date == null
+        ? _repo.saveDailyReflection(_id, text)
+        : _repo.saveReviewReflection(_id, text, date);
   }
 
   // ── build ───────────────────────────────────────────────────────────────
@@ -363,6 +493,57 @@ class _HabitDetailViewState extends ConsumerState<HabitDetailView>
               delay: const Duration(milliseconds: 220),
               child: V3Section(title: 'How to do it', child: _howTo()),
             ),
+            if (_review != null)
+              V3Section(
+                title: 'Your review',
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: v3Card(),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        _review?['available'] == true
+                            ? 'Recall first, then try the supplied case. Check your answer and correct the rule you missed. These are reviews of familiar cases; new applications stay in your lessons.'
+                            : (_review?['message'] as String? ??
+                                  'Finish a lesson practice to begin your reviews.'),
+                        style: AppTypography.sans(14).copyWith(height: 1.5),
+                      ),
+                      if ((_review?['source_titles'] as List? ?? [])
+                          .isNotEmpty) ...[
+                        const SizedBox(height: 10),
+                        Text(
+                          'From: ${(_review!['source_titles'] as List).join(' · ')}',
+                          style: AppTypography.sans(12),
+                        ),
+                      ],
+                      if (_review?['available'] == true) ...[
+                        const SizedBox(height: 14),
+                        V3Button(
+                          key: const Key('open-habit-review'),
+                          onPressed: _openReview,
+                          child: Text(
+                            _review?['attempted'] == true
+                                ? 'Review saved answers'
+                                : 'Open review',
+                          ),
+                        ),
+                      ],
+                      if (_review?['attempted'] == true) ...[
+                        const SizedBox(height: 10),
+                        Text(
+                          _review?['needs_correction'] == true
+                              ? 'Revise your answer or record the corrected rule below before logging the session.'
+                              : 'Your checked attempt is saved. Logging the session records participation, not mastery.',
+                          style: AppTypography.sans(
+                            13,
+                          ).copyWith(color: AppColors.ink2),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
             V3Rise(
               delay: const Duration(milliseconds: 260),
               child: V3Section(title: 'Reflection', child: _reflection()),
@@ -387,12 +568,32 @@ class _HabitDetailViewState extends ConsumerState<HabitDetailView>
                     onPressed: () => _toggle(view),
                     child: const Text('Mark as not done'),
                   )
+                : _review != null && _review?['attempted'] != true
+                ? V3Button(
+                    full: true,
+                    onPressed: _review?['available'] == true
+                        ? _openReview
+                        : null,
+                    child: Text(
+                      _review?['available'] == true
+                          ? 'Start review'
+                          : 'No review ready',
+                    ),
+                  )
                 : V3Button(
                     kind: V3ButtonKind.sage,
                     full: true,
                     icon: V3Icons.check,
-                    onPressed: () => _toggle(view),
-                    child: const Text('Mark done for today'),
+                    onPressed:
+                        _review?['needs_correction'] == true &&
+                            _note.text.trim().length < 10
+                        ? null
+                        : () => _toggle(view),
+                    child: Text(
+                      _review == null
+                          ? 'Mark done for today'
+                          : 'Log practice session',
+                    ),
                   ),
             // The design's burst sits in a zero-size box at the button's
             // centre: particles only, no halo the size of the button.
@@ -421,7 +622,9 @@ class _HabitDetailViewState extends ConsumerState<HabitDetailView>
     final item = widget.detailed.item;
     final habits = view?.items ?? const <TodayTaskItem>[];
     final index = habits.indexWhere((h) => h.id == _id);
-    final kick = index < 0
+    final kick = _review != null
+        ? 'Practice routine · Week ${item.weekStart}'
+        : index < 0
         ? 'Daily habit · Week ${item.weekStart}'
         : 'Daily habit ${index + 1} of ${habits.length} · '
               'Week ${item.weekStart}';
@@ -446,9 +649,11 @@ class _HabitDetailViewState extends ConsumerState<HabitDetailView>
               spacing: 8,
               runSpacing: 8,
               children: [
-                const V3Tag(
+                V3Tag(
                   icon: V3Icons.refresh,
-                  child: Text('Repeats daily'),
+                  child: Text(
+                    _schedule?['label'] as String? ?? 'Scheduled practice',
+                  ),
                 ),
                 done
                     ? const V3Tag(
@@ -457,14 +662,30 @@ class _HabitDetailViewState extends ConsumerState<HabitDetailView>
                         icon: V3Icons.check,
                         child: Text('Done today'),
                       )
-                    : const V3Tag(
+                    : V3Tag(
                         background: AppColors.emberSoft,
                         color: AppColors.ember2,
-                        child: Text('Due today'),
+                        child: Text(_scheduled ? 'Practice day' : 'Rest day'),
                       ),
               ],
             ),
           ),
+          if (_schedule != null) ...[
+            const SizedBox(height: 10),
+            Text(
+              _schedule!['cue'] as String? ?? '',
+              style: AppTypography.sans(13),
+            ),
+            TextButton(
+              onPressed: _editSchedule,
+              child: const Text('Choose days and starting cue'),
+            ),
+            if (_schedule?['pending'] is Map)
+              Text(
+                'Updated schedule starts ${_schedule!['pending']['from']}.',
+                style: AppTypography.sans(13),
+              ),
+          ],
         ],
       ),
     );
@@ -619,7 +840,7 @@ class _HabitDetailViewState extends ConsumerState<HabitDetailView>
                 ] else ...[
                   const SizedBox(height: 14),
                   Text(
-                    'Counted for today. It’ll be back tomorrow.',
+                    'Session logged. Return on your next scheduled practice day.',
                     textAlign: TextAlign.center,
                     style: AppTypography.sans(
                       14,
@@ -808,7 +1029,10 @@ class _HabitDetailViewState extends ConsumerState<HabitDetailView>
   }
 
   Widget _week(List<bool> days, {required int todayIndex}) {
-    final count = days.where((d) => d).length;
+    final scheduled =
+        ((_schedule?['weekdays'] as List?) ?? [0, 1, 2, 3, 4, 5, 6])
+            .cast<int>();
+    final count = scheduled.where((d) => days[d]).length;
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(16),
@@ -828,10 +1052,15 @@ class _HabitDetailViewState extends ConsumerState<HabitDetailView>
               ),
               const SizedBox(width: 6),
               Text(
-                'of 7 days done',
+                'of ${scheduled.length} practice days logged',
                 style: AppTypography.sans(13.5).copyWith(color: AppColors.ink2),
               ),
             ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Rest days do not reset your practice streak.',
+            style: AppTypography.sans(12).copyWith(color: AppColors.ink2),
           ),
           const SizedBox(height: 12),
           Row(
@@ -849,7 +1078,8 @@ class _HabitDetailViewState extends ConsumerState<HabitDetailView>
 
   Widget _day(int k, bool done, {required bool today}) {
     final motion = MotionConfig.enabled(context);
-    final Widget cell = today && !done
+    final scheduled = (_schedule?['weekdays'] as List?)?.contains(k) ?? true;
+    final Widget cell = today && !done && scheduled
         ? const PlanDashedCell(
             key: ValueKey('habit-day-today'),
             height: 34,
@@ -875,12 +1105,18 @@ class _HabitDetailViewState extends ConsumerState<HabitDetailView>
                       color: Colors.white,
                     ),
                   )
+                : !scheduled
+                ? const Center(child: Text('–'))
                 : null,
           );
     return Semantics(
       label:
           '${_dayNames[k]}${today ? ', today' : ''}, '
-          '${done ? 'done' : 'not done'}',
+          '${done
+              ? 'done'
+              : !scheduled
+              ? 'rest day'
+              : 'not done'}',
       excludeSemantics: true,
       child: _dayColumn(k, cell, today: today),
     );

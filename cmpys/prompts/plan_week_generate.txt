@@ -33,29 +33,36 @@ EXECUTION CONTRACT:
 - Every mission description must be 80-140 substantive words. Name the exact
   method, resource, exercise, artifact, and quality check. Explain why each is
   appropriate for this learner. Do not write the long lesson itself here.
-- Every daily rhythm description must be 45-80 words and state exact cadence,
-  per-session duration, skill drill, and recorded evidence.
-- The cadence times per-session minutes must equal estimated_hours × 60 exactly.
-  For a one-hour weekly habit, three sessions must be 20 minutes each, not 10.
-- The daily screen offers a saved free-text reflection and a completion button.
-  Do not promise automatic timers, templates, spreadsheet editors or scored daily fields.
-- Every daily rhythm includes daily_instructions of 70-120 words: what to do,
-  sequence, timer or repetition count, tool/template, expected output, and a
-  stopping rule. It must be executable from the Today screen by itself.
+- Every practice-routine description uses 45-80 words connecting review of taught
+  concepts to this week's domain skill. Prefer one anchor routine; a second needs
+  a distinct purpose and must share the existing time budget.
+- The server owns practice days and divides the task's weekly minutes exactly
+  across them (default Monday, Wednesday, Friday). Do not invent a competing
+  cadence, daily obligation, timer duration or fixed number of completed cases.
+- The routine opens real exercises from already attempted lesson practice with
+  saved answers, hints, answer checks, worked solutions and correction attempts.
+  Review selection carries across weeks and uses prior errors and elapsed days.
+  It cannot conjure a new dataset, supplied example or answer key from this prose.
+- daily_instructions uses 70-120 words: recall the relevant taught rule before
+  checking references; open the provided review; attempt; check; correct; record
+  the misconception. Stop and save at the session limit, even when unfinished.
+  If no review is ready, finish lesson practice first and return when due.
+  Never promise novel transfer testing from a repeated case or call a completion
+  tick mastery. Mission practice supplies new applications and independent cases.
 - success_metric must remain binary, measurable, and consistent with the
   backbone. Never write "task completed".
 - Do not invent quotations, chapter numbers, mentor facts, URLs, or resources.
 - For cognitive daily rhythms, distribute practice across separate sessions.
   Name what to reconstruct or decide before reopening the material, how to check
-  it and which mistake to record in the saved reflection. A later session varies
-  the application or compares related methods already introduced. Keep physical
-  practice appropriate to its skill; do not force memory quizzes onto every habit.
+  it and which mistake to record in the saved reflection. Later reviews can mix
+  available, already attempted cases. New cases and physical skill performance
+  belong in mission practice; recalling a method does not demonstrate motor skill.
 - Mission descriptions connect the taught method to an observable independent
   outcome, its quality check and a likely misconception. When prior methods are
   available, include a case requiring method selection, without naming the answer
   in the question. Preserve the approved scope and total time.
-- Describe review dates as learner-managed cadence only. Do not promise automatic
-  reminders, scored daily checks or adaptation that the supplied runtime lacks.
+- Do not promise push reminders, a diagnostic score, or new generated cases inside a routine.
+  The schedule and private answer checks are supplied by the runtime, not by this text.
 - The sum of estimated_hours must remain exactly {hours_per_week}; preserve the
   approved weekly workload rather than shrinking it during expansion.
 

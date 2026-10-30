@@ -259,14 +259,15 @@ class ExecutionBinaryTask(BinaryTask):
     daily_instructions: str | None = Field(
         default=None, max_length=2000,
         description=(
-            "For a daily rhythm, give 70-120 actionable words including the actual "
-            "small fictional dataset/inputs needed to work from Today alone. Today "
-            "has only one saved free-text reflection and a completion button: no "
-            "structured drill fields, automatically presented cases, scoring, feedback, "
-            "timers or spreadsheet editor. Record answers and manual checks in that "
-            "reflection or the learner's notebook. Preserve the approved session/drill "
-            "count; every prose cadence must agree and fill the task's weekly hours. "
-            "An external clock is optional. Null for a mission."
+            "For a practice routine, give 70-120 words: recall a taught rule, open "
+            "the in-app review, attempt its supplied case, check, correct and record "
+            "the misconception. The server chooses practice days and exactly splits "
+            "weekly minutes; do not prescribe a competing cadence or duration. "
+            "Exercises reuse already attempted lesson practice with saved answers, "
+            "hints and checks; never invent a supplied dataset or example in prose. "
+            "If nothing is due, finish lesson practice and return when scheduled. "
+            "Stop and save at the session limit, even if unfinished. Reviews of old "
+            "cases measure retention, not novel transfer or broad mastery. Null for a mission."
         ),
     )
     success_metric: str = Field(

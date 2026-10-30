@@ -54,9 +54,9 @@ The idol's milestones define the DESTINATION; the User Context, Readiness data, 
 - Set Week 1's difficulty to the user's current level, NOT the idol's peak. A beginner starts with fundamentals; do not open with idol-level challenges.
 - Every week's total effort MUST fit within {hours_per_week} hours. Do not exceed it — an over-stuffed plan the user abandons is a failed plan.
 - Apply exactly one task-count rule to every week:
-  - **LOW-CAPACITY PLAN — under 6 hours/week:** exactly 1 mission task and exactly 1 daily rhythm task. Right-size both to fit the cap. The mission may be shorter than 2 hours as a low-capacity exception, but it must still have a substantial, binary deliverable and satisfy every specificity and description-depth requirement below. A daily session may be 10-20 minutes.
-  - **STANDARD PLAN — 6 hours/week or more:** 2-3 mission tasks and 1-2 daily rhythm tasks, with mission sessions of 2-8 hours and daily sessions of 20-45 minutes, sized so the total still fits the cap.
-- For a daily rhythm task, `estimated_hours` means its TOTAL weekly time across all repetitions, not one session. State the cadence in its description (for example, 20 minutes on 4 days) and make the arithmetic fit {hours_per_week} hours.
+  - **LOW-CAPACITY PLAN — under 6 hours/week:** exactly 1 mission task and exactly 1 daily rhythm task. Right-size both to fit the cap. The mission may be shorter than 2 hours as a low-capacity exception, but it must still have a substantial, binary deliverable and satisfy every specificity and description-depth requirement below.
+  - **STANDARD PLAN — 6 hours/week or more:** 2-3 mission tasks and 1-2 daily rhythm tasks, with mission blocks of 2-8 hours and practice allocations sized to fit the same weekly cap.
+- For a daily rhythm task, `estimated_hours` means its TOTAL weekly time across all repetitions, not one session. Let the runtime schedule its sessions and keep the total within {hours_per_week} hours.
 - This conditional count rule is authoritative everywhere in this prompt. Never apply the standard counts to a low-capacity plan, and never emit a week whose total `estimated_hours` exceeds {hours_per_week}.
 - If the User Context is rich, the plan must visibly reflect it. Do not let the idol's achievements crowd out the user's real situation, constraints, and stated goal ({user_goal}).
 
@@ -82,33 +82,30 @@ Each MISSION task must represent real, focused work with a meaningful artifact o
 - ✅ GOOD: "Read chapters 1-5 of 'Security Analysis' by Benjamin Graham and write a 1-page analysis of Graham's intrinsic value formula" (4-6 hours, substantive)
 - ✅ GOOD: "Work through the first 20 problems in Spivak's 'Calculus' Chapter 1, proving each theorem yourself before reading the proof" (5-8 hours, skill-building)
 
+For owner-earnings exercises, Buffett's 1986 shareholder letter is the primary
+reference. Do not present net income plus depreciation minus total capital
+expenditure as his complete definition. Maintenance spending and required
+additional working capital involve judgment; supply case data and explicit
+assumptions instead of inventing a precise company estimate. A method example
+illustrates a learning activity, not a recommendation to trade a security.
+
 ### 3. MEANINGFUL DAILY RHYTHM TASKS (not trivial habits)
-Daily rhythm tasks are the compounding engine of this plan. They MUST be:
-- Directly connected to the idol's domain and this week's mission
-- Specific enough to execute in 20-45 minutes without further guidance in a standard plan, or 10-20 minutes under the low-capacity rule
-- Explicit about weekly cadence; `estimated_hours` is the sum of all repetitions that week
-- Progressive — they should evolve week over week, not repeat the same generic habit
-- Skill-building, not just "showing up"
+Practice routines consolidate taught skills inside the app. Prefer one anchor
+routine. A second must serve a distinct purpose within the same weekly budget.
+The runtime schedules Monday, Wednesday and Friday by default, splits weekly
+minutes exactly, and lets the learner choose days and a starting cue. Do not
+invent another schedule, daily requirement or fixed duration in prose.
 
-BAD daily rhythm examples (too vague, not domain-specific):
-- ❌ "Read for 30 minutes" (what? which book? what skill?)
-- ❌ "Journal your thoughts" (about what? what framework?)
-- ❌ "Practice coding" (what specifically? what level?)
+For each routine, daily_instructions gives 70-120 actionable words connecting
+this week's taught skill to recall, an attempt in the prepared review, checking,
+correction, and a specific error note. The review reuses real exercises from
+already attempted lessons with inputs, saved answers, hints and answer checks.
+Do not claim a supplied dataset, example or key merely because you mention one.
+No review appears before lesson practice has been attempted. Stop and save at
+the session cap even if unfinished. Prior mistakes return across weeks. Known
+cases check retention; new applications and transfer belong in mission practice.
+Logging participation does not certify mastery. Do not promise push reminders.
 
-GOOD daily rhythm examples (specific, progressive, domain-grounded):
-- ✅ Einstein Week 1: "Solve 3 kinematics problems from 'University Physics' Ch 2 using only first principles — no formula sheet allowed" (30 min)
-- ✅ Buffett practice: "Use a supplied financial-statement case to estimate a range of owner earnings. Reconcile reported earnings and relevant non-cash charges; distinguish maintenance investment from growth investment; account for any additional working capital needed to maintain the business. Record uncertain inputs and explain the range." Size the exercise to the learner's demonstrated accounting skill and available time.
-
-For this example, Buffett's 1986 shareholder letter is the primary reference.
-Do not present net income plus depreciation minus total capital expenditure as
-his complete definition. Maintenance spending and required additional working
-capital involve judgment; supply case data and explicit assumptions rather than
-inventing a precise company estimate. A book or method example illustrates a
-learning activity, not a recommendation to trade a security.
-- ✅ Jobs Week 5: "Find 1 product you use daily. Write 200 words on what makes its design great and what you'd change, using Dieter Rams' 10 principles as your framework" (25 min)
-- ✅ Einstein Week 8: "Work through 1 thought experiment from 'Spacetime Physics' Ch 3 — draw the spacetime diagram, predict the outcome, then verify against the book's solution" (35 min)
-
-Each daily rhythm task MUST include a `daily_instructions` field — a 3-5 sentence paragraph (40-80 words) that tells the user EXACTLY what to do that day so they don't need to open a separate detail view. Include: what to work on, how to approach it, and how to know you're done. This is their daily script.
 
 ### 4. SUBSTANCE MINIMUMS
 - Every `description` for mission tasks (project/course/reading) MUST be at least 50 words with specific books, chapters, exercises, or techniques named. Generic descriptions like "Work on your goal" or "Study the fundamentals" are FORBIDDEN.
@@ -187,11 +184,11 @@ Use the User Context and Readiness data. Adapt difficulty to their level. If the
         },
         {
           "title": "Specific daily practice action",
-          "description": "Brief description of the daily rhythm, including its weekly cadence and per-session duration.",
+          "description": "Describe how reviewing taught concepts supports this week’s skill. The runtime owns days and durations.",
           "type": "habit|practice",
           "estimated_hours": 2,
-          "success_metric": "The concrete weekly outcome of doing this habit, e.g. '5 daily Mr.-Market notes logged'. Binary and measurable — never 'task completed'.",
-          "daily_instructions": "3-5 sentences (40-80 words) telling the user EXACTLY what to do today. Include: what to work on, how to approach it, and how to know you're done. This is their daily script — they should NOT need to open a detail view."
+          "success_metric": "The evidence to save: a checked attempt and an explained correction. Participation is separate from demonstrated skill.",
+          "daily_instructions": "70-120 words: recall, open the prepared review, attempt, check, correct and save a specific error note. Stop at the session cap. Never invent supplied materials."
         }
       ],
       "predicted_friction": "The specific domain-related difficulty they will face this week.",

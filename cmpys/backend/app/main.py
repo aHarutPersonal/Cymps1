@@ -13,6 +13,7 @@ from app.core.config import settings
 from app.core.health import router as health_router
 from app.core.logging import get_logger, setup_logging, shutdown_logging
 from app.core.middleware import ResponseBodyLoggerMiddleware
+from app.services.planning.habit_schedule import LearningCalendarMiddleware
 
 logger = get_logger("cmpys.main")
 
@@ -56,6 +57,7 @@ app.add_middleware(ResponseBodyLoggerMiddleware)
 # Added last so it sits OUTERMOST: the body logger above still sees the
 # uncompressed body, while the client receives the gzipped response.
 app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
+app.add_middleware(LearningCalendarMiddleware)
 
 # Include routers
 app.include_router(health_router)

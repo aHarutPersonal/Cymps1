@@ -248,6 +248,11 @@ class TodayTaskItem {
     this.estimatedMinutes,
     this.sessionMinutes,
     this.dailyInstructions,
+    this.scheduledToday = true,
+    this.scheduleLabel,
+    this.requiresReview = false,
+    this.reviewAvailable,
+    this.reviewMessage,
   });
 
   final String id;
@@ -264,6 +269,12 @@ class TodayTaskItem {
   /// over the rhythm's sessions per week. Null from servers that predate it.
   final int? sessionMinutes;
   final String? dailyInstructions;
+  final bool scheduledToday;
+  final String? scheduleLabel;
+  final bool requiresReview;
+  final bool? reviewAvailable;
+  final String? reviewMessage;
+  bool get isDue => scheduledToday && reviewAvailable != false;
 
   /// The week's allocation in minutes: exact when the server sends it, else
   /// the whole hours.
@@ -281,6 +292,11 @@ class TodayTaskItem {
     sessionMinutes: (j['session_minutes'] as num?)?.toInt(),
     completedToday: j['completed_today'] as bool? ?? false,
     dailyInstructions: j['daily_instructions'] as String?,
+    scheduledToday: j['scheduled_today'] != false,
+    scheduleLabel: (j['schedule'] as Map?)?['label'] as String?,
+    requiresReview: j['requires_review'] == true,
+    reviewAvailable: j['review_available'] as bool?,
+    reviewMessage: j['review_message'] as String?,
   );
 }
 
@@ -292,10 +308,14 @@ class StreakSummary {
     required this.current,
     required this.longest,
     this.lastActive,
+    this.days = const [],
+    this.totalPracticeDays,
   });
 
   final int current;
   final int longest;
+  final List<DailyStatusDay> days;
+  final int? totalPracticeDays;
 
   /// Last calendar day with a completion (a date, no time), if any.
   final DateTime? lastActive;
@@ -304,7 +324,13 @@ class StreakSummary {
     final raw = DateTime.tryParse(j['last_active_date']?.toString() ?? '');
     return StreakSummary(
       current: (j['current_streak'] as num?)?.toInt() ?? 0,
+      totalPracticeDays: (j['total_practice_days'] as num?)?.toInt(),
       longest: (j['longest_streak'] as num?)?.toInt() ?? 0,
+      days: (j['days'] as List? ?? [])
+          .map(
+            (d) => DailyStatusDay.fromJson(Map<String, dynamic>.from(d as Map)),
+          )
+          .toList(),
       lastActive: raw == null ? null : DateTime(raw.year, raw.month, raw.day),
     );
   }
@@ -312,11 +338,16 @@ class StreakSummary {
 
 /// One day of a habit's week grid (GET /plan-items/{id}/daily-status).
 class DailyStatusDay {
-  const DailyStatusDay({required this.date, required this.completed});
+  const DailyStatusDay({
+    required this.date,
+    required this.completed,
+    this.scheduled = true,
+  });
 
   /// The calendar day (a UTC date, no time).
   final DateTime date;
   final bool completed;
+  final bool scheduled;
 
   factory DailyStatusDay.fromJson(Map<String, dynamic> j) {
     final raw = DateTime.tryParse(j['date']?.toString() ?? '');
@@ -325,6 +356,7 @@ class DailyStatusDay {
           ? DateTime.utc(1970)
           : DateTime.utc(raw.year, raw.month, raw.day),
       completed: j['completed'] as bool? ?? false,
+      scheduled: j['scheduled'] != false,
     );
   }
 }
@@ -898,6 +930,8 @@ class PlanItemDetailed {
     this.mentalModel,
     this.sessionMinutes,
     this.generationWindow,
+    this.habitSchedule,
+    this.habitReview,
   });
 
   final BackendPlanItem item;
@@ -936,6 +970,8 @@ class PlanItemDetailed {
   /// [windowCurrentIndex] and [windowNextIndex] fall back to the next
   /// uncompleted step and the one after it.
   final GenerationWindow? generationWindow;
+  final Map<String, dynamic>? habitSchedule;
+  final Map<String, dynamic>? habitReview;
 
   /// The habit's minutes for one session: [sessionMinutes] when the server
   /// sends it, else about a seventh of the week's allocation, at least one
@@ -1121,6 +1157,8 @@ class PlanItemDetailed {
       mentalModel: _optionalText(details?['mental_model']),
       sessionMinutes: _sessionMinutes(j),
       generationWindow: GenerationWindow.tryParse(j['generation_window']),
+      habitSchedule: (j['habit_schedule'] as Map?)?.cast<String, dynamic>(),
+      habitReview: (j['habit_review'] as Map?)?.cast<String, dynamic>(),
     );
   }
 

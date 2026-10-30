@@ -105,6 +105,9 @@ int habitSessionMinutes(TodayTaskItem item) {
 /// day. The run ending on that day is shown as done; earlier days of the week
 /// are not known and show as not done.
 List<bool?> streakWeek(StreakSummary? streak, DateTime today) {
+  if (streak != null && streak.days.length == 7) {
+    return [for (final d in streak.days) d.completed];
+  }
   final day = DateTime.utc(today.year, today.month, today.day);
   final monday = day.subtract(Duration(days: day.weekday - 1));
   final done = <DateTime>{};

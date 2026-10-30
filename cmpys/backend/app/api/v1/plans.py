@@ -14,7 +14,7 @@ PROMPT MAPPING:
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -1207,8 +1207,8 @@ async def create_plan_item(
         status=PlanItemStatus.NOT_STARTED,
         progress_percent=0,
         meta_json=(
-            {"daily_instructions": daily_instructions}
-            if daily_instructions
+            {"daily_instructions": daily_instructions, "practice_mode": "manual"}
+            if data.type in DAILY_TYPES
             else None
         ),
     )
@@ -1351,6 +1351,7 @@ async def update_plan_item(
 
 class DailyReflectionRequest(BaseModel):
     text: str = Field(max_length=8000)
+    session_date: date | None = None
 
 
 @items_router.put("/{item_id}/reflection")
@@ -1363,7 +1364,10 @@ async def save_daily_reflection(
     item = await _get_item_for_user(db, item_id, current_user.id, for_update=True)
     if item.type not in {PlanItemType.HABIT, PlanItemType.PRACTICE}:
         raise HTTPException(422, "Reflections belong to daily rhythms")
-    today = datetime.now(timezone.utc).date().isoformat()
+    from app.services.planning.habit_schedule import learning_today
+    today = learning_today().isoformat()
+    if data.session_date is not None and data.session_date.isoformat() != today:
+        raise HTTPException(409, "The practice day changed. Your note is still on this screen; reopen today's routine before saving it.")
     meta = dict(item.meta_json or {})
     reflections = dict(meta.get("daily_reflections") or {})
     reflections[today] = data.text
@@ -2035,16 +2039,20 @@ async def _plan_item_detailed_response(
     """The detailed response before the generation window is attached."""
     item = await _get_item_for_user(db, item_id, current_user.id)
 
-    # Habits and practices are lightweight daily rhythms. They reset every
-    # day and must never wait for (or pay for) a three-lesson mission module.
+    # Recurring practice uses a scheduled review of studied exercises. It never
+    # generates a separate mission module or silently rewrites saved attempts.
     if item.type in DAILY_TYPES:
+        from app.services.planning.habit_schedule import learning_today, schedule_for, practice_instructions, uses_checked_review
+        from app.services.practice.habit_review import review_status
+        today = learning_today()
+        checked = uses_checked_review(item)
         completed_today = await db.scalar(
             select(func.count())
             .select_from(DailyTaskCompletion)
             .where(
                 DailyTaskCompletion.user_id == current_user.id,
                 DailyTaskCompletion.plan_item_id == item.id,
-                DailyTaskCompletion.completed_date == datetime.now(timezone.utc).date(),
+                DailyTaskCompletion.completed_date == today,
             )
         )
         from app.api.v1.daily_tasks import _session_minutes
@@ -2052,6 +2060,8 @@ async def _plan_item_detailed_response(
         daily_item = _item_to_response(item)
         # One session, exactly as Today shows it (estimatedMinutes is weekly).
         daily_item.session_minutes = _session_minutes(item)
+        if checked:
+            daily_item.successMetric = "Save a checked attempt and correct a mistake or record the rule you will use next time. Participation and answer evidence are tracked separately."
         return PlanItemDetailedResponse(
             item=daily_item,
             details=None,
@@ -2060,9 +2070,11 @@ async def _plan_item_detailed_response(
             completed_step_ids=[],
             details_status=DetailsStatus.AVAILABLE,
             job_id=None,
-            daily_instructions=_daily_instructions_for_plan_item(item),
-            daily_reflection=((item.meta_json or {}).get("daily_reflections") or {}).get(datetime.now(timezone.utc).date().isoformat(), ""),
+            daily_instructions=practice_instructions(item) if checked else _daily_instructions_for_plan_item(item),
+            daily_reflection=((item.meta_json or {}).get("daily_reflections") or {}).get(today.isoformat(), ""),
             completed_today=bool(completed_today),
+            habit_schedule=schedule_for(item, today),
+            habit_review=await review_status(db, item, str(current_user.id), on=today) if checked else None,
         )
 
     # Only the immutable item type is consumed from the initial unlocked read.
