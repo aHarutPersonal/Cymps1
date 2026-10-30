@@ -12,6 +12,7 @@ from app.services import learning_sources as sources
 from app.services import learning_support as support
 from app.models.idol import CatalogStatus
 from app.services.planning.lesson_package import digest
+from app.services.llm.client import BaseLLMClient, LLMResponse
 
 
 SOURCE = "The author explains how to replace an abstract intention with a concrete cue and small action."
@@ -205,6 +206,27 @@ async def test_no_book_draft_is_generated_without_primary_sources(monkeypatch):
     assert [c.args[0] for c in call.await_args_list] == [
         "book_companion_sources", "book_companion_sources"
     ]
+
+
+@pytest.mark.asyncio
+async def test_support_schema_repair_restores_missing_self_check_question(monkeypatch):
+    valid = draft().model_dump()
+    invalid = copy.deepcopy(valid)
+    invalid["lessons"][0].pop("question")
+
+    class Client(BaseLLMClient):
+        calls = 0
+
+        async def generate_json(self, **kwargs):
+            self.calls += 1
+            return LLMResponse(data=invalid if self.calls == 1 else valid)
+
+    client = Client()
+    monkeypatch.setattr(books, "get_llm_client", lambda **kw: client)
+    monkeypatch.setattr(books, "record_llm_response", AsyncMock())
+    result = await books.structured_call("test", books.CompanionDraft, "Teach", {})
+    assert client.calls == 2
+    assert result.lessons[0].question == valid["lessons"][0]["question"]
 
 
 @pytest.mark.parametrize(
@@ -457,6 +479,9 @@ async def test_video_fallback_runs_after_first_candidates_are_rejected(monkeypat
     verify = AsyncMock(return_value=None)
     monkeypatch.setattr(support, "search_evidence", search)
     monkeypatch.setattr(support, "verify_video_source", verify)
+    monkeypatch.setattr(support, "structured_call", AsyncMock(
+        return_value=support.VideoSearchIntent(query="Writing an essay thesis with concrete examples")
+    ))
     value = {"mission": "Writing an essay thesis", "lesson_title": "Sharpen your skill"}
     assert await support.find_support_video(value) == []
     assert search.await_count == 2 and verify.await_count == 2

@@ -25,7 +25,7 @@ from app.services.llm.telemetry import record_llm_response
 from app.services.planning.lesson_package import digest
 from app.services.practice.contracts import StrictModel
 
-VERSION = 2
+VERSION = 3
 
 
 class CompanionLesson(StrictModel):
@@ -137,15 +137,16 @@ async def structured_call(operation, model, system, data, *, max_tokens=6000):
         thinking_level="low",
         allow_fallback=False,
     )
-    response = await client.generate_json(
+    validated, response = await client.generate_and_validate(
         system_prompt=system,
         user_prompt=json.dumps(data, ensure_ascii=False),
         output_model=model,
+        repair_on_failure=True,
     )
     await record_llm_response(operation=operation, response=response)
-    if response.error:
+    if response.error or validated is None:
         raise ValueError("Supporting material generation unavailable")
-    return model.model_validate(response.data)
+    return validated
 
 
 def _normal(text: str) -> str:
@@ -262,7 +263,8 @@ async def build_companion(title: str, author: str | None) -> tuple[dict, dict] |
         "covered. Aim for 280–450 words of useful teaching per lesson (hard bounds 220–800), "
         "with one idea in your own words and a clearly "
         "labelled ORIGINAL CMPYS fictional worked example, one small application exercise, then an "
-        "answerable scenario self-check with one correct zero-based answer and explanatory feedback. "
+        "answerable scenario self-check with a separate required question field, options, one correct "
+        "zero-based answer and explanatory feedback. Do not put the question only in content. "
         "No quotations, author-style imitation, chapter reconstruction, attributed fictional examples "
         "or unsupported book claims. Cite only source_ids that substantiate this lesson. No URLs or "
         "images in content. Book idea and original application must be clearly distinguished.",
