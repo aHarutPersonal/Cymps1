@@ -1221,7 +1221,8 @@ def test_legacy_workbook_without_new_fields_parses_and_grades():
     used = v3_activity().model_dump(mode="json")["fields"]
     assert {"prefix", "hint", "misconceptions"} <= set(used[0]) and "correct_choices" not in used[0]
     assert "correct_choices" in used[1] and not {"prefix", "hint", "misconceptions"} & set(used[1])
-    # The stored text-only transfer is not subject to the new-workbook rule.
+    # Stored scored fields without a rubric remain readable; new generations
+    # still require the rubric, even though text-only transfer is now valid.
     from app.services.practice.contracts import GeneratedWorkbook
 
     with pytest.raises(ValidationError):
@@ -1234,23 +1235,20 @@ def generated_payload(**changes):
     return raw
 
 
-def test_generation_rejects_text_only_activity():
+def test_generation_accepts_text_only_activity_but_bounds_text_review():
     from app.services.practice.contracts import GeneratedWorkbook
 
     assert GeneratedWorkbook.model_validate(generated_payload()).activities[0].fields[1].kind == "multi_choice"
     text = {"id": "why", "label": "Explain the method in one sentence", "kind": "text", "criteria": ["Uses the supplied figures"]}
     text_only = generated_payload()
     text_only["activities"][1]["fields"] = [text]
-    with pytest.raises(ValidationError) as error:
-        GeneratedWorkbook.model_validate(text_only)
-    message = str(error.value)
-    assert "case_d" in message and "number or multi_choice" in message
+    assert GeneratedWorkbook.model_validate(text_only).activities[1].fields[0].kind == "text"
     two_texts = generated_payload()
     two_texts["activities"][0]["fields"] += [text, {**text, "id": "why2"}]
     with pytest.raises(ValidationError) as error:
         GeneratedWorkbook.model_validate(two_texts)
     assert "at most one text field" in str(error.value)
-    # One number or multi-select plus one short text field is the intended shape.
+    # A calculation and explanation still work together when the skill needs both.
     paired = generated_payload()
     paired["activities"][0]["fields"].append(text)
     assert [f.kind for f in GeneratedWorkbook.model_validate(paired).activities[0].fields] == ["number", "multi_choice", "text"]
@@ -1386,13 +1384,48 @@ def test_generated_workbook_schema_shows_the_rules_the_model_is_checked_against(
     }
     assert "Required" in answer["properties"]["rubric_criterion"]["description"]
     assert set(answer["required"]) == {"id", "label", "kind"}  # kind-dependent, so conditional
-    # Every activity needs a number or multi_choice field; one text field at most.
+    # Any supported response kind is allowed; text review remains bounded.
     (contains,) = act["allOf"]
-    assert set(contains["properties"]["fields"]["contains"]["properties"]["kind"]["enum"]) == {"number", "multi_choice"}
+    fields_rule = contains["properties"]["fields"]
+    assert fields_rule["contains"]["properties"]["kind"] == {"const": "text"}
+    assert fields_rule["minContains"] == 0 and fields_rule["maxContains"] == 1
     assert "at most one text field" in act["properties"]["fields"]["description"]
     # The lenient stored-workbook schema is untouched.
     stored = Workbook.model_json_schema()["$defs"]
     assert "allOf" not in stored["AnswerField"] and "allOf" not in stored["Activity"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("met,uncertain,passed", [(True, False, True), (False, False, False), (True, True, False)])
+async def test_text_only_submission_requires_a_definite_rubric_review(state, met, uncertain, passed):
+    w = Workbook.model_validate(state.row.workbook_json)
+    a = w.activities[0]
+    a.fields = [a.fields[1]]
+    state.row.workbook_json = w.model_dump()
+    state.row.answers_json = {"case_a.reason": "This is a right triangle."}
+    state.review.return_value = TextReview.model_validate({"fields": [{
+        "field_id": "reason", "criterion_met": [met], "uncertain": uncertain,
+        "feedback": "Check whether the stated right-angle condition supports the method.",
+    }]})
+    result = await api.submit_practice("item", "s1", submission(), state.db, state.user)
+    state.review.assert_awaited_once()
+    assert ("case_a" in result["passed_activity_ids"]) is passed
+    assert result["attempts"][0]["passed"] is passed
+    assert result["attempts"][0]["answers"] == {"reason": "This is a right triangle."}
+    assert not result["complete"]  # the independent transfer is still required
+
+
+@pytest.mark.asyncio
+async def test_text_only_submission_cannot_pass_when_review_is_missing(state):
+    w = Workbook.model_validate(state.row.workbook_json)
+    w.activities[0].fields = [w.activities[0].fields[1]]
+    state.row.workbook_json = w.model_dump()
+    state.row.answers_json = {"case_a.reason": "This is a right triangle."}
+    state.review.return_value = None
+    with pytest.raises(HTTPException) as error:
+        await api.submit_practice("item", "s1", submission(), state.db, state.user)
+    assert error.value.status_code == 503
+    assert state.row.attempts_json == []
 
 
 def test_generation_prompt_does_not_call_the_required_rubric_optional():

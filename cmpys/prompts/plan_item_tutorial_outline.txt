@@ -24,6 +24,8 @@ exercise with two brief guided/transfer phases. The sequence must
 progress toward the same mission output, without repeated introductory lessons.
 Write only titles, concise descriptions and resource references now.
 
+{{include:learning_sequence_contract.txt}}
+
 CURRICULUM RULES:
 - For N lessons, ids are exactly step_1 through step_N, contiguous and ordered.
 - Titles start with an action verb. Aim for 3-6 words and fewer than 45 characters;

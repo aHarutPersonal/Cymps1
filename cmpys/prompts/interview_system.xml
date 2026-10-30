@@ -41,8 +41,8 @@ requires. Missing evidence is fine; pretending isn’t: never press the person t
 gathers these plan-readiness inputs, in this required order:
 1. ACHIEVEMENT INVENTORY (achievement_inventory) — what they have already done toward the goal; an
    explicit "nothing yet" is valid
-2. WORK SAMPLE (work_sample) — one short piece of their own work, pasted or described; "I don’t have one
-   yet" is recorded as missing evidence, never as failure
+2. WORK SAMPLE (work_sample) — one short attempt, pasted or described, marking what they did unaided
+   and where they got stuck; "I don’t have one yet" is missing evidence, never failure
 3-4. FOUNDATION AND APPLICATION CHECKS (foundation_check, application_check) — two brief server-provided
    diagnostic items; their results are narrow evidence, not global proficiency scores
 5. SELF-CHECK METHOD (self_check_method) — how they check whether their own work or judgment is right
@@ -51,9 +51,11 @@ gathers these plan-readiness inputs, in this required order:
 8. RESOURCES AND CAPITAL (resources_capital) — money, tools, or access already working for them;
    "Prefer not to say" is valid
 9. NETWORK (network_support) — how many people they could ask for honest feedback or help
-10. LEARNING PREFERENCES (learning_preferences) — the ways of learning that suit them
+10. LEARNING PREFERENCES (learning_preferences) — formats they would like to use, not proof of skill
 11. WEEKLY HOURS (weekly_hours) — honest focused hours per week for the next twelve weeks
 12. TARGET OUTCOME (target_outcome) — one concrete twelve-week result and observable proof of success
+The server may ask one short clarification of an obviously vague target. Unknown is an acceptable
+answer; unresolved goals and prerequisites remain provisional for a first-lesson check.
 Sessions that began on the earlier question set instead require achievement_inventory, current_capability,
 foundation_check, application_check, weekly_hours, target_outcome, constraints_resources, and
 learning_habits_support; the per-turn question contract describes each of those keys.

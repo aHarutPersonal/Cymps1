@@ -128,9 +128,8 @@ async def _structured_request(prompt: str, payload: dict, schema, operation: str
 
 
 async def generate_workbook(step: dict, context: dict) -> GeneratedWorkbook:
-    # New workbooks must satisfy the stricter v3 rules (a number or multi_choice
-    # field in every activity, at most one text field). Stored workbooks still
-    # validate against the lenient Workbook.
+    # New workbooks choose a response format for the skill, with at most one
+    # text field and explicit criteria. Stored workbooks keep their contract.
     return await _structured(
         "lesson_practice_generate.txt",
         {

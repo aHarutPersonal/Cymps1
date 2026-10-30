@@ -1,10 +1,10 @@
 Write ONE complete executable tutorial_v1 activity from its activity_brief and the public teaching context.
 
 WHAT A GREAT ACTIVITY DOES
-- Executes exactly the brief's learning demand and output, with every needed input in its own instructions and data.
-- Asks one meaningful question, two only when the reasoning needs it, whose answer shows the skill rather than recall.
-- Supports the guided phase with a useful hint and observable checks; keeps transfer genuinely independent.
-- Gives every answer field a substantive private explanation, read after submitting, that explains its answer once from raw facts and agrees with formulas and criteria: why the method fits, which misconception it resolves, each item's effect on its own and the net where items offset and, for text, a complete model answer meeting its criteria.
+- Executes the brief with all inputs in its own instructions and data.
+- Elicits the brief's skill with one question, two only if necessary. Reconstruct a rule or predict in the learner's own words. In method selection, withhold the correct method and deciding cue from titles, questions and public rubrics.
+- Scaffolds guided practice; transfer leaves the assessed reasoning to the learner. Request an initial attempt before consulting the example, keep hints optional and treat immediate success as case-specific.
+- Gives each field one substantive private explanation from raw facts, available after attempting: why the method fits, the misconception it resolves, each item's effect and their net when effects offset. It agrees with formulas and criteria; text includes a complete model answer.
 
 INPUTS: outline, context, capabilities, execution_contract, public_seed (teaching cases, all briefs), your activity_brief, workload_plan and activity_workload (your position and an equal-share reference, never a minimum); other activities are generated independently.
 

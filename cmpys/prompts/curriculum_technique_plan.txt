@@ -20,7 +20,7 @@ Select two to eight techniques appropriate for the skill type and learner level.
 - cite exact source IDs from the source pack;
 - preserve limitations.
 
-Never select a technique absent from the supplied registry. Select spaced_practice only when durable_spacing_scheduler is true; if selected, provide positive ascending follow-up day offsets. Assessment must test the stated performance, not recall of lesson prose.
+Never select a technique absent from the supplied registry. Select spaced_practice only when durable_spacing_scheduler is true; if selected, provide positive ascending follow-up day offsets. Assessment must test the stated performance. Retrieval reconstructs a concept or method without consulting the explanation, not verbatim lesson prose; it complements application rather than replacing it. Use interleaving to distinguish related methods after their prerequisites are introduced. Specify observable evidence and corrective feedback instead of merely naming a technique. Do not impose a fixed memory capacity, universal review interval or calendar for Bloom levels.
 
 FIELD LENGTH LIMITS
 assessment_strategy must be at most 1500 characters. Write it as a compact plan, not an essay: name what evidence demonstrates the outcome, how it is judged, and the pass bar. A longer value is rejected outright and the whole module is discarded, so trim before returning rather than risking the limit.

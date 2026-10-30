@@ -267,23 +267,17 @@ class Workbook(StrictModel):
 def check_generated_fields(activity_id: str, fields) -> None:
     """Rules for NEWLY generated activities; stored workbooks never run this.
 
-    Works on canonical answer fields and on generation drafts alike. Prefer
-    numbers and multi-select over free text: every activity needs at least one
-    number or multi_choice field, and at most one short text field. Each scored
-    field names the criterion the result panel shows. The messages are written
-    to be acted on by the model's one correction request.
+    Works on canonical answer fields and on generation drafts alike. Any
+    supported response kind can demonstrate the skill, including text alone.
+    Keep at most one text field per activity and a public skill criterion for
+    every fixed-answer field. Stored workbooks retain their original contract.
     """
     kinds = [field.kind for field in fields]
-    if not any(kind in ("number", "multi_choice") for kind in kinds):
-        raise ValueError(
-            f"Activity {activity_id} needs at least one number or multi_choice field; "
-            "a text field cannot be its only response. Ask for a number or a multi-select answer, "
-            "plus at most one short text field."
-        )
     if kinds.count("text") > 1:
         raise ValueError(
             f"Activity {activity_id} has {kinds.count('text')} text fields; use at most one text field "
-            "(an answer of at most 40 words) and turn the others into number or multi_choice fields."
+            "for one coherent response with observable criteria. Remove redundant questions; "
+            "use another response kind only when the skill requires it."
         )
     for field in fields:
         if field.kind != "text" and not (field.rubric_criterion or "").strip():
@@ -330,12 +324,12 @@ class GeneratedWorkbook(Workbook):
         })
         activity = definitions["Activity"]
         activity["properties"]["fields"]["description"] = (
-            "At least one number or multi_choice field, and at most one text field "
-            "(an answer of 40 words or fewer); text is never the only field."
+            "Match number, choice, multi_choice or text to the skill; text-only is valid. "
+            "Use at most one text field with observable criteria and an honest workload."
         )
         activity.setdefault("allOf", []).append({
-            "properties": {"fields": {"contains": {
-                "properties": {"kind": {"enum": ["number", "multi_choice"]}},
+            "properties": {"fields": {"minContains": 0, "maxContains": 1, "contains": {
+                "properties": {"kind": {"const": "text"}},
                 "required": ["kind"],
             }}},
         })

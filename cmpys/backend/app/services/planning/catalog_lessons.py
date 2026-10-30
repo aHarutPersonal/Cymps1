@@ -1375,6 +1375,30 @@ async def build_learner_lesson_brief(
             "learner.recent_practice", "learner",
             bounded("recent_practice", json.dumps(compact_practice_evidence(baseline["practice_evidence"])), MAX_BRIEF_FACT_CHARS),
         ))
+    if baseline.get("interview_key_set") == "v2":
+        from app.services.interview_inputs import compact_diagnostic_evidence, evidence_excerpt
+        # Keep the exact attempted task and response separate from self-rating.
+        # Each fact fits the existing cap, including a sample's final obstacle.
+        for index, check in enumerate((baseline.get("skill_diagnostics") or [])[:2]):
+            if not isinstance(check, Mapping):
+                continue
+            evidence = compact_diagnostic_evidence(check, max_chars=MAX_BRIEF_FACT_CHARS)
+            facts.append(BriefFact(
+                f"learner.intake_check.{index + 1}", "learner",
+                json.dumps(evidence, ensure_ascii=False, separators=(",", ":")),
+            ))
+        sample = baseline.get("work_sample")
+        if isinstance(sample, Mapping) and sample.get("answer"):
+            facts.append(BriefFact(
+                "learner.work_sample", "learner",
+                "Learner-supplied attempt, not independently verified: "
+                + evidence_excerpt(sample["answer"], 900),
+            ))
+        if baseline.get("planning_readiness"):
+            facts.append(BriefFact(
+                "learner.planning_readiness", "learner",
+                json.dumps(baseline["planning_readiness"], ensure_ascii=False),
+            ))
     for index, preference in enumerate(learning_preferences, start=1):
         facts.append(BriefFact(f"learner.preference.{index}", "learner", preference))
     for index, constraint in enumerate(constraints, start=1):

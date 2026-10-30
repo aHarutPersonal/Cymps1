@@ -114,9 +114,9 @@ INTERVIEW_ANSWER_KEY_INSTRUCTIONS = {
     ),
     "work_sample": (
         "Ask them to paste or briefly describe one short piece of their own work "
-        "toward the goal, even a rough one, and make clear that not having one "
-        "yet is an acceptable answer because missing evidence is fine and "
-        "pretending is not."
+        "toward the goal. In one short helper sentence, ask them to mark what "
+        "they did without help and where they got stuck. A rough attempt or "
+        "'I don't have one yet' is valid; never require invented evidence."
     ),
     "self_check_method": (
         "Ask how they check whether their own work or judgment toward the goal "
@@ -144,7 +144,8 @@ INTERVIEW_ANSWER_KEY_INSTRUCTIONS = {
         "an honest answer."
     ),
     "learning_preferences": (
-        "Ask how they learn best and invite them to pick every way that fits, "
+        "Ask which formats they would like to use and invite every way that fits, "
+        "without treating preference as evidence of skill or effectiveness, "
         "without listing the ways, because the screen shows the choices."
     ),
 }
@@ -177,8 +178,8 @@ INTERVIEW_QUESTION_FALLBACKS = {
         "A useful format, routine, or feedback partner is enough. ‘Nothing yet’ is fine."
     ),
     "work_sample": (
-        "Could you paste a short piece of your own work toward this goal, even a "
-        "rough one, or tell me honestly that you don’t have one yet?"
+        "Could you share a short attempt at this goal? Mark what you did without "
+        "help and where you got stuck. A rough attempt or ‘I don’t have one yet’ is fine."
     ),
     "self_check_method": (
         "When you think your work toward this goal is good, how do you check yourself?"
@@ -197,8 +198,13 @@ INTERVIEW_QUESTION_FALLBACKS = {
     "network_support": (
         "How many people could you ask today for honest feedback or help with this goal?"
     ),
-    "learning_preferences": "Which ways of learning tend to work best for you?",
+    "learning_preferences": "Which formats would you like to use while learning?",
 }
+
+TARGET_CLARIFICATION_QUESTION = (
+    "What specific thing would you like to make or do independently after twelve "
+    "weeks? Name one result and how you would check it. ‘I’m not sure yet’ is fine."
+)
 
 # Every contract is a silent instruction. The model once paraphrased "append no
 # response-control trailer" into the visible reply ("No trailer — server-owned
@@ -740,6 +746,9 @@ def collect_interview_answers(messages: list[Any]) -> dict[str, list[dict[str, A
                 "source_message_id": message_id,
                 "question_id": str(getattr(question, "id", "") or ""),
                 "diagnostic_id": str(metadata.get("diagnostic_id") or ""),
+                "question": str(getattr(question, "content", "") or ""),
+                "clarification_allowed": metadata.get("clarification_allowed") is True,
+                "is_clarification": metadata.get("is_clarification") is True,
                 "missing_evidence": isinstance(answer_metadata, dict)
                 and answer_metadata.get("missing_evidence") is True,
             }
@@ -759,6 +768,8 @@ def missing_interview_answer_keys(messages: list[Any]) -> list[str]:
             parse_weekly_capacity_minutes(record["answer"], key_set) is not None
             for record in records
         ):
+            missing.append(key)
+        elif key == "target_outcome" and _target_clarification_needed(records):
             missing.append(key)
     return missing
 
@@ -797,6 +808,59 @@ def is_noncommittal_answer(text: str) -> bool:
     if answer_evidence_status(text or "") != "self_reported":
         return True
     return _NONCOMMITTAL_RE.fullmatch(normalized(text)) is not None
+
+
+def is_vague_target(text: str) -> bool:
+    """Conservative trigger for one clarification, not a semantic skill grader.
+
+    Match only unmistakably generic aspirations and generic UI suggestions.
+    A short concrete result remains valid; length is not evidence of quality.
+    """
+    from app.services.intake_diagnostics import normalized
+
+    value = normalized(text)
+    return value in {
+        "a finished piece of work i can show", "a skill i can demonstrate on request",
+        "a result i can measure and share", "improve", "learn", "get better",
+        "стать лучше", "научиться", "улучшить знания", "развиваться",
+        "learn python", "learn javascript", "learn programming", "learn coding",
+        "learn investing", "learn finance", "learn geometry", "learn mathematics",
+        "learn statistics", "learn data analysis", "learn writing", "become a better writer",
+        "изучить python", "научиться программированию", "научиться инвестировать",
+    } or bool(re.fullmatch(
+        r"(?:(?:i want to|i d like to|to) )?"
+        r"(?:(?:get|become) (?:better|good|great)(?: at .+)?|"
+        r"improve (?:my )?(?:skills|knowledge|understanding)(?: (?:of|in|about) .+)?|"
+        r"learn (?:more|the basics)(?: (?:about|of) .+)?)", value
+    ))
+
+
+def _target_clarification_needed(records: list[dict]) -> bool:
+    # Opt in on newly issued questions. Completed and in-flight older sessions
+    # must not reopen merely because the server's clarification policy changed.
+    return bool(
+        len(records) == 1
+        and records[0].get("clarification_allowed") is True
+        and not records[0].get("is_clarification")
+        and not is_noncommittal_answer(records[0]["answer"])
+        and is_vague_target(records[0]["answer"])
+    )
+
+
+def target_clarification_needed(messages: list[Any]) -> bool:
+    if interview_key_set(messages) != INTERVIEW_ANSWER_KEYS_V2:
+        return False
+    return _target_clarification_needed(collect_interview_answers(messages)["target_outcome"])
+
+
+def has_target_clarification(messages: list[Any]) -> bool:
+    return any(
+        _role_value(message) == "assistant"
+        and isinstance(metadata := getattr(message, "response_ui_json", None), dict)
+        and metadata.get("answer_key") == "target_outcome"
+        and metadata.get("is_clarification") is True
+        for message in messages
+    )
 
 
 def parse_learning_preferences(text: str) -> list[str]:
@@ -908,7 +972,10 @@ def build_interview_plan_inputs(
     # to the onboarding goal.
     target_record = latest.get("target_outcome")
     noncommittal_target = bool(
-        target_record and is_noncommittal_answer(target_record["answer"])
+        target_record and (
+            is_noncommittal_answer(target_record["answer"])
+            or (keys == INTERVIEW_ANSWER_KEYS_V2 and is_vague_target(target_record["answer"]))
+        )
     )
     if noncommittal_target:
         evidence_status["target_outcome"] = "unknown"
@@ -957,6 +1024,19 @@ def build_interview_plan_inputs(
             baseline[key] = latest[key]
     if noncommittal_target:
         baseline["target_outcome"] = None
+    checks = baseline["skill_diagnostics"]
+    baseline["planning_readiness"] = {
+        "target": "self_reported" if baseline.get("target_outcome") else "needs_confirmation",
+        "placement": "narrow_evidence" if any(
+            item["status"] in {"correct_on_item", "needs_practice_on_item"} for item in checks
+        ) else "provisional",
+        "first_lesson_actions": list(dict.fromkeys(
+            (["Agree on one concrete outcome before substantial practice."]
+             if not baseline.get("target_outcome") else [])
+            + [item.get("next_check", "Check an uncertain prerequisite on a small goal-specific task.")
+               for item in checks]
+        )),
+    }
     return baseline
 
 
@@ -979,6 +1059,7 @@ def provider_interview_plan_inputs(plan_inputs: dict[str, Any]) -> dict[str, Any
         "answer_evidence_status": plan_inputs.get("answer_evidence_status", {}),
         "skill_diagnostics": plan_inputs.get("skill_diagnostics", []),
         "placement_policy": plan_inputs.get("placement_policy"),
+        "planning_readiness": plan_inputs.get("planning_readiness"),
         "practice_evidence": plan_inputs.get("practice_evidence", []),
         "north_star_goal": plan_inputs.get("goal"),
         # Minutes are canonical; hours (a float) keep older readers working.
@@ -1033,13 +1114,98 @@ _V1_PLACEMENT_FIELDS = (
 )
 # Bounded so the whole v3 block stays well under the lesson-context budget.
 _V2_PLACEMENT_FIELDS = (
-    ("work_sample", 300),
+    ("work_sample", 900),
     ("skill_confidence", 60),
     ("practice_volume", 60),
     ("self_check_method", 120),
     ("target_outcome", 300),
     ("resources_capital", 120),
 )
+
+
+def evidence_excerpt(text: Any, limit: int) -> str:
+    """Keep both ends, including a final sticking point, and label omissions.
+
+    This is an excerpt of learner evidence, never a generated assessment.
+    Preserve whitespace because samples may contain code or structured work.
+    """
+    text = str(text or "")
+    if len(text) <= limit:
+        return text
+    marker = " …[excerpt]… "
+    head = (limit - len(marker)) // 2
+    return text[:head] + marker + text[-(limit - len(marker) - head):]
+
+
+def compact_diagnostic_evidence(check: dict, *, max_chars: int = 1000) -> dict:
+    """Bound serialized size too: code, quotes and newlines expand in JSON."""
+    import json
+
+    result = {key: evidence_excerpt(check[key], limit) for key, limit in (
+        ("diagnostic_id", 80), ("skill_id", 80), ("status", 32),
+        ("question", 360), ("answer", 480), ("criterion", 170),
+        ("observed_issue", 150), ("next_check", 150),
+    ) if check.get(key) is not None}
+    prose_keys = ("question", "answer", "criterion", "observed_issue", "next_check")
+    while len(json.dumps(result, ensure_ascii=False, separators=(",", ":"))) > max_chars:
+        candidates = [key for key in prose_keys if len(result.get(key) or "") > 40]
+        if not candidates:
+            break
+        key = max(candidates, key=lambda key: len(result[key]))
+        result[key] = evidence_excerpt(result[key], max(40, len(result[key]) - 40))
+    return result
+
+
+def _v2_placement_context(baseline: dict[str, Any]) -> str:
+    """Fit a valid evidence object inside the existing 4,000-character caller cap.
+
+    Preserve diagnostic identity/status and recent practice. If prose must be
+    shortened, use marked excerpts rather than silently cutting off its ending.
+    """
+    import json
+    from app.services.practice.evidence import compact_practice_evidence
+
+    prefix = "Learner placement (self-report and narrow checks, not general mastery):\n"
+    checks = []
+    for item in (baseline.get("skill_diagnostics") or [])[:2]:
+        if not isinstance(item, dict):
+            continue
+        checks.append(compact_diagnostic_evidence(item, max_chars=1400))
+    readiness = baseline.get("planning_readiness") or {}
+    facts = {
+        "skill_diagnostics": checks,
+        "planning_readiness": {key: readiness.get(key) for key in ("target", "placement")},
+        "recent_practice": compact_practice_evidence(baseline.get("practice_evidence") or []),
+        "answer_evidence_status": {
+            key: value for key, value in (baseline.get("answer_evidence_status") or {}).items()
+            if key in INTERVIEW_ANSWER_KEYS_V2
+        },
+        "learning_preferences": [evidence_excerpt(value, 60)
+                                 for value in (baseline.get("learning_preferences") or [])[:5]],
+    }
+    for key, limit in _V2_PLACEMENT_FIELDS:
+        record = baseline.get(key)
+        facts[key] = evidence_excerpt(record.get("answer"), limit) if isinstance(record, dict) else None
+
+    def render():
+        return prefix + json.dumps(facts, ensure_ascii=False, separators=(",", ":"))
+
+    # Reduce the longest excerpt first. Never drop an entire check or its
+    # uncertainty, nor a newer practice result to make room for old narrative.
+    prose = [(facts, key) for key, _ in _V2_PLACEMENT_FIELDS]
+    prose += [(check, key) for check in checks
+              for key in ("question", "answer", "criterion", "observed_issue", "next_check") if key in check]
+    prose += [(facts["learning_preferences"], index) for index in range(len(facts["learning_preferences"]))]
+    for practice in facts["recent_practice"]:
+        prose.append((practice, "lesson"))
+        prose.extend((check, "title") for check in practice["checks"])
+    while len(render()) > 3800:
+        candidates = [(obj, key) for obj, key in prose if len(obj[key] or "") > 40]
+        if not candidates:
+            break
+        obj, key = max(candidates, key=lambda entry: len(entry[0][entry[1]]))
+        obj[key] = evidence_excerpt(obj[key], max(40, len(obj[key]) - 40))
+    return render()
 
 
 def compact_placement_context(baseline: dict[str, Any]) -> str:
@@ -1050,6 +1216,8 @@ def compact_placement_context(baseline: dict[str, Any]) -> str:
         return (
             "Learner placement: not assessed; check prerequisites in the first lesson."
         )
+    if baseline.get("interview_key_set") == "v2":
+        return _v2_placement_context(baseline)
     facts = {
         "answer_evidence_status": baseline.get("answer_evidence_status", {}),
         "skill_diagnostics": [
@@ -1060,13 +1228,8 @@ def compact_placement_context(baseline: dict[str, Any]) -> str:
     }
     from app.services.practice.evidence import compact_practice_evidence
     facts["recent_practice"] = compact_practice_evidence(baseline.get("practice_evidence") or [])
-    if baseline.get("interview_key_set") == "v2":
-        placement_fields = _V2_PLACEMENT_FIELDS
-        facts["missing_evidence_keys"] = list(baseline.get("missing_evidence_keys") or [])
-        facts["learning_preferences"] = list(baseline.get("learning_preferences") or [])[:6]
-    else:
-        # Pre-v3 baselines keep exactly their previous placement context.
-        placement_fields = _V1_PLACEMENT_FIELDS
+    # Pre-v3 baselines keep exactly their previous placement context.
+    placement_fields = _V1_PLACEMENT_FIELDS
     for key, limit in placement_fields:
         record = baseline.get(key)
         facts[key] = (

@@ -23,7 +23,7 @@ async def test_noop_private_patch_recovers_only_independently_rejected_activity(
     prior = structured_package()
     payload = prior.model_dump(mode="json")
     for activity in payload["workbook"]["activities"]:
-        multi_choice_first(activity)  # a new tutorial needs a number or multi_choice answer
+        multi_choice_first(activity)  # preserve this existing mixed-response workbook
     prior = LessonPackage.model_validate(payload)
     client = SimpleNamespace(generate_json=AsyncMock(side_effect=[
         LLMResponse(data={}), LLMResponse(data=activity_draft_fixture(multi_choice_first(replacement())))]))
@@ -36,9 +36,9 @@ async def test_noop_private_patch_recovers_only_independently_rejected_activity(
     assert result.workbook.activities[1].fields[1] == prior.workbook.activities[1].fields[1]
     assert client.generate_json.await_count == 2
     assert issubclass(client.generate_json.call_args.kwargs["output_model"], TutorialActivityDraft)
-    # The one-shot repair must not steer a tutorial into the text-only shape its own wire rejects.
+    # Repairs use the same response flexibility and bounds as initial generation.
     repair_prompt = " ".join(client.generate_json.call_args.kwargs["system_prompt"].split())
-    assert "keeps at least one number or multi_choice field" in repair_prompt
+    assert "text-only is valid" in repair_prompt
     assert "at most one text field" in repair_prompt
 
 

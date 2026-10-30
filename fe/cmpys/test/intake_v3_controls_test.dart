@@ -612,9 +612,7 @@ void main() {
       ),
     );
 
-    await tester.pumpWidget(
-      _composer({'version': 1, 'kind': 'scale'}, (_) {}),
-    );
+    await tester.pumpWidget(_composer({'version': 1, 'kind': 'scale'}, (_) {}));
     await tester.pump();
     await tester.tap(find.byKey(const ValueKey('intake-scale-2')));
     await tester.pump();
@@ -721,6 +719,41 @@ void main() {
     await show({...count, 'answer_key': 'focus', 'unit': 'hrs'});
     expect(headerIcon(), V3Icons.clock);
   });
+
+  testWidgets(
+    'one target clarification extends progress and submits its own question id',
+    (tester) async {
+      final repository = _ClarifyingTargetRepository();
+      final draft = CmpysOnboardingDraft()..sessionId = 'session-1';
+      await tester.pumpWidget(_step(repository, draft));
+      await tester.pumpAndSettle();
+      expect(find.text('Question 12 of 12'), findsOneWidget);
+
+      final input = find.byKey(const ValueKey('intake-text-input'));
+      await tester.enterText(input, 'Get better');
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('intake-text-submit')));
+      await tester.pumpAndSettle();
+      expect(find.text('Question 13 of 13'), findsOneWidget);
+      expect(
+        find.text('What specific result would you like to demonstrate?'),
+        findsOneWidget,
+      );
+      expect(repository.answeredQuestionIds, ['target']);
+
+      await tester.enterText(input, 'Build a tested calculator');
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('intake-text-submit')));
+      await tester.pumpAndSettle();
+      expect(repository.answers, ['Get better', 'Build a tested calculator']);
+      expect(repository.answeredQuestionIds, [
+        'target',
+        'target-clarification',
+      ]);
+      expect(find.text('Your starting point is saved.'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 
   testWidgets('finishing shows the closing line and Open the mentor lab', (
     tester,
@@ -935,6 +968,40 @@ class _FinishingRepository extends _Recording {
     {'type': 'chunk', 'content': 'Your starting point is saved.'},
     {'type': 'done', 'turn': 13, 'max_turns': 13, 'phase_transition': true},
   ];
+}
+
+class _ClarifyingTargetRepository extends _FinishingRepository {
+  @override
+  List<Map<String, Object?>> afterAnswer(String content) => answers.length == 1
+      ? [
+          {
+            'type': 'chunk',
+            'content': 'What specific result would you like to demonstrate?',
+          },
+          {
+            'type': 'done',
+            'turn': 13,
+            'max_turns': 14,
+            'phase_transition': false,
+            'question_id': 'target-clarification',
+            'response_ui': {
+              'version': 1,
+              'kind': 'text',
+              'answer_key': 'target_outcome',
+              'clarification_allowed': false,
+              'is_clarification': true,
+            },
+          },
+        ]
+      : [
+          {'type': 'chunk', 'content': 'Your starting point is saved.'},
+          {
+            'type': 'done',
+            'turn': 14,
+            'max_turns': 14,
+            'phase_transition': true,
+          },
+        ];
 }
 
 class _SseClient extends Fake implements DioClient {

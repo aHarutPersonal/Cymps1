@@ -14,7 +14,13 @@ array, teaching cases, brief, patch or fragment. Keep the response compact and
 complete, retaining every necessary fact, supported action and reasoning step.
 Output headroom is shared with reasoning, not a guaranteed visible-text allowance.
 
-Execute the brief's concrete learning demand and output. For the first practice
+Execute the brief's concrete learning demand and output. Choose response fields
+that demonstrate that skill; a written response alone is valid. Conceptual
+retrieval reconstructs a rule or predicts an outcome, not lesson wording. For a
+method-selection task, keep its answer and deciding cue out of the title, question
+and public rubric. Supply needed facts, not the reasoning being assessed. Ask for
+an initial attempt before consulting the example; keep hints optional.
+For the first practice
 activity, support guided application with a useful hint and observable checks. For
 writing or interpretation, choose qualitative evidence when it serves the learning
 objective. Do not invent percentages, prices, headcounts or arithmetic to make an

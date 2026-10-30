@@ -95,6 +95,9 @@ from app.services.interview_inputs import (
     parse_weekly_capacity_minutes,
     provider_interview_plan_inputs,
     weekly_capacity_rejection,
+    TARGET_CLARIFICATION_QUESTION,
+    target_clarification_needed,
+    has_target_clarification,
 )
 from app.services.planning.capacity import (
     capacity_prompt_params,
@@ -122,7 +125,9 @@ MAX_INTERVIEW_TURNS = len(INTERVIEW_ANSWER_KEYS_V2) + 1
 
 def interview_max_turns(messages) -> int:
     """Turn budget for one session, from the question set it is using."""
-    return len(interview_key_set(messages)) + 1
+    return len(interview_key_set(messages)) + 1 + int(
+        target_clarification_needed(messages) or has_target_clarification(messages)
+    )
 
 INTERVIEW_QUESTION_TIMEOUT_SECONDS = 18
 INTERVIEW_QUESTION_MAX_WORDS = 55
@@ -439,6 +444,9 @@ def _response_input_for_answer_key(
 
     response_input = _validated_interview_response_input(value)
     response_input.answer_key = answer_key
+    response_input.diagnostic_id = None
+    response_input.clarification_allowed = False
+    response_input.is_clarification = False
     if answer_key in MODEL_CONTROL_KINDS:
         try:
             response_input = _enforced_model_control(response_input, answer_key)
@@ -450,6 +458,9 @@ def _response_input_for_answer_key(
             )
             response_input = _default_model_control(answer_key)
         response_input.answer_key = answer_key
+    response_input.clarification_allowed = (
+        answer_key == "target_outcome" and key_set == INTERVIEW_ANSWER_KEYS_V2
+    )
     return response_input
 
 
@@ -2647,6 +2658,10 @@ async def interview(
         require_diagnostics=True,
     )
     required_answer_key = next_interview_answer_key(planning_messages)
+    clarify_target = (
+        required_answer_key == "target_outcome"
+        and target_clarification_needed(planning_messages)
+    )
     # The session's own question set: legacy 8-key intakes finish on it.
     answer_key_set = interview_key_set(planning_messages)
     max_turns = interview_max_turns(planning_messages)
@@ -2729,7 +2744,9 @@ async def interview(
             yield f"data: {json_lib.dumps({'type': 'status', 'message': 'thinking'})}\n\n"
 
             response_input = _default_interview_response_input()
-            if diagnostic is not None:
+            if clarify_target:
+                clean_response = TARGET_CLARIFICATION_QUESTION
+            elif diagnostic is not None:
                 # The question and grading key must refer to the exact same
                 # versioned case. Do not pay a model to rewrite its conditions.
                 clean_response = diagnostic.question
@@ -2805,6 +2822,11 @@ async def interview(
                 persisted_response_input = InterviewResponseInput.model_validate(
                     diagnostic.response_ui(required_answer_key)
                 )
+            if clarify_target:
+                persisted_response_input.is_clarification = True
+                persisted_response_input.clarification_allowed = False
+                # Repeating generic suggestion chips would just repeat the gap.
+                persisted_response_input.suggestions = []
             ai_msg = ChatMessage(
                 id=str(uuid.uuid4()),
                 thread_id=locked_thread.id,

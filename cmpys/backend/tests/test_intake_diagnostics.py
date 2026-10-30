@@ -119,10 +119,10 @@ def test_goal_takes_priority_over_mentor_name_and_unknown_domains_stay_ungraded(
         select_diagnostic("foundation_check", "Learn geometry", "Warren Buffett")
         == BANK["geometry"][0]
     )
-    assert (
-        select_diagnostic("application_check", "Learn poetry", "Warren Buffett")
-        == BANK["general"][1]
-    )
+    generic = select_diagnostic("application_check", "Learn poetry", "Warren Buffett")
+    assert generic.id == "general.check.v2"
+    assert "Learn poetry" in generic.question
+    assert generic.correct is None
     assert select_diagnostic("weekly_hours", "investing", "Warren Buffett") is None
 
 

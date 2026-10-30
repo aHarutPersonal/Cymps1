@@ -1,0 +1,27 @@
+LEARNING SEQUENCE — express these decisions through the existing output fields:
+- Each description names one observable learning demand, the evidence the learner
+  will produce and a quality check. A familiar prerequisite can be practiced in a
+  new decision without being re-taught as a new introductory topic.
+- Build from explained examples to less supported application. Where the sequence
+  introduces related methods, include a mixed case requiring the learner to choose
+  the method and explain the deciding cue. Use only supplied prerequisites or
+  methods explicitly taught earlier in this sequence; do not invent mastery.
+- In the first lesson, address provisional placement with one short goal-specific
+  check and a targeted explanation within the existing time. Use the supplied
+  diagnostic response and criterion; explicitly excerpted work cannot establish
+  omitted reasoning. If the target needs confirmation, help define a small
+  observable result before substantial practice; do not invent the learner's consent.
+- Use a brief reconstruction, prediction or self-explanation where it supports
+  the goal. Distribute these checks through the sequence, not every technique in
+  every lesson. A difficult question is useful only if its prerequisites are met.
+- The final lesson checks the mission's outcome on a self-contained new case:
+  produce or justify a small artifact or decision combining the relevant taught
+  skills, with observable criteria and reduced procedural help. Keep one primary
+  objective and the allocated time; isolated quiz completion is not the outcome.
+- Activities are authored separately. Supply the needed case and source material
+  within each activity; do not assume access to a learner's earlier answer or an
+  evolving saved artifact unless that input is explicitly supplied. Use a complete
+  new case for synthesis when cross-lesson artifact handoff is unavailable.
+- Allocate review and synthesis inside the mission budget. Only an actual elapsed
+  interval establishes spacing; short lessons or sequential unlocks do not. Do not
+  promise automatic delayed checks, notifications or unsupported response controls.

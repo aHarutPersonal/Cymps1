@@ -45,6 +45,17 @@ EXECUTION CONTRACT:
 - success_metric must remain binary, measurable, and consistent with the
   backbone. Never write "task completed".
 - Do not invent quotations, chapter numbers, mentor facts, URLs, or resources.
+- For cognitive daily rhythms, distribute practice across separate sessions.
+  Name what to reconstruct or decide before reopening the material, how to check
+  it and which mistake to record in the saved reflection. A later session varies
+  the application or compares related methods already introduced. Keep physical
+  practice appropriate to its skill; do not force memory quizzes onto every habit.
+- Mission descriptions connect the taught method to an observable independent
+  outcome, its quality check and a likely misconception. When prior methods are
+  available, include a case requiring method selection, without naming the answer
+  in the question. Preserve the approved scope and total time.
+- Describe review dates as learner-managed cadence only. Do not promise automatic
+  reminders, scored daily checks or adaptation that the supplied runtime lacks.
 - The sum of estimated_hours must remain exactly {hours_per_week}; preserve the
   approved weekly workload rather than shrinking it during expansion.
 

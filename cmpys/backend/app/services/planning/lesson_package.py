@@ -937,8 +937,8 @@ async def _repair_public_activities(step, context, package, scope, defects, *, c
                         "Instructions and all explanations together each have a 4000-character maximum. "
                         "Do not invent phase timers or additional word quotas. If categories have defensible overlap, "
                         "use a text response with observable criteria accepting valid interpretations, not a hidden "
-                        "single-choice key. A tutorial_v1 activity keeps at least one number or multi_choice field "
-                        "(an exact selection the case fully determines) and at most one text field. "
+                        "single-choice key. A tutorial_v1 activity matches its response format to the skill: "
+                        "text-only is valid, with at most one text field and at most two fields overall. "
                         "Resolve the ambiguity in the task itself. Every quantitative case fact, "
                         "even in fictional prose, needs its own accurately labeled raw datum; omit unnecessary "
                         "invented quantities throughout when they do not serve this exercise." + _ACTIVITY_REPAIR_LIMITS

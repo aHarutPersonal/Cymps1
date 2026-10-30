@@ -4,5 +4,6 @@ DOMAIN NOTES — writing, interpretation and other qualitative skills. Apply the
 - A writing revision keeps the supplied source facts and evidence while revising the claim the task targets; it never adds invented statistics.
 - Transfer never depends on an unseen worked case, an unavailable book excerpt or an external video, and stays clearly different from the public example.
 - Where narration, action, reported speech or motive overlap in a literary classification, use a text answer whose criteria accept reasoned alternatives.
+- A short written argument, interpretation or revision may be the only answer. Assess the claim, relevant evidence and their connection; add selection only when distinguishing alternatives is itself the goal. Supply source facts and constraints so creation does not require inventing evidence.
 - If an outline asks to tag every sentence of a scene, teach and test one representative sentence or short pair here and leave further cases to later tutorials. Identify a sentence by quoting its opening words, not by line numbers or numeric tag lists.
 - Lesson blocks for qualitative skills: the reading shows a comparison or diagram, then walks the example in steps whose notes carry the reasoning; step values stay empty and a chart is optional.

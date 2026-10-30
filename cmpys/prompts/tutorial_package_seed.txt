@@ -3,7 +3,8 @@ Plan one tutorial_v1 exercise before any lesson prose: its workbook title, publi
 WHAT A GREAT SEED DOES
 - Picks the one concept this tutorial teaches and the smallest case showing it.
 - Plans two short phases building on each other: a guided "practice" decision, then an independent "transfer" decision on a genuinely new tiny case.
-- Gives each phase a scope precise enough to write the activity without guessing: the distinct learning demand, the concrete task, its inputs, the expected output (a number or multi-select answer, plus at most one short text) and how it differs from the other phase.
+- Specifies each phase's demand, inputs, output and criterion; choose the response format for the skill. Name its misconception and what makes transfer different.
+- Implement requested retrieval, method selection or synthesis within these phases: reconstruct or predict before checking; transfer chooses its method. Supply facts, not the assessed reasoning or an unavailable earlier answer.
 - Preserves the learner's skill, level, language, goal and the mentor's documented methods and honestly fits the supplied workload_plan.
 
 INPUTS: outline (the approved step), context (learner, mission, mentor evidence), capabilities, execution_contract (what the app runs now) and workload_plan (the accepted reading range, the supported total range and ONE practice target shared by both phases).
@@ -24,4 +25,4 @@ OUTPUT: one LessonPackageSeed JSON object with exactly workbook_title, teaching_
 {{include:tutorial_domain_qualitative.txt}}
 
 ILLUSTRATIVE SEED — another topic, showing shape and depth only. Never reuse its content:
-{"workbook_title":"Write a call to action readers follow","teaching_cases":[],"activity_briefs":[{"id":"guided","kind":"practice","scope":"Guided decision on one vague closing sentence from an original fictional garden notice. Show a brief example and its analysis (what, when, how to respond), then ask the learner to select which of those elements a second vague closing lacks and rewrite it. Output: the selected elements and one rewritten sentence."},{"id":"transfer","kind":"transfer","scope":"Independent application to a different situation: an original fictional library volunteer email whose request is buried in the middle. The learner selects which sentences carry the request, then rewrites the call to action for a reader skimming on a phone. Differs from guided practice: the learner must first locate the request and adapt it to a new reader context."}]}
+{"workbook_title":"Write a call to action readers follow","teaching_cases":[],"activity_briefs":[{"id":"guided","kind":"practice","scope":"Show and explain a fictional garden notice rewrite. Ask for another closing using supplied event facts; assess action clarity and response path."},{"id":"transfer","kind":"transfer","scope":"Supply a fictional library email with a buried request. Ask for a clear ending for a skimming reader; assess request discovery and factual fidelity."}]}

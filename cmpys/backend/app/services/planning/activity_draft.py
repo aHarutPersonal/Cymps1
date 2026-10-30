@@ -127,14 +127,13 @@ class LessonActivityDraft(StrictModel):
 class TutorialActivityDraft(LessonActivityDraft):
     """A short phase has one response, or two tightly coupled responses.
 
-    New tutorials prefer numbers and multi-select over free text: every activity
-    needs a number or multi_choice field and at most one text field, and each
-    scored field names its result-panel criterion. Legacy lesson drafts keep the
-    looser LessonActivityDraft contract.
+    The response format follows the skill; text alone is valid. At most one
+    text field keeps review bounded, and each fixed-answer field names its
+    result-panel criterion. Legacy lesson drafts keep their original contract.
     """
 
     fields: list[DraftAnswerField] = Field(min_length=1, max_length=2,
-        description="One meaningful response, optionally a second necessary reasoning response. Simplify the task, not its timing; do not bundle a long quiz inside one text field.")
+        description="One meaningful response, optionally a second necessary response; text-only is valid, with at most one text field. Match the format to the skill. Simplify the task, not its timing; do not bundle a long quiz inside one text field.")
 
     @model_validator(mode="after")
     def new_workbook_rules(self):
@@ -144,6 +143,10 @@ class TutorialActivityDraft(LessonActivityDraft):
     @classmethod
     def model_json_schema(cls, *args, **kwargs) -> dict:
         schema = super().model_json_schema(*args, **kwargs)
+        schema["properties"]["fields"].update({
+            "contains": {"properties": {"kind": {"const": "text"}}, "required": ["kind"]},
+            "minContains": 0, "maxContains": 1,
+        })
         # Make the conditional rule visible before a paid response is written.
         for name in ("NumberDraftField", "ChoiceDraftField", "MultiChoiceDraftField"):
             branch = schema["$defs"][name]

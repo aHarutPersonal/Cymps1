@@ -20,6 +20,8 @@ add a lesson only when it teaches a genuinely distinct cumulative skill needed
 for the final artifact. Write only titles, descriptions, and resource references
 at this stage; the full lessons are generated separately.
 
+{{include:learning_sequence_contract.txt}}
+
 CURRICULUM RULES:
 - For N lessons, ids are exactly step_1 through step_N, contiguous and ordered.
 - Titles start with an action verb. Aim for 3-6 words and fewer than 45 characters;

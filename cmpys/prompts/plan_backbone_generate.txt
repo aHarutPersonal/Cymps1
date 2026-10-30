@@ -45,7 +45,8 @@ BACKBONE CONTRACT:
 - Every week advances one clear domain-specific outcome and must build on the
   prior week. Avoid repeating mission task titles or weekly outcomes. Daily
   rhythms may continue across weeks when they support that progression.
-  Never duplicate tasks within the same week.
+  Never duplicate tasks within the same week. A later retrieval or mixed case
+  may revisit an earlier skill with a distinct purpose and fresh evidence.
 - Under 6 hours/week, use exactly one mission task and one daily rhythm task.
 - At 6 hours/week or more, use 2-3 mission tasks and 1-2 daily rhythm tasks.
 - Under 3 hours/week, the CAPACITY RULE sets the exact mission and daily
@@ -84,6 +85,18 @@ BACKBONE CONTRACT:
   externally verified. When a generic gap/readiness seed conflicts with concrete
   baseline evidence, use the concrete evidence and calibrate the task upward.
 - Never invent quotations, chapter numbers, biographical facts, or resources.
+- Sequence prerequisites toward the final performance, not a list of topics.
+  Within existing task titles and success_metric fields, make the evidence
+  concrete: a justified decision, solved new case or created artifact with a
+  quality criterion. Completion or confidence alone is insufficient.
+- Where related methods have been introduced, plan application that requires
+  choosing between them and identifying the deciding cue. Reuse only skills
+  supported by the baseline or taught earlier in this backbone. Keep early
+  novice practice supported; increase independence as prerequisites develop.
+- Use daily rhythms to revisit the week's cognitive skill across separate
+  sessions: attempt from memory, check against supplied learning material, then
+  correct a specific miss. This is a manual practice cadence, not an automatic
+  spaced-review service. Count it within the existing weekly allocation.
 
 Return strict JSON only:
 {

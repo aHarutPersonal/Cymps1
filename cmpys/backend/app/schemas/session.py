@@ -285,6 +285,10 @@ class InterviewResponseInput(BaseModel):
     ) = None
 
     diagnostic_id: str | None = Field(default=None, max_length=80)
+    # Server-owned, additive metadata: one optional target clarification.
+    # Old questions without these markers retain their original completion rule.
+    clarification_allowed: bool = False
+    is_clarification: bool = False
 
     model_config = {"populate_by_name": True}
 

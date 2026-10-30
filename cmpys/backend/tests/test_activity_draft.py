@@ -390,17 +390,18 @@ def test_wire_exposes_four_discriminated_kinds_and_their_v3_properties():
 
 
 def test_tutorial_draft_enforces_the_new_workbook_rules():
-    text = {"id": "why", "kind": "text", "label": "Say why in at most 40 words.",
+    text = {"id": "why", "kind": "text", "label": "Explain your decision using the case facts.",
             "criteria": ["Uses the supplied figures"],
             "explanation": "A strong answer ties the classification to what the item adds to capacity."}
     only_text = v3_draft(); only_text["fields"] = [text]
-    with pytest.raises(ValidationError) as error:
-        TutorialActivityDraft.model_validate(only_text)
-    assert "number or multi_choice" in str(error.value) and "guided" in str(error.value)
+    assert TutorialActivityDraft.model_validate(only_text).fields[0].kind == "text"
+    repaired = parse_activity_repair_draft(only_text, tutorial=True)
+    assert repaired.fields[0].kind == "text"
+    assert repaired.worked_solution.steps[0].field_id == "why"
     two_texts = v3_draft(); two_texts["fields"] = [text, {**text, "id": "why2"}]
     with pytest.raises(ValidationError) as error:
         TutorialActivityDraft.model_validate(two_texts)
-    assert "number or multi_choice" in str(error.value)  # two short fields: a text pair has no number
+    assert "at most one text field" in str(error.value)
     # Legacy lesson drafts (their prompt is unchanged) keep accepting text-only work.
     LessonActivityDraft.model_validate(only_text)
     parse_activity_draft(only_text)
