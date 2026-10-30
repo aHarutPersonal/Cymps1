@@ -247,6 +247,22 @@ async def test_support_schema_repair_restores_missing_self_check_question(monkey
     assert result.lessons[0].question == valid["lessons"][0]["question"]
 
 
+@pytest.mark.asyncio
+async def test_positive_book_review_gets_one_bounded_evidence_repair(monkeypatch):
+    source = {"id": "s1", "title": "Author interview", "text": SOURCE * 30,
+              "url": "https://author.example/interview"}
+    invalid = review()
+    invalid.evidence[0].support_quote = "Invented words which do not appear anywhere in the supplied source text."
+    call = AsyncMock(side_effect=[books.CompanionSources(source_ids=["s1"]),
+                                 draft(), invalid, review()])
+    monkeypatch.setattr(books, "search_evidence", AsyncMock(return_value=[source]))
+    monkeypatch.setattr(books, "structured_call", call)
+    content, report = await books.build_companion("Book", "Author")
+    assert content["lessons"] and report["passed"]
+    assert call.await_count == 4
+    assert call.await_args.args[0] == "book_companion_evidence_repair"
+
+
 @pytest.mark.parametrize(
     "url, expected",
     [
@@ -520,6 +536,37 @@ async def test_concurrent_book_preparation_finishes_before_idea_matching(monkeyp
     match.assert_awaited_once_with(value, [ready])
     assert result["idea"]["bookId"] == "shared"
     assert "books_pending" not in result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["repaired", "still_invalid", "unsuitable"])
+async def test_video_evidence_repair_remains_bounded_and_fails_closed(monkeypatch, outcome):
+    async def candidates(value):
+        yield "https://youtu.be/abcdefghijk", {}
+
+    video = {"url": "https://youtu.be/abcdefghijk", "videoId": "abcdefghijk",
+             "title": "Writing a thesis", "creator": "Instructor", "seconds": 240,
+             "evidenceType": "creator_description", "evidenceUrl": "https://youtu.be/abcdefghijk",
+             "availabilityMethod": "public_oembed", "evidence": SOURCE}
+    initial = support.VideoReview(
+        credible_educational_creator=True, substantive_content_evidence=True,
+        directly_reinforces_lesson=True, appropriate_level=outcome != "unsuitable",
+        adds_demonstration_or_explanation=True, no_material_conflicts=True,
+        why_watch="Shows a concrete worked example of the taught skill.",
+        try_after="Apply the taught skill to your own example.",
+        supporting_quote=SOURCE, issues=["Uses different labels for the same skill."],
+    )
+    repaired = initial.model_copy(deep=True)
+    repaired.issues = []
+    if outcome == "still_invalid":
+        repaired.supporting_quote = "These invented words never appeared in the actual evidence source."
+    call = AsyncMock(side_effect=[initial, repaired])
+    monkeypatch.setattr(support, "video_candidates", candidates)
+    monkeypatch.setattr(support, "verify_video_source", AsyncMock(return_value=video))
+    monkeypatch.setattr(support, "structured_call", call)
+    result = await support.find_support_video({"lesson": "A concrete tutorial."})
+    assert bool(result) == (outcome == "repaired")
+    assert call.await_count == (1 if outcome == "unsuitable" else 2)
 
 
 @pytest.mark.asyncio
