@@ -30,7 +30,7 @@ from app.services.planning.artifact_identity import (
 from app.services.planning.lesson_package import current_package_approval, digest
 from app.services.practice.contracts import StrictModel
 
-VERSION = 1
+VERSION = 2
 
 
 def support_input(item, step_id: str | None, book_title: str | None) -> dict:
@@ -138,35 +138,36 @@ def valid_video_review(review: VideoReview, evidence: str) -> bool:
     )
 
 
-@background_generation
-async def find_support_video(value: dict) -> list[dict]:
-    # Discovery is explicit even when the outline model chose books only.
+async def video_candidates(value: dict):
+    """Keep the skill domain in the query and try a fallback after rejections."""
     identities = value.get("video_identities") or []
     topic = (
         " ".join(str(part) for part in identities[0].values() if part)
         if identities
         else value["lesson_title"]
     )
-    sources = await search_evidence(
-        f"{topic} official video lesson transcript demonstration"
-    )
-    candidates = [
-        (url, source) for source in sources for url in referenced_video_urls(source)
-    ]
-    if not candidates:
-        sources = await search_evidence(
-            f"site:youtube.com/watch {topic} tutorial demonstration"
-        )
-        candidates = [
-            (url, source) for source in sources for url in referenced_video_urls(source)
-        ]
+    context = " ".join(filter(None, [value.get("mission"), topic]))[:350]
     seen = set()
-    for url, source in candidates:
-        if url in seen:
-            continue
-        if len(seen) == 3:
-            break
-        seen.add(url)
+    for query in (
+        f"{context} official video lesson demonstration",
+        f"site:youtube.com/watch {context} tutorial demonstration",
+    ):
+        sources = await search_evidence(query)
+        offered = 0
+        for source in sources:
+            for url in referenced_video_urls(source):
+                if url in seen or offered == 2:
+                    continue
+                seen.add(url)
+                offered += 1
+                yield url, source
+
+
+@background_generation
+async def find_support_video(value: dict) -> list[dict]:
+    # Discovery runs even when the outline selected books only. The generator
+    # advances to the second query if first-query candidates fail verification.
+    async for url, source in video_candidates(value):
         try:
             video = await verify_video_source(url, source)
             if not video:
@@ -270,11 +271,27 @@ async def match_book_idea(value: dict, books: list[dict]) -> dict | None:
     }
 
 
+async def resolved_companion(book: dict) -> dict:
+    """Wait for a concurrent book opener's shared job before matching an idea."""
+    result = {**book, "status": "checking"}
+    try:
+        async with asyncio.timeout(240):
+            while True:
+                result = await get_companion(book["title"], book.get("author"))
+                if result.get("status") != "checking":
+                    return result
+                await asyncio.sleep(6)
+    except TimeoutError:
+        return result
+
+
 async def build_support(value: dict) -> dict:
     books = await asyncio.gather(
-        *(get_companion(b["title"], b.get("author")) for b in value["books"])
+        *(resolved_companion(b) for b in value["books"])
     )
     result = {"books": value["books"], "idea": None, "videos": []}
+    if any(book.get("status") == "checking" for book in books):
+        result["books_pending"] = True
     if value["lesson"]:
         idea, videos = await asyncio.gather(
             match_book_idea(value, books),
@@ -392,7 +409,10 @@ async def run_support(item_id: str, key: str, token: str) -> dict:
             "status": status,
             "revision": value["revision"],
             "result": result,
-            "retry_after": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+            "retry_after": (
+                datetime.now(timezone.utc)
+                + (timedelta(minutes=2) if result.get("books_pending") else timedelta(days=1))
+            ).isoformat(),
         }
         item.meta_json = {**(item.meta_json or {}), "learning_support": entries}
         await db.commit()

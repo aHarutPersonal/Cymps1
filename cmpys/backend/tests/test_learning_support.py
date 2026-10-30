@@ -164,13 +164,47 @@ async def test_book_build_uses_distinct_review_and_returns_only_checked_sources(
             ]
         ),
     )
-    call = AsyncMock(side_effect=[draft(), review()])
+    call = AsyncMock(side_effect=[
+        books.CompanionSources(source_ids=["s1"]), draft(), review()
+    ])
     monkeypatch.setattr(books, "structured_call", call)
     content, report = await books.build_companion("Book", "Author")
-    assert call.await_count == 2 and report["passed"]
+    assert call.await_count == 3 and report["passed"]
     assert content["lessons"][0]["minutes"] >= 4
     assert "text" not in content["sources"][0]
     assert report["content_hash"] == digest(content)
+
+
+@pytest.mark.asyncio
+async def test_book_source_fallback_excludes_long_nonprimary_pages(monkeypatch):
+    rejected = {"id": "s1", "title": "Retail summary", "text": SOURCE * 30,
+                "url": "https://retailer.example/summary"}
+    primary = {**rejected, "title": "Author interview",
+               "url": "https://author.example/interview"}
+    search = AsyncMock(side_effect=[[rejected], [primary]])
+    call = AsyncMock(side_effect=[books.CompanionSources(source_ids=[]),
+                                 books.CompanionSources(source_ids=["s1"]),
+                                 draft(), review()])
+    monkeypatch.setattr(books, "search_evidence", search)
+    monkeypatch.setattr(books, "structured_call", call)
+    content, _ = await books.build_companion("Book: Long Subtitle", "A and B")
+    assert search.await_count == 2
+    assert '"A and B"' not in search.await_args_list[0].args[0]
+    assert content["sources"] == [{k: primary[k] for k in ("id", "title", "url")}]
+    assert call.await_args_list[2].args[3]["sources"] == [primary]
+
+
+@pytest.mark.asyncio
+async def test_no_book_draft_is_generated_without_primary_sources(monkeypatch):
+    monkeypatch.setattr(books, "search_evidence", AsyncMock(return_value=[{
+        "id": "s1", "text": SOURCE * 30, "url": "https://retailer.example"
+    }]))
+    call = AsyncMock(return_value=books.CompanionSources(source_ids=[]))
+    monkeypatch.setattr(books, "structured_call", call)
+    assert await books.build_companion("Book", "Author") is None
+    assert [c.args[0] for c in call.await_args_list] == [
+        "book_companion_sources", "book_companion_sources"
+    ]
 
 
 @pytest.mark.parametrize(
@@ -412,6 +446,37 @@ async def test_video_discovery_runs_even_when_outline_has_only_books(monkeypatch
     result = await support.build_support(value)
     discover.assert_awaited_once_with(value)
     assert result["idea"] is None and result["videos"] == []
+
+
+@pytest.mark.asyncio
+async def test_video_fallback_runs_after_first_candidates_are_rejected(monkeypatch):
+    search = AsyncMock(side_effect=[
+        [{"url": "https://youtu.be/abcdefghijk", "text": "First result"}],
+        [{"url": "https://youtu.be/otherother1", "text": "Fallback result"}],
+    ])
+    verify = AsyncMock(return_value=None)
+    monkeypatch.setattr(support, "search_evidence", search)
+    monkeypatch.setattr(support, "verify_video_source", verify)
+    value = {"mission": "Writing an essay thesis", "lesson_title": "Sharpen your skill"}
+    assert await support.find_support_video(value) == []
+    assert search.await_count == 2 and verify.await_count == 2
+    assert all("Writing an essay thesis" in c.args[0] for c in search.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_book_preparation_finishes_before_idea_matching(monkeypatch):
+    ready = {"title": "Book", "status": "ready", "lessons": []}
+    get = AsyncMock(side_effect=[{"title": "Book", "status": "checking"}, ready])
+    match = AsyncMock(return_value={"bookId": "shared", "lessonId": "lesson_1"})
+    monkeypatch.setattr(support, "get_companion", get)
+    monkeypatch.setattr(support.asyncio, "sleep", AsyncMock())
+    monkeypatch.setattr(support, "match_book_idea", match)
+    monkeypatch.setattr(support, "find_support_video", AsyncMock(return_value=[]))
+    value = support.support_input(item(), "step_1", None)
+    result = await support.build_support(value)
+    match.assert_awaited_once_with(value, [ready])
+    assert result["idea"]["bookId"] == "shared"
+    assert "books_pending" not in result
 
 
 @pytest.mark.asyncio
