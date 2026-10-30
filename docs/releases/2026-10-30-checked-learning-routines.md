@@ -48,6 +48,7 @@ establish an optimal schedule or prove improved learner outcomes.
   that isolated run. Coverage includes scheduling, exact budgets, source
   ownership/version/publication, due selection, draft carry, completion gates,
   local-date handling, prompt contracts and existing plan/lesson behavior.
+  After the final prompt clarification, the relevant 145-test subset passed again.
 - Three checks passed with the existing local PostgreSQL test database,
   including a complete review attempt/correction/completion flow and existing
   goal staging. Synthetic data was isolated in rollback transactions.
@@ -72,4 +73,23 @@ caps guide and save work; they do not claim to verify attention or mastery.
 Older clients need the updated app to open and submit the new generated review
 flow. No database schema change is required.
 
-Deployment and normal-app verification are recorded below after release.
+## AWS deployment and normal app
+
+- Runtime source commit: `c004536977702645fd182cafb6fef4326059b411` on local
+  `main`. Release tag: `20261030-160533` (ARM64). This was a manual release
+  from the tested checkout, not a claim that GitHub main was updated.
+- The repository's rollback-enabled deployment completed successfully. API,
+  PostgreSQL, Redis, all workers and beat passed its readiness checks. All nine
+  application services were independently confirmed running the release image.
+- SHA-256 comparison of 256 application, prompt and runtime support files found
+  zero missing files and zero differences between the checkout and running API.
+- The normal iOS app was rebuilt, installed and launched against AWS using the
+  existing signed-in session. Today and the habit detail both showed
+  `Mon, Wed, Fri · 20 min`. Existing logged participation remained intact.
+- The live schedule sheet showed Monday/Wednesday/Friday selected and stated
+  that changes start next Monday. It was dismissed without changing preferences.
+  Live checks did not submit answers, toggle completion or trigger paid content
+  generation. The full answer/correction flow was verified by the native fixture
+  and rollback-only database test above.
+
+Only this release record changed after the deployed source commit.
