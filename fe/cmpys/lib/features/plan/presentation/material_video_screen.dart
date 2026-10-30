@@ -43,6 +43,8 @@ class _MaterialVideoScreenState extends State<MaterialVideoScreen> {
   YoutubePlayerController? _controller;
   StreamSubscription<YoutubePlayerValue>? _subscription;
   bool _playbackFailed = false;
+  bool _playerReady = false;
+  bool _isPlaying = false;
 
   @override
   void initState() {
@@ -57,8 +59,18 @@ class _MaterialVideoScreenState extends State<MaterialVideoScreen> {
       ),
     );
     _subscription = _controller!.stream.listen((value) {
-      if (mounted && value.error != YoutubeError.none && !_playbackFailed) {
-        setState(() => _playbackFailed = true);
+      final failed = _playbackFailed || value.error != YoutubeError.none;
+      final ready = value.playerState != PlayerState.unknown;
+      final playing = value.playerState == PlayerState.playing;
+      if (mounted &&
+          (failed != _playbackFailed ||
+              ready != _playerReady ||
+              playing != _isPlaying)) {
+        setState(() {
+          _playbackFailed = failed;
+          _playerReady = ready;
+          _isPlaying = playing;
+        });
       }
     });
   }
@@ -112,6 +124,41 @@ class _MaterialVideoScreenState extends State<MaterialVideoScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      if (_controller != null && !_playbackFailed) ...[
+                        V3Button(
+                          kind: V3ButtonKind.glass,
+                          onPressed: !_playerReady
+                              ? null
+                              : () async {
+                                  try {
+                                    if (_isPlaying) {
+                                      await _controller!.pauseVideo();
+                                    } else {
+                                      await _controller!.playVideo();
+                                    }
+                                  } catch (_) {
+                                    if (mounted) {
+                                      setState(() => _playbackFailed = true);
+                                    }
+                                  }
+                                },
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(_isPlaying ? Icons.pause : Icons.play_arrow),
+                              const SizedBox(width: 8),
+                              Text(
+                                !_playerReady
+                                    ? 'Loading video…'
+                                    : _isPlaying
+                                    ? 'Pause video'
+                                    : 'Play video',
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                      ],
                       const Align(
                         alignment: Alignment.centerLeft,
                         child: V3AccessBadge(type: AccessType.video),
