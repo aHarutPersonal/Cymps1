@@ -972,6 +972,9 @@ class PlanItemDetailed {
     if (completed || detailsReady || !isTutorialSequence || steps.isEmpty) {
       return false;
     }
+    // Only a one-ahead server promises that a missing current tutorial with
+    // no job is stuck; an older server batches and may sit idle between runs.
+    if (generationWindow == null) return false;
     if (detailsLoading || generationParked) return false;
     final step = steps[activeStepIndex];
     return !step.hasContent && !isStepCompleted(step.id);

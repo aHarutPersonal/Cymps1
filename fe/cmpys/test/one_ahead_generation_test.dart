@@ -296,8 +296,10 @@ void main() {
       expect(detail.detailsFailed, isFalse);
     });
 
-    test('a missing current tutorial with no job and not parked is stopped '
+    test('an older backend without the window is never declared stuck '
         '(no window, no error)', () {
+      // The deployed batching backend sits idle between runs; only a
+      // one-ahead server makes "missing with no job" mean stuck.
       final detail = _detail(
         steps: 3,
         ready: 1,
@@ -305,12 +307,8 @@ void main() {
         jobId: null,
         step: 'lessons_ready',
       );
-      expect(detail.detailsFailed, isTrue);
-      expect(tutorialRowStates(detail), [
-        TutorialRowState.done,
-        TutorialRowState.stopped,
-        TutorialRowState.locked,
-      ]);
+      expect(detail.generationStalled, isFalse);
+      expect(detail.detailsFailed, isFalse);
     });
 
     test('the same with the backend error shape', () {
