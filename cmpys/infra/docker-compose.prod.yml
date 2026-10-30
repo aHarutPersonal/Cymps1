@@ -192,6 +192,10 @@ services:
       # Optional per-tutorial Imagen illustration. Default off: each image is a paid call.
       TUTORIAL_ILLUSTRATIONS_ENABLED: ${TUTORIAL_ILLUSTRATIONS_ENABLED:-false}
       TUTORIAL_ILLUSTRATION_DAILY_CAP: ${TUTORIAL_ILLUSTRATION_DAILY_CAP:-200}
+      # Pilot 29 Oct: numbers kept in data and steps, plus a second targeted
+      # package repair, published 11 of 13 tutorials (from 0-2 of 15).
+      TUTORIAL_NUMERIC_BUDGET: ${TUTORIAL_NUMERIC_BUDGET:-6}
+      TUTORIAL_PACKAGE_REPAIRS: ${TUTORIAL_PACKAGE_REPAIRS:-2}
       CURRICULUM_ENABLED: ${CURRICULUM_ENABLED:-false}
       CURRICULUM_CONTROL_INTERVAL_SECONDS: ${CURRICULUM_CONTROL_INTERVAL_SECONDS:-60}
       CURRICULUM_MAX_DISPATCH_PER_TICK: ${CURRICULUM_MAX_DISPATCH_PER_TICK:-1}
