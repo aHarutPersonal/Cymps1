@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/design_tokens.dart';
+import '../../../core/ui/motion/page_transition.dart';
 import '../../../core/ui/motion/motion_config.dart';
 import '../../../core/ui/v3/v3.dart';
 import '../../cmpys/state/habit_toggle.dart';
@@ -109,7 +110,7 @@ class _HabitDetailViewState extends ConsumerState<HabitDetailView>
     if (step == null || _review?['available'] != true) return;
     if (!_running && _left > 0) _startOrPause();
     await Navigator.of(context).push(
-      MaterialPageRoute<bool>(
+      CmpysPageRoute<bool>(
         builder: (_) => LessonPracticeScreen(
           itemId: _id,
           stepId: step,

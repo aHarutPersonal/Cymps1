@@ -10,12 +10,28 @@ import 'package:cmpys/core/ui/v3/lesson_blocks/worked_steps.dart';
 import 'package:cmpys/core/ui/v3/motion.dart';
 import 'package:cmpys/features/cmpys/state/cmpys_store.dart';
 import 'package:cmpys/features/plan/models/plan_models.dart';
+import 'package:cmpys/features/plan/models/learning_support.dart';
+import 'package:cmpys/features/plan/data/plan_repository.dart';
 import 'package:cmpys/features/plan/presentation/lesson_reader_screen.dart';
 import 'package:cmpys/features/plan/presentation/material_row.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+class _SupportRepo extends Fake implements PlanRepository {
+  @override
+  Future<LearningSupport> getLearningSupport(
+    String itemId, {
+    String? stepId,
+    String? bookTitle,
+    bool prepare = false,
+  }) async => LearningSupport.fromJson({
+    'status': 'unavailable',
+    'books': [],
+    'videos': [],
+  });
+}
 
 const _newFormat = '''
 # Owner earnings
@@ -123,6 +139,7 @@ Widget _reader(
   bool signedIn = false,
 }) => ProviderScope(
   overrides: [
+    planRepositoryProvider.overrideWithValue(_SupportRepo()),
     if (signedIn)
       cmpysStoreProvider.overrideWith(
         (ref) => CmpysStore()..openAccount('acct', unkeyedOwner: 'acct'),

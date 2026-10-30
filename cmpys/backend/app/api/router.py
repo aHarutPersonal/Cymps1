@@ -9,6 +9,7 @@ from app.api.v1 import (
     feed,
     idols,
     jobs,
+    learning_support,
     me,
     notes,
     plans,
@@ -28,6 +29,7 @@ router.include_router(jobs.router)
 router.include_router(achievements.router)
 router.include_router(comparison.router)
 router.include_router(content_resources.router)
+router.include_router(learning_support.router)
 router.include_router(plans.router)
 router.include_router(plans.items_router)  # /plan-items
 router.include_router(practice.router)

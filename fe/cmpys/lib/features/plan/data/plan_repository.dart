@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/api_error.dart';
 import '../../../core/network/dio_client.dart';
 import '../models/plan_models.dart';
+import '../models/learning_support.dart';
 
 /// Plan repository provider.
 final planRepositoryProvider = Provider<PlanRepository>((ref) {
@@ -52,6 +53,23 @@ class BookReadingAccess {
 /// API access for the generated 12-week plan: current plan, generation-job
 /// polling, and per-item lesson details.
 class PlanRepository {
+  Future<LearningSupport> getLearningSupport(
+    String itemId, {
+    String? stepId,
+    String? bookTitle,
+    bool prepare = false,
+  }) async {
+    final query = {
+      if (stepId != null) 'step_id': stepId,
+      if (bookTitle != null) 'book_title': bookTitle,
+    };
+    final path = '/plan-items/$itemId/learning-support';
+    final response = prepare
+        ? await _dioClient.post(path, queryParameters: query)
+        : await _dioClient.get(path, queryParameters: query);
+    return LearningSupport.fromJson(response.data as Map<String, dynamic>);
+  }
+
   Future<void> saveReviewReflection(
     String itemId,
     String text,

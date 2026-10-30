@@ -12,6 +12,8 @@ import 'package:cmpys/features/cmpys/state/cmpys_backend_sync.dart';
 import 'package:cmpys/features/cmpys/state/today_data.dart';
 import 'package:cmpys/features/plan/data/plan_repository.dart';
 import 'package:cmpys/features/plan/models/plan_models.dart';
+import 'package:cmpys/features/plan/models/learning_support.dart';
+import 'package:cmpys/features/plan/presentation/book_companion_screen.dart';
 import 'package:cmpys/features/plan/presentation/plan_item_detail_screen.dart';
 import 'package:cmpys/features/plan/state/current_plan_provider.dart';
 
@@ -73,6 +75,23 @@ class _ScriptedRepo extends Fake implements PlanRepository {
 }
 
 class _BookGuideRepo extends Fake implements PlanRepository {
+  String supportStatus = 'unavailable';
+  int supportPrepares = 0;
+  @override
+  Future<LearningSupport> getLearningSupport(
+    String itemId, {
+    String? stepId,
+    String? bookTitle,
+    bool prepare = false,
+  }) async {
+    if (prepare) supportPrepares++;
+    return LearningSupport.fromJson({
+      'status': supportStatus,
+      'books': [],
+      'videos': [],
+    });
+  }
+
   final guide = Completer<String?>();
   int guideWaits = 0;
   BookReadingAccess access = const BookReadingAccess();
@@ -821,7 +840,7 @@ void main() {
     await tester.pumpAndSettle();
   });
 
-  testWidgets('author excerpt is labelled before the reader opens', (
+  testWidgets('book companion preserves the optional reading-edition action', (
     tester,
   ) async {
     final repo = _BookGuideRepo()
@@ -839,18 +858,14 @@ void main() {
       );
     await tester.pumpWidget(_app(repo));
     await tester.pumpAndSettle();
-    // The row's badge says what CMPYS has before anything opens.
-    expect(find.text('Excerpt only'), findsOneWidget);
-    expect(find.text('Study guide'), findsNothing);
+    expect(find.text('Book companion'), findsOneWidget);
     await tester.ensureVisible(find.text('The Personal MBA'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('The Personal MBA'));
     await tester.pumpAndSettle();
-    expect(find.text('Read excerpt'), findsOneWidget);
-    expect(
-      find.text('A verified excerpt. The full book is not included.'),
-      findsOneWidget,
-    );
+    expect(find.byType(BookCompanionScreen), findsOneWidget);
+    expect(find.text('Find a reading edition'), findsOneWidget);
+    expect(find.text('Open full study guide'), findsNothing);
     expect(repo.guideWaits, 0);
     await tester.pumpWidget(const SizedBox());
   });
@@ -867,57 +882,38 @@ void main() {
       );
     await tester.pumpWidget(_app(repo));
     await tester.pumpAndSettle();
-    expect(find.text('No readable edition'), findsOneWidget);
+    expect(find.text('Book companion'), findsOneWidget);
     await tester.ensureVisible(find.text('The Personal MBA'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('The Personal MBA'));
     await tester.pumpAndSettle();
-    expect(find.text('Open guide'), findsNothing);
-    final button = tester.widget<V3Button>(
-      find.ancestor(
-        of: find.text('Not available to read'),
-        matching: find.byType(V3Button),
-      ),
+    expect(
+      find.textContaining('haven’t found enough reliable source material'),
+      findsOneWidget,
     );
-    expect(button.disabled, isTrue);
-    await tester.tap(find.text('Not available to read'), warnIfMissed: false);
-    await tester.pump();
+    expect(find.text('Open full study guide'), findsNothing);
+    expect(repo.supportPrepares, 1);
     expect(repo.guideWaits, 0);
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('book guide action stays single-flight while preparation runs', (
-    tester,
-  ) async {
-    final repo = _BookGuideRepo();
-    await tester.pumpWidget(_app(repo));
-    await tester.pumpAndSettle();
-
-    // Nothing ruled out yet: opening it prepares the in-app guide.
-    expect(find.text('Study guide'), findsOneWidget);
-    await tester.ensureVisible(find.text('The Personal MBA'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('The Personal MBA'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Open guide'));
-    await tester.pump();
-    // The sheet closes, then the guide preparation starts (its spinner
-    // keeps animating, so pump past the close instead of settling).
-    await tester.pump(const Duration(milliseconds: 600));
-
-    expect(find.text('Preparing…'), findsOneWidget);
-    expect(repo.guideWaits, 1);
-    await tester.tap(find.text('The Personal MBA'));
-    await tester.pump();
-    expect(find.text('Open guide'), findsNothing);
-    expect(repo.guideWaits, 1);
-
-    repo.guide.complete(null);
-    await tester.pump();
-    await tester.pump();
-    expect(find.text('Preparing…'), findsNothing);
-    expect(find.text('Study guide'), findsOneWidget);
-    await tester.pump(const Duration(seconds: 3));
-    await tester.pumpWidget(const SizedBox());
-  });
+  testWidgets(
+    'book companion starts one preparation without waiting for a full guide',
+    (tester) async {
+      final repo = _BookGuideRepo()..supportStatus = 'checking';
+      await tester.pumpWidget(_app(repo));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('The Personal MBA'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('The Personal MBA'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(find.textContaining('Preparing short tutorials'), findsOneWidget);
+      expect(repo.supportPrepares, 1);
+      expect(repo.guideWaits, 0);
+      await tester.pump(const Duration(seconds: 8));
+      expect(repo.supportPrepares, 1);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 }

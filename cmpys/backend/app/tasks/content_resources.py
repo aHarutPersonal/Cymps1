@@ -7,6 +7,12 @@ from app.core.db import async_session_maker
 logger = logging.getLogger(__name__)
 
 
+@celery_app.task(time_limit=540, soft_time_limit=510)
+def generate_learning_support(item_id: str, key: str, token: str) -> dict:
+    from app.services.learning_support import run_support
+    return run_async(run_support(item_id, key, token))
+
+
 @celery_app.task(bind=True)
 def generate_book_module_resource(
     self,

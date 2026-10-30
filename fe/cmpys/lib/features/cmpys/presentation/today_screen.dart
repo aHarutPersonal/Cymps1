@@ -15,6 +15,7 @@ import '../../../core/ui/v3/v3.dart';
 import '../../plan/models/plan_models.dart';
 import '../../plan/presentation/book_narration_checkpoint.dart';
 import '../../plan/presentation/book_reader_screen.dart';
+import '../../plan/presentation/book_companion_screen.dart';
 import '../../plan/presentation/first_tutorial_auto_open.dart';
 import '../../plan/presentation/material_reader_screen.dart';
 import '../../plan/presentation/material_web_screen.dart';
@@ -299,6 +300,18 @@ class _CmpysTodayScreenState extends ConsumerState<CmpysTodayScreen>
   }
 
   void _openMaterial(PlanMaterialDetail material, String missionId) {
+    if (material.type == 'book') {
+      Navigator.of(context).push(
+        CmpysPageRoute<void>(
+          builder: (_) => BookCompanionScreen(
+            itemId: missionId,
+            material: material,
+            shellBranchIndex: 0,
+          ),
+        ),
+      );
+      return;
+    }
     final access = accessTypeForMaterial(material);
     final resourceId = material.contentResourceId?.trim();
     if (access == AccessType.guide &&
@@ -2610,7 +2623,9 @@ class _MaterialCover extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final access = accessTypeForMaterial(material);
+    final access = material.type == 'book'
+        ? AccessType.bookCompanion
+        : accessTypeForMaterial(material);
     final none = access == AccessType.none;
     return V3Pressable(
       onTap: onTap,

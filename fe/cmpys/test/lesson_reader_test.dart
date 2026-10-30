@@ -4,6 +4,7 @@ import 'package:cmpys/core/storage/token_store.dart';
 import 'package:cmpys/core/ui/v3/v3.dart';
 import 'package:cmpys/features/plan/data/plan_repository.dart';
 import 'package:cmpys/features/plan/models/plan_models.dart';
+import 'package:cmpys/features/plan/models/learning_support.dart';
 import 'package:cmpys/features/plan/presentation/book_reader_screen.dart';
 import 'package:cmpys/features/plan/presentation/lesson_reader_screen.dart';
 import 'package:cmpys/features/plan/presentation/material_reader_screen.dart';
@@ -17,6 +18,18 @@ import 'support/fake_web_platforms.dart';
 
 class _FakePlanRepository extends PlanRepository {
   _FakePlanRepository() : super(dioClient: DioClient(tokenStore: TokenStore()));
+
+  @override
+  Future<LearningSupport> getLearningSupport(
+    String itemId, {
+    String? stepId,
+    String? bookTitle,
+    bool prepare = false,
+  }) async => LearningSupport.fromJson({
+    'status': 'unavailable',
+    'books': [],
+    'videos': [],
+  });
 
   @override
   Future<({bool completed, bool itemCompleted})> toggleStepComplete(
@@ -276,7 +289,7 @@ Set a timer, write the decision boundary, then test it against two choices.
     expect(find.text('Start With Why'), findsOneWidget);
     expect(find.text('Simon Sinek'), findsOneWidget);
     // A book with a guide id reads as a study guide (was "Read book").
-    const guide = AccessType.guide;
+    const guide = AccessType.bookCompanion;
     expect(find.byType(V3AccessBadge), findsOneWidget);
     expect(find.text(accessCopy(guide).label), findsOneWidget);
     expect(find.text('Unrelated article'), findsNothing);
@@ -343,7 +356,9 @@ Purpose creates a useful decision boundary.
       await tester.pumpAndSettle();
       await tester.tap(find.text('Start With Why'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text(accessCopy(AccessType.guide).cta!));
+      await tester.tap(find.text(accessCopy(AccessType.bookCompanion).cta!));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Open full study guide'));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 500));
 
@@ -523,8 +538,10 @@ Purpose creates a useful decision boundary.
     await tester.pumpAndSettle();
     await tester.tap(find.text('The Personal MBA'));
     await tester.pumpAndSettle();
-    // Not checked yet, the book reads as a guide; opening resolves it.
-    await tester.tap(find.text('Open guide'));
+    // Short tutorials remain separate from finding a reading edition.
+    await tester.tap(find.text('Explore short tutorials'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Find a reading edition'));
     await tester.pumpAndSettle();
 
     final screen = tester.widget<MaterialWebScreen>(
@@ -536,7 +553,7 @@ Purpose creates a useful decision boundary.
       screen.sourceDescription,
       'Chapter 1 excerpt on the author’s website.',
     );
-    expect(screen.openedFrom, 'Tutorial · Define the purpose');
+    expect(screen.openedFrom, 'Book companion · The Personal MBA');
     await tester.pumpWidget(const SizedBox());
   });
 

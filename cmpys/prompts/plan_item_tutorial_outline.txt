@@ -36,7 +36,11 @@ CURRICULUM RULES:
 - Choose {minimum_materials} to {maximum_materials} real resources. Select the
   exact count and mix that best improves this mission; there is no book, video,
   or other type quota. Prefer fewer authoritative resources over decorative
-  recommendations, and follow the user's learning preference.
+  recommendations, and follow the user's learning preference. Usually one or two
+  strongly relevant books are enough. Include a real video when a demonstration
+  would materially improve a specific skill; do not default to books alone.
+  Optional book companions and verified videos are prepared separately and never
+  replace the tutorial's required explanation or count toward its time budget.
 - Materials contain only external reference identities (book, video, article, course, tool).
   The app writes the lesson separately; never put an in_app_lesson in materials.
   In-app practice does not mean inventing an in-app resource title.

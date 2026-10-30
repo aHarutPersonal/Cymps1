@@ -1174,7 +1174,7 @@ class _GrainPainter extends CustomPainter {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// What CMPYS can actually show for a reading item.
-enum AccessType { guide, original, excerpt, web, video, none }
+enum AccessType { guide, original, excerpt, web, video, none, bookCompanion }
 
 /// One `ACCESS` entry: badge label, icon and colours, plus the [cta] and
 /// [note] that reading screens show. Copy is verbatim from the design.
@@ -1200,6 +1200,15 @@ class V3AccessCopy {
 }
 
 const Map<AccessType, V3AccessCopy> _access = {
+  AccessType.bookCompanion: V3AccessCopy(
+    label: 'Book companion',
+    icon: V3Icons.book,
+    color: AppColors.iris2,
+    background: AppColors.irisSoft,
+    cta: 'Explore short tutorials',
+    note:
+        'Original CMPYS tutorials on publicly documented ideas, with sources and self-checks.',
+  ),
   AccessType.guide: V3AccessCopy(
     label: 'Study guide',
     icon: V3Icons.book,

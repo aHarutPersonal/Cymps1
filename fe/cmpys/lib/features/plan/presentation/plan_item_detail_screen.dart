@@ -22,6 +22,7 @@ import 'achievement_sheet.dart';
 import 'backend_plan_widgets.dart' show TutorialGlowDisc, TutorialShake;
 import 'book_narration_checkpoint.dart';
 import 'book_reader_screen.dart';
+import 'book_companion_screen.dart';
 import 'cycle_completion_screen.dart';
 import 'first_tutorial_auto_open.dart';
 import 'habit_detail_view.dart';
@@ -210,17 +211,6 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
           _terminalDetailError = detailed.detailsError ?? _detailFailureMessage;
         }
       });
-      for (final material in detailed.materials) {
-        if (material.type == 'book' &&
-            _bookResourceId(material) == null &&
-            material.directUrl == null) {
-          unawaited(
-            _checkBookAccess(
-              material,
-            ).then<void>((_) {}, onError: (Object _) {}),
-          );
-        }
-      }
       _noteFirstTutorial(detailed);
       if (_shouldPollDetails(detailed)) {
         _pollStartedAt ??= DateTime.now();
@@ -1695,6 +1685,15 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
   /// reader for books backed by a shared resource (full public-domain text
   /// or LLM module), markdown reader for lessons, web view for plain links.
   Future<void> _openMaterial(PlanMaterialDetail m) async {
+    if (m.type == 'book') {
+      await Navigator.of(context).push(
+        CmpysPageRoute<void>(
+          builder: (_) =>
+              BookCompanionScreen(itemId: widget.itemId, material: m),
+        ),
+      );
+      return;
+    }
     final videoId = m.youtubeVideoId;
     final canonicalKey = (m.canonicalKey ?? '').trim();
     final preparationKey = _bookPreparationKey(m);
@@ -1840,6 +1839,15 @@ class _PlanItemDetailScreenState extends ConsumerState<PlanItemDetailScreen>
       _bookAccess[_bookPreparationKey(m)] == null;
 
   Widget _materialRow(PlanMaterialDetail m) {
+    // Only the independently verified lesson-support path offers videos.
+    if (m.type == 'video') return const SizedBox.shrink();
+    if (m.type == 'book') {
+      return MaterialRow(
+        material: m,
+        type: AccessType.bookCompanion,
+        onTap: () => _openMaterial(m),
+      );
+    }
     final preparing = _isPreparingBookGuide(m);
     final checking = _checkingAccessKeys.contains(_bookPreparationKey(m));
     return MaterialRow(

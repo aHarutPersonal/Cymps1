@@ -196,6 +196,9 @@ def servable_content_resource_clause():
 def content_resource_is_servable(resource: ContentResource) -> bool:
     if resource.status != CatalogStatus.PUBLISHED:
         return False
+    if isinstance(resource.canonical_key, str) and resource.canonical_key.startswith('book-companion:'):
+        from app.services.book_companions import companion_ready
+        return companion_ready(resource)
     if resource.kind in {
         ContentResourceKind.LLM_BOOK_SUMMARY,
         ContentResourceKind.PUBLIC_DOMAIN_BOOK,

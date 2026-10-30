@@ -23,7 +23,9 @@ import '../state/current_plan_provider.dart';
 import 'achievement_sheet.dart';
 import 'book_narration_checkpoint.dart';
 import 'book_reader_screen.dart';
+import 'book_companion_screen.dart';
 import 'lesson_practice_screen.dart';
+import 'learning_support_section.dart';
 import 'material_reader_screen.dart';
 import 'material_row.dart';
 import 'material_video_screen.dart';
@@ -205,7 +207,10 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
   @override
   void initState() {
     super.initState();
-    _references = matchLessonMaterials(widget.step.resources, widget.materials);
+    _references = matchLessonMaterials(
+      widget.step.resources,
+      widget.materials,
+    ).where((m) => m.type != 'video').toList();
     final outline = outlineLesson(widget.step.lessonContent ?? '');
     _sections = [
       for (final section in outline.sections)
@@ -488,12 +493,26 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
     if (open == true && mounted) await _openMaterial(material);
   }
 
-  AccessType _accessType(PlanMaterialDetail material) => accessTypeForMaterial(
-    material,
-    resolvedGuideId: _bookResourceId(material),
-  );
+  AccessType _accessType(PlanMaterialDetail material) => material.type == 'book'
+      ? AccessType.bookCompanion
+      : accessTypeForMaterial(
+          material,
+          resolvedGuideId: _bookResourceId(material),
+        );
 
   Future<void> _openMaterial(PlanMaterialDetail material) async {
+    if (material.type == 'book') {
+      await Navigator.of(context).push(
+        CmpysPageRoute<void>(
+          builder: (_) => BookCompanionScreen(
+            itemId: widget.itemId,
+            material: material,
+            shellBranchIndex: widget.shellBranchIndex,
+          ),
+        ),
+      );
+      return;
+    }
     final videoId = material.youtubeVideoId;
     final canonicalKey = (material.canonicalKey ?? '').trim();
     var bookResourceId = _bookResourceId(material);
@@ -889,6 +908,11 @@ class _LessonReaderScreenState extends ConsumerState<LessonReaderScreen> {
               ),
             ],
             for (final section in _sections) ..._section(section, theme, fs),
+            LearningSupportSection(
+              itemId: widget.itemId,
+              stepId: widget.step.id,
+              theme: theme,
+            ),
           ],
         ),
       ),

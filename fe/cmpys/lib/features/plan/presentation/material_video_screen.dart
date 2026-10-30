@@ -2,24 +2,34 @@
 // `VideoViewer` (`v3/library.jsx`): the night page, a full-width 16:9
 // player, the Video access badge, the title, and the "Why it’s here" card.
 
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:youtube_player_iframe/youtube_player_iframe.dart';
 
 import '../../../app/design_tokens.dart';
 import '../../../core/ui/v3/v3.dart';
 import '../models/plan_models.dart';
+import 'material_web_screen.dart';
+import '../../../core/ui/motion/page_transition.dart';
 
 class MaterialVideoScreen extends StatefulWidget {
   const MaterialVideoScreen({
     super.key,
     required this.material,
     required this.videoId,
+    this.tryAfter,
+    this.verification,
+    this.evidenceUrl,
     @visibleForTesting this.playerOverride,
   });
 
   final PlanMaterialDetail material;
   final String videoId;
+  final String? tryAfter;
+  final String? verification;
+  final String? evidenceUrl;
 
   /// Test seam: stands in for the YouTube player, whose web view cannot run
   /// in widget tests. The page around it is unchanged.
@@ -31,6 +41,8 @@ class MaterialVideoScreen extends StatefulWidget {
 
 class _MaterialVideoScreenState extends State<MaterialVideoScreen> {
   YoutubePlayerController? _controller;
+  StreamSubscription<YoutubePlayerValue>? _subscription;
+  bool _playbackFailed = false;
 
   @override
   void initState() {
@@ -38,16 +50,22 @@ class _MaterialVideoScreenState extends State<MaterialVideoScreen> {
     if (widget.playerOverride != null) return;
     _controller = YoutubePlayerController.fromVideoId(
       videoId: widget.videoId,
-      autoPlay: true,
+      autoPlay: false,
       params: const YoutubePlayerParams(
         showFullscreenButton: true,
         strictRelatedVideos: true,
       ),
     );
+    _subscription = _controller!.stream.listen((value) {
+      if (mounted && value.error != YoutubeError.none && !_playbackFailed) {
+        setState(() => _playbackFailed = true);
+      }
+    });
   }
 
   @override
   void dispose() {
+    _subscription?.cancel();
     _controller?.close();
     super.dispose();
   }
@@ -145,6 +163,81 @@ class _MaterialVideoScreenState extends State<MaterialVideoScreen> {
                           ),
                         ),
                       ],
+                      if (widget.verification != null) ...[
+                        const SizedBox(height: 16),
+                        Text(
+                          widget.verification!,
+                          style: AppTypography.sans(
+                            12,
+                          ).copyWith(color: AppColors.nink3),
+                        ),
+                      ],
+                      if (widget.tryAfter != null) ...[
+                        const SizedBox(height: 20),
+                        Text(
+                          'Try after watching',
+                          style: AppTypography.sans(17, FontWeight.w600),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          widget.tryAfter!,
+                          style: AppTypography.sans(15).copyWith(height: 1.5),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Optional practice · watching does not complete your mission.',
+                          style: AppTypography.sans(
+                            12,
+                          ).copyWith(color: AppColors.nink3),
+                        ),
+                      ],
+                      if (widget.evidenceUrl != null &&
+                          widget.evidenceUrl != widget.material.url &&
+                          PlanMaterialDetail(
+                                title: 'Video source',
+                                url: widget.evidenceUrl,
+                              ).directUrl !=
+                              null) ...[
+                        const SizedBox(height: 12),
+                        V3Button(
+                          kind: V3ButtonKind.glass,
+                          onPressed: () => Navigator.of(context).push(
+                            CmpysPageRoute<void>(
+                              builder: (_) => MaterialWebScreen(
+                                url: widget.evidenceUrl!,
+                                title: 'Video source',
+                              ),
+                            ),
+                          ),
+                          child: const Text('View supporting source'),
+                        ),
+                      ],
+                      const SizedBox(height: 20),
+                      if (_playbackFailed)
+                        const Text(
+                          'This video cannot play here right now. You can try opening it on YouTube.',
+                        ),
+                      V3Button(
+                        kind: V3ButtonKind.glass,
+                        onPressed: () async {
+                          final opened = await launchUrl(
+                            Uri.https('www.youtube.com', '/watch', {
+                              'v': widget.videoId,
+                            }),
+                            mode: LaunchMode.externalApplication,
+                          );
+                          if (!opened && context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Couldn’t open YouTube. Please try again.',
+                                ),
+                              ),
+                            );
+                          }
+                        },
+                        child: const Text('Open on YouTube'),
+                      ),
                     ],
                   ),
                 ),

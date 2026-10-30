@@ -285,6 +285,11 @@ void main() {
   testWidgets('access_badge_labels_match_design', (tester) async {
     // `ACCESS` in v3/core.jsx, verbatim (curly apostrophe included).
     const expected = <AccessType, (String, String?, String)>{
+      AccessType.bookCompanion: (
+        'Book companion',
+        'Explore short tutorials',
+        'Original CMPYS tutorials on publicly documented ideas, with sources and self-checks.',
+      ),
       AccessType.guide: (
         'Study guide',
         'Open guide',
@@ -953,9 +958,7 @@ void main() {
     await tester.pumpAndSettle();
   });
 
-  testWidgets('top bar fits a 320 pt phone at 2.0 text scale', (
-    tester,
-  ) async {
+  testWidgets('top bar fits a 320 pt phone at 2.0 text scale', (tester) async {
     tester.view.physicalSize = const Size(320, 568);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
