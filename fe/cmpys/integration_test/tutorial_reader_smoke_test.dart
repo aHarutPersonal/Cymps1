@@ -1,6 +1,6 @@
 // Fixture-only native UI smoke. No backend, account, or provider calls.
-// Run on an isolated simulator with the app's existing font cache seeded;
-// runtime font downloads are disabled and unexpected HTTP clients fail closed.
+// Setup warms the public Google Fonts cache. During the flow, runtime font
+// downloads are disabled and unexpected HTTP clients fail closed.
 import 'dart:io';
 
 import 'package:cmpys/core/ui/cmpys/learning_comparison_view.dart';
@@ -14,6 +14,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:integration_test/integration_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class _NoNetwork extends HttpOverrides {
   @override
@@ -135,11 +136,30 @@ No outside material is required for this tutorial.
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
-  GoogleFonts.config.allowRuntimeFetching = false;
-  HttpOverrides.global = _NoNetwork();
+  SharedPreferences.setMockInitialValues({});
+  setUpAll(() async {
+    await GoogleFonts.pendingFonts([
+      GoogleFonts.instrumentSerif(),
+      GoogleFonts.instrumentSerif(fontStyle: FontStyle.italic),
+      GoogleFonts.literata(),
+      GoogleFonts.playfairDisplay(),
+      GoogleFonts.playfairDisplay(fontStyle: FontStyle.italic),
+      GoogleFonts.playfairDisplay(fontWeight: FontWeight.w600),
+      GoogleFonts.playfairDisplay(fontWeight: FontWeight.w700),
+      for (final weight in [
+        FontWeight.w300,
+        FontWeight.w500,
+        FontWeight.w600,
+        FontWeight.w700,
+      ])
+        GoogleFonts.jetBrainsMono(fontWeight: weight),
+    ]).timeout(const Duration(seconds: 30));
+    GoogleFonts.config.allowRuntimeFetching = false;
+    HttpOverrides.global = _NoNetwork();
+  });
 
   testWidgets(
-    'native tutorial pages, visual, timing, and saved practice finish',
+    'native continuous tutorial, contents, visual, and saved practice finish',
     (tester) async {
       final completion = _CompletionRepository();
       final practice = _SavedPracticeRepository();
@@ -151,6 +171,10 @@ void main() {
             practiceRepositoryProvider.overrideWithValue(practice),
           ],
           child: MaterialApp(
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(context).copyWith(disableAnimations: true),
+              child: child!,
+            ),
             home: Builder(
               builder: (context) => Scaffold(
                 body: Center(
@@ -182,8 +206,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Open tutorial'));
       await tester.pumpAndSettle();
-      expect(find.text('TUTORIAL 1 · PART 1 OF 4'), findsOneWidget);
-      expect(find.text('7 min total'), findsOneWidget);
+      expect(find.text('TUTORIAL 1 OF 12'), findsOneWidget);
       expect(find.text('4 min read'), findsOneWidget);
       expect(find.text('3 min practice'), findsOneWidget);
       expect(find.byType(LearningComparisonView), findsOneWidget);
@@ -191,22 +214,24 @@ void main() {
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
 
-      await tester.tap(find.text('Next'));
+      await tester.tap(find.bySemanticsLabel('Contents'));
       await tester.pumpAndSettle();
-      expect(find.text('TUTORIAL 1 · PART 2 OF 4'), findsOneWidget);
       expect(find.text('Worked example'), findsOneWidget);
-      await tester.tap(find.byIcon(Icons.arrow_back_rounded));
+      await tester.tap(find.text('Worked example'));
       await tester.pumpAndSettle();
-      expect(find.text('TUTORIAL 1 · PART 1 OF 4'), findsOneWidget);
-      for (var page = 2; page <= 4; page++) {
-        await tester.tap(find.text('Next'));
-        await tester.pumpAndSettle();
-        expect(find.text('TUTORIAL 1 · PART $page OF 4'), findsOneWidget);
-      }
-      expect(find.text('Practice & finish'), findsOneWidget);
-      await tester.tap(find.text('Practice & finish'));
+      expect(find.text('Worked example'), findsNothing);
+      expect(find.text('WORKED EXAMPLE'), findsOneWidget);
+      final readerScroll = tester.state<ScrollableState>(
+        find.descendant(
+          of: find.byKey(LessonReaderScreen.scrollKey),
+          matching: find.byType(Scrollable),
+        ),
+      );
+      expect(readerScroll.position.pixels, greaterThan(0));
+      expect(find.text('Open practice · 3 min'), findsOneWidget);
+      await tester.tap(find.text('Open practice · 3 min'));
       await tester.pumpAndSettle();
-      expect(find.byTooltip('Back to tutorial'), findsOneWidget);
+      expect(find.text('Practice · Tutorial 1'), findsOneWidget);
       expect(
         find.byKey(const ValueKey('answer-claim.reason')),
         findsOneWidget,
@@ -229,17 +254,21 @@ void main() {
       await tester.ensureVisible(find.text('Finish tutorial'));
       await tester.tap(find.text('Finish tutorial'));
       await tester.pumpAndSettle();
-      expect(finished, isTrue);
+      expect(find.text('Tutorial 1 complete'), findsOneWidget);
       expect(completion.completions, 1);
       expect(completion.completedItem, 'native-fixture-item');
       expect(completion.completedStep, 'step_1');
       expect(completion.completedArtifact, 'native-fixture-artifact');
       expect(practice.loads, 1);
+      await tester.tap(find.text('Continue'));
+      await tester.pumpAndSettle();
+      expect(finished, isTrue);
       expect(find.text('Open tutorial'), findsOneWidget);
       expect(tester.takeException(), isNull);
       debugPrint(
-        'NATIVE_TUTORIAL_SMOKE passed: 4 reader pages, native comparison, '
-        'honest timing, next/back, saved practice, artifact-bound completion. '
+        'NATIVE_TUTORIAL_SMOKE passed: continuous reader, native comparison, '
+        'honest timing, contents jump, saved practice, artifact-bound completion '
+        'and celebration. '
         'Fixture repositories only; HTTP disabled; no account or provider calls.',
       );
     },
