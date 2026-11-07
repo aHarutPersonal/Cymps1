@@ -2402,7 +2402,10 @@ _INTERVIEW_COACHING_PERSON_RE = re.compile(
     r"|\bmy (?:next )?(?:question|suggestion|recommendation)\b"
     r"|\bwe(?:['’]ll| will| can| could| should) (?:use|check|plan|adapt|build|start|learn|see)\b"
     r"|\bwe (?:see|check|use|plan)\b"
-    r"|\blet us\b",
+    r"|\blet us\b"
+    # Shared planning in the present ("four hours a week gives us a rhythm").
+    # Past tense ("gave us") stays: it narrates the mentor's own history.
+    r"|\b(?:gives?|lets|helps?) us\b",
     re.IGNORECASE,
 )
 _INTERVIEW_PERSON_RE = re.compile(r"\b(?:i|me|my|mine|myself|we|us|our|ours|ourselves)\b", re.IGNORECASE)

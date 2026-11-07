@@ -19,6 +19,9 @@ from app.models.intake import IntakeSession, SessionPhase
     "My readers helped shape every chapter. How do you review your own essays?",
     "We learned from our readers. How do you review your essays?",
     "I suggest asking my old publisher. How do you review your work?",
+    # Past tense is the mentor's own history, not present coaching.
+    "Apple gave us the freedom to fail. What would you try first?",
+    "Our early customers gave us honest feedback. How do you review your work?",
 ])
 @pytest.mark.asyncio
 async def test_autobiographical_question_uses_same_key_fallback_without_retry(monkeypatch, text):
@@ -51,6 +54,12 @@ async def test_autobiographical_question_uses_same_key_fallback_without_retry(mo
     "By week twelve, what result would prove success, and how would we see it?",
     "My next question is about your work. What did you complete?",
     "How many finished essays have you completed? Exclude abandoned drafts.",
+    # gpt-6-luna's shared-planning voice (simulator run 2026-11-07).
+    "Weekly reports and six blog posts give us real material to work with. Could you paste or briefly describe one short piece of your writing? Mark what you wrote without help and where you got stuck.",
+    "Six finished pieces give us a useful base. What money, tools, or access can you already put toward writing clearer, more persuasive essays?",
+    "Four focused hours a week gives us a workable rhythm. What specific result do you want by week twelve, and what visible evidence would prove your essays are clearer and more persuasive?",
+    "Your answer helps us pick the first exercise. How do you check whether your argument is clear?",
+    "That lets us plan around your evenings. What result would make these twelve weeks worthwhile?",
 ])
 @pytest.mark.asyncio
 async def test_present_coaching_and_learner_context_keep_the_adapted_question(monkeypatch, text):
