@@ -12,7 +12,7 @@ from typing import Annotated
 
 from pydantic import Field, StrictBool, StrictStr, ValidationError
 
-from app.services.llm.openlux import incomplete_stream_error
+from app.services.llm.protocol import incomplete_stream_error, provider_request_failed
 from app.services.planning.lesson_package import CAPABILITIES, LessonPackage
 from app.services.planning.lesson_review import (
     LessonReview, LiteralFactCheck, MathRoleCheck, PackagedCalculationCheck, ReviewEvidencePatch,
@@ -394,12 +394,10 @@ def _retryable_error(response) -> bool:
             or (getattr(response, "retry_after_seconds", None) or 0) > 5):
         return False
     error = str(response.error)
-    return getattr(response, "finish_reason", None) == "length" or incomplete_stream_error(error) or any(
-        error.startswith(f"{provider} request failed ({category};")
-        for provider in ("zai", "OpenLux")
-        for category in ("TimeoutError", "APITimeoutError", "APIConnectionError",
-                         "InternalServerError", "RateLimitError", "JSONDecodeError", "JSONProtocolError")
-    )
+    return (getattr(response, "finish_reason", None) == "length" or incomplete_stream_error(error)
+            or provider_request_failed(error, ("TimeoutError", "APITimeoutError", "APIConnectionError",
+                                               "InternalServerError", "RateLimitError", "JSONDecodeError",
+                                               "JSONProtocolError")))
 
 
 async def review_package(package: LessonPackage, outline: dict, context: dict, *, client_factory):

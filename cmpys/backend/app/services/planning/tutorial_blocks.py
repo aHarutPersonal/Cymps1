@@ -11,6 +11,7 @@ are rendered; a raw [[result:...]] token is not a number.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Callable
@@ -181,6 +182,19 @@ def _sign(value: str) -> str:
     return "−" if value == "-" else value
 
 
+_EMPTY_HEADER_METADATA = re.compile(r"(?:\t+[A-Za-z_][\w-]*:\s*)+$")
+_EMBEDDED_HEADER_METADATA = re.compile(r"\t+[A-Za-z_][\w-]*\s*:")
+
+
+def _header_value(value: str) -> str:
+    # Empty tab-separated metadata has no learner content. Nonempty metadata
+    # must be repaired explicitly rather than silently losing its information.
+    value = _EMPTY_HEADER_METADATA.sub("", value).strip()
+    if _EMBEDDED_HEADER_METADATA.search(value):
+        raise _Reject("header metadata must be on separate supported header lines")
+    return value
+
+
 def _headers(lines: list[str], allowed: set[str], required: tuple[str, ...],
              defects: _Defects) -> tuple[dict, list[str]]:
     """Consume leading `key: value` lines; rows start at the first other line."""
@@ -192,7 +206,7 @@ def _headers(lines: list[str], allowed: set[str], required: tuple[str, ...],
             break
         if match[1].lower() in headers:
             defects.add(f"repeats {match[1].lower()}: keep one {match[1].lower()}: line", lines[index])
-        headers[match[1].lower()] = match[2].strip()
+        headers[match[1].lower()] = defects.value(_header_value, match[2], line=lines[index]) or ""
         index += 1
     missing = [key + ":" for key in required if key not in headers]
     if missing:
@@ -226,6 +240,8 @@ def _formula(body: str, defects: _Defects) -> FormulaBlock:
         defects.add(f"needs 2-6 term lines, found {len(rows)}"
                     + (". A formula fence holds one equation: show any other equation in prose"
                        if len(rows) > 6 or equations > 1 else ""))
+    if equations != 1:
+        defects.add("a formula holds one equation: only its first term starts with =")
     terms = []
     for line in rows:
         match = _TERM.fullmatch(line)
@@ -238,6 +254,14 @@ def _formula(body: str, defects: _Defects) -> FormulaBlock:
     if first and _sign(first[1]) != "=":
         defects.add("the first term must start with =", rows[0])
     title = defects.value(_text, headers["title"], 60, "title") if "title" in headers else ""
+    if title and terms:
+        # Compare whole labels, not substrings: "profit" and "profit margin"
+        # are different quantities. Do not guess a corrected mathematical term.
+        def normalized(label: str) -> str:
+            return " ".join(unicodedata.normalize("NFKC", label).casefold().split())
+        if normalized(title) == normalized(terms[0].label):
+            defects.add("circular formula: title is the result on the left; the first = term "
+                        "must name the first input on the right, never repeat the result", rows[0])
     return FormulaBlock(title or "", tuple(terms))
 
 
@@ -329,7 +353,8 @@ def _steps(body: str, defects: _Defects, *, case_has_numbers: bool = True) -> St
         else:
             value = defects.value(_number, cells[1], "step value", line=line) if cells[1].strip() else None
             sums_known &= value is not None or not cells[1].strip()
-        note = defects.value(_text, cells[2], 160, "a step note", line=line)
+        # Notes wrap in the reader; allow a quoted premise plus its reasoning.
+        note = defects.value(_text, cells[2], 320, "a step note", line=line)
         rows.append(StepRow(label or "", value, note or ""))
     if empty_total is not None:
         values = [row.value for row in rows if row.value is not None]
@@ -389,7 +414,7 @@ def _check(body: str, defects: _Defects) -> CheckBlock:
         options = tuple(parsed)
         if not any(option.correct for option in options):
             defects.add("mark at least one correct option with [x]: write '- [x] <option>' for each correct one")
-    question_text = defects.value(_text, question[1], 240, "the question", line=lines[0]) if question else ""
+    question_text = defects.value(_text, question[1], 480, "the question", line=lines[0]) if question else ""
     why_text = defects.value(_text, why[1], 280, "Why", line=lines[-1]) if why else ""
     return CheckBlock(question_text or "", options, numeric, why_text or "")
 
@@ -499,6 +524,11 @@ def _normalize_steps(lines: list[str], units: frozenset[str] | set[str] = frozen
     content = [index for index, line in enumerate(lines) if line.strip()]
     if not content:
         return lines
+    for index in content:
+        if _HEADER.fullmatch(lines[index].strip()):
+            fixed = _EMPTY_HEADER_METADATA.sub("", lines[index])
+            if fixed != lines[index]:
+                lines[index] = fixed.rstrip()
     last = content[-1]
     cells = lines[last].strip().split("|")
     headers = [_HEADER.fullmatch(lines[index].strip()) for index in content]
@@ -544,8 +574,8 @@ def _normalize_check(lines: list[str]) -> list[str]:
 def normalize_fence(kind: str, body: str, *, units: frozenset[str] | set[str] = frozenset()) -> str:
     """Rewrite harmless variants of a fence body to the canonical grammar.
 
-    Deterministic and content-neutral: a note after a steps total's number is
-    dropped, a last "= <label> | | <note>" row under step rows that carry no
+    Deterministic and content-neutral: empty trailing tab-separated metadata
+    is removed from step headers, a note after a steps total's number is dropped, a last "= <label> | | <note>" row under step rows that carry no
     number loses its "=" (no number is added), a bare line directly under a steps title becomes its "unit:"
     header only when it is a recognised unit word or symbol (or one of the
     case's declared ``units``) with no digit, and semicolons inside steps notes and check Q, Why and

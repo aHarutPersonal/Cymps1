@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import joinedload, selectinload
+from sqlalchemy.orm import defer, joinedload, raiseload, selectinload
 
 from app.api.dependencies import get_current_user
 from app.core.db import get_db
@@ -415,7 +415,12 @@ async def get_job_status(
         # Try Plan Generation Job
         stmt = (
             select(PlanGenerationJob)
-            .options(joinedload(PlanGenerationJob.idol))
+            .options(
+                raiseload("*"),
+                joinedload(PlanGenerationJob.idol),
+                defer(PlanGenerationJob.generation_checkpoint_json),
+                defer(PlanGenerationJob.focus),
+            )
             .where(
                 PlanGenerationJob.id == job_id,
                 PlanGenerationJob.user_id == current_user.id,
@@ -429,8 +434,11 @@ async def get_job_status(
         stmt = (
             select(PlanItemDetailJob)
             .options(
+                raiseload("*"),
                 joinedload(PlanItemDetailJob.plan_item)
+                .options(defer(PlanItem.details_json), defer(PlanItem.meta_json))
                 .joinedload(PlanItem.plan)
+                .defer(Plan.roadmap_json)
                 .joinedload(Plan.idol)
             )
             .where(

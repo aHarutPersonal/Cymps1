@@ -4,9 +4,9 @@ import json
 import pytest
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.services.llm.openlux import OpenLuxLLMClient, _unwrap_schema_answer, _complete_json_object
-from app.services.llm.zai import ZaiLLMClient
-from tests.test_openlux import chunk, transport
+from app.core.config import settings
+from app.services.llm.protocol import _complete_json_object, _unwrap_schema_answer
+from tests.direct_wire import PROVIDERS, Reply, client_for, serve
 
 
 class StructuredAnswer(BaseModel):
@@ -16,6 +16,11 @@ class StructuredAnswer(BaseModel):
 
 
 VALID = {"explanation": "A complete answer", "checked": True}
+
+
+@pytest.fixture(autouse=True)
+def no_admission_network(monkeypatch):
+    monkeypatch.setattr(settings, "llm_admission_limits", {})
 
 
 @pytest.mark.parametrize('raw', [
@@ -43,39 +48,33 @@ def test_json_framing_never_guesses_or_selects_ambiguous_content(raw):
 
 
 @pytest.mark.asyncio
-async def test_complete_fenced_stream_is_decoded_but_truncation_is_rejected(monkeypatch):
-    client = ZaiLLMClient(api_key='test', model='glm-5.3', base_url='https://api.z.ai/api/paas/v4')
+@pytest.mark.parametrize("provider", PROVIDERS)
+async def test_complete_fenced_stream_is_decoded_but_truncation_is_rejected(provider):
+    client = client_for(provider)
     raw = '```json\n' + json.dumps(VALID) + '\n```'
-    transport(monkeypatch, client, [chunk(raw, 'stop')])
+    serve(client, Reply(raw, 'stop'))
     response = await client.generate_json('System', 'User', output_model=StructuredAnswer)
     assert response.error is None and response.data == VALID
-    transport(monkeypatch, client, [chunk(raw, 'length')])
+    serve(client, Reply(raw, 'length'))
     response = await client.generate_json('System', 'User', output_model=StructuredAnswer)
     assert response.error and response.data == {}
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("provider", ["openlux", "zai"])
-@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("provider", PROVIDERS)
 @pytest.mark.parametrize("quoted", [False, True])
-async def test_complete_wrapped_schema_recovered_without_new_call(
-    monkeypatch, provider, streaming, quoted
-):
-    factory = ZaiLLMClient if provider == "zai" else OpenLuxLLMClient
-    client = factory(
-        api_key="fake-envelope-test-key",
-        model="glm-5.3" if provider == "zai" else "gpt-5.6-terra",
-        base_url="https://api.z.ai/api/paas/v4" if provider == "zai" else "https://api.openlux.ai/v1",
-    )
+async def test_complete_wrapped_schema_recovered_without_new_call(provider, quoted):
+    # A wrapper can only arrive on the prompt-JSON wire; native schemas constrain decoding.
+    client = client_for(provider, json_mode="prompt")
     wrapped = {"answer": json.dumps(VALID) if quoted else VALID}
     raw = json.dumps(wrapped)
-    stream, _ = transport(monkeypatch, client, [chunk(raw, "stop")])
-    method = client.generate_json_streaming if streaming else client.generate_json
-    response = await method("System", "User", output_model=StructuredAnswer)
+    wire = serve(client, Reply(raw, "stop"))
+    response = await client.generate_json("System", "User", output_model=StructuredAnswer)
     assert response.error is None
     assert response.data == VALID
     assert response.raw_response == raw
-    assert stream.closed
+    assert len(wire.requests) == 1
+    assert all(stream.closed for stream in wire.streams)
 
 
 @pytest.mark.parametrize("data", [
@@ -132,11 +131,10 @@ def test_wrapped_review_cannot_approve_wrong_arithmetic():
 
 
 @pytest.mark.asyncio
-async def test_truncated_stream_wrapper_is_rejected(monkeypatch):
-    client = ZaiLLMClient(
-        api_key="fake-envelope-test-key", model="glm-5.3",
-        base_url="https://api.z.ai/api/paas/v4",
-    )
-    transport(monkeypatch, client, [chunk(json.dumps({"answer": VALID}), "length")])
+@pytest.mark.parametrize("provider", PROVIDERS)
+@pytest.mark.parametrize("json_mode", ["auto", "prompt"])
+async def test_truncated_stream_wrapper_is_rejected(provider, json_mode):
+    client = client_for(provider, json_mode=json_mode)
+    serve(client, Reply(json.dumps({"answer": VALID}), "length"))
     response = await client.generate_json("System", "User", output_model=StructuredAnswer)
     assert response.error and response.data == {}

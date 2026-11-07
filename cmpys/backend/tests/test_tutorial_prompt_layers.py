@@ -43,8 +43,8 @@ def test_numeric_answer_rules_reach_activities_only():
 
 def test_domain_incident_rules_are_preserved_in_their_notes():
     activity = " ".join(load_and_render(ACTIVITY, {}).split())
-    for marker in ("prior-period collections and payments", "overdue rent", "tolerance of 0.01",
-                   "symbolic formula", "quoting its opening words", "untrusted reference data"):
+    for marker in ("prior-period collections and payments", "Avoid invented quantities", "tolerance of 0.01",
+                   "symbolic formula", "quoting their opening words", "untrusted reference data"):
         assert marker in activity, marker
 
 
@@ -53,9 +53,12 @@ def test_numbers_in_quoted_material_are_declared_data():
     # the evidence gate rejected every attempt, so the rule names quoted text.
     for name in (SEED, ACTIVITY):
         rendered = " ".join(load_and_render(name, {}).split())
-        assert "Every raw number shown in a task, hint or explanation, quoted material included" in rendered
-    activity = " ".join(load_and_render(ACTIVITY, {}).split())
-    assert "lists every raw number in the instructions, hint or explanations" in activity
+        from app.services.planning.tutorial_rules import tutorial_rule
+        data_rule = tutorial_rule("R-DATA")
+        assert data_rule in rendered
+        for source in ("learner text", "hints", "quotations", "explanations"):
+            assert source in data_rule
+        assert "named data" in data_rule and "Derived results are not inputs" in data_rule
 
 
 def test_rubric_rows_never_state_the_answer():
@@ -76,8 +79,11 @@ def test_multi_choice_keys_are_the_only_defensible_set():
     # {checks} alone defensible. Single-choice uniqueness now covers sets too.
     for name in (SEED, ACTIVITY):
         rendered = " ".join(load_and_render(name, {}).split())
-        assert ("Choice and multi_choice keys are the only defensible option or set "
-                "from supplied facts, with no borderline options") in rendered
+        from app.services.planning.tutorial_rules import tutorial_rule
+        fields = tutorial_rule("R-FIELDS")
+        assert fields in rendered
+        assert "Choice keys must be uniquely defensible from supplied facts" in fields
+        assert "counterexamples" in fields
 
 
 def _exemplar(name: str) -> dict:
@@ -105,7 +111,12 @@ def test_rendered_prompt_budget():
         rendered = load_and_render(name, {})
         assert len(rendered) <= max_chars, (name, len(rendered))
         assert len(re.findall(NEGATIONS, rendered, re.I)) <= max_negations, name
-    assert len((prompt_loader.PROMPTS_DIR / "tutorial_contract.txt").read_text()) <= 4500
+    assert len((prompt_loader.PROMPTS_DIR / "tutorial_contract.txt").read_text()) <= 3000
+    # The rewrite cut both prompts to 70% of their 1,517 and 2,333 words. On 2026-11-06 the
+    # owner approved the D2 and derivation sentences in the seed (PROMPT-ANALYSIS-2026-11-06.md,
+    # section 8): +29 seed words. The activity prompt keeps its original cap.
+    for name, max_words in ((SEED, 1090), (ACTIVITY, 1633)):
+        assert len(load_and_render(name, {}).split()) <= max_words, name
 
 
 def test_validation_identity_changes_when_included_file_changes(tmp_path, monkeypatch):

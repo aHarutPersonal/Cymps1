@@ -1,0 +1,421 @@
+{
+  "source": "Synthetic local QA capture, 2026-10-31; public writer package and published shop check only.",
+  "writer_package": {
+    "capabilities": {
+      "version": 1,
+      "answer_types": [
+        "number",
+        "choice",
+        "multi_choice",
+        "text"
+      ],
+      "max_fields_per_activity": 10,
+      "activities": {
+        "min": 2,
+        "max": 6
+      },
+      "supports": [
+        "saved_answers",
+        "feedback",
+        "schematic_geometry",
+        "revision"
+      ],
+      "unavailable": [
+        "spreadsheet_editor",
+        "embedded_timer",
+        "file_upload",
+        "live_peer_review"
+      ],
+      "private_until_review": [
+        "worked_solution",
+        "answer_key"
+      ],
+      "external_resources": "optional; all required inputs must be supplied in the package"
+    },
+    "teaching_cases": [],
+    "practice": {
+      "title": "Narrow a claim until someone could check it",
+      "activities": [
+        {
+          "id": "guided_practice",
+          "title": "Narrow a claim with the who-what-result checklist",
+          "kind": "practice",
+          "instructions": "A claim is narrow enough when someone who disagrees with you could still check whether you were right. Test every narrowed claim against three items: who (a named actor or decision-maker), what (one specific action that actor could actually take), and observable result (a result an outsider could observe or measure after the fact).\n\nWorked example, original and fictional. The broad claim \"The library should stay open later\" narrows to: \"The library board should extend Thursday hours to 8 p.m. for one term, then check whether at least twenty people use the study desks after 6 p.m. before continuing.\" Walking the checklist: the who is the library board, the body that actually sets hours; the what is extending Thursday hours on a trial basis, one bounded action; the observable result is a desk-usage count anyone could verify after the trial term ends.\n\nYour own diagnostic attempt narrowed the Sunday-opening claim to: \"The town should test Sunday library opening for six weeks, then compare attendance with staffing costs before deciding whether to continue.\" That version already passes: the actor is the town (acting through its library board), the action is a six-week Sunday trial, and the result — attendance and staffing costs over those weeks — is something an outsider could look up. The instinct is repeatable. Now apply the checklist to a claim that does not pass all three items.\n\nHere is a new fictional claim someone drafted about the same library: \"The library director should approve Sunday afternoon opening on a trial basis because it would be good for the town.\"",
+          "data": [
+            {
+              "id": "worked_closing_time",
+              "label": "Closing hour in the worked example's Thursday extension",
+              "value": 8.0,
+              "unit": "p.m."
+            },
+            {
+              "id": "worked_desk_users_threshold",
+              "label": "Desk users after 6 p.m. required in the worked example's check",
+              "value": 20.0,
+              "unit": "people"
+            },
+            {
+              "id": "worked_check_start_time",
+              "label": "Time after which the worked example counts desk users",
+              "value": 6.0,
+              "unit": "p.m."
+            },
+            {
+              "id": "diagnostic_trial_weeks",
+              "label": "Weeks in the learner's diagnostic Sunday-opening trial",
+              "value": 6.0,
+              "unit": "weeks"
+            },
+            {
+              "id": "example_trial_sundays",
+              "label": "Sundays in the example revision's trial",
+              "value": 6.0,
+              "unit": "Sundays"
+            }
+          ],
+          "fields": [
+            {
+              "id": "weakest_item",
+              "label": "Which checklist item is weakest in the drafted claim?",
+              "kind": "choice",
+              "unit": "",
+              "choices": [
+                {
+                  "id": "actor",
+                  "label": "The who — the library director may not be the one who can decide"
+                },
+                {
+                  "id": "action",
+                  "label": "The what — Sunday afternoon opening is not specific enough to run"
+                },
+                {
+                  "id": "result",
+                  "label": "The observable result — \"good for the town\" is not something an outsider could check"
+                },
+                {
+                  "id": "all_solid",
+                  "label": "All three items are solid as written"
+                }
+              ],
+              "rubric_criterion": "Identifies the missing observable result in the drafted claim",
+              "display_token": "[[practice:guided_practice.weakest_item]]"
+            },
+            {
+              "id": "improved_claim",
+              "label": "Your one-sentence improved version of the drafted claim",
+              "kind": "text",
+              "unit": "",
+              "choices": [],
+              "rubric_criterion": null,
+              "display_token": "[[practice:guided_practice.improved_claim]]"
+            }
+          ],
+          "minutes_min": 1,
+          "minutes_max": 2,
+          "diagram": null
+        },
+        {
+          "id": "transfer_narrowing",
+          "title": "Narrow the centre notice yourself",
+          "kind": "transfer",
+          "instructions": "Original fictional case. A notice taped to a community centre door reads: \"The community centre should offer more evening programmes because people are busy during the day.\"\n\nWrite your own one-sentence narrowed version of this claim. Build all three checklist elements yourself: name a concrete actor or decision-maker (for example, the centre's programme coordinator), propose one specific trial action with a bounded scope the centre could actually run, and name a result an outsider could check (for instance, a sign-in count after a few trial evenings). Any sensible observable result works — an attendance tally, a survey count, a sign-in sheet — and any reasonable trial length stated in words.\n\nThen decide which single checklist item a sceptical reader would most likely challenge first in your sentence.",
+          "data": [],
+          "fields": [
+            {
+              "id": "narrowed_claim",
+              "label": "Your one-sentence narrowed claim",
+              "kind": "text",
+              "unit": "",
+              "choices": [],
+              "rubric_criterion": null,
+              "display_token": "[[practice:transfer_narrowing.narrowed_claim]]"
+            },
+            {
+              "id": "first_challenge",
+              "label": "Which single checklist item would a sceptical reader challenge first in your sentence?",
+              "kind": "choice",
+              "unit": "",
+              "choices": [
+                {
+                  "id": "actor",
+                  "label": "The actor is not the one who can decide"
+                },
+                {
+                  "id": "action",
+                  "label": "The action is not specific enough to run"
+                },
+                {
+                  "id": "result",
+                  "label": "The result is not observable"
+                }
+              ],
+              "rubric_criterion": "Identifies the result as the first item a sceptic would challenge, because any observable count of trial-evening use shows attendance but not whether evening timing reaches people who were busy during the day.",
+              "display_token": "[[practice:transfer_narrowing.first_challenge]]"
+            }
+          ],
+          "minutes_min": 2,
+          "minutes_max": 3,
+          "diagram": null
+        }
+      ]
+    }
+  },
+  "ambiguous_shop_check": {
+    "lesson_format": "tutorial_v1",
+    "lesson_content": "The broad shop sentence is: \"Longer hours would bring in more customers.\"\n\n```check\nQ: The broad shop sentence already names an action. Which element does it still fail to name?\n- [ ] Who must act\n- [ ] An action someone could take\n- [x] A result you could observe and compare\n- [ ] A longer, more detailed wording\nWhy: The action is present, what is missing is any outcome a reader could check afterward, like receipts versus staff cost. Length is the trap — detail is not testability.\n```"
+  },
+  "universal_policy_checklist": {
+    "lesson_format": "tutorial_v1",
+    "lesson_content": "# Check your draft claim attempt\n\n## Why This Matters\nA vague topic cannot be argued; a testable claim gives every fact a destination and every objection an address, which is the bridge your drafts currently lack.\n\n## Core Framework\nA claim is a sentence someone could reject. That is the whole difference between a topic and an argument. \"Sunday library hours\" names a subject. \"The town should test Sunday opening for six weeks, then compare attendance with staffing costs\" takes a position a reasonable person could dispute. Three tests separate them.\n\nFirst, the disputability test: could a thoughtful reader say \"no, and here is why\"? If nobody sane would disagree, you have a fact or a wish, not a claim. Second, the concrete-scope test: does the sentence name a specific subject, action and boundary, so a reader knows exactly what is proposed? Third, the test test: does the claim imply some observable outcome that could count against it? A claim that survives any evidence is a slogan.\n\n```comparison\nTopic sentence\n- Names a subject only\n- Reader cannot restate a position\n- No evidence could count against it\nvs\nTestable claim\n- Names subject, action and scope\n- Reader can restate and dispute it\n- Implies an outcome that could fail\n```\n\nRun the three tests on every draft, each time. Passing once shows this draft works; it does not certify your next one. The tests work because they force the sentence to do argumentative work: pick a side, draw a boundary, accept a risk. Their limit: they check the claim's shape, not whether your evidence is good — that comes later.\n\n## Worked Example\nTake the fictional Elm Street case. A resident writes: \"The city should turn the empty lot on Elm Street into a dog park, run a three-month trial, and compare weekend visitor counts with maintenance costs before making it permanent.\" Walk the checklist.\n\n```steps\ntitle: Elm Street dog park (fictional case)\nunit:\nDisputable? | | A critic could argue the lot suits housing better, or that dogs disturb neighbours — the writer has taken a side.\nConcrete scope? | | Names one lot, a three-month trial, and the comparison that guides the decision — a reader knows the exact proposal.\nImplies a test? | | Visitor counts versus maintenance costs could fail the proposal: few dogs or high costs collapse the case.\n```\n\nEach note carries the reasoning, so the verdict follows directly. Disputable: yes, because rejection is available and sensible. Scope: yes, because the sentence draws boundaries — one lot, three months, one comparison. Test: yes, because the visitor-count-versus-cost check is observable and could come out badly for the park. All three pass, so this claim is ready for evidence-gathering. The verdict names which tests passed and why; it does not declare the park a good idea. A claim can be perfectly testable and still lose on the evidence.\n\n## Failure Modes\nMistaking a topic phrase for a claim — writing \"Sunday library hours\" and feeling finished. Correction: ask whether a reasonable person could say no. If not, add a subject, an action and a scope until they can.\n\n## Check Your Understanding\n```check\nQ: In the Elm Street case, which test does the three-month trial length mainly serve?\n- [ ] Disputability, because a critic could prefer housing\n- [x] Concrete scope, because it bounds exactly what is proposed\n- [ ] The test itself, because counts decide the outcome\n- [ ] None, since trial length is just a detail\nWhy: The length draws the boundary of the proposal — scope. The cue is what the detail does, not whether it matters. Misconception: any important-sounding detail must prove disputability.\n```\n\n## References\nOptional: Graff and Birkenstein, They Say / I Say; Booth, Colomb and Williams, The Craft of Research."
+  },
+  "task_scope_mismatch": {
+    "teaching_cases": [
+      {
+        "id": "verdict_case",
+        "assumptions": "Original fictional example. A learner named Priya attempted a task: 'Narrow your claim about school start times into something testable.' She wrote: 'Our school should pilot a later start for one term and compare attendance before deciding.' She added: 'I don't know what evidence would count, or how to answer parents who say later starts cut sports practice time.' Worked analysis of that attempt: Strength — the narrowed claim is genuinely testable because it names a decision point and a comparison (attendance before and after the pilot). Unresolved gap — she has not chosen evidence yet, and she names an objection (sports practice) without a fair response, so the attempt is incomplete on both fronts. Small observable next result — 'One paragraph naming one specific source to check (term attendance records) and one sentence stating the objection's strongest form.' The verdict names one strength, one gap, and one small result, each tied to the stated task rather than to effort or confidence.",
+        "data": [],
+        "results": []
+      }
+    ],
+    "lesson": {
+      "lesson_format": "tutorial_v1",
+      "lesson_content": "# Check diagnostic attempts against criteria\n\n## Why This Matters\nThis tutorial teaches you to review an attempt against its criteria: name one strength, one unresolved gap, and one small observable next result before revising anything.\n\n## Core Framework\nA checked verdict compares what an attempt actually did against what its task asked. Judge the visible work, not effort or confidence. The verdict has three moves, each tied to the stated task.\n\nFirst, name a strength the work genuinely shows. Second, name the unresolved gap: something the task required that the work does not yet deliver. Third, set one small observable result: a concrete artefact the learner could produce next, small enough to attempt soon.\n\n```diagram\n[The stated task and its criteria]\n   │\n   ▼\n[The attempt as written]\n   │\n   ▼\n[Strength: what holds]\n   │\n   ▼\n[Gap: what stays unresolved]\n   │\n   ▼\n[Small observable next result]\n```\n\nWhen the criterion says \"check the actual response,\" you must quote or point to the response's own words. Priya naming a comparison of attendance is a strength only because her task asked for something testable. An honest \"I don't know yet\" counts as a located gap, not a failure.\n\nContrast: praise such as \"good effort\" or a self-rating of confidence judges the writer instead of the work. The verdict stays useful because anyone reading it can see which line of the attempt supports each judgement, and the next result is a thing you can point at when it exists. Apply this to drafts, plans and checks alike.\n\n## Worked Example\nWalk Priya's attempt through the three moves. Her task: narrow a claim about school start times into something testable. She wrote: \"Our school should pilot a later start for one term and compare attendance before deciding.\"\n\n```steps\ntitle: Verdict on Priya's attempt\nRead the stated task and criterion | | Testability is the standard the task names.\nQuote what the attempt did | | She proposed a one-term pilot and an attendance comparison.\nName the strength | | A pilot with a before-and-after comparison makes the claim testable, the decision point is explicit.\nName the unresolved gap | | No evidence source is chosen, and the sports-practice objection has no response.\nState one small next result | | One paragraph naming term attendance records as the source, plus one sentence stating the objection's strongest form.\n```\n\nEach part ties to the task. The strength holds because a bounded trial with a named comparison is what \"testable\" demands. The gap is real because she wrote \"I don't know what evidence would count\" and named an objection without answering it — her own words locate the missing pieces. The next result is deliberately small: a paragraph and a sentence, not a finished essay. It produces something observable, so the next check can compare the artefact against the task instead of guessing at progress.\n\n## Failure Modes\nA common mistake is judging the writer instead of the work: \"Priya worked hard but lacks confidence.\" Correct it by pointing to a line of the attempt. Every verdict line should quote or reference the response's own words.\n\n## Check Your Understanding\n```check\nQ: Priya's verdict names \"no evidence source chosen\" as her gap. Why does this line count as a valid gap judgement?\n- [ ] It criticises her confidence, which the criterion says to assess\n- [x] It cites her own words and names something the task required that the attempt lacks\n- [ ] It predicts she will fail the next attempt\n- [ ] It replaces the strength with a second criticism\nWhy: The criterion says check the actual response. Her stated \"I don't know what evidence would count\" shows the requirement is unmet. Judging confidence or predicting failure assesses the writer, not the work.\n```\n\n## References\nOptional reading: They Say / I Say by Graff and Birkenstein; The Craft of Research by Booth, Colomb and Williams."
+    }
+  },
+  "long_step_notes": "Walk the Millbrook noticeboard case. Three sentences sit side by side about the same subject; the cue is the job each does, not the words they share.\n\n```steps\ntitle: Millbrook noticeboard (fictional case)\nSentence 1: The Millbrook river cleanup | | Names a subject. Asserts nothing, a reader cannot agree or disagree.\nSentence 2: The litter count | | 'Volunteers collected two hundred bags of litter last year.' Reports a specific happening, checkable against records. Disagreement would mean the records are wrong, not that a view is contested.\nSentence 3: The weekend proposal | | 'The town should hold the cleanup on weekends, because weekday volunteers cannot attend.' Takes a position on what should happen and gives a reason a reader could dispute. This is the claim.\n```\n\nNotice the reason clause does the arguing work. \"Because weekday volunteers cannot attend\" links the proposal to a testable idea: attendance, not general goodwill toward the river, is what the weekend proposal would improve. Sentence 3 is also where your Sunday-library sentence is heading — a proposal plus a because-clause a reader could challenge and evidence could test. Sentences 1 and 2 can support that claim later: the fact supplies context, the topic supplies the subject. But only sentence 3 commits you to defending something, which is exactly what your reader said was missing. In practice you will classify supplied sentences, then apply the same cue to your own draft.",
+  "false_check_explanation": {
+    "lesson_format": "tutorial_v1",
+    "lesson_content": "```check\nQ: Which sentence is a claim with a testable because-clause, using the bus case's parts?\n- [ ] Weekend bus service to the lakeside market\n- [ ] The city should run a free weekend bus because buses are useful\n- [x] The city should trial a free weekend bus for one summer because rider counts will show whether it is worth the cost\n- [ ] Free buses are popular in many cities\nWhy: Only the third states actor, action, bounded trial and a reason a comparison can test. The first and fourth are topic statements, \"buses are useful\" gives no test.\n```"
+  },
+  "assertion_testability_confusion": {
+    "lesson_format": "tutorial_v1",
+    "lesson_content": "# Separate topic from claim\n\n## Why This Matters\nA claim can fail; a topic cannot. Learning this rule lets you label any sentence quickly and gives your Sunday-library draft something a reader could disprove.\n\n## Core Framework\nA topic names a subject. A claim asserts something about that subject that a finding could disprove. The test is simple: ask what result would count against the sentence. If you can name one, you have a claim. If nothing counts because nothing is asserted, you only have a topic.\n\n```comparison\nTopic\n- Names a subject\n- Asserts nothing\n- No result can disprove it\nvs\nTestable claim\n- Asserts an outcome\n- Names a scope\n- A finding could prove it wrong\n```\n\nThis works because argument needs a target. A reader can agree, disagree, or check evidence only when a sentence takes a position — even an accepted factual assertion like \"the library is closed on Sundays\" is still a claim, since a finding that it opens Sundays would refute it. Topics invite no response; they wait for someone to add the assertion. The contrast also shows why the failure rule matters for revision: if you cannot say what would change your mind, your reader cannot either, and your evidence has nothing to support. Note the limit: this test separates topic from claim, but it does not judge whether a claim is true, important, or well evidenced — those are later questions.\n\n## Worked Example\nThe supplied case: a student essay opens \"Our town's new bus route\" and later writes \"The new riverside bus route increased Saturday ridership among weekend shoppers.\" Walk each sentence through the rule.\n\n```steps\ntitle: Bus route case (fictional)\nFirst sentence label | | \"Our town's new bus route\" names a subject and asserts nothing.\nApply the rule | | Ask: what finding would count against it? No outcome is claimed, so nothing can.\nVerdict on first | | Topic: a label waiting for an assertion.\nSecond sentence label | | Asserts an outcome: ridership among weekend shoppers increased.\nApply the rule | | A flat Saturday count on that route, or a rise no larger than on unchanged routes, would defeat it.\nVerdict on second | | Testable claim: someone could disprove it with a result.\n```\nThe deciding cue is the outcome. The first sentence has no result to check; the second predicts one, which is exactly what makes it arguable and supportable with evidence.\n\n## Failure Modes\nCommon mistake: treating a popular fact as a topic, or a topic as a claim. \"Free buses run in many cities\" asserts something checkable, so it is a claim. \"Free buses\" alone is a topic. Fix: always name the finding that would prove the sentence wrong.\n\n## Check Your Understanding\n```check\nQ: Which sentence is a topic rather than a claim? A: \"The riverside bus route is popular.\" B: \"The library's Sunday hours.\n- [ ] A only\n- [x] B only\n- [ ] Both are topics\n- [ ] Neither is a topic\nWhy: B names a subject and asserts nothing, so no result could disprove it. A asserts popularity — a ridership survey showing low use would count against it, making A a claim, though possibly a weak one.\n```\n\n## References\nOptional reading: They Say / I Say by Gerald Graff and Cathy Birkenstein, on making claims arguable.\n"
+  },
+  "quoted_case_question": "```check\nQ: Which sentence is an arguable claim? A: \"Sunday opening would help everyone.\" B: \"Volunteer staffing at the town library.\" C: \"Riders and drivers argue about Market Street.\" D: \"The library should open on Sundays because many residents work weekdays.\"\n- [ ] A\n- [ ] B\n- [ ] C\n- [x] D\nWhy: D names an actor and action with a disputable reason. A asserts a benefit but claims universal reach it cannot support, so it is vague, not testable, B is a bare topic phrase, C reports arguing without taking a side.\n```",
+  "empty_title_metadata": "Walk the pantry case through the three criteria. The original sentence names an actor but fails the other two, and the revision fixes exactly those failures.\n\n```steps\ntitle: Food pantry claim check\tnote: \nNamed actor | | \"The food pantry\" names who must act, so this criterion passes.\nSpecific action | | \"Improve weekend access\" is a direction; it never says which hours or which service, so it fails.\nStated success measure | | Nothing tells us the change worked; counting weekend visits before and after would, so it fails.\nRevision: Saturday trial | | \"Open Saturday mornings for a trial\" makes the action concrete and bounded instead of permanent.\nRevision: comparison | | \"Compare Saturday visits with added staffing cost\" states the measure the decision turns on.\n```",
+  "factual_claim_section_contradiction": {
+    "lesson_format": "tutorial_v1",
+    "lesson_content": "# Turn a topic into a claim\n\n## Why This Matters\nEvery persuasive essay needs one sentence a reader could dispute; naming a subject is not yet arguing, and the distinction shapes everything downstream.\n\n## Core Framework\nA topic is a noun phrase pointing at a subject. A claim adds an assertion: something the writer commits to and an opponent could deny. Ask of any sentence: could a reasonable person disagree with it, and does it commit its author to a side? If neither, you have a topic. Accepted facts, value judgments and normative positions all count as claims — precision and evidence are separate, later questions. To turn a topic into a claim, add a verb of judgment or recommendation (should, matters, improves) plus a specific direction someone could act on. Note the contrast: 'The library on Sundays' names a subject; 'Sunday opening would help everyone' commits you to a position a reader could challenge.\n\n```comparison\nTopic: The riverside footpath\n- A noun phrase pointing at a subject\n- Nothing to agree or dispute\n- A reader could not argue back\nvs\nClaim: The town should light the footpath in winter\n- A position the writer commits to\n- A reason a reader could challenge\n- Someone could act on it\n```\n\n## Worked Example\nWalk the newsletter case. Sentence A says 'The new riverside footpath.' Sentence B says 'The town should light the riverside footpath in winter so commuters can walk home safely after dark.' Test each against the two questions.\n\n```steps\ntitle: Classifying the two sentences\nSentence A: The new riverside footpath | | Names the subject only, nothing could be agreed or disputed, and it commits the author to nothing.\nTwo-question test on A | | No reasonable disagreement possible, no commitment: it is a topic.\nSentence B: Light the footpath in winter | | Recommends an action, should light, for a stated reason, commuter safety after dark.\nTwo-question test on B | | A reader could doubt the safety benefit or the cost, and should light commits the writer: it is a claim.\nVerdict | | A is a topic, B is contestable, directional, and actionable: a claim.\n```\n\n## Failure Modes\nCommon mistake: treating any informative sentence as a claim because it contains facts. Correction: apply the test — ask whether a reasonable person could disagree and whether the sentence commits its author. 'Libraries have books and computers' informs but disputes nothing; 'Sunday opening would help everyone' disputes.\n\n## Check Your Understanding\n```check\nQ: A newsletter reads: 'The library on Sundays.' Is this a topic or a claim?\n- [ ] A claim, because it concerns the essay's subject\n- [x] A topic, because it asserts nothing a reader could dispute\n- [ ] A claim, because it names a real service\n- [ ] A topic, because it lacks sourced evidence\nWhy: The sentence names a subject without committing its author, no one could argue back. Lacking evidence would not make it a topic — an unsupported assertion is still a claim.\n```\n\n## References\nOptional: Graff and Birkenstein, They Say / I Say; Booth, Colomb and Williams, The Craft of Research."
+  },
+  "factual_claim_high_review": {
+    "acceptable": false,
+    "issues": [
+      "Failure Modes contains a false rule: it says 'Libraries have books and computers' 'informs but disputes nothing', denying it claim status. That sentence is a factual assertion (finite verb 'have') and therefore a claim under this lesson's own Core Framework rule that accepted facts count as claims. This misclassification would also mislead learners on exactly the transfer task, where the factual statement 'The market runs from dawn to noon' must be labeled a claim."
+    ],
+    "package_issues": [],
+    "package_issue_targets": [],
+    "advisories": [
+      "The lesson description promises 'Classify six fictional statements' but the workbook contains four sentences in classify_and_rewrite and five in transfer (nine statements total); the description should be updated to match the delivered work.",
+      "Practice minutes estimated at the upper end of the feasible range because both activities include a rewrite checked against a public criterion."
+    ],
+    "practice_minutes": 4,
+    "public_check_options": [
+      {
+        "option_id": "check1.option1",
+        "defensible": false,
+        "reason": "'The library on Sundays' is a noun phrase with no finite verb and no assertion; concerning the essay's subject does not make it a claim, so this option fails the two-question test."
+      },
+      {
+        "option_id": "check1.option2",
+        "defensible": true,
+        "reason": "Correct: the sentence names a subject and asserts nothing a reader could dispute, and it commits its author to no position — the definition of a topic in the Core Framework."
+      },
+      {
+        "option_id": "check1.option3",
+        "defensible": false,
+        "reason": "Naming a real service is still only naming; no verb of judgment or assertion is present, so no disputable commitment exists."
+      },
+      {
+        "option_id": "check1.option4",
+        "defensible": false,
+        "reason": "Wrong reason and wrong principle: lack of sourced evidence does not make a sentence a topic — an unsupported assertion is still a claim; the Why correctly rejects this."
+      }
+    ],
+    "public_sections": [
+      {
+        "section_id": "why_this_matters",
+        "source_quote": "Every persuasive essay needs one sentence a reader could dispute; naming a subject is not yet arguing, and the distinction shapes everything downstream.",
+        "domain_valid": true,
+        "consistent_with_core": true,
+        "reason": "Sound framing: it states the assertion/disputability criterion that the Core Framework formalizes, and it matches the learner's work sample problem of listing facts ('Libraries have books and computers') without connecting them to an argument."
+      },
+      {
+        "section_id": "core_framework",
+        "source_quote": "Accepted facts, value judgments and normative positions all count as claims — precision and evidence are separate, later questions.",
+        "domain_valid": true,
+        "consistent_with_core": true,
+        "reason": "Correctly separates claim status from evidential support and precision; the noun-phrase-versus-assertion test with the library/footpath contrast is internally consistent and matches the comparison block and worked example."
+      },
+      {
+        "section_id": "worked_example",
+        "source_quote": "A is a topic, B is contestable, directional, and actionable: a claim.",
+        "domain_valid": true,
+        "consistent_with_core": true,
+        "reason": "Sentence A is a verbless noun phrase ('The new riverside footpath') with no commitment; Sentence B contains the recommendation 'should light' with a challengeable reason (commuter safety), so the verdict follows from the stated two-question test on fully quoted premises."
+      },
+      {
+        "section_id": "failure_modes",
+        "source_quote": "'Libraries have books and computers' informs but disputes nothing; 'Sunday opening would help everyone' disputes.",
+        "domain_valid": false,
+        "consistent_with_core": false,
+        "reason": "False rule: 'Libraries have books and computers' is a factual assertion with a finite verb and therefore a claim, exactly as the Core Framework states ('accepted facts... count as claims'). Calling it non-disputing to deny claim status contradicts the framework and would mislabel factual claims such as transfer statement B ('The market runs from dawn to noon')."
+      },
+      {
+        "section_id": "check_your_understanding",
+        "source_quote": "The sentence names a subject without committing its author, no one could argue back.",
+        "domain_valid": true,
+        "consistent_with_core": true,
+        "reason": "'The library on Sundays' is a noun phrase with no assertion, so 'topic' is correct; the Why also correctly states that lacking evidence does not make a sentence a topic, consistent with the framework's claim/evidence separation."
+      },
+      {
+        "section_id": "references",
+        "source_quote": "Optional: Graff and Birkenstein, They Say / I Say; Booth, Colomb and Williams, The Craft of Research.",
+        "domain_valid": true,
+        "consistent_with_core": true,
+        "reason": "Both are real, correctly attributed texts on academic argument and claims; they are optional supplements, not dependencies, and no invented quotations or attributions appear."
+      }
+    ],
+    "contains_calculations": false,
+    "calculations": [],
+    "literal_facts": [],
+    "literal_fact_ids": [],
+    "affected_sections": [
+      "failure_modes"
+    ]
+  },
+  "reasoning_only_review": {
+    "data": {},
+    "error": "anthropic request failed (ValueError; finish=length)",
+    "finish_reason": "length",
+    "completion_tokens": 6048,
+    "thoughts_tokens": 6048,
+    "response_chars": 0,
+    "duration_ms": 75948.36574996589,
+    "effective_parameters": {
+      "model": "glm-5.3",
+      "temperature": 0.1,
+      "max_tokens": 6048,
+      "reasoning_effort": "high",
+      "extra_body": {
+        "thinking": {
+          "type": "enabled"
+        }
+      },
+      "response_format": {
+        "type": "json_object"
+      }
+    }
+  },
+  "teaching_grading_conflict": {
+    "lesson": {
+      "lesson_format": "tutorial_v1",
+      "lesson_content": "# Test Your Narrowed Claim\n\n## Why This Matters\nA claim naming its actor, action and success measure lets a reader restate it accurately and tells you what evidence to gather.\n\n## Core Framework\nA topic is a subject area; a claim asserts something arguable about it. \"Sunday library hours\" is a topic. \"The town should test Sunday opening\" is a claim. But a claim needs three definitions before you can argue it well. First, a named actor: who exactly should act? \"The town\" hides the decision-maker; \"the council\" names it. Second, a specific action: what should that actor do, bounded so a reader can picture it? \"Test Sunday opening for six weeks\" is specific; \"improve library access\" could mean almost anything. Third, a stated success measure: what observable result counts as success or failure, and how would you count it? \"Compare attendance with staffing costs\" points at a decision; \"attendance is high\" leaves the reader guessing what counts as high. The criteria work as a filter: each narrows the claim until one interpretable position remains. A reasonable person can still dispute it — that is the point. Disagreement now happens on defined ground: whether the actor can act, whether the action is worth its cost, whether the measure captures what matters. The criteria also discipline evidence choice: once the measure is stated, you know what to count and what would count against you. The limit: these criteria apply to policy proposals, where someone should do something. An evaluative claim like \"equal access is fair\" needs reasons and principles instead.\n\n```comparison\nVague draft\n- Actor hidden: \"the town\"\n- Action unspecified: \"improve access\"\n- Success undefined: \"would help everyone\"\nvs\nNarrowed claim\n- Actor named: \"the council\"\n- Action bounded: \"six-week Sunday pilot\"\n- Success stated: \"attendance against staffing cost\"\n```\n\n## Worked Example\nWalk the supplied public case: a draft claim reads, \"The council should offer free bus passes to students during exam weeks so more students arrive on time.\" Label each criterion from the claim's own wording, not from what the writer meant.\n\n```steps\ntitle: Bus-pass claim check (fictional public case)\nNamed actor | | \"The council\" is stated, so this criterion is present.\nSpecific action | | \"Offer free bus passes during exam weeks\" is bounded: who, what, when.\nSuccess measure | | \"More students arrive on time\" is only implied: no counting rule, no end point.\n```\nTwo criteria pass. The success measure fails: the claim never states how arrival would be counted or when the trial ends. That is the element to define first, and the order matters. Without a stated measure you cannot choose evidence, since any arrival figure might or might not count as success. With one stated, the evidence question answers itself: gather counted arrival figures and pass costs, then compare. Notice the labelling method: you judge the words on the page. The writer may have intended a precise measure, but a reader who cannot find it will restate the claim wrongly — exactly what your week-twelve reader-summary check catches. The same three-criterion pass applies to your Sunday pilot draft: actor, action, then define the measure so its counting rule and end point are visible.\n\n## Failure Modes\nCommon mistake: grading a claim by what you meant, not what it says. \"More students arrive on time\" feels measurable until a reader asks how counted and until when. Correction: quote the claim's words and ask a stranger to find the actor, action and measure in them.\n\n## Check Your Understanding\n```check\nQ: In the bus-pass claim, why is the success measure the element to define first?\n- [ ] The actor is wrong and should be the school instead\n- [ ] The action is too broad to picture\n- [x] \"More students arrive on time\" states no counting rule or end point, so success is undefined\n- [ ] The claim is a topic, not an assertion\nWhy: The actor and action are stated in the wording, so those criteria pass. The measure only implies an outcome without saying how or when it is judged. The claim asserts something, so it is a claim, not a topic.\n```\n\n## References\nOptional reading: Anthony Weston, A Rulebook for Arguments, on constructing arguable claims."
+    },
+    "context": {
+      "lesson_package": {
+        "teaching_cases": [
+          {
+            "id": "claim_check_example",
+            "assumptions": "Original fictional example: A draft claim reads, 'The council should offer free bus passes to students during exam weeks so more students arrive on time.' Worked analysis: named actor is present ('the council'); specific action is present ('offer free bus passes during exam weeks'); a success measure is partially implied ('more students arrive on time') but never states how arrival would be counted or when the trial ends, so the success measure is the element needing definition first. The example shows how to label each criterion as present or missing from the claim's own wording, not from what the writer intended.",
+            "data": [],
+            "results": []
+          }
+        ],
+        "private_workbook": {
+          "title": "Test Your Narrowed Claim",
+          "activities": [
+            {
+              "id": "guided_pilot_check",
+              "title": "Check your Sunday pilot claim",
+              "kind": "practice",
+              "instructions": "Original fictional example. A draft claim reads: \"The council should offer free bus passes to students during exam weeks so more students arrive on time.\" Worked analysis: the named actor is present (\"the council\"); the specific action is present (\"offer free bus passes during exam weeks\"); the success measure is only implied (\"more students arrive on time\") — it never says how arrival would be counted or when the trial ends, so the success measure is the element to define first. The test labels each criterion from the claim's own wording, not from what the writer intended.\n\nNow apply the same three-criterion test to your own narrowed claim from your placement attempt, quoted in full: \"The town should test Sunday library opening for six weeks, then compare attendance with staffing costs before deciding whether to continue.\"\n\nWrite one response that does two things: first, say for each of the three criteria — named actor, specific action, stated success measure — whether it is present or missing in that exact wording; then name which element needs definition first, with a one-sentence reason drawn from the claim's own words. Note that \"compare attendance with staffing costs\" gestures at a measure but names no threshold, no units for the comparison, and no one who decides.",
+              "data": [],
+              "fields": [
+                {
+                  "id": "claim_check",
+                  "label": "Label each of the three criteria present or missing in your claim's wording, then name which element needs definition first and why",
+                  "kind": "text",
+                  "unit": "",
+                  "choices": [],
+                  "expression": null,
+                  "correct_choice": null,
+                  "tolerance": 0.01,
+                  "criteria": [
+                    "Labels the named actor as present, citing wording such as \"the town\"",
+                    "Labels the specific action as present, citing the bounded pilot of testing Sunday opening for six weeks",
+                    "Labels the stated success measure as missing or too weak, because the comparison names no threshold, comparison units, or decision-maker",
+                    "Names the success measure as the element to define first, with a reason grounded in the claim's actual wording",
+                    "Judges the claim's wording rather than the writer's stated intention"
+                  ],
+                  "rubric_criterion": null
+                }
+              ],
+              "hint": "Read the claim's words literally: who is named as acting, what exactly they would do, and whether the claim states how success would be counted and judged.",
+              "worked_solution": "Label each of the three criteria present or missing in your claim's wording, then name which element needs definition first and why\n\nThe claim names an actor (\"the town\") and a specific, bounded action (\"test Sunday library opening for six weeks\"), so those criteria are present in the wording. The success measure is the weak element: \"compare attendance with staffing costs\" gestures at evidence but states no threshold for what counts as worthwhile, no units or method for the comparison, and no one who decides whether to continue. A model answer: \"Actor and action are present — 'the town' and 'test Sunday library opening for six weeks' — but the success measure is too vague, because 'compare attendance with staffing costs' names no threshold, no units for the comparison, and no one who decides; that element needs defining first.\" Accept reasoned alternatives only if they point to wording actually absent from the claim; treating the actor or action as missing mistakes vagueness of intent for absence in the wording.",
+              "minutes_min": 1,
+              "minutes_max": 2,
+              "diagram": null
+            },
+            {
+              "id": "transfer_new_claim",
+              "title": "Test a fresh claim",
+              "kind": "transfer",
+              "instructions": "Original fictional draft. A school newsletter contains this sentence: \"We should make the cafeteria menu healthier so students eat better.\"\n\nApply the same three-criterion test you just used: named actor, specific action, stated success measure. Judge each criterion from the claim's own wording, not from what the writer probably meant. Note that \"we\" does not name who would actually change the menu, \"make the menu healthier\" leaves the action general, and \"eat better\" states no way of counting success. A reasonable answer may still judge the actor as present if you think \"we\" implies the school community, provided you say why.\n\nWrite one short response that labels each of the three criteria as present or missing and names which element you would define first, with one sentence of reason.",
+              "data": [],
+              "fields": [
+                {
+                  "id": "label_and_choose",
+                  "label": "Your three labels and the element to define first",
+                  "kind": "text",
+                  "unit": "",
+                  "choices": [],
+                  "expression": null,
+                  "correct_choice": null,
+                  "tolerance": 0.01,
+                  "criteria": [
+                    "Labels named actor as present or missing, judging \"we\" from the claim's own wording",
+                    "Labels specific action as present or missing, judging \"make the menu healthier\" from the claim's own wording",
+                    "Labels the success measure as missing, noting \"eat better\" states no count or test",
+                    "Names one element to define first and gives a reason tied to that gap from the sentence"
+                  ],
+                  "rubric_criterion": "Labels each criterion from the claim's wording and picks a first element with a reason"
+                }
+              ],
+              "hint": "For each criterion, ask what the sentence itself commits to on the page, then pick the element whose absence most blocks the other two.",
+              "worked_solution": "Your three labels and the element to define first\n\nA model answer: Named actor is arguably missing, since \"we\" does not say who changes the menu, though calling it present is defensible if \"we\" is read as the school community. Specific action is missing in substance, because \"make the cafeteria menu healthier\" names no concrete change such as which items or meals. The success measure is missing, since \"students eat better\" names no count, survey or observation that could show the result. The success measure is the strongest candidate to define first: without a stated measure, no one can tell whether any menu change worked, and the actor and action can be settled once the measure sets the target. Accept a reasoned choice of actor or action instead, provided the reason quotes the gap in the sentence's own wording.",
+              "minutes_min": 1,
+              "minutes_max": 2,
+              "diagram": null
+            }
+          ]
+        }
+      }
+    }
+  },
+  "teaching_grading_alignment_review": {
+    "practice_alignment": [
+      {
+        "target": "practice.guided_pilot_check.claim_check",
+        "aligned": false,
+        "public_rule_valid": true,
+        "public_section_id": "core_framework",
+        "public_quote": "First, a named actor: who exactly should act? \"The town\" hides the decision-maker; \"the council\" names it.",
+        "assessment_source": "criteria",
+        "assessment_quote": "Labels the named actor as present, citing wording such as \"the town\"",
+        "repair_scope": "activity",
+        "reason": "Public teaching explicitly treats \"the town\" as hiding the actor and \"compare attendance with staffing costs\" as a stated measure pointing at a decision. The criteria, instructions and worked_solution invert both judgments and mandate the success measure as the fixed first priority."
+      },
+      {
+        "target": "practice.transfer_new_claim.label_and_choose",
+        "aligned": true,
+        "public_rule_valid": true,
+        "public_section_id": "core_framework",
+        "public_quote": "Third, a stated success measure: what observable result counts as success or failure, and how would you count it?",
+        "assessment_source": "criteria",
+        "assessment_quote": "Labels the success measure as missing, noting \"eat better\" states no count or test",
+        "repair_scope": "none",
+        "reason": "Grading applies the same wording-based three-criterion test; \"eat better\" lacks a counting rule exactly as the public standard requires, and justified alternatives for the actor and first-choice element are permitted."
+      }
+    ]
+  }
+}

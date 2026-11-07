@@ -301,7 +301,7 @@ async def compose_review(db, item, user_id, on: date):
             "sources": sources,
             "source_titles": list(dict.fromkeys(c["title"] for c in selected)),
             "resume_answers": resumed,
-            "recall_prompt": "Before opening a reference, recall the rule you need. Then solve the case and explain any correction.",
+            "recall_prompt": "Before opening any reference, reconstruct the rule and its deciding cue in your own words. Then solve the case from memory and explain any correction.",
         },
     ), None
 

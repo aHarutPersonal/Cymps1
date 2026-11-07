@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from app.core.config import settings
 
 
-PRICING_VERSION = "multi-provider-2026-09-15-zai"
+PRICING_VERSION = "direct-providers-2026-11-07"
 
 
 @dataclass(frozen=True)
@@ -40,72 +40,15 @@ class PriceCard:
 def price_card_for_model(model: str, provider: str | None = None) -> PriceCard:
     """Return the closest official card, or a conservative configurable card."""
     normalized = model.casefold().removeprefix("models/")
-    resolved_provider = (provider or settings.llm_provider).casefold()
 
-    if resolved_provider == "zai":
-        # Official uncached rates, verified 2026-09-15. Completion includes reasoning.
-        if normalized == "glm-5.3-flash":
-            return PriceCard(0.15, 0.50)
-        if normalized == "glm-5.3":
-            return PriceCard(1.40, 4.40)
-    if resolved_provider == "openlux":
-        # The gateway account's group/discount is not the direct OpenAI price.
-        # Until reconciled, use explicit conservative budget rates, not Yunwu's
-        # historical recharge multiplier or an accidental free fallback.
-        return PriceCard(
-            settings.openlux_input_usd_per_million,
-            settings.openlux_output_usd_per_million,
-        )
-
-    # Effective Yunwu cash rates. Recharge conversion and the token's assigned
-    # route are configurable because either can change independently.
-    # Grok 4.5 doubles token rates above a 200k prompt context.
-    # OpenRouter's stealth route is free at present, so it contributes nothing to
-    # the internal spend estimate. Grounded discovery still runs natively on
-    # Gemini and is still priced by the Gemini cards below, so the daily budget
-    # guard keeps protecting the one curriculum path that actually bills.
-    if resolved_provider == "openrouter":
-        return PriceCard(
-            max(settings.openrouter_input_usd_per_million, 0.0),
-            max(settings.openrouter_output_usd_per_million, 0.0),
-        )
-    if resolved_provider == "yunwu":
-        exchange_rate = max(settings.yunwu_usd_exchange_rate, 0.000001)
-        cash_multiplier = (
-            max(settings.yunwu_quota_price_cny, 0.0)
-            / exchange_rate
-            * max(settings.yunwu_group_ratio, 0.0)
-        )
-        if normalized.startswith("gemini-3.5-flash-lite"):
-            return PriceCard(
-                0.30 * cash_multiplier,
-                2.50 * cash_multiplier,
-            )
-        if normalized.startswith("gemini-3.6-flash"):
-            return PriceCard(
-                1.50 * cash_multiplier,
-                7.50 * cash_multiplier,
-            )
-        if normalized.startswith("gemini-3.1-pro"):
-            return PriceCard(
-                2.00 * cash_multiplier,
-                12.00 * cash_multiplier,
-                long_context_threshold=200_000,
-                long_input_usd_per_million=4.00 * cash_multiplier,
-                long_output_usd_per_million=18.00 * cash_multiplier,
-            )
-        if normalized == "gpt-5.6-luna":
-            return PriceCard(1.0 * cash_multiplier, 6.0 * cash_multiplier)
-        if normalized == "grok-4.5":
-            return PriceCard(
-                2.0 * cash_multiplier,
-                6.0 * cash_multiplier,
-                long_context_threshold=200_000,
-                long_input_usd_per_million=4.0 * cash_multiplier,
-                long_output_usd_per_million=12.0 * cash_multiplier,
-            )
-        if normalized == "claude-fable-5":
-            return PriceCard(10.0 * cash_multiplier, 50.0 * cash_multiplier)
+    if normalized.startswith("claude-haiku-5-5"):
+        # Official list price; prompts above 100K tokens bill at a higher card.
+        return PriceCard(0.10, 0.50, long_context_threshold=100_000,
+                         long_input_usd_per_million=0.50, long_output_usd_per_million=2.50)
+    if normalized.startswith("gpt-6-luna"):
+        # Listed at $0.10/$0.50 by third parties, not an OpenAI price page;
+        # budgeted at gpt-5.6-luna's rate so spend caps stay conservative.
+        return PriceCard(0.20, 1.20)
 
     # Order matters: Flash-Lite names also contain "flash".
     if normalized.startswith("gemini-2.5-flash-lite"):

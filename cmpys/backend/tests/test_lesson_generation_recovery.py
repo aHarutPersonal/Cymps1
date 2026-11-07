@@ -188,7 +188,7 @@ async def test_unavailable_review_never_rewrites_or_publishes_a_draft(monkeypatc
                 return SimpleNamespace(data=package_payload(), error=None)
             if issubclass(output_model, LessonReview):
                 reviews += 1
-                return LLMResponse(data={}, error="zai request failed (TimeoutError; finish=missing)")
+                return LLMResponse(data={}, error="anthropic request failed (TimeoutError; finish=missing)")
             writers += 1
             return SimpleNamespace(data=_lesson_sections_payload(), error=None)
 
@@ -210,9 +210,9 @@ async def test_unavailable_review_never_rewrites_or_publishes_a_draft(monkeypatc
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("error,expected_calls", [
-    ("zai request failed (JSONDecodeError; finish=stop)", 2),
-    ("OpenLux request failed (JSONDecodeError; finish=stop)", 2),
-    ("zai request failed (RateLimitError; finish=missing)", 2),
+    ("anthropic request failed (JSONDecodeError; finish=stop)", 2),
+    ("openai request failed (JSONDecodeError; finish=stop)", 2),
+    ("anthropic request failed (RateLimitError; finish=missing)", 2),
 ])
 async def test_package_json_repair_is_bounded_and_still_validates(monkeypatch, error, expected_calls):
     from unittest.mock import AsyncMock
@@ -234,7 +234,7 @@ async def test_valid_package_can_recover_from_malformed_json(monkeypatch):
     from app.services.planning.lesson_package import generate_package
     monkeypatch.setattr("app.services.llm.telemetry.record_llm_response", AsyncMock())
     client = SimpleNamespace(generate_json=AsyncMock(side_effect=[
-        LLMResponse(data={}, error="zai request failed (JSONDecodeError; finish=stop)"),
+        LLMResponse(data={}, error="anthropic request failed (JSONDecodeError; finish=stop)"),
         LLMResponse(data=structured_package_fixture(package_payload())),
     ]))
     package, response, _ = await generate_package({}, {}, client_factory=lambda **kw: client)
@@ -251,7 +251,7 @@ async def test_truncated_package_uses_one_compact_retry_without_relaxing_gates(m
     from app.services.llm.client import LLMResponse
     from app.services.planning.lesson_package import generate_package
     monkeypatch.setattr("app.services.llm.telemetry.record_llm_response", AsyncMock())
-    truncated = LLMResponse(data={}, error="zai request failed (ValueError; finish=length)",
+    truncated = LLMResponse(data={}, error="anthropic request failed (ValueError; finish=length)",
                             finish_reason="length", raw_response='{"workbook":')
     second = (LLMResponse(data=structured_package_fixture(package_payload())) if recovery == "valid" else
               LLMResponse(data={"invalid": True}) if recovery == "invalid" else truncated)

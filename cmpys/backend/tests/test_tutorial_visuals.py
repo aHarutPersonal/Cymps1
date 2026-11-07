@@ -215,7 +215,7 @@ def test_steps_total_must_match():
         "title: One row\nNet income | 80 | From the income statement.",
         "title: Seven rows\n" + "\n".join(f"Row {i} | {i} | Note {i}." for i in range(7)),
         "Net income | 80 | Note.\nD&A | 22 | Note.",                                  # no title
-        "title: Notes\nNet income | 80 | " + "n" * 161 + "\nD&A | 22 | Note.",
+        "title: Notes\nNet income | 80 | " + "n" * 321 + "\nD&A | 22 | Note.",
         "title: Notes\nNet income | 80 |\nD&A | 22 | Note.",                         # empty note
         "title: Cells\nNet income | 80\nD&A | 22 | Note.",
         "title: Labels\n" + "L" * 61 + " | 80 | Note.\nD&A | 22 | Note.",
@@ -250,7 +250,7 @@ def test_check_fence_single_multi_numeric():
         question + "\n- [ ] $35m\n- [x] $50m",                                       # no Why
         why + "\n- [ ] $35m\n- [x] $50m\n" + question,                               # wrong order
         question + "\n- [ ] $35m\n- [x] $50m\nanswer: 50 | unit: $m | tolerance: 0\n" + why,
-        "Q: " + "q" * 241 + "\n- [ ] A\n- [x] B\n" + why,
+        "Q: " + "q" * 481 + "\n- [ ] A\n- [x] B\n" + why,
         question + "\n- [ ] A\n- [x] B\nWhy: " + "w" * 281,
         question + "\n* [ ] A\n- [x] B\n" + why,
         question + "\nanswer: 50 | unit: $m | tolerance: -1\n" + why,

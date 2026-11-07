@@ -110,7 +110,8 @@ def test_numerals_inside_native_fences_and_result_tokens_are_not_counted():
     assert lesson_writer._prose_numerals({"worked_example": MAPLE}, context) == ["900", "600", "300", "400"]
     fenced_only = MAPLE.split("\n\n", 1)[1].replace("So December's profit is", "Profit is")
     assert lesson_writer._prose_numerals({"worked_example": fenced_only}, context) == []
-    token = {"worked_example": "Profit is [[result:case_2024.total_3100]] EUR in 2 steps."}
+    # "2 steps" is a structural count since 2026-11-06; "2 shops" is a case fact.
+    token = {"worked_example": "Profit is [[result:case_2024.total_3100]] EUR from 2 shops."}
     assert lesson_writer._prose_numerals(token, None) == ["2"]
 
 

@@ -141,7 +141,7 @@ def test_unicode_unary_minus_cannot_match_a_positive_raw_datum():
 
 
 @pytest.mark.parametrize("text", ["100−200", "100 − 200", "100 000−200 000", "100 000 − 200 000"])
-def test_unicode_binary_minus_keeps_two_positive_operands_and_requires_proof(text):
+def test_unicode_binary_minus_keeps_two_positive_operands_and_proves_a_shown_result(text):
     numbers = {100000, 200000} if "000" in text else {100, 200}
     assert _numeric_values(text) == {Decimal(value) for value in numbers}
     package = {"teaching_cases": [{"id": "case", "data": [
@@ -150,7 +150,10 @@ def test_unicode_binary_minus_keeps_two_positive_operands_and_requires_proof(tex
     review = verdict(calculations=[], literal_facts=[{
         "claim_id": "n1", "case_id": "teaching.case", "datum_ids": ["first", "second"],
     }])
-    assert grounded_failures(review, {"lesson_content": text}, package)
+    # Owner (2026-11-06): only results need proof; the unevaluated expression shows none.
+    assert grounded_failures(review, {"lesson_content": text}, package) == []
+    result = " = −100 000" if "000" in text else " = −100"
+    assert grounded_failures(review, {"lesson_content": text + result}, package)
 
 
 @pytest.mark.parametrize("text", [

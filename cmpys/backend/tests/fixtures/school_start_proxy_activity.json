@@ -1,0 +1,40 @@
+{
+  "id": "new_claim_rescue",
+  "data": [],
+  "hint": "Ask what a board member could not possibly know from the draft as written: who changes what, for how long, and what result would count as failure.",
+  "kind": "transfer",
+  "title": "Rescue a vague school-start claim",
+  "fields": [
+    {
+      "id": "checklist_and_rewrite",
+      "kind": "text",
+      "unit": "",
+      "label": "Your verdicts on all three checklist questions, your rewritten claim, and the point that still needs evidence",
+      "choices": [],
+      "criteria": [
+        "Gives an explicit verdict for each of the three questions rather than a general impression",
+        "Grounds each verdict in specific words of the draft, such as 'should start later' or 'everyone knows'",
+        "Rewritten claim names concrete scope: who makes what change, for what trial period, and how it will be judged",
+        "Rewritten claim implies a test whose failure condition is stated or clearly derivable, with no invented statistics or studies",
+        "Stays on the school-start-time subject and separates what the draft asserts from what would need real evidence"
+      ],
+      "tolerance": 0.01,
+      "expression": null,
+      "correct_choice": null,
+      "rubric_criterion": null
+    }
+  ],
+  "diagram": null,
+  "minutes_max": 3,
+  "minutes_min": 2,
+  "instructions": "Original fictional draft. A student writes to the school board: \"Our school should start later because tired students cannot learn, and everyone knows mornings are hard.\"\n\nYour task, in one response: first run the three checklist questions on this draft — is it disputable (could a reasonable critic reject it?), does it have concrete scope (does a reader know exactly who changes what, and how the decision will be judged?), and does it imply a test (is there a check that could fail)? Give a verdict of pass or needs work for each question, with reasons drawn from the draft's own wording. Then rewrite the claim so it passes all three questions. Keep the school-start-time subject; do not invent statistics, studies, or survey numbers — the rewrite may set conditions and comparisons (for example, a trial period, and something to measure against something else) but no fabricated evidence. Finally, note one thing the original draft asserts that would still need real evidence to support it.",
+  "worked_solution": {
+    "steps": [
+      {
+        "field_id": "checklist_and_rewrite",
+        "explanation": "A strong response runs the checklist on the draft's own words. Disputable: pass — a critic could argue that a later start shortens after-school activities or that parents' schedules depend on the current time, so the draft takes a side someone could reject. Concrete scope: needs work — 'should start later' names no school-wide change, no trial period, and no basis for judging success; 'everyone knows mornings are hard' is an appeal to common feeling, not a scope. Implies a test: needs work — nothing in the draft could fail; no measurement or comparison is proposed. A model rewrite: 'Our school should shift its first bell later for one term and then compare student attendance and reported alertness in first-period classes against a normal term before deciding whether to keep the change.' It names who (the school), what (shifting the first bell), a trial period (one term), and an evaluation (attendance and alertness compared with a normal term); if attendance and alertness do not improve, the case for the change collapses, so the test can fail. Note that the rewrite invents no numbers — the comparisons are conditions, not fabricated results. One point still needing evidence: 'tired students cannot learn' is an assertion; supporting it would require real attendance records or a sourced study, which the learner should name as a gap rather than fill."
+      }
+    ],
+    "version": 1
+  }
+}

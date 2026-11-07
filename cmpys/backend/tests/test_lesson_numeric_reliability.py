@@ -372,7 +372,7 @@ async def test_package_transport_timeout_uses_existing_retry_without_changing_pr
     monkeypatch.setattr("app.services.llm.telemetry.record_llm_response", AsyncMock())
     monkeypatch.setattr("app.services.planning.lesson_package.asyncio.sleep", AsyncMock())
     client = SimpleNamespace(generate_json=AsyncMock(side_effect=[
-        LLMResponse(data={}, error="zai request failed (TimeoutError; finish=missing)"),
+        LLMResponse(data={}, error="anthropic request failed (TimeoutError; finish=missing)"),
         LLMResponse(data=structured_package_fixture(package_payload())),
     ]))
     package, response, _ = await generate_package({}, {}, client_factory=lambda **kw: client)
@@ -383,8 +383,8 @@ async def test_package_transport_timeout_uses_existing_retry_without_changing_pr
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("error,attempts", [
-    ("zai request failed (TimeoutError; finish=missing)", 2),
-    ("zai request failed (AuthenticationError; finish=missing)", 1),
+    ("anthropic request failed (TimeoutError; finish=missing)", 2),
+    ("anthropic request failed (AuthenticationError; finish=missing)", 1),
 ])
 async def test_package_transport_recovery_is_bounded_and_skips_permanent_errors(monkeypatch, error, attempts):
     from types import SimpleNamespace

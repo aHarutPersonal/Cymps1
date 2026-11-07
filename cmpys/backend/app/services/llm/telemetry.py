@@ -1,7 +1,9 @@
 """Best-effort persistence for LLM usage and downstream quality outcomes."""
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -35,15 +37,13 @@ class UsageRecord:
 
 def infer_provider(model: str | None) -> str:
     lowered = (model or "").casefold()
-    if settings.llm_provider == "openlux":
-        return "openlux"
-    if settings.llm_provider == "yunwu":
-        return "yunwu"
     if "gemini" in lowered:
         return "gemini"
+    if lowered.startswith("claude"):
+        return "anthropic"
     if lowered.startswith(("gpt-", "o1", "o3", "o4")):
         return "openai"
-    return settings.llm_provider if settings.llm_provider != "dummy" else "unknown"
+    return "unknown"
 
 
 def usage_record_from_response(
@@ -221,3 +221,23 @@ async def record_llm_response(
         ],
         db=db,
     )
+
+
+async def record_stream_usage(*, operation, provider, model, usage, started, success, finish, chars, attempt):
+    """Record one streamed text request; ``usage`` holds LLMResponse token fields.
+
+    Missing usage after an interrupted stream is unknown spend, not a free call.
+    """
+    if not usage and success:
+        return
+    try:
+        async with asyncio.timeout(3):
+            await record_usage_records([UsageRecord(
+                operation=operation, model=model, provider=provider,
+                prompt_tokens=usage.get("prompt_tokens"), completion_tokens=usage.get("completion_tokens"),
+                total_tokens=usage.get("total_tokens"), duration_ms=(time.perf_counter() - started) * 1000,
+                success=success, result_status="streamed" if success else "incomplete",
+                metadata={"finish_reason": finish, "response_chars": chars, "attempt": attempt},
+            )])
+    except Exception as exc:
+        logger.warning("%s usage recording failed (%s)", provider, type(exc).__name__)

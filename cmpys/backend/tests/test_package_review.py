@@ -156,10 +156,10 @@ async def test_exact_recorded_accounting_rejection_reaches_repair_unchanged(reco
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("error", [
-    "zai request failed (TimeoutError; finish=missing)",
-    "OpenLux request failed (APIConnectionError; finish=missing)",
-    "zai request failed (RateLimitError; finish=missing)",
-    "zai request failed (JSONDecodeError; finish=stop)",
+    "anthropic request failed (TimeoutError; finish=missing)",
+    "openai request failed (APIConnectionError; finish=missing)",
+    "anthropic request failed (RateLimitError; finish=missing)",
+    "anthropic request failed (JSONDecodeError; finish=stop)",
 ])
 async def test_transient_or_malformed_review_retries_same_package_once(package, telemetry, error):
     first = LLMResponse(data={}, error=error)
@@ -176,7 +176,7 @@ async def test_transient_or_malformed_review_retries_same_package_once(package, 
 @pytest.mark.asyncio
 async def test_two_unavailable_reviews_stop_and_sanitize_private_error(package, telemetry, caplog):
     private = package.workbook.activities[0].worked_solution
-    errors = [LLMResponse(data={}, error=f"zai request failed (TimeoutError; {private})") for _ in range(2)]
+    errors = [LLMResponse(data={}, error=f"anthropic request failed (TimeoutError; {private})") for _ in range(2)]
     client, factory = client_for(*errors)
     failures, actual, _ = await review_package(package, {}, {}, client_factory=factory)
     assert failures == ["Lesson package review unavailable; contract must not be used"]
@@ -188,7 +188,7 @@ async def test_two_unavailable_reviews_stop_and_sanitize_private_error(package, 
 
 @pytest.mark.asyncio
 async def test_permanent_error_does_not_spend_retry(package, telemetry):
-    response = LLMResponse(data={}, error="zai request failed (AuthenticationError; finish=missing)")
+    response = LLMResponse(data={}, error="anthropic request failed (AuthenticationError; finish=missing)")
     client, factory = client_for(response)
     failures, _, _ = await review_package(package, {}, {}, client_factory=factory)
     assert failures and client.generate_json.await_count == 1 and not telemetry.called

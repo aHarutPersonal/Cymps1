@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from app.core.config import Settings, settings
 from app.services import book_narration as narration
@@ -48,24 +49,35 @@ def gemini_settings(monkeypatch, tmp_path):
     narration._locks.clear()
 
 
-def test_gemini_defaults_are_isolated_from_minimax_model_and_voices(monkeypatch):
-    monkeypatch.delenv("BOOK_NARRATION_PROVIDER", raising=False)
-    config = Settings(
-        _env_file=None, llm_provider="dummy", google_books_secret_id=None,
-        book_narration_tts_model="speech-2.8-hd", book_narration_voice_id="Legacy voice",
-        book_narration_mentor_voice_id="Legacy mentor",
-    )
+def test_gemini_is_the_only_narration_provider_and_default_voices(monkeypatch):
+    for name in ("PROVIDER", "GEMINI_MODEL", "GEMINI_VOICE", "GEMINI_MENTOR_VOICE"):
+        monkeypatch.delenv(f"BOOK_NARRATION_{name}", raising=False)
+    config = Settings(_env_file=None, llm_provider="dummy", google_books_secret_id=None)
     assert config.book_narration_provider == "gemini"
     assert config.book_narration_gemini_model == "gemini-3.8-flash-tts"
     assert config.book_narration_gemini_voice == "Sulafat"
     assert config.book_narration_gemini_mentor_voice == "Gacrux"
+    for retired in ("yunwu", "openlux"):
+        with pytest.raises(ValidationError):
+            Settings(_env_file=None, llm_provider="dummy", google_books_secret_id=None,
+                     book_narration_provider=retired)
+
+
+@pytest.mark.asyncio
+async def test_unsupported_provider_value_is_not_configured(monkeypatch):
+    monkeypatch.setattr(settings, "book_narration_provider", "yunwu")
+    synthesize = AsyncMock()
+    monkeypatch.setattr(narration, "_synthesize_with_gemini", synthesize)
+    with pytest.raises(narration.BookNarrationUnavailableError) as raised:
+        await narration.render_book_narration("Read this.", "expressive")
+    assert raised.value.reason_code == "provider_not_configured"
+    synthesize.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_native_request_keeps_directions_out_of_transcript_and_uses_google_key(monkeypatch):
-    monkeypatch.setattr(settings, "book_narration_api_base_url", "https://legacy.invalid/minimax")
-    monkeypatch.setattr(settings, "book_narration_tts_model", "legacy-model")
-    monkeypatch.setattr(settings, "yunwu_api_key", "DO_NOT_USE_LEGACY_KEY")
+    monkeypatch.setattr(settings, "anthropic_api_key", "DO_NOT_USE_LLM_KEY")
+    monkeypatch.setattr(settings, "openai_api_key", "DO_NOT_USE_LLM_KEY")
     observed = []
     audio = _wav(frames=391680)
 
@@ -83,6 +95,8 @@ async def test_native_request_keeps_directions_out_of_transcript_and_uses_google
     assert str(request.url) == "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash-tts:generateContent"
     assert request.headers["x-goog-api-key"] == "GEMINI_TEST_SECRET"
     assert "authorization" not in request.headers
+    assert b"DO_NOT_USE_LLM_KEY" not in request.content
+    assert all("DO_NOT_USE_LLM_KEY" not in value for value in request.headers.values())
     document = json.loads(request.content)
     assert document["contents"] == [{"role": "user", "parts": [{
         "text": "Read these exact words.",
@@ -243,14 +257,10 @@ async def test_response_body_is_bounded_before_json_decoding(monkeypatch, declar
 
 
 @pytest.mark.asyncio
-async def test_saved_wav_is_reused_without_key_subtitles_or_legacy_configuration(monkeypatch, tmp_path, caplog):
+async def test_saved_wav_is_reused_without_key(monkeypatch, tmp_path, caplog):
     audio = _wav()
     synthesize = AsyncMock(return_value=narration._GeminiSynthesis(audio, 1000))
-    legacy = AsyncMock(side_effect=AssertionError("No fallback allowed"))
-    subtitle = AsyncMock(side_effect=AssertionError("Gemini has no exact timing"))
     monkeypatch.setattr(narration, "_synthesize_with_gemini", synthesize)
-    monkeypatch.setattr(narration, "_synthesize_with_minimax", legacy)
-    monkeypatch.setattr(narration, "_fetch_subtitle_with_retry", subtitle)
     first, concurrent = await asyncio.gather(
         narration.render_book_narration("A saved passage.", "expressive"),
         narration.render_book_narration("A saved passage.", "expressive"),
@@ -262,13 +272,9 @@ async def test_saved_wav_is_reused_without_key_subtitles_or_legacy_configuration
     assert first.voice == "Sulafat" and first.duration_ms == 1000
     assert first.alignment == () and first.alignment_source == first.alignment_granularity == "none"
     monkeypatch.setattr(settings, "gemini_api_key", None)
-    monkeypatch.setattr(settings, "book_narration_tts_model", "changed-legacy-model")
-    monkeypatch.setattr(settings, "book_narration_api_base_url", "https://legacy.invalid")
     cached = await narration.render_book_narration("A saved passage.", "expressive")
     assert cached.cached and cached.audio_url == first.audio_url
     synthesize.assert_awaited_once()
-    legacy.assert_not_awaited()
-    subtitle.assert_not_awaited()
     assert "timing unavailable" not in caplog.text
 
 
@@ -308,8 +314,8 @@ async def test_corrupt_wav_cache_is_rejected(monkeypatch, tmp_path, corruption):
 @pytest.mark.asyncio
 async def test_missing_google_key_never_borrows_other_provider_keys(monkeypatch):
     monkeypatch.setattr(settings, "gemini_api_key", None)
-    monkeypatch.setattr(settings, "yunwu_api_key", "LEGACY_KEY")
-    monkeypatch.setattr(settings, "openlux_api_key", "OTHER_KEY")
+    monkeypatch.setattr(settings, "anthropic_api_key", "LLM_KEY")
+    monkeypatch.setattr(settings, "openai_api_key", "OTHER_KEY")
     synthesis = AsyncMock()
     monkeypatch.setattr(narration, "_synthesize_with_gemini", synthesis)
     with pytest.raises(narration.BookNarrationUnavailableError) as raised:
@@ -319,17 +325,44 @@ async def test_missing_google_key_never_borrows_other_provider_keys(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_legacy_mp3_cache_fingerprint_is_unchanged(monkeypatch):
-    monkeypatch.setattr(settings, "book_narration_provider", "yunwu")
-    monkeypatch.setattr(settings, "yunwu_api_key", "LEGACY_KEY")
-    synthesize = AsyncMock(return_value=narration._MiniMaxSynthesis(b"\xff\xfb" + b"a" * 256, 1000, None))
-    monkeypatch.setattr(narration, "_synthesize_with_minimax", synthesize)
-    text = "Saved legacy passage."
+@pytest.mark.parametrize("profile,voice,style,direction", [
+    ("expressive_narrator", "Sulafat", "expressive",
+     "Warm, expressive audiobook narration with natural emphasis and clear, unhurried pacing."),
+    ("seasoned_mentor", "Gacrux", "grounded",
+     "Calm, grounded audiobook narration with measured pacing and clear emphasis."),
+])
+async def test_saved_gemini_wav_cache_fingerprint_is_unchanged(monkeypatch, profile, voice, style, direction):
+    # Literal values on purpose: changing any of them orphans paid recordings.
+    synthesize = AsyncMock(return_value=narration._GeminiSynthesis(_wav(), 1000))
+    monkeypatch.setattr(narration, "_synthesize_with_gemini", synthesize)
+    text = "Saved Gemini passage."
     expected = hashlib.sha256("\n".join((
-        "minimax-narration-v4", "yunwu", settings.book_narration_api_base_url.rstrip("/"),
-        settings.book_narration_tts_model, "expressive_narrator", settings.book_narration_voice_id,
-        "expressive", "1.0", "0", "provider-subtitle-word-request",
+        "gemini-narration-v1", "gemini", "https://generativelanguage.googleapis.com/v1beta/models",
+        "gemini-3.8-flash-tts", profile, voice, style, direction, "native-wav-no-alignment",
         hashlib.sha256(text.encode()).hexdigest(),
     )).encode()).hexdigest()
-    asset = await narration.render_book_narration(text, "expressive")
-    assert asset.audio_url == f"/media/book_narration_{expected}.mp3"
+    asset = await narration.render_book_narration(f"  {text}\n", style, profile)
+    assert asset.audio_url == f"/media/book_narration_{expected}.wav"
+    await asyncio.gather(*narration._alignment_tasks.values())
+
+
+@pytest.mark.asyncio
+async def test_render_persists_one_recording_and_releases_locks(monkeypatch, tmp_path):
+    text = "Hello 😊 world."
+    synthesize = AsyncMock(return_value=narration._GeminiSynthesis(_wav(), 1000))
+    monkeypatch.setattr(narration, "_synthesize_with_gemini", synthesize)
+    first = await narration.render_book_narration(text, "expressive", "seasoned_mentor")
+    await asyncio.gather(*narration._alignment_tasks.values())
+    second = await narration.render_book_narration(text, "expressive", "seasoned_mentor")
+    assert first.cached is False and first.alignment_pending is True
+    assert second.cached is True and second.alignment_pending is False
+    assert first.narrator_profile == "seasoned_mentor" and first.voice == "Gacrux"
+    assert first.voice_display_name == "Seasoned mentor"
+    assert first.offset_encoding == "utf16"
+    assert first.source_text_hash == second.source_text_hash == hashlib.sha256(text.encode()).hexdigest()
+    assert first.disclosure == second.disclosure == "AI-generated voice; not the real person."
+    synthesize.assert_awaited_once()
+    assert len(list(tmp_path.glob("book_narration_*.wav"))) == 1
+    assert len(list(tmp_path.glob("book_narration_*.json"))) == 1
+    assert not list(tmp_path.glob("*.tmp"))
+    assert narration._locks == {}

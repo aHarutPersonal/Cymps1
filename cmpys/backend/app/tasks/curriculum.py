@@ -71,6 +71,7 @@ from app.services.curriculum.gates import (
 )
 from app.services.curriculum.generation import (
     curriculum_recovery_route,
+    supported_recovery_route,
     GeneratedArtifact,
     configured_tier,
     deterministic_draft_gate,
@@ -112,6 +113,7 @@ from app.services.curriculum.transitions import (
     retry_delay_seconds,
 )
 from app.services.llm import get_llm_client
+from app.services.llm.protocol import DIRECT_PROVIDERS, provider_request_failed
 from app.services.llm.prompt_loader import load_and_render, load_prompt
 from app.services.llm.telemetry import record_llm_response
 from app.services.tavily import is_direct_resource_url
@@ -163,117 +165,44 @@ def _worker_owner() -> str:
     return f"{socket.gethostname()}:{os.getpid()}:{uuid4()}"
 
 
-def _provider_model_for_tier(provider: str, tier: str) -> str | None:
-    fields = {
-        "zai": {"fast": settings.zai_fast_model, "balanced": settings.zai_model, "quality": settings.zai_quality_model},
-        "openlux": {
-            "fast": settings.openlux_fast_model,
-            "balanced": settings.openlux_model,
-            "quality": settings.openlux_quality_model,
-        },
-        "openai": {
-            "fast": settings.openai_fast_model,
-            "balanced": settings.openai_model,
-            "quality": settings.openai_quality_model,
-        },
-        "gemini": {
-            "fast": settings.gemini_fast_model,
-            "balanced": settings.gemini_model,
-            "quality": settings.gemini_quality_model,
-        },
-        "yunwu": {
-            "fast": settings.yunwu_fast_model,
-            "balanced": settings.yunwu_model,
-            "quality": settings.yunwu_quality_model,
-        },
-    }
-    return fields.get(provider, {}).get(tier)
+def _gemini_model_for_tier(tier: str) -> str | None:
+    return {
+        "fast": settings.gemini_fast_model,
+        "balanced": settings.gemini_model,
+        "quality": settings.gemini_quality_model,
+    }.get(tier)
 
 
 def _resolved_llm_route(tier: str) -> dict[str, Any]:
     """Describe the exact side-effect-free route used by ``get_llm_client``."""
+    from app.services.llm.client import provider_configured
+    from app.services.llm.routes import route_for
 
-    provider = settings.llm_provider
     route: dict[str, Any] = {
-        "configured_provider": provider,
+        "configured_provider": settings.llm_provider,
         "tier": tier,
         "primary": {"provider": "dummy", "model": "deterministic-fixtures"},
         "fallback": None,
         "resolution": "dummy_or_unknown_provider",
     }
-    if provider == "zai":
-        if settings.zai_api_key:
-            route["primary"] = {
-                "provider": "zai", "model": _provider_model_for_tier("zai", tier),
-                "endpoint_fingerprint": sha256_json({"base_url": settings.zai_base_url.rstrip("/")}),
-            }
-            route["resolution"] = "configured_primary"
-        else:
-            route["resolution"] = "configured_primary_unavailable"
+    if settings.llm_provider != "routed":
         return route
-    if provider == "openlux":
-        if settings.openlux_api_key:
-            route["primary"] = {
-                "provider": "openlux",
-                "model": _provider_model_for_tier("openlux", tier),
-                "endpoint_fingerprint": sha256_json(
-                    {"base_url": settings.openlux_base_url.rstrip("/")}
-                ),
-            }
-            route["resolution"] = "configured_primary"
-        else:
-            route["resolution"] = "configured_primary_unavailable"
-        return route
-    if provider == "openai":
-        if settings.openai_api_key:
-            route["primary"] = {
-                "provider": "openai",
-                "model": _provider_model_for_tier("openai", tier),
-            }
-            route["resolution"] = "configured_primary"
-        else:
-            route["resolution"] = "configured_primary_unavailable"
-        return route
-    if provider == "gemini":
-        if settings.gemini_api_key:
-            route["primary"] = {
-                "provider": "gemini",
-                "model": _provider_model_for_tier("gemini", tier),
-            }
-            route["resolution"] = "configured_primary"
-        else:
-            route["resolution"] = "configured_primary_unavailable"
-        return route
-    if provider != "yunwu":
-        return route
-
-    fallback = None
-    if settings.yunwu_fallback_enabled and settings.gemini_api_key:
-        fallback = {
-            "provider": "gemini",
-            "model": _provider_model_for_tier("gemini", tier),
-        }
-    if settings.yunwu_api_key:
-        route["primary"] = {
-            "provider": "yunwu",
-            "model": _provider_model_for_tier("yunwu", tier),
-            # Detect a gateway route change without persisting a potentially
-            # private endpoint in curriculum provenance.
-            "endpoint_fingerprint": sha256_json(
-                {"base_url": settings.yunwu_base_url.rstrip("/")}
-            ),
-        }
-        route["fallback"] = fallback
-        route["resolution"] = (
-            "configured_primary_with_fallback"
-            if fallback is not None
-            else "configured_primary"
-        )
-    elif fallback is not None:
-        route["primary"] = fallback
+    # One model serves every tier of a direct provider; the tier sets effort.
+    primary, backup = route_for("curriculum_module_draft")
+    models = {"anthropic": settings.anthropic_model, "openai": settings.openai_model}
+    available = [{"provider": name, "model": models[name]}
+                 for name in (primary, backup) if provider_configured(name)]
+    if not available:
+        route["primary"] = {"provider": primary, "model": models[primary]}
+        route["resolution"] = "configured_primary_unavailable"
+    elif available[0]["provider"] != primary:
+        route["primary"] = available[0]
         route["resolution"] = "configured_primary_unavailable_using_fallback"
     else:
-        route["resolution"] = "configured_primary_unavailable"
+        route["primary"] = available[0]
+        route["fallback"] = available[1] if len(available) > 1 else None
+        route["resolution"] = ("configured_primary_with_fallback" if route["fallback"]
+                               else "configured_primary")
     return route
 
 
@@ -285,7 +214,7 @@ def _grounded_search_route(tier: str) -> dict[str, Any]:
         "tier": tier,
         "primary": {
             "provider": "gemini",
-            "model": _provider_model_for_tier("gemini", tier),
+            "model": _gemini_model_for_tier(tier),
         },
         "fallback": None,
         "credential_available": bool(settings.gemini_api_key),
@@ -733,10 +662,13 @@ def _rechecked_writer_provenance(checkpoints: dict, recheck: dict) -> str:
 
 
 def _complete_recovery_usage(model_usage: dict[str, Any]) -> tuple[int, int] | None:
-    """Only single-call, complete native recovery responses can release a reserve."""
+    """Only single-call, complete native responses can release a reserve.
+
+    The direct provider APIs report the billed token counts themselves.
+    """
     if "provider" in model_usage:
         tokens = int(model_usage.get("total_tokens") or 0)
-        return (1, tokens) if model_usage["provider"] == "gemini" and tokens > 0 else None
+        return (1, tokens) if model_usage["provider"] in DIRECT_PROVIDERS and tokens > 0 else None
     children = [_complete_recovery_usage(value) for value in model_usage.values() if isinstance(value, dict)]
     if not children or any(value is None for value in children):
         return None
@@ -2022,10 +1954,12 @@ def _retryable_error(exc: Exception, stage: PipelineStage) -> bool:
         # existing bounded job-attempt and cost-budget fences instead of making
         # a resumable stage terminal after its first response.
         "invalid json in response",
-        # A gateway stream can fail after successful discovery/curation. The
+        # A provider stream can fail after successful discovery/curation. The
         # durable substage checkpoint now allows a bounded verification retry
         # without charging for the completed research again.
-        "openlux request failed (apierror; finish=missing)",
+        "request failed (incompletestreamerror; finish=missing)",
+        "request failed (apierror; stream)",
+        "request failed (internalservererror;",
     )
     if any(marker in text for marker in transient_markers):
         return True
@@ -2056,22 +1990,26 @@ async def _record_stage_failure(
         job.attempts = min(job.attempts + 1, job.max_attempts)
         checkpoints = dict(job.checkpoints_json or {})
         policy = checkpoints.get("generation_recovery_policy") or {}
+        # An operator policy may move a stage to the other direct provider
+        # after its primary failed: {"provider", "model", "allowed_after": "primary_failure"}.
+        failed_provider = next((name for name in DIRECT_PROVIDERS
+                                if str(error).startswith(f"{name} request failed (")), None)
         recovery_eligible = (
             stage not in {PipelineStage.SOURCE_RESEARCH, PipelineStage.TAXONOMY, PipelineStage.PUBLISH}
-            and any(str(error).startswith(f"OpenLux request failed ({kind};") for kind in (
+            and failed_provider is not None
+            and provider_request_failed(str(error), (
                 "TimeoutError", "APITimeoutError", "APIConnectionError", "ConnectionError",
                 "RateLimitError", "InternalServerError", "APIError", "JSONDecodeError", "ValueError",
+                "IncompleteStreamError",
             ))
-            and policy.get("provider") == "gemini"
-            and policy.get("model") == settings.gemini_quality_model
-            and policy.get("allowed_after") == "openlux_failure"
-            and bool(settings.gemini_api_key)
+            and policy.get("allowed_after") == "primary_failure"
+            and supported_recovery_route({**policy, "from_provider": failed_provider})
             and job.attempts < job.max_attempts
         )
         if recovery_eligible:
             routes = dict(checkpoints.get("generation_recovery_routes") or {})
-            route = {"provider": "gemini", "model": settings.gemini_quality_model,
-                     "from_provider": "openlux", "reason": str(error)[:1000],
+            route = {"provider": policy["provider"], "model": policy["model"],
+                     "from_provider": failed_provider, "reason": str(error)[:1000],
                      "failed_stage": stage.value, "recorded_at": now.isoformat()}
             routes.setdefault(stage.value, {"route": route, "hash": sha256_json(route)})
             job.checkpoints_json = {**checkpoints, "generation_recovery_routes": routes}
@@ -3630,7 +3568,8 @@ async def _curate_mentor_evidence_async(
             },
         )
     tier = configured_tier(settings.curriculum_review_model_tier, default="quality")
-    client = get_llm_client(tier=tier, timeout=90, max_tokens=8000, temperature=0.0)
+    client = get_llm_client(operation="curriculum_mentor_claim_curation", tier=tier, timeout=90,
+                            max_tokens=8000)
     validated, response = await client.generate_and_validate(
         system_prompt=load_prompt("curriculum_writer_system"),
         user_prompt=load_and_render(
@@ -3691,7 +3630,8 @@ async def _curate_mentor_evidence_async(
                 "current_corpus_hash": live_corpus_hash,
             },
         )
-    verifier = get_llm_client(tier=tier, timeout=90, max_tokens=8000, temperature=0.0)
+    verifier = get_llm_client(operation="curriculum_mentor_claim_verification", tier=tier, timeout=90,
+                              max_tokens=8000)
     verified_payload, verification_response = await verifier.generate_and_validate(
         system_prompt=load_prompt("curriculum_writer_system"),
         user_prompt=load_and_render(

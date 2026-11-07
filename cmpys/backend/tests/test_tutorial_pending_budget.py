@@ -1,5 +1,6 @@
 """Remaining mission capacity scopes unpublished tutorials before paid drafting."""
 import copy
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -44,7 +45,7 @@ def test_reserves_capacity_for_every_concurrent_pending_writer_and_fails_closed(
 @pytest.mark.parametrize("reviewed_minutes,accepted", [(2, True), (3, False)])
 async def test_remaining_budget_reaches_package_writer_review_and_invalidates_oversized_cache(
         monkeypatch, reviewed_minutes, accepted):
-    from app.services.planning.lesson_review import LessonReview, ReviewEvidencePatch
+    from app.services.planning.lesson_review import LessonReview, ReviewEvidencePatch, public_section_inventory
     from app.services.planning.lesson_writer import generate_lesson_sections as real_writer
 
     package = short_package()
@@ -102,7 +103,30 @@ async def test_remaining_budget_reaches_package_writer_review_and_invalidates_ov
             assert issubclass(kwargs["output_model"], LessonReview)
             # Real independent-review validation must reject honest work that
             # exceeds capacity; mocked provider acceptance cannot waive it.
-            return LLMResponse(data=_review(practice_minutes=reviewed_minutes), finish_reason="stop")
+            actual_sections = public_section_inventory(json.loads(kwargs["user_prompt"])["lesson"])
+            reasoning = {
+                "why_this_matters": "Synthetic framing has no case assertions; semantic approval is mocked for this workload test.",
+                "core_framework": "The comparison distinguishes missing scope/evidence from explicit scope/evidence, matching the check's bounded claim.",
+                "worked_example": "Steps name the assertion, supplied evidence and scope limit, consistently applying the comparison's criteria.",
+                "failure_modes": "Placeholder failure-mode prose introduces no conflicting rule; substantive quality is mocked in this timing fixture.",
+                "check_your_understanding": "The selected team-and-quarter claim has an explicit scope; the universal alternative is unbounded.",
+                "references": "Placeholder reference prose attributes no facts or quotations; this is an offline timing fixture.",
+            }
+            anchors = {
+                "core_framework": "Scope is explicit",
+                "worked_example": "Name what you assert and for whom it holds.",
+                "check_your_understanding": "Which claim is bounded?",
+            }
+            audits = [{"section_id": name, "source_quote": anchors.get(name, text[:100]),
+                       "domain_valid": True, "consistent_with_core": True, "reason": reasoning[name]}
+                      for name, text in actual_sections.items()]
+            return LLMResponse(data=_review(practice_minutes=reviewed_minutes,
+                public_sections=audits, public_check_options=[
+                    {"option_id": "check1.option1", "defensible": False,
+                     "reason": "The universal claim has no bounded scope."},
+                    {"option_id": "check1.option2", "defensible": True,
+                     "reason": "The claim is limited to this team and quarter."},
+                ]), finish_reason="stop")
 
     async def no_shortening(*args, **kwargs):
         raise AssertionError("Already published work must not need shortening")

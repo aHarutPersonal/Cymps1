@@ -12,7 +12,10 @@ def test_writer_contract_states_one_final_total_row_and_product_rows():
     assert 'Only the final line starts with "=", and nothing follows its number' in contract
     assert "inputs and factors such as base or height leave the number empty" in contract
     # Fix 7 (29 Oct, round 2): labels hold no numerals, so "÷ 2 (half)" became "Half of it".
-    assert '"Base × height | 24 | 6 × 4"' in contract and '"Half of it | −12 |' in contract
+    # Geometry round 3 (6 Nov): reviewers read "Half of it | −12" as a negative area, so the
+    # product goes in the note and the half is the valued row.
+    assert '"Base × height | | 6 × 4 = 24"' in contract and '"Half of it | 12 | <why>"' in contract
+    assert "halving is never a negative row" in contract and "−12" not in contract
     assert "With two results, total the main one and give the other its own valued row, the chart or prose" in contract
     assert 'never a second "=" row or a second steps fence' in contract
     assert "A formula fence holds one equation" in contract

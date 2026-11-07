@@ -1,4 +1,5 @@
 """One-ahead window: completion trigger, enqueue paths and the detailed response contract."""
+import copy
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -21,11 +22,16 @@ DONE_AT = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
 
 
 def _details(ready=("step_1", "step_2"), count=4):
+    from app.services.planning.lesson_package import provenance, validation_identity
+    from tests.test_short_tutorial_pipeline import short_package
     raw = outline(count)
     steps = [complete_step(step) if step["id"] in ready else step for step in raw["steps"]]
+    package = short_package()
     return {**raw, "steps": steps, "_generation": {
         "status": "partial", "job_id": JOB, "ready_step_ids": list(ready),
-        "outline": {"lesson_format": "tutorial_v1"},
+        "outline": {"lesson_format": "tutorial_v1"}, "lesson_package_version": 1,
+        "validation_identity": validation_identity(),
+        "lesson_validation": {step["id"]: provenance(step, package) for step in steps if step["id"] in ready},
     }}
 
 
@@ -395,3 +401,55 @@ async def test_regenerate_on_a_parked_mission_reuses_its_job():
         response = await plans.regenerate_item_details("mission-1", db, SimpleNamespace(id="user-1"))
     assert response.job_id == ""  # Window ready: nothing to generate, no new artifact.
     publish.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("gate_change", [None, "review_version", "generation_contract_hash", "content_hash"])
+async def test_normal_retry_revalidates_stale_parked_window_in_the_same_artifact(monkeypatch, gate_change):
+    from app.services.planning.lesson_package import current_package_approval
+
+    item = _item(_details(ready=("step_1", "step_2", "step_3")))
+    generation = item.details_json["_generation"]
+    if gate_change == "content_hash":
+        generation["lesson_validation"]["step_2"]["content_hash"] = "f" * 64
+    elif gate_change:
+        value = generation["validation_identity"][gate_change] - 1 if gate_change == "review_version" else "0" * 64
+        generation["validation_identity"][gate_change] = value
+        for approval in generation["lesson_validation"].values():
+            approval[gate_change] = value
+    before = copy.deepcopy(item.details_json)
+    assert current_package_approval(item.details_json) is (gate_change is None)
+    assert plan_tasks._historically_published_step_ids(item.details_json) == (
+        frozenset() if gate_change == "content_hash" else {"step_1", "step_2", "step_3"})
+    db, updates = _ensure_db(item, _job())
+    db.add = MagicMock()
+    completed = AsyncMock(return_value={"step_1"})
+    monkeypatch.setattr(plan_tasks, "_learner_completed_tutorial_ids", completed)
+    monkeypatch.setattr(plans, "_get_item_for_user", AsyncMock(return_value=item))
+    monkeypatch.setattr(plans, "_latest_active_detail_job", AsyncMock(return_value=None))
+    # Exercise the normal route, actual parked lookup and actual window helper.
+    # Only persistence and queue publication are fakes; no broker can be reached.
+    with patch("app.tasks.plans.regenerate_plan_item_details.apply_async") as publish:
+        result = await plans.regenerate_item_details("mission-1", db, SimpleNamespace(id="user-1"))
+    assert item.details_json == before  # Completed prose, approvals and pointer are retained.
+    completed.assert_awaited_once()
+    db.add.assert_not_called()  # No new artifact/job or completion row is manufactured.
+    if gate_change:
+        assert str(result.job_id) == JOB
+        assert len(updates) == 1
+        assert updates[0]["status"] == "queued" and updates[0]["step"] == "user_priority"
+        assert (updates[0]["status_1"], updates[0]["step_1"]) == ("completed", "waiting_for_learner")
+        publish.assert_called_once_with(args=[JOB], queue="default")
+        assert not current_package_approval(item.details_json)  # Enqueue never grants approval.
+        # Once the worker claims that job, a repeated normal retry reuses it.
+        active = _job(status="running", step="generating_lessons", age=timedelta())
+        monkeypatch.setattr(plans, "_latest_active_detail_job", AsyncMock(return_value=active))
+        with patch("app.tasks.plans.regenerate_plan_item_details.apply_async") as duplicate_publish:
+            repeated = await plans.regenerate_item_details("mission-1", db, SimpleNamespace(id="user-1"))
+        assert str(repeated.job_id) == JOB and len(updates) == 1
+        assert item.details_json == before
+        duplicate_publish.assert_not_called()
+        db.add.assert_not_called()
+    else:
+        assert result.job_id == "" and updates == []
+        publish.assert_not_called()

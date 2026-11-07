@@ -1,0 +1,143 @@
+{
+  "package": {
+    "teaching_cases": [
+      {
+        "id": "bus_route_case",
+        "assumptions": "Original fictional example. A student essay opens: 'Our town's new bus route.' That phrase names a subject but asserts nothing — no result could show it wrong, so it is a topic. The same student later writes: 'The new riverside bus route increased Saturday ridership among weekend shoppers.' This can fail: if Saturday ridership on that route stayed flat after it opened, or rose no more than on routes without the change, the sentence is wrong. Worked analysis: a claim is a statement someone could disprove with a result; a topic is a label waiting for an assertion. To test any sentence, ask 'what finding would count against this?' If you can name one, it is a claim; if nothing counts because nothing is asserted, it is a topic. Applied here: 'Our town's new bus route' — no asserted outcome, nothing to disprove, topic. 'The new riverside bus route increased Saturday ridership among weekend shoppers' — a flat or unchanged Saturday count would defeat it, so it is a testable claim.",
+        "data": [],
+        "results": []
+      }
+    ],
+    "workbook": {
+      "title": "Separate topic from claim",
+      "activities": [
+        {
+          "id": "guided_practice",
+          "title": "Label topic or claim",
+          "kind": "practice",
+          "instructions": "Original fictional example. A student is drafting a persuasive essay about the town swimming pool and jotting notes. The statements below come from those notes.\n\n\"The town swimming pool.\"\n\n\"The town swimming pool's free morning sessions raised summer attendance among local families.\"\n\n\"Pool maintenance costs and admission fees.\"\n\n\"Free morning sessions cost the town money it recovers through nearby café sales.\"\n\n\"Local families and weekday workers.\"\n\nYour task: for each statement, label it topic or claim, and give a one-line reason for each label. For every statement you label a claim, your reason must name the specific result or finding that could prove it wrong. For every statement you label a topic, your reason should note that nothing is asserted, so no result could disprove it. If a phrasing seems genuinely borderline to you, give your best label and say why in your reason. Refer to each statement by quoting its opening words.\n\nThe rule from the reading: a claim is a statement someone could disprove with a result; a topic is a label waiting for an assertion.",
+          "fields": [
+            {
+              "id": "labels_reasons",
+              "label": "Your label and one-line reason for each statement, identified by its opening words",
+              "kind": "text",
+              "criteria": [
+                "Labels \"The town swimming pool.\", \"Pool maintenance costs and admission fees.\" and \"Local families and weekday workers.\" as topics, or gives a defensible borderline reason if relabelled",
+                "Labels the free-morning-sessions attendance statement and the café-sales statement as claims, or gives a defensible borderline reason if relabelled",
+                "Gives a reason for each claim label naming a specific result that could genuinely prove it wrong, such as attendance among local families not rising with the free sessions or café sales not recovering the sessions' cost; another valid disconfirming result is equally acceptable",
+                "Gives a reason for each topic label noting that nothing is asserted, so no result could disprove it",
+                "Keeps each reason to one line without adding invented statistics"
+              ]
+            }
+          ],
+          "hint": "Ask of each statement: what finding would count against it? If you can name one, it is a claim; if nothing could count because nothing is asserted, it is a topic.",
+          "worked_solution": "Your label and one-line reason for each statement, identified by its opening words\n\nModel answer: \"The town swimming pool.\" is a topic — it names the pool but asserts nothing, so no result could count against it. The statement that free morning sessions raised summer attendance among local families is a claim — if that attendance stayed flat after the sessions began, or rose no more than in places without them, the statement would be wrong. \"Pool maintenance costs and admission fees.\" is a topic — it lists two subjects without saying anything about them, so nothing could disprove it. The statement that the sessions cost money recovered through nearby café sales is a claim — if those café sales did not recover the sessions' cost, the statement would fail. \"Local families and weekday workers.\" is a topic — it names two groups without asserting anything about either, so no finding could show it wrong. Accept reasoned alternatives: for example, a learner who reads the café-sales statement as overstated because it implies full recovery may still label it a claim if the reason names the disconfirming result; the skill being checked is that every reason names what could prove the statement wrong, or notes that nothing is asserted.",
+          "minutes_min": 1,
+          "minutes_max": 2
+        },
+        {
+          "id": "independent_transfer",
+          "title": "Find the real claim in a newsletter",
+          "kind": "transfer",
+          "instructions": "Original fictional newsletter submission. A neighbor submits this paragraph to a street newsletter: \"The community garden matters to our street. The garden is a lovely place on a Saturday morning. Garden members collected more compost from the council depot this season than last season. Our newsletter should have a regular garden column.\"\n\nEach sentence is grammatically complete, but only some assert something a result could disprove. \"The garden is a lovely place\" states a personal reaction with no agreed measure that could count against it, and \"should have a regular garden column\" recommends an action rather than predicting an outcome. Focus on the two remaining candidates: \"The community garden matters to our street\" and the compost sentence.\n\nYour task: identify which single sentence is the strongest testable claim, then in your own words write one line naming the result that could prove that sentence wrong, and one line explaining why the other candidate is a topic even though it reads as a full sentence.",
+          "fields": [
+            {
+              "id": "claim_choice",
+              "label": "Which sentence is the strongest testable claim, what result could prove it wrong, and why is the other candidate a topic?",
+              "kind": "text",
+              "criteria": [
+                "Identifies the compost sentence as the strongest testable claim, quoting or clearly describing it",
+                "Names a specific result that would defeat it, such as depot records showing the garden collected the same or less than the previous season",
+                "Explains that 'The community garden matters to our street' is a topic because no stated finding or measure could count against it, leaving nothing asserted to disprove",
+                "Uses only the supplied sentences without inventing statistics or outside facts"
+              ]
+            }
+          ],
+          "hint": "For each candidate, try to name a finding that would make it false. If no finding could count against it because nothing is being asserted about an outcome, it is a topic.",
+          "worked_solution": "Which sentence is the strongest testable claim, what result could prove it wrong, and why is the other candidate a topic?\n\nThe compost sentence is the strongest testable claim because it asserts a comparable outcome across two seasons: a record from the council depot showing the garden collected the same amount or less this season than last season would prove it wrong. \"The community garden matters to our street\" reads as a full sentence, but \"matters\" names no outcome and no measure; any finding could be reinterpreted as mattering or not, so nothing counts against it and nothing is asserted to disprove — it is a topic dressed as a sentence. Accept a reasoned alternative only if it names a defensible disconfirming result for the chosen sentence and shows why the compost sentence fails that test on the stated failure condition.",
+          "minutes_min": 2,
+          "minutes_max": 3
+        }
+      ]
+    }
+  },
+  "recorded_verdict": {
+    "acceptable": true,
+    "issues": [],
+    "choice_audits": [],
+    "text_audits": [
+      {
+        "target": "practice.guided_practice.labels_reasons",
+        "alternative_response": "'The town swimming pool' — topic: names the pool, asserts nothing, so no result counts. 'Free morning sessions raised summer attendance' — claim: if a survey of local families showed no rise in attendance after sessions began, it fails. 'Pool maintenance costs and admission fees' — topic: lists subjects without asserting anything. 'Cost the town money recovered through café sales' — claim: if nearby café revenue after sessions fell short of session costs, it fails. 'Local families and weekday workers' — topic: names two groups, no assertion.",
+        "criteria": [
+          {
+            "criterion_index": 0,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Three statements assert nothing; borderline relabelling is explicitly permitted."
+          },
+          {
+            "criterion_index": 1,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Both remaining statements assert disprovable outcomes; alternative labels need reasoned justification only."
+          },
+          {
+            "criterion_index": 2,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Any genuine disconfirming result is accepted, not only the listed examples."
+          },
+          {
+            "criterion_index": 3,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Applies to statements the learner labels topics; borderline relabelling excused via criterion 0."
+          },
+          {
+            "criterion_index": 4,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "One-line reasons without invented statistics match the stated task; alternative satisfies it."
+          }
+        ],
+        "model_answer_valid": true,
+        "model_answer_reason": "Model answer labels all five statements correctly and names disconfirming results for both claims, matching the public rule.",
+        "requires_activity_repair": false
+      },
+      {
+        "target": "practice.independent_transfer.claim_choice",
+        "alternative_response": "The compost sentence is the strongest testable claim: members' collection logs or depot records showing the garden collected the same or less this season than last would prove it wrong. 'The community garden matters to our street' is a topic because 'matters' names no outcome or measure, so no stated finding could count against it.",
+        "criteria": [
+          {
+            "criterion_index": 0,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Compost sentence is the clearly strongest candidate under the taught rule; quoting or describing both accepted."
+          },
+          {
+            "criterion_index": 1,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Accepts any specific defeating result, not only depot records."
+          },
+          {
+            "criterion_index": 2,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Explaining 'matters' lacks a stated measure is exactly the required analysis; alternative phrasings accepted."
+          },
+          {
+            "criterion_index": 3,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Alternative uses only supplied sentences and no invented statistics."
+          }
+        ],
+        "model_answer_valid": true,
+        "model_answer_reason": "Model answer identifies the compost sentence, names depot records as disconfirming evidence, and explains why 'matters' is a topic.",
+        "requires_activity_repair": false
+      }
+    ]
+  }
+}

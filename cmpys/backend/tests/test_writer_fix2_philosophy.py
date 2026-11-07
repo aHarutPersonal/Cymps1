@@ -163,7 +163,8 @@ def test_verdict_row_without_values_becomes_an_ordinary_row():
 
 def test_verdict_draft_now_passes_the_writer_for_a_package_without_numbers():
     context = short_package().writer_context()
-    assert context["teaching_cases"] == []
+    assert context["teaching_cases"]
+    assert all(not case["data"] and not case["results"] for case in context["teaching_cases"])
     for worked in (VERDICT_DRAFT["worked_example"], WINS_WORKED):
         for minutes in (6, None):
             result, issues = validate(worked, context, minutes)

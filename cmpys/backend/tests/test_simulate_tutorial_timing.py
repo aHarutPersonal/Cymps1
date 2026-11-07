@@ -1,14 +1,21 @@
 """The offline timing harness drives the real tutorial pipeline end to end."""
 import json
 
+import pytest
+
 from scripts import simulate_tutorial_timing as harness
+from tests.phase0_fixtures import model_binder_mechanics  # noqa: F401
 
 
+# Phase 0.4: exercises the model binder; keep earlier server bindings.
+@pytest.mark.usefixtures("model_binder_mechanics")
 def test_harness_publishes_both_scenarios_with_the_overlapped_critical_path(tmp_path):
     from app.services.llm import client, telemetry
     originals = (client.get_llm_client, telemetry.record_llm_response)
     out = tmp_path / "timing.json"
-    assert harness.main(["--scenario", "all", "--runs", "1", "--time-scale", "0.01", "--out", str(out)]) == 0
+    # Preserve a 100 ms writer/preflight gap: at 0.01 it is only 10 ms,
+    # which local payload processing can consume and change the inferred path.
+    assert harness.main(["--scenario", "all", "--runs", "1", "--time-scale", "0.1", "--out", str(out)]) == 0
     assert (client.get_llm_client, telemetry.record_llm_response) == originals  # Isolation is undone.
     result = json.loads(out.read_text())
     clean, rejected = result["runs"]
@@ -42,3 +49,54 @@ def test_stage_detection_uses_output_model_and_calling_module():
     assert stage("ReviewEvidencePatch", ["app.services.planning.lesson_review"]) == "review_evidence_repair"
     assert stage("SomethingNew", ["app.tasks.plans"]).startswith("unclassified:")
     assert harness.latency_for("package_repair") == harness.LATENCIES["repair"]
+
+
+def test_canned_preflight_checks_full_package_and_only_expected_repair():
+    import copy
+    import pytest
+
+    data = {
+        "choice_audit_inventory": {}, "text_audit_inventory": {},
+        "teaching_case_audit_inventory": ["teaching.example"],
+        "package": harness._expected_preflight_package(repaired=False),
+        "numerical_evidence": [
+            {"target": "teaching_cases[example].results[double]", "value": 20},
+            {"target": "workbook.activities[guided].fields[double]", "value": 24},
+            {"target": "workbook.activities[transfer].fields[double]", "value": 26},
+        ],
+    }
+    harness._validate_preflight_fixture(data, repaired=False)
+    changed = copy.deepcopy(data)
+    changed["package"]["teaching_cases"][0]["results"][0]["unit"] = "cm"
+    with pytest.raises(AssertionError):
+        harness._validate_preflight_fixture(changed, repaired=False)
+    changed = copy.deepcopy(data)
+    changed["package"]["workbook"]["activities"][1]["fields"][0]["expression"] = "amount * 3"
+    with pytest.raises(AssertionError):
+        harness._validate_preflight_fixture(changed, repaired=False)
+    repaired = copy.deepcopy(data)
+    repaired["package"] = harness._expected_preflight_package(repaired=True)
+    harness._validate_preflight_fixture(repaired, repaired=True)
+    with pytest.raises(AssertionError):
+        harness._validate_preflight_fixture(data, repaired=True)
+    repaired["package"]["workbook"]["activities"][1]["worked_solution"] += " wrong"
+    with pytest.raises(AssertionError):
+        harness._validate_preflight_fixture(repaired, repaired=True)
+
+
+def test_canned_public_review_rejects_altered_sections_and_answer_keys():
+    import copy
+    import pytest
+
+    sections, checks = copy.deepcopy(harness._EXPECTED_SECTIONS), copy.deepcopy(harness._EXPECTED_CHECKS)
+    harness._validate_public_fixture(sections, checks)
+    changed_sections = copy.deepcopy(sections)
+    changed_sections["worked_example"] = changed_sections["worked_example"].replace("20.0", "30.0")
+    with pytest.raises(AssertionError):
+        harness._validate_public_fixture(changed_sections, checks)
+    changed_checks = copy.deepcopy(checks)
+    changed_checks[0]["options"][0]["selected"] = True
+    changed_checks[0]["options"][1]["selected"] = False
+    with pytest.raises(AssertionError):
+        harness._validate_public_fixture(sections, changed_checks)
+    assert harness._OPTION_TRUTH == {"check1.option1": False, "check1.option2": True}

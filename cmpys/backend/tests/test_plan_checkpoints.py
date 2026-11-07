@@ -30,7 +30,7 @@ async def test_backbone_survives_failed_week_and_next_retry_reuses_both(monkeypa
     async def backbone(**kwargs):
         calls['backbone'] += 1
         value = _backbone()
-        await kwargs['candidate_callback'](value, SimpleNamespace(provider='openlux', model='test'), [])
+        await kwargs['candidate_callback'](value, SimpleNamespace(provider='anthropic', model='test'), [])
         return value
     async def week(**kwargs):
         calls['week'] += 1
@@ -56,13 +56,13 @@ async def test_targeted_repair_replaces_only_invalid_week_and_runs_once(monkeypa
     bad.weeks[9].tasks.insert(1, PlanBackboneTask(title='Extra mission', type='course', estimated_hours=2,
                                                success_metric='One checked example exists.'))
     store = PlanCheckpointStore(None, 'test', None)
-    await store.put('backbone', bad.model_dump(mode='json'), provider='openlux', repair_attempts=0)
+    await store.put('backbone', bad.model_dump(mode='json'), provider='anthropic', repair_attempts=0)
     calls = []
     class Client:
         model = 'test'
         async def generate_and_validate(self, **kwargs):
             calls.append(kwargs)
-            return generator.BackboneWeekRepair(weeks=[original.weeks[9]]), SimpleNamespace(provider='openlux', error=None)
+            return generator.BackboneWeekRepair(weeks=[original.weeks[9]]), SimpleNamespace(provider='anthropic', error=None)
     monkeypatch.setattr(generator, '_plan_client', lambda **kwargs: Client())
     async def telemetry(**kwargs): pass
     monkeypatch.setattr(generator, 'record_llm_response', telemetry)
@@ -83,13 +83,13 @@ async def test_repair_cannot_change_other_weeks_or_repeat_after_failure(monkeypa
     original = _backbone(); bad = original.model_copy(deep=True)
     bad.weeks[9].tasks[0].estimated_hours = 7
     store = PlanCheckpointStore(None, 'test', None)
-    await store.put('backbone', bad.model_dump(mode='json'), provider='openlux', repair_attempts=0)
+    await store.put('backbone', bad.model_dump(mode='json'), provider='anthropic', repair_attempts=0)
     calls = []
     class Client:
         model = 'test'
         async def generate_and_validate(self, **kwargs):
             calls.append(kwargs)
-            return generator.BackboneWeekRepair(weeks=[original.weeks[8]]), SimpleNamespace(provider='openlux', error=None)
+            return generator.BackboneWeekRepair(weeks=[original.weeks[8]]), SimpleNamespace(provider='anthropic', error=None)
     monkeypatch.setattr(generator, '_plan_client', lambda **kwargs: Client())
     async def telemetry(**kwargs): pass
     monkeypatch.setattr(generator, 'record_llm_response', telemetry)
@@ -106,26 +106,34 @@ async def test_repair_cannot_change_other_weeks_or_repeat_after_failure(monkeypa
 @pytest.mark.asyncio
 async def test_operator_recovery_requires_same_learner_and_actual_outage(monkeypatch):
     from datetime import datetime, timezone
+    from app.core.config import settings
     from app.tasks.plans import _validated_plan_recovery
     from app.models.plan_job import PlanGenerationJob
     from app.services.curriculum.hashing import sha256_json
-    from app.services.llm import recovery
+    # The real recovery check: Haiku (the plan route's primary) timed out and
+    # luna, the other direct model, is configured.
+    monkeypatch.setattr(settings, 'llm_provider', 'routed')
+    monkeypatch.setattr(settings, 'anthropic_api_key', 'fake-anthropic-key')
+    monkeypatch.setattr(settings, 'openai_api_key', 'fake-openai-key')
     proof = {'source_job_id': 'prior', 'source_usage_id': 'usage', 'catalog_only': True}
     job = SimpleNamespace(user_id='owner', session_id='intake', idol_id='mentor',
         generation_checkpoint_json={'operator_recovery': {'proof': proof, 'hash': sha256_json(proof)}})
     prior = SimpleNamespace(id='prior', user_id='owner', session_id='intake', idol_id='mentor')
-    event = SimpleNamespace(provider='openlux', success=False, created_at=datetime.now(timezone.utc),
-        metadata_json={'plan_job_id': 'prior', 'contract_issues': ['OpenLux request failed (TimeoutError; finish=missing)']})
+    event = SimpleNamespace(provider='anthropic', success=False, created_at=datetime.now(timezone.utc),
+        metadata_json={'plan_job_id': 'prior', 'contract_issues': ['anthropic request failed (TimeoutError; deadline)']})
     class DB:
         async def get(self, model, key): return prior if model is PlanGenerationJob else event
-    monkeypatch.setattr(recovery, 'operational_recovery_client',
-        lambda response, **kwargs: object() if 'TimeoutError' in response.error else None)
     response = await _validated_plan_recovery(DB(), job)
-    assert response.provider == 'openlux'
+    assert response.provider == 'anthropic'
     prior.user_id = 'someone-else'
     with pytest.raises(ValueError, match='matching outage'):
         await _validated_plan_recovery(DB(), job)
-    prior.user_id = 'owner';event.metadata_json['contract_issues'] = ['invalid mission count']
+    prior.user_id = 'owner'
+    # A retired gateway's failure is no longer evidence for a direct-model recovery.
+    event.provider = 'openlux'
+    with pytest.raises(ValueError, match='matching outage'):
+        await _validated_plan_recovery(DB(), job)
+    event.provider = 'anthropic'; event.metadata_json['contract_issues'] = ['invalid mission count']
     with pytest.raises(ValueError, match='not an operational outage'):
         await _validated_plan_recovery(DB(), job)
 
@@ -154,7 +162,7 @@ async def test_scoped_quality_candidate_is_saved_without_repeating_full_generati
         def __init__(self): self.model = 'native-quality'
         async def generate_and_validate(self, **kwargs):
             calls.append(kwargs)
-            return candidate, SimpleNamespace(provider='gemini', model=self.model, error=None, finish_reason='STOP')
+            return candidate, SimpleNamespace(provider='openai', model=self.model, error=None, finish_reason='stop')
     monkeypatch.setattr(generator, '_plan_client', lambda **kwargs: Client())
     async def telemetry(**kwargs): pass
     monkeypatch.setattr(generator, 'record_llm_response', telemetry)
@@ -174,8 +182,8 @@ def test_catalog_cache_recipe_does_not_change_inside_temporary_recovery(monkeypa
     import app.services.llm as llm
     from app.services.llm import recovery
     from app.services.planning.catalog_lessons import _default_composer_route_provenance
-    primary = SimpleNamespace(provider_name='openlux', model='primary-model')
-    native = SimpleNamespace(provider_name='gemini', model='recovery-model')
+    primary = SimpleNamespace(provider_name='anthropic', model='primary-model')
+    native = SimpleNamespace(provider_name='openai', model='recovery-model')
     failure = object()
     monkeypatch.setattr(llm, 'get_llm_client', lambda **kwargs: primary)
     monkeypatch.setattr(recovery, 'operational_recovery_client',
@@ -205,7 +213,7 @@ async def test_first_week_keeps_checked_placement_ahead_of_narrative(monkeypatch
 
 @pytest.mark.asyncio
 async def test_live_outage_is_reused_for_later_stages_and_does_not_leak(monkeypatch):
-    failure = SimpleNamespace(provider='openlux', error='OpenLux request failed (TimeoutError; finish=missing)')
+    failure = SimpleNamespace(provider='anthropic', error='anthropic request failed (TimeoutError; deadline)')
     sentinel = object()
     def recovery(response, **kwargs):
         return sentinel if response is failure else None
@@ -214,7 +222,7 @@ async def test_live_outage_is_reused_for_later_stages_and_does_not_leak(monkeypa
         assert generator._recover_plan_outage(failure, timeout=45, max_tokens=9000) is sentinel
         return _backbone()
     async def week(**kwargs):
-        assert generator._plan_client(timeout=45, max_tokens=8000) is sentinel
+        assert generator._plan_client(operation='plan_week_generation', timeout=45, max_tokens=8000) is sentinel
         return _expanded_week_one().weeks[0]
     monkeypatch.setattr(generator, '_checkpointed_backbone', backbone)
     monkeypatch.setattr(generator, 'generate_plan_week_from_backbone', week)

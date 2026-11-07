@@ -45,36 +45,12 @@ class RoutingDecision:
 
 
 def _model_for_tier(tier: str) -> str | None:
-    if settings.llm_provider == "zai":
-        return {"fast": settings.zai_fast_model, "balanced": settings.zai_model}.get(tier)
-    if settings.llm_provider == "openlux":
-        return {
-            "fast": settings.openlux_fast_model,
-            "balanced": settings.openlux_model,
-        }.get(tier)
-    if settings.llm_provider == "gemini":
-        return {
-            "fast": settings.gemini_fast_model,
-            "balanced": settings.gemini_model,
-        }.get(tier)
-    if settings.llm_provider == "openai":
-        return {
-            "fast": settings.openai_fast_model,
-            "balanced": settings.openai_model,
-        }.get(tier)
-    if settings.llm_provider == "yunwu":
-        return {
-            "fast": settings.yunwu_fast_model,
-            "balanced": settings.yunwu_model,
-        }.get(tier)
+    """A distinct fast-tier model to canary, if the configured provider has one.
+
+    The direct providers serve every tier with one model (only reasoning effort
+    differs), so adaptive routing has nothing to switch to.
+    """
     return None
-
-
-def operation_thinking_level(operation: str, default: str | None) -> str | None:
-    """Apply an eval-approved per-operation Z.ai reasoning override, if any."""
-    if settings.llm_provider != "zai":
-        return default
-    return settings.zai_reasoning_overrides.get(operation, default)
 
 
 def exploration_bucket(operation: str, routing_key: str) -> int:

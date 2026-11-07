@@ -1,31 +1,38 @@
 """JSON transport must distinguish exhausted credit from temporary throttling."""
+import anthropic
 import httpx
+import httpx2
+import openai
 import pytest
-from openai import AuthenticationError, PermissionDeniedError, RateLimitError
 
 from app.core.config import settings
-from app.services.llm.openlux import OpenLuxLLMClient
-from app.services.llm.zai import ZaiLLMClient
 from app.services.planning.lesson_writer import _may_retry
 from app.services.planning.package_review import _retryable_error
-from tests.test_openlux import chunk, transport
+from tests.direct_wire import PROVIDERS, Reply, client_for, serve
+
+__all__ = ["api_error", "client_for", "credit_error"]
+
+_CLASSES = {400: "BadRequestError", 401: "AuthenticationError", 403: "PermissionDeniedError",
+            429: "RateLimitError", 500: "InternalServerError", 503: "InternalServerError"}
+_URLS = {"openai": "https://api.openai.com/v1/chat/completions", "anthropic": "https://api.anthropic.com/v1/messages"}
 
 
-def client_for(provider):
-    if provider == "zai":
-        return ZaiLLMClient(model="glm-5.3", api_key="fake-test-key",
-                            base_url="https://api.z.ai/api/paas/v4")
-    return OpenLuxLLMClient(model="gpt-5.6-terra", api_key="fake-test-key",
-                            base_url="https://api.openlux.ai/v1")
+def api_error(provider, status, body, retry_after="120"):
+    """The SDK's own status error, as raised for an HTTP ``status`` response."""
+    sdk, http = (openai, httpx) if provider == "openai" else (anthropic, httpx2)
+    response = http.Response(status, headers={"retry-after": retry_after},
+                             request=http.Request("POST", _URLS[provider]))
+    return getattr(sdk, _CLASSES[status])("PRIVATE provider message and credential", response=response, body=body)
 
 
-def api_error(error_type, status, body, retry_after="120"):
-    return error_type(
-        "PRIVATE provider message and credential",
-        body=body,
-        response=httpx.Response(status, headers={"retry-after": retry_after},
-                                request=httpx.Request("POST", "https://example.test")),
-    )
+def credit_error(provider, *, nested=True):
+    """Exhausted credit: OpenAI answers 429 insufficient_quota, Anthropic a 400 credit-balance error."""
+    if provider == "openai":
+        details, status = {"code": "insufficient_quota", "message": "PRIVATE credit details"}, 429
+    else:
+        details, status = {"type": "invalid_request_error",
+                           "message": "Your credit balance is too low. PRIVATE credit details"}, 400
+    return api_error(provider, status, {"type": "error", "error": details} if nested else details)
 
 
 @pytest.fixture(autouse=True)
@@ -34,22 +41,14 @@ def no_admission_network(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("where", ["open", "stream"])
 @pytest.mark.parametrize("nested", [False, True])
-@pytest.mark.parametrize("provider,code", [
-    ("zai", "1113"), ("zai", 1113),
-    ("zai", "insufficient_quota"), ("openlux", "credit_balance_exhausted"),
-])
-async def test_exhausted_credit_never_becomes_a_json_throttling_retry(
-    monkeypatch, provider, code, nested, streaming, caplog,
-):
+@pytest.mark.parametrize("provider", PROVIDERS)
+async def test_exhausted_credit_never_becomes_a_json_throttling_retry(provider, nested, where, caplog):
     client = client_for(provider)
-    details = {"code": code, "message": "PRIVATE credit details"}
-    stream, _ = transport(monkeypatch, client, [api_error(
-        RateLimitError, 429, {"error": details} if nested else details,
-    )])
-    generate = client.generate_json_streaming if streaming else client.generate_json
-    response = await generate("System", "User")
+    error = credit_error(provider, nested=nested)
+    wire = serve(client, Reply(usage=None, **({"open_error": error} if where == "open" else {"error": error})))
+    response = await client.generate_json("System", "User")
     assert response.data == {}
     assert response.error_code == "generation_unavailable"
     assert response.retryable is False
@@ -59,18 +58,18 @@ async def test_exhausted_credit_never_becomes_a_json_throttling_retry(
     assert not _may_retry(response, [])
     assert not _retryable_error(response)
     assert "PRIVATE" not in response.model_dump_json() + caplog.text
-    assert response.total_tokens is None
-    assert client.last_attempt is response and stream.closed
+    # Rejected before any stream event: nothing was generated or billed.
+    assert response.total_tokens == 0
+    assert client.last_attempt is response
+    assert all(stream.closed for stream in wire.streams)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("provider", ["zai", "openlux"])
-@pytest.mark.parametrize("error_type,status", [
-    (AuthenticationError, 401), (PermissionDeniedError, 403),
-])
-async def test_json_auth_failures_are_explicitly_permanent(monkeypatch, provider, error_type, status):
+@pytest.mark.parametrize("provider", PROVIDERS)
+@pytest.mark.parametrize("status", [401, 403])
+async def test_json_auth_failures_are_explicitly_permanent(provider, status):
     client = client_for(provider)
-    transport(monkeypatch, client, [api_error(error_type, status, {"message": "PRIVATE"})])
+    serve(client, Reply(open_error=api_error(provider, status, {"message": "PRIVATE"}), usage=None))
     response = await client.generate_json("System", "User")
     assert response.error_code == "generation_unavailable"
     assert response.retryable is False and response.retry_after_seconds is None
@@ -79,45 +78,48 @@ async def test_json_auth_failures_are_explicitly_permanent(monkeypatch, provider
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("provider", ["zai", "openlux"])
+@pytest.mark.parametrize("provider", PROVIDERS)
 @pytest.mark.parametrize("header,expected", [("2", 2), ("120", 120), ("invalid", 60), ("-1", 1), ("99999", 3600)])
-async def test_genuine_json_throttling_preserves_sanitized_retry_metadata(monkeypatch, provider, header, expected):
+async def test_genuine_json_throttling_preserves_sanitized_retry_metadata(provider, header, expected):
     client = client_for(provider)
-    transport(monkeypatch, client, [api_error(
-        RateLimitError, 429, {"code": "1302", "message": "PRIVATE request"}, header,
-    )])
+    serve(client, Reply(usage=None, open_error=api_error(
+        provider, 429, {"code": "rate_limit_exceeded", "message": "PRIVATE request"}, header)))
     response = await client.generate_json("System", "User")
     assert response.error_code == "generation_rate_limited"
     assert response.retryable is True
-    assert response.retry_after_seconds == expected
     assert "RateLimitError" in response.error and "PRIVATE" not in response.model_dump_json()
-    assert response.total_tokens is None
+    assert response.total_tokens == 0  # rejected before any stream event
+    assert response.retry_after_seconds == expected
 
 
 @pytest.mark.asyncio
-async def test_json_timeout_retains_transient_policy_but_invalid_output_leaves_repair_to_caller(monkeypatch):
-    client = client_for("zai")
-    transport(monkeypatch, client, [TimeoutError("PRIVATE timeout")])
+@pytest.mark.parametrize("provider", PROVIDERS)
+async def test_json_timeout_retains_transient_policy_but_invalid_output_leaves_repair_to_caller(provider):
+    client = client_for(provider)
+    serve(client, Reply(error=TimeoutError("PRIVATE timeout"), usage=None))
     response = await client.generate_json("System", "User")
     assert response.retryable is True and response.retry_after_seconds is None
     assert response.error_code == "generation_failed"
+    assert "PRIVATE" not in response.error
 
-    transport(monkeypatch, client, [chunk('{"unfinished":', "length")])
+    serve(client, Reply('{"unfinished":', "length"))
     response = await client.generate_json("System", "User")
     assert response.retryable is None and response.retry_after_seconds is None
     assert response.finish_reason == "length"
 
-    transport(monkeypatch, client, [chunk('{"invalid":}', "stop")])
+    serve(client, Reply('{"invalid":}', "stop"))
     response = await client.generate_json("System", "User")
-    assert response.retryable is None and "JSONDecodeError" in response.error
+    assert "JSONDecodeError" in response.error and response.retry_after_seconds is None
+    assert response.retryable is None
 
 
 @pytest.mark.asyncio
-async def test_success_does_not_retain_a_prior_request_error_policy(monkeypatch):
-    client = client_for("zai")
-    transport(monkeypatch, client, [api_error(RateLimitError, 429, {"code": "1113"})])
+@pytest.mark.parametrize("provider", PROVIDERS)
+async def test_success_does_not_retain_a_prior_request_error_policy(provider):
+    client = client_for(provider)
+    serve(client, Reply(open_error=credit_error(provider), usage=None))
     assert (await client.generate_json("System", "User")).retryable is False
-    transport(monkeypatch, client, [chunk('{"ok":true}', "stop")])
+    serve(client, Reply('{"ok":true}', "stop"))
     response = await client.generate_json("System", "User")
     assert response.data == {"ok": True}
     assert response.error is response.error_code is response.retryable is response.retry_after_seconds is None

@@ -1,7 +1,6 @@
-DOMAIN NOTES — numbers and calculations. Apply whenever a case, datum or answer involves quantities.
-- Teaching cases: default to ONE explicitly fictional case with stable raw facts, units, assumptions. Each case has exactly id, assumptions, data and results, and its own id, even when alone; a datum or result id is not a case id. Each result has id, label, expression, unit and decimal_places.
-- Expressions use only the same case's or activity's OWN raw data ids with + - * /, parentheses, sqrt and the constants 0, 1, 2 and 100. Expand intermediate steps to raw inputs instead of citing another result or answer-field id. A number field needs a computable expression, not a constant answer.
-- State classification, sign, unit, period and display-rounding assumptions. Distinguish current-period transactions from prior-period collections and payments. Check threshold inclusivity.
-- Keep public teaching cases and their computed results separate from independent-transfer inputs and answers.
-- A declared datum is not proof of real-world truth: keep supplied evidence or an explicitly fictional case. Numeric evidence alone does not require a numeric answer field or an arithmetic exercise.
-- Lesson blocks for numbers: a formula with one equation, then one case as signed steps (often a waterfall too) adding up to the main result on the last, only "=" row. Inputs and factors leave the value empty; a product is one row. A second result gets its own valued row, the chart or prose. Plan cases whose signed rows reach it.
+DOMAIN NOTES — numbers and calculations.
+- A fictional teaching case has id, assumptions, data and results. Each result has id, label, expression, unit and decimal_places; keep case, datum and result identities distinct.
+- Expressions use only their OWN raw data ids, + - * /, parentheses, sqrt and constants 0, 1, 2, 100. Expand intermediates to raw inputs; never use another result or answer id, or a constant-only answer.
+- State units, signs, periods, classification and rounding. Distinguish prior-period collections and payments. Compare compatible quantities; justify conversions and threshold boundaries. Declared data is not proof of real-world truth.
+- Numeric evidence does not require a numeric answer field. Public teaching and assessed cases remain separate.
+- Lesson blocks for numbers: a formula with one equation; its title is the result, first = row the first input. Signed steps sum to the main result on the last, only "=" row. Inputs and factors leave the value empty; a product is one row. A second result gets its own valued row, the chart or prose.

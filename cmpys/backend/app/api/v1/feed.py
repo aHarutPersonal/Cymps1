@@ -258,9 +258,8 @@ async def _generate_and_persist(
             "exclude_titles_json": json_lib.dumps(recent_titles),
         })
 
-        # Feed cards are short, highly structured, and non-critical. Flash-Lite
-        # is materially cheaper and keeps the balanced model for plans/books.
-        client = get_llm_client(timeout=60.0, tier="fast")
+        # Feed cards are short, highly structured, and non-critical.
+        client = get_llm_client(operation="feed_generation", timeout=60.0, tier="fast")
         response = await client.generate_json(
             system_prompt="You are a content curator. Return only valid JSON, no markdown code blocks.",
             user_prompt=prompt,

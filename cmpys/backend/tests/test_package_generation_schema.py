@@ -6,11 +6,10 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.config import settings
-from app.services.llm.zai import ZaiLLMClient
 from app.services.planning.lesson_package import LessonPackage, _generation_package_schema
 from app.services.practice.contracts import AnswerField, Workbook
 from tests.lesson_package_fixtures import package_payload
-from tests.test_openlux import chunk, transport
+from tests.direct_wire import PROVIDERS, Reply, client_for, sent_schema, serve
 
 
 def branches():
@@ -102,16 +101,21 @@ def test_schema_adapter_preserves_canonical_defaults_constraints_and_model_ident
 
 
 @pytest.mark.asyncio
-async def test_zai_json_object_wire_contains_the_conditional_package_schema(monkeypatch):
+@pytest.mark.parametrize("provider", PROVIDERS)
+async def test_json_wire_contains_the_conditional_package_schema(monkeypatch, provider):
     monkeypatch.setattr(settings, "llm_admission_limits", {})
-    client = ZaiLLMClient(model="glm-5.3", api_key="fake-test-key",
-                          base_url="https://api.z.ai/api/paas/v4", thinking_level="low")
-    _, request = transport(monkeypatch, client, [chunk(json.dumps(package_payload()), "stop")])
+    client = client_for(provider, thinking_level="low")
+    wire = serve(client, Reply(json.dumps(package_payload()), "stop"))
     response = await client.generate_json("Package instructions", "Reference context", output_model=LessonPackage)
     assert response.error is None
     assert LessonPackage.model_validate(response.data)
-    assert request["response_format"] == {"type": "json_object"}
-    schema = json.loads(request["messages"][0]["content"].rsplit("\n", 1)[-1])
+    # The conditional schema cannot be expressed natively, so it travels in the prompt.
+    assert response.effective_parameters["json_mode"] == "prompt"
+    if provider == "openai":
+        assert wire.request["response_format"] == {"type": "json_object"}
+    else:
+        assert "format" not in wire.request["output_config"]
+    schema = sent_schema(wire.request)
     assert schema == LessonPackage.model_json_schema()
     assert "oneOf" in schema["$defs"]["AnswerField"]
     assert "data" in schema["$defs"]["Activity"]["required"]

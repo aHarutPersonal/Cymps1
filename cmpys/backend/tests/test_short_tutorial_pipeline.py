@@ -75,6 +75,9 @@ def outline(count=6):
 
 def short_package():
     raw = structured_package_fixture(package_payload())
+    raw["teaching_cases"] = [{"id": "public_notice", "assumptions":
+        "Original fictional notice: Please return library books by Friday. The revision names the action and deadline so a reader can act.",
+        "data": [], "results": []}]
     for activity in raw["workbook"]["activities"]:
         activity.update(minutes_min=1, minutes_max=2)
     return LessonPackage.model_validate(raw)
@@ -233,12 +236,16 @@ async def test_first_tutorial_publishes_before_bounded_lookahead_and_resumes(mon
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("extra_words,practice_minutes,accepted", [
-    (0, 2, True), (100, 3, True), (100, 4, True), (100, 5, False),
+@pytest.mark.parametrize("extra_words,practice_minutes,shown", [
+    (0, 2, 2), (100, 3, 3), (100, 4, 4), (100, 5, 4),
 ])
 async def test_real_review_uses_actual_tutorial_workload_not_planning_average(
-        monkeypatch, extra_words, practice_minutes, accepted):
-    """Real writer, rendering, review and task publication use one 5–8 contract."""
+        monkeypatch, extra_words, practice_minutes, shown):
+    """Real writer, rendering, review and task publication use the actual reading time.
+
+    Since 2026-11-06 exercise time never fails a tutorial: an estimate outside
+    the 2–4 minute budget publishes with its shown practice time held inside it.
+    """
     from app.services.planning.lesson_review import LessonReview, ReviewEvidencePatch
     from tests.test_lesson_review_contract import _review
     package = short_package()
@@ -264,7 +271,20 @@ async def test_real_review_uses_actual_tutorial_workload_not_planning_average(
             if kwargs["output_model"].__name__ == ReviewEvidencePatch.__name__:
                 return LLMResponse(data={"practice_minutes": practice_minutes}, finish_reason="stop")
             assert issubclass(kwargs["output_model"], LessonReview)
-            response = LLMResponse(data=_review(practice_minutes=practice_minutes), finish_reason="stop")
+            from app.services.planning.lesson_review import public_section_inventory
+            import json
+            lesson = json.loads(kwargs["user_prompt"])["lesson"]
+            response = LLMResponse(data=_review(practice_minutes=practice_minutes,
+                public_sections=[{"section_id": name, "source_quote": text[:100],
+                    "domain_valid": True, "consistent_with_core": True,
+                    "reason": "Offline timing fixture: semantic validity is mocked, not evaluated."}
+                    for name, text in public_section_inventory(lesson).items()],
+                public_check_options=[
+                    {"option_id": "check1.option1", "defensible": False,
+                     "reason": "Always better leaves the claim unbounded."},
+                    {"option_id": "check1.option2", "defensible": True,
+                     "reason": "This team and last quarter bound the claim."},
+                ]), finish_reason="stop")
             reviewed.append(response)
             return response
 
@@ -285,44 +305,33 @@ async def test_real_review_uses_actual_tutorial_workload_not_planning_average(
     assert builds[0]["allotted_lesson_minutes"] is None
     assert builds[0]["target_practice_minutes"] == 3
     assert reviewed
-    if accepted:
-        assert error is None
-        step = payload["steps"][0]
-        assert step["reading_minutes"] == (4 if extra_words else 3)
-        assert step["practice_minutes"] == practice_minutes
-        assert step["estimate_minutes"] == step["reading_minutes"] + practice_minutes
-        assert "step_1_ready" in checkpoints
-        assert validations["step_1"] == provenance(step, package)
-        assert packages["step_1"] == package
-    else:
-        assert error
-        assert not payload["steps"][0].get("lesson_content")
-        assert "step_1_ready" not in checkpoints
-        assert packages == validations == {}
+    assert error is None
+    step = payload["steps"][0]
+    assert step["reading_minutes"] == (4 if extra_words else 3)
+    assert step["practice_minutes"] == shown
+    assert step["estimate_minutes"] == step["reading_minutes"] + shown
+    assert "step_1_ready" in checkpoints
+    assert validations["step_1"] == provenance(step, package)
+    assert packages["step_1"] == package
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("rebuild_valid", [True, False])
-async def test_real_preflight_workload_defect_authorizes_one_rebuild_before_any_prose(monkeypatch, rebuild_valid):
+async def test_tutorial_exercise_time_is_not_a_package_defect_before_prose(monkeypatch):
+    # Owner decision (2026-11-06): tutorial exercise time is server-set and never fails a
+    # lesson, so an oversized estimate no longer forces a public scope rebuild before prose.
     from app.services.planning.package_preflight import PackageSemanticReview
     events = []
     builds = []
     oversized = short_package().model_dump(mode="json")
-    for activity in oversized["workbook"]["activities"]:
-        activity.update(minutes_min=3, minutes_max=3)
-    original_package = LessonPackage.model_validate(oversized)
-    revised = short_package().model_dump(mode="json")
-    revised["workbook"]["activities"][0].update(minutes_min=1, minutes_max=1,
+    oversized["workbook"]["activities"][0].update(minutes_min=3, minutes_max=3,
         instructions="Inspect the supplied claim and identify its stated scope in the answer field.")
-    revised["workbook"]["activities"][1].update(minutes_min=2, minutes_max=2,
+    oversized["workbook"]["activities"][1].update(minutes_min=3, minutes_max=3,
         instructions="Use the distinct supplied case to state a bounded claim, explain its supporting evidence, and check it.")
-    revised_package = LessonPackage.model_validate(revised)
-    original_bytes = original_package.model_dump_json()
+    package = LessonPackage.model_validate(oversized)
 
     async def build(step, context, **kwargs):
         builds.append(copy.deepcopy(context))
         events.append("build")
-        package = revised_package if len(builds) == 2 and rebuild_valid else original_package
         return package, LLMResponse(data={}, effective_parameters={"synthetic_local_validation": True}), SimpleNamespace(model="offline")
 
     async def review(step, **kwargs):
@@ -334,12 +343,15 @@ async def test_real_preflight_workload_defect_authorizes_one_rebuild_before_any_
         async def generate_json(self, **kwargs):
             if kwargs["output_model"].__name__ == PackageSemanticReview.__name__:
                 events.append("semantic_preflight")
-                return LLMResponse(data={"acceptable": True, "issues": []}, finish_reason="stop")
+                from tests.text_audit_fixtures import argument_text_audits, public_notice_teaching_audits
+                return LLMResponse(data={"acceptable": True, "issues": [],
+                    "text_audits": argument_text_audits(package),
+                    "teaching_case_audits": public_notice_teaching_audits(package)}, finish_reason="stop")
             assert issubclass(kwargs["output_model"], PlanTutorialLessonSectionsOutput)
             events.append("write")
             return LLMResponse(data=sections(), finish_reason="stop")
 
-    scoped_repair = AsyncMock(side_effect=AssertionError("Aggregate timing requires a public scope rebuild"))
+    scoped_repair = AsyncMock(side_effect=AssertionError("Exercise time must not request a repair"))
     monkeypatch.setattr("app.services.planning.package_builder.generate_initial_package", build)
     monkeypatch.setattr("app.services.planning.lesson_review.review_lesson", review)
     monkeypatch.setattr("app.tasks.plans.generate_package", scoped_repair)
@@ -350,22 +362,11 @@ async def test_real_preflight_workload_defect_authorizes_one_rebuild_before_any_
         idol_evidence={}, session_context="", active_tier="balanced", routing_reason="test",
         client_factory=lambda **kwargs: Client(), prepared_packages=packages, validation_records=validations,
         existing_checkpoint={"_generation": {"outline": outline(1), "outline_contract_version": 3}})
-    assert len(builds) == 2
-    assert "independent_package_defects" in builds[1]
-    assert builds[1]["allotted_lesson_minutes"] is None
-    assert original_package.model_dump_json() == original_bytes
+    assert error is None
+    assert len(builds) == 1
+    assert events == ["build", "semantic_preflight", "write", "final_review"]
     scoped_repair.assert_not_called()
-    if rebuild_valid:
-        assert error is None
-        assert events == ["build", "build", "semantic_preflight", "write", "final_review"]
-        assert payload["steps"][0]["estimate_minutes"] == 6
-        assert packages["step_1"] == revised_package
-        assert validations["step_1"] == provenance(payload["steps"][0], revised_package)
-    else:
-        assert error and "cannot meet" in error
-        assert events == ["build", "build"]
-        assert not payload["steps"][0].get("lesson_content")
-        assert packages == validations == {}
+    assert packages["step_1"] == package
 
 
 @pytest.mark.asyncio

@@ -965,6 +965,7 @@ async def test_generate_book_module_uses_bounded_quality_fallback_options(monkey
     assert generation_count == 3
     assert quality_options == [
         {
+            "operation": "book_module_generation",
             "timeout": BOOK_MODULE_QUALITY_TIMEOUT_SECONDS,
             "max_tokens": 16000,
             "tier": "quality",
@@ -2125,18 +2126,19 @@ async def test_sync_plan_item_content_resource_links_replaces_existing_links():
     db.flush.assert_awaited_once()
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('error', [
-    'OpenLux request failed (TimeoutError; finish=missing)',
-    'OpenLux request failed (ValueError; finish=missing)',
+@pytest.mark.parametrize('provider, error', [
+    ('openai', 'openai request failed (TimeoutError; deadline)'),
+    ('anthropic', 'anthropic request failed (IncompleteStreamError; finish=missing)'),
+    ('openai', 'openai request failed (APIConnectionError; connection)'),
 ])
-async def test_transport_failure_is_not_retried_as_json_repair(monkeypatch, error):
+async def test_transport_failure_is_not_retried_as_json_repair(monkeypatch, provider, error):
     from app.services.llm.client import LLMResponse as Response
     client = SimpleNamespace(model='gpt-test', generate_json=AsyncMock(
-        return_value=Response(data={}, error=error, provider='openlux', model='gpt-test')))
+        return_value=Response(data={}, error=error, provider=provider, model='gpt-test')))
     recorded = AsyncMock()
     monkeypatch.setattr('app.services.llm.client.get_llm_client', lambda **kw: client)
     monkeypatch.setattr('app.services.llm.telemetry.record_usage_records', recorded)
-    with pytest.raises(RuntimeError, match='OpenLux request failed'):
+    with pytest.raises(RuntimeError, match=f'{provider} request failed'):
         await generate_book_module(title='Test', author='Author', user_goal='Learn')
     assert client.generate_json.await_count == 1
     records = recorded.call_args.args[0]

@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Mapping
 
-from app.services.practice.contracts import Activity, SolutionDocument, calculate
+from app.services.practice.contracts import _TYPESET_OPERATORS, Activity, SolutionDocument, calculate
 
 
 SOLUTION_RENDERER_VERSION = 1
@@ -80,6 +80,12 @@ def _numeric_expression(node: ast.AST, data: dict[str, float]) -> str:
     if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
             and node.func.id == "sqrt" and len(node.args) == 1 and not node.keywords):
         return "sqrt(" + _numeric_expression(node.args[0], data) + ")"
+    # The calculator's squares and cubes ("x^2", "x ** 3") render as an explicit
+    # product, the form the numeric gate matches them in (pilot 2026-11-06).
+    if (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow)
+            and isinstance(node.right, ast.Constant) and type(node.right.value) is int
+            and node.right.value in (2, 3)):
+        return "(" + " * ".join([_numeric_expression(node.left, data)] * node.right.value) + ")"
     raise ValueError("Unsupported private solution arithmetic")
 
 
@@ -123,7 +129,8 @@ def compile_worked_solution(activity: Activity | Mapping) -> CompiledSolution:
         append(field.label)
         if field.kind == "number":
             calculate(field.expression, data)
-            tree = ast.parse(field.expression, mode="eval")
+            # Parse in calculate()'s grammar: "^" is a power, never XOR.
+            tree = ast.parse(field.expression.translate(_TYPESET_OPERATORS), mode="eval")
             node = tree.body
             datum_ids = tuple(sorted({part.id for part in ast.walk(node)
                                       if isinstance(part, ast.Name) and part.id != "sqrt"}))

@@ -152,26 +152,31 @@ def test_daily_rhythm_can_continue_but_mission_duplicates_still_fail():
 
 
 @pytest.mark.asyncio
-async def test_zai_compact_backbone_uses_low_reasoning_without_changing_model_tier(monkeypatch):
+@pytest.mark.parametrize("llm_provider", ["routed", "dummy"])
+async def test_compact_backbone_and_week_drafts_keep_one_reasoning_level_and_tier(monkeypatch, llm_provider):
+    # The Z.ai-only low-reasoning, 90 s branch is gone: every provider drafts
+    # the backbone and week on the balanced tier with medium reasoning.
     client = SimpleNamespace(model="test", generate_and_validate=AsyncMock(
         return_value=(_backbone(), SimpleNamespace(error=None, model="test"))))
     factory = MagicMock(return_value=client)
-    monkeypatch.setattr(generator.settings, "llm_provider", "zai")
+    monkeypatch.setattr(generator.settings, "llm_provider", llm_provider)
     monkeypatch.setattr(generator, "_plan_client", factory)
     monkeypatch.setattr(generator, "record_llm_response", AsyncMock())
     result = await generator._generate_plan_backbone(
         system_prompt="system", user_prompt="goal", duration_weeks=12, hours_per_week=5,
     )
     assert result == _backbone()
-    assert factory.call_args.kwargs["thinking_level"] == "low"
-    assert factory.call_args.kwargs["tier"] == "balanced"
+    assert factory.call_args.kwargs == {
+        "operation": "plan_backbone_generation", "timeout": generator.PLAN_BACKBONE_TIMEOUT_SECONDS,
+        "max_tokens": generator.PLAN_BACKBONE_MAX_TOKENS, "tier": "balanced", "thinking_level": "medium"}
     client.generate_and_validate.return_value = (_expanded_week_one(), SimpleNamespace(error=None, model="test"))
     await generator.generate_plan_week_from_backbone(
         backbone_week=_backbone().weeks[0], roadmap_thesis="Learn",
         idol_name="Ada", idol_domain="computing", user_goal="Learn", hours_per_week=5,
     )
-    assert factory.call_args.kwargs["thinking_level"] == "low"
-    assert factory.call_args.kwargs["tier"] == "balanced"
+    assert factory.call_args.kwargs == {
+        "operation": "plan_week_generation", "timeout": generator.PLAN_WEEK_TIMEOUT_SECONDS,
+        "max_tokens": generator.PLAN_WEEK_MAX_TOKENS, "tier": "balanced", "thinking_level": "medium"}
 
 
 @pytest.mark.asyncio

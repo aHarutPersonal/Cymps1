@@ -1,0 +1,612 @@
+{
+  "provenance": {
+    "initial_verdict": "18f2f1f1dfad478f858dd8efd8c442f8",
+    "recorded_repair": "f6f5aaafe6674524b8a5938c095c5856",
+    "final_verdict": "09a09a041765468e8dbd86628e3b7ff7",
+    "numbered_draft": "d022a505f2e644f8b110c118c89e0b43",
+    "six_criteria_draft": "11edbeb324bc4912ac4254f8cff19757"
+  },
+  "original_package": {
+    "teaching_cases": [
+      {
+        "id": "library_statements",
+        "assumptions": "Original fictional example. Five statements posted at a town library noticeboard: (1) \"Sunday opening hours\" — a topic phrase; nothing is asserted, no one can disagree. (2) \"The library should open on Sundays\" — a claim; someone could reply \"No, it shouldn't.\" (3) \"Sunday attendance figures\" — topic; names a subject, takes no position. (4) \"Sunday attendance rose after the town extended hours\" — claim; a disputable assertion about what happened, so it needs evidence. (5) \"People who work weekdays\" — topic. Worked analysis: the cue is a disputable position someone could reject. Test each statement by asking whether a reader could reasonably say \"I disagree\"; if so, underline the deciding words (\"should open on Sundays\", \"attendance rose\") and label it a claim; if not, label it a topic. Note that claims may assert policy (\"should\"), value (\"matters\"), or fact (\"rose\"), and all three need support, while topics only name a subject.",
+        "data": [],
+        "results": []
+      }
+    ],
+    "workbook": {
+      "title": "Separate Topic From Claim",
+      "activities": [
+        {
+          "id": "guided_practice",
+          "title": "Label flyer statements",
+          "kind": "practice",
+          "instructions": "Original fictional flyer. A town library fundraising flyer includes these four statements:\n\nA. \"The library's reading room\"\nB. \"The council should fund weekend tutoring\"\nC. \"Weekend tutoring raised attendance\"\nD. \"The reading room matters to families\"\n\nRecall the cue from the worked example: a statement is a claim when a reader could reasonably reply \"I disagree\" — it takes a disputable position, whether about policy (\"should\"), fact (\"rose\", \"raised\"), or value (\"matters\"). A topic only names a subject and cannot be disagreed with.\n\nLabel each statement A–D as a topic or a claim. For each claim, quote the word or phrase that does the asserting (the deciding cue someone would reject). For each topic, say in a few words why nothing is asserted. Note: a value statement like \"matters\" cannot be dismissed as a mere topic just because it has no measurable test — it still asserts something someone could dispute.",
+          "data": [],
+          "fields": [
+            {
+              "id": "labels",
+              "label": "Your four labels with quoted cues (A–D)",
+              "kind": "text",
+              "unit": "",
+              "choices": [],
+              "expression": null,
+              "correct_choice": null,
+              "tolerance": 0.01,
+              "criteria": [
+                "Labels A and D as topics and B and C as claims (or gives a reasoned alternative accepted in the explanation)",
+                "Quotes the actual asserting phrase for each claim, such as \"should fund weekend tutoring\" and \"raised attendance\"",
+                "Explains that topics A and D name a subject without taking a position — or, if D is labelled a claim, quotes \"matters\" as a disputable value position",
+                "Does not relabel a policy or value claim as a topic for lacking a measurable test"
+              ],
+              "rubric_criterion": null
+            }
+          ],
+          "hint": "For each statement, ask whether a reader could say \"No, that's wrong.\" If yes, find the words that carry the position; if no, it only names a subject.",
+          "worked_solution": {
+            "version": 1,
+            "steps": [
+              {
+                "field_id": "labels",
+                "explanation": "Model answer: A — topic; it names the reading room, asserting nothing. B — claim; the cue is \"should fund weekend tutoring,\" a policy position a councillor could reject. C — claim; the cue is \"raised attendance,\" a factual assertion someone could dispute by pointing to other causes or flat figures. D — claim; the cue is \"matters to families,\" a value assertion a critic could deny by saying families manage without it. Accept D labelled as a topic only if the reasoning clearly states why no position is taken; but \"matters\" asserts value, so the stronger answer treats D as a claim. The recurring misconception is treating value statements as non-claims because they cannot be measured — the cue is disputability, not testability."
+              }
+            ]
+          },
+          "minutes_min": 1,
+          "minutes_max": 2,
+          "diagram": null
+        },
+        {
+          "id": "transfer_classify",
+          "title": "Judge five sentences in a letter about the library van",
+          "kind": "transfer",
+          "instructions": "Original fictional letter, printed in a community newspaper.\n\n\"Dear Editor,\nOur neighbourhood lost its branch library, and many of us now travel a long way to borrow a book. The mobile library van deserves more support from the town. The van's route schedule was posted at the community hall last spring. Extending the van's evening stops would help residents who work during the day. The cost of diesel for the van. Yours faithfully, a regular borrower.\"\n\nYour task has two parts. First, label each of the five sentences below as a topic or a claim, quoting the word or phrase that decides it. Use the cue you practised: a claim takes a position a reader could reasonably reject; a topic only names a subject.\n\nThe five sentences to label:\nA. Our neighbourhood lost its branch library.\nB. The mobile library van deserves more support from the town.\nC. The van's route schedule was posted at the community hall last spring.\nD. Extending the van's evening stops would help residents who work during the day.\nE. The cost of diesel for the van.\n\nSecond, choose the two sentences you found hardest to judge, and for each give a one-line reason your label is right, naming what a reader could or could not reject. If you think a sentence is genuinely arguable either way, say so and defend your label.",
+          "data": [],
+          "fields": [
+            {
+              "id": "labels_and_reasons",
+              "label": "Your five labels with quoted cues, and your two one-line reasons",
+              "kind": "text",
+              "unit": "",
+              "choices": [],
+              "expression": null,
+              "correct_choice": null,
+              "tolerance": 0.01,
+              "criteria": [
+                "Labels each of the five sentences A–E as topic or claim with a quoted deciding cue",
+                "Labels sentences B and D as claims, since each asserts something a reader could reject",
+                "Labels sentence E as a topic, since it names a subject without asserting anything",
+                "Applies the disputable-position cue in at least two reasons, not length or grammar",
+                "Accepts a reasoned alternative for a genuinely arguable sentence (such as A or C) with a defensible justification"
+              ],
+              "rubric_criterion": null
+            }
+          ],
+          "hint": "For each sentence, ask whether a reader could reply \"No, that's not so\" to some part of it. If yes, that part is your quoted cue.",
+          "worked_solution": {
+            "version": 1,
+            "steps": [
+              {
+                "field_id": "labels_and_reasons",
+                "explanation": "Model answer: A is a claim in this letter's context — a reader could dispute that the branch library was lost or what that means for borrowers, so the cue is \"lost its branch library\"; if the closure is treated as undisputed shared background, labeling it a topic is also defensible when the reason names that no position is being argued. B is a claim, cue \"deserves more support from the town\" — someone could reply \"No, it doesn't.\" C is a claim, cue \"was posted at the community hall last spring\" — the assertion about what happened could be false and needs checking. D is a claim, cue \"would help residents who work during the day\" — a reader could reject the prediction that extending stops helps. E is a topic, cue \"The cost of diesel for the van\" — it names a subject and asserts nothing; someone could only ask a question about it, not disagree. Accept any consistent, reasoned set: the essential skill is that every claim label rests on a phrase a reader could reject, and every topic label rests on the absence of one, never on sentence length or grammar."
+              }
+            ]
+          },
+          "minutes_min": 2,
+          "minutes_max": 3,
+          "diagram": null
+        }
+      ]
+    }
+  },
+  "initial_verdict": {
+    "acceptable": false,
+    "issues": [
+      {
+        "target": "practice.guided_practice.labels",
+        "description": "Criterion 0's primary key labels D ('The reading room matters to families') as a topic, but 'matters' asserts a disputable value position — the exact misconception the activity's own instructions, criterion 3, and the worked solution warn against. The vague parenthetical '(or gives a reasoned alternative accepted in the explanation)' does not repair a key that forces a value claim into topic. Criterion 2's primary clause has the same defect. Correction: criterion 0 should read 'Labels A as a topic and B, C, and D as claims (accepting a reasoned alternative for D only if it argues no position is taken)'; criterion 2's primary clause should treat D as a claim quoting 'matters', keeping topic readings only for A."
+      }
+    ],
+    "choice_audits": [],
+    "text_audits": [
+      {
+        "target": "practice.guided_practice.labels",
+        "alternative_response": "A — topic: it only names the reading room. B — claim, cue \"should fund weekend tutoring,\" a policy a councillor could reject. C — claim, cue \"raised attendance,\" a factual assertion someone could dispute. D — claim, cue \"matters to families\": it asserts value a critic could deny by saying families manage without it, so it is not a mere subject name.",
+        "criteria": [
+          {
+            "criterion_index": 0,
+            "task_aligned": false,
+            "accepts_alternative": false,
+            "reason": "Primary key forces the value claim D into topic; alternative rejected."
+          },
+          {
+            "criterion_index": 1,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Quoting the asserting phrases for B and C works for this response."
+          },
+          {
+            "criterion_index": 2,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Second clause accepts D-as-claim quoting 'matters'; A explanation present."
+          },
+          {
+            "criterion_index": 3,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Response never uses lack of measurability to relabel claims."
+          }
+        ],
+        "model_answer_valid": true,
+        "model_answer_reason": "Model correctly labels D a claim; it conflicts only with criterion 0's erroneous key.",
+        "requires_activity_repair": false
+      },
+      {
+        "target": "practice.transfer_classify.labels_and_reasons",
+        "alternative_response": "A — claim, cue \"lost its branch library\": a reader could dispute what was lost. B — claim, cue \"deserves more support from the town.\" C — topic: treated as undisputed shared background; the posting asserts no arguable position here. D — claim, cue \"would help residents who work during the day.\" E — topic: \"The cost of diesel for the van\" only names a subject. Hardest: C and E — no phrase in either invites a reader's 'I disagree.'",
+        "criteria": [
+          {
+            "criterion_index": 0,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "All five labelled with quoted phrases; topics quote their noun phrases."
+          },
+          {
+            "criterion_index": 1,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "B and D labelled claims with rejectable cues."
+          },
+          {
+            "criterion_index": 2,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "E labelled topic for naming a subject, asserting nothing."
+          },
+          {
+            "criterion_index": 3,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Reasons rest on rejectability, not length or grammar."
+          },
+          {
+            "criterion_index": 4,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Accepts reasoned C-as-topic reading, as this response uses."
+          }
+        ],
+        "model_answer_valid": true,
+        "model_answer_reason": "Consistent with criteria; accepts reasoned alternatives for A and C with defensible justification.",
+        "requires_activity_repair": false
+      }
+    ],
+    "teaching_case_audits": [
+      {
+        "target": "teaching.library_statements",
+        "core_inference": "Classify each noticeboard statement as topic or claim.",
+        "quantities_and_units": "No quantities; categories are topic versus claim.",
+        "decision_rule": "Claim iff a reader could reasonably reply 'I disagree'; else topic.",
+        "semantically_valid": true,
+        "reason": "Five fictional statements correctly classified; value, policy, fact cues distinguished."
+      }
+    ]
+  },
+  "recorded_repair": {
+    "field_patches": [
+      {
+        "activity_id": "guided_practice",
+        "criteria": [
+          "Labels A as a topic and B, C, and D as claims (accepting a reasoned alternative for D only if it argues no position is taken)",
+          "Quotes the actual asserting phrase for each claim, such as \"should fund weekend tutoring\" and \"raised attendance\"",
+          "Explains that topic A names a subject without taking a position, and that D's \"matters to families\" is a disputable value position a reader could reject",
+          "Does not relabel a policy or value claim as a topic for lacking a measurable test"
+        ],
+        "field_id": "labels"
+      }
+    ],
+    "solution_step_patches": [
+      {
+        "activity_id": "guided_practice",
+        "explanation": "Model answer: A — topic; it names the reading room, asserting nothing, and no reader could reasonably reply \"I disagree.\" B — claim; the cue is \"should fund weekend tutoring,\" a policy position a councillor could reject. C — claim; the cue is \"raised attendance,\" a factual assertion someone could dispute by pointing to other causes or flat figures. D — claim; the cue is \"matters to families,\" a value assertion a critic could deny by saying families manage without it — it takes a position a reader could reject, so the correct primary label is claim. Accept D labelled as a topic only if the reasoning clearly argues that no position is being taken in the flyer's context; otherwise D is a claim. The recurring misconception is treating value statements as non-claims because they cannot be measured — the cue is disputability, not testability.",
+        "field_id": "labels"
+      }
+    ]
+  },
+  "repaired_package": {
+    "teaching_cases": [
+      {
+        "id": "library_statements",
+        "assumptions": "Original fictional example. Five statements posted at a town library noticeboard: (1) \"Sunday opening hours\" — a topic phrase; nothing is asserted, no one can disagree. (2) \"The library should open on Sundays\" — a claim; someone could reply \"No, it shouldn't.\" (3) \"Sunday attendance figures\" — topic; names a subject, takes no position. (4) \"Sunday attendance rose after the town extended hours\" — claim; a disputable assertion about what happened, so it needs evidence. (5) \"People who work weekdays\" — topic. Worked analysis: the cue is a disputable position someone could reject. Test each statement by asking whether a reader could reasonably say \"I disagree\"; if so, underline the deciding words (\"should open on Sundays\", \"attendance rose\") and label it a claim; if not, label it a topic. Note that claims may assert policy (\"should\"), value (\"matters\"), or fact (\"rose\"), and all three need support, while topics only name a subject.",
+        "data": [],
+        "results": []
+      }
+    ],
+    "workbook": {
+      "title": "Separate Topic From Claim",
+      "activities": [
+        {
+          "id": "guided_practice",
+          "title": "Label flyer statements",
+          "kind": "practice",
+          "instructions": "Original fictional flyer. A town library fundraising flyer includes these four statements:\n\nA. \"The library's reading room\"\nB. \"The council should fund weekend tutoring\"\nC. \"Weekend tutoring raised attendance\"\nD. \"The reading room matters to families\"\n\nRecall the cue from the worked example: a statement is a claim when a reader could reasonably reply \"I disagree\" — it takes a disputable position, whether about policy (\"should\"), fact (\"rose\", \"raised\"), or value (\"matters\"). A topic only names a subject and cannot be disagreed with.\n\nLabel each statement A–D as a topic or a claim. For each claim, quote the word or phrase that does the asserting (the deciding cue someone would reject). For each topic, say in a few words why nothing is asserted. Note: a value statement like \"matters\" cannot be dismissed as a mere topic just because it has no measurable test — it still asserts something someone could dispute.",
+          "fields": [
+            {
+              "id": "labels",
+              "label": "Your four labels with quoted cues (A–D)",
+              "kind": "text",
+              "criteria": [
+                "Labels A as a topic and B, C, and D as claims (accepting a reasoned alternative for D only if it argues no position is taken)",
+                "Quotes the actual asserting phrase for each claim, such as \"should fund weekend tutoring\" and \"raised attendance\"",
+                "Explains that topic A names a subject without taking a position, and that D's \"matters to families\" is a disputable value position a reader could reject",
+                "Does not relabel a policy or value claim as a topic for lacking a measurable test"
+              ]
+            }
+          ],
+          "hint": "For each statement, ask whether a reader could say \"No, that's wrong.\" If yes, find the words that carry the position; if no, it only names a subject.",
+          "worked_solution": "Your four labels with quoted cues (A–D)\n\nModel answer: A — topic; it names the reading room, asserting nothing, and no reader could reasonably reply \"I disagree.\" B — claim; the cue is \"should fund weekend tutoring,\" a policy position a councillor could reject. C — claim; the cue is \"raised attendance,\" a factual assertion someone could dispute by pointing to other causes or flat figures. D — claim; the cue is \"matters to families,\" a value assertion a critic could deny by saying families manage without it — it takes a position a reader could reject, so the correct primary label is claim. Accept D labelled as a topic only if the reasoning clearly argues that no position is being taken in the flyer's context; otherwise D is a claim. The recurring misconception is treating value statements as non-claims because they cannot be measured — the cue is disputability, not testability.",
+          "minutes_min": 1,
+          "minutes_max": 2
+        },
+        {
+          "id": "transfer_classify",
+          "title": "Judge five sentences in a letter about the library van",
+          "kind": "transfer",
+          "instructions": "Original fictional letter, printed in a community newspaper.\n\n\"Dear Editor,\nOur neighbourhood lost its branch library, and many of us now travel a long way to borrow a book. The mobile library van deserves more support from the town. The van's route schedule was posted at the community hall last spring. Extending the van's evening stops would help residents who work during the day. The cost of diesel for the van. Yours faithfully, a regular borrower.\"\n\nYour task has two parts. First, label each of the five sentences below as a topic or a claim, quoting the word or phrase that decides it. Use the cue you practised: a claim takes a position a reader could reasonably reject; a topic only names a subject.\n\nThe five sentences to label:\nA. Our neighbourhood lost its branch library.\nB. The mobile library van deserves more support from the town.\nC. The van's route schedule was posted at the community hall last spring.\nD. Extending the van's evening stops would help residents who work during the day.\nE. The cost of diesel for the van.\n\nSecond, choose the two sentences you found hardest to judge, and for each give a one-line reason your label is right, naming what a reader could or could not reject. If you think a sentence is genuinely arguable either way, say so and defend your label.",
+          "fields": [
+            {
+              "id": "labels_and_reasons",
+              "label": "Your five labels with quoted cues, and your two one-line reasons",
+              "kind": "text",
+              "criteria": [
+                "Labels each of the five sentences A–E as topic or claim with a quoted deciding cue",
+                "Labels sentences B and D as claims, since each asserts something a reader could reject",
+                "Labels sentence E as a topic, since it names a subject without asserting anything",
+                "Applies the disputable-position cue in at least two reasons, not length or grammar",
+                "Accepts a reasoned alternative for a genuinely arguable sentence (such as A or C) with a defensible justification"
+              ]
+            }
+          ],
+          "hint": "For each sentence, ask whether a reader could reply \"No, that's not so\" to some part of it. If yes, that part is your quoted cue.",
+          "worked_solution": "Your five labels with quoted cues, and your two one-line reasons\n\nModel answer: A is a claim in this letter's context — a reader could dispute that the branch library was lost or what that means for borrowers, so the cue is \"lost its branch library\"; if the closure is treated as undisputed shared background, labeling it a topic is also defensible when the reason names that no position is being argued. B is a claim, cue \"deserves more support from the town\" — someone could reply \"No, it doesn't.\" C is a claim, cue \"was posted at the community hall last spring\" — the assertion about what happened could be false and needs checking. D is a claim, cue \"would help residents who work during the day\" — a reader could reject the prediction that extending stops helps. E is a topic, cue \"The cost of diesel for the van\" — it names a subject and asserts nothing; someone could only ask a question about it, not disagree. Accept any consistent, reasoned set: the essential skill is that every claim label rests on a phrase a reader could reject, and every topic label rests on the absence of one, never on sentence length or grammar.",
+          "minutes_min": 2,
+          "minutes_max": 3
+        }
+      ]
+    }
+  },
+  "final_verdict": {
+    "acceptable": false,
+    "issues": [
+      {
+        "target": "practice.guided_practice.labels",
+        "description": "Criterion 0 expressly permits labelling D as a topic 'only if it argues no position is taken', but criterion 2 mandates explaining that D's 'matters to families' is a disputable value position a reader could reject. A learner taking the permitted D-as-topic path cannot satisfy criterion 2 without contradicting their own label, so the expressly permitted response path is ungradeable. Revise criterion 2 so it accepts either (a) D explained as a disputable value claim, or (b) D-as-topic with a reasoned argument that no position is taken in the flyer's context."
+      }
+    ],
+    "choice_audits": [],
+    "text_audits": [
+      {
+        "target": "practice.guided_practice.labels",
+        "alternative_response": "A — topic: 'The library's reading room' names a subject; a reader could only ask a question about it. B — claim, cue 'should fund weekend tutoring', a policy a councillor could reject. C — claim, cue 'raised attendance', a factual assertion someone could dispute. D — topic: in this flyer's context 'The reading room matters to families' functions as an unargued caption beside a donation request; no position is being defended, so a reader is not asked to reject anything.",
+        "criteria": [
+          {
+            "criterion_index": 0,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Keyed labels given; D-as-topic alternative is expressly permitted with reasoning."
+          },
+          {
+            "criterion_index": 1,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Alternative quotes asserting phrases for claims B and C."
+          },
+          {
+            "criterion_index": 2,
+            "task_aligned": true,
+            "accepts_alternative": false,
+            "reason": "Requires calling D's 'matters' disputable, excluding the permitted D-as-topic path."
+          },
+          {
+            "criterion_index": 3,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Alternative's D reason rests on context, not lack of measurable test."
+          }
+        ],
+        "model_answer_valid": true,
+        "model_answer_reason": "Model labels, cues and value-claim reasoning match the supplied flyer and cue.",
+        "requires_activity_repair": false
+      },
+      {
+        "target": "practice.transfer_classify.labels_and_reasons",
+        "alternative_response": "A — topic: 'lost its branch library' is shared background all parties accept; no reader is asked to reject it. B — claim, cue 'deserves more support from the town'. C — topic: 'was posted at the community hall last spring' is uncontested background in the letter. D — claim, cue 'would help residents who work during the day'. E — topic: 'The cost of diesel for the van' names a subject, asserting nothing. Hardest two: B, because 'deserves' asserts value a taxpayer could reject; D, because the prediction 'would help' could be denied.",
+        "criteria": [
+          {
+            "criterion_index": 0,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "All five sentences labelled with quoted cues, as instructed."
+          },
+          {
+            "criterion_index": 1,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "B and D labelled claims with rejectable assertions."
+          },
+          {
+            "criterion_index": 2,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "E labelled topic naming a subject without assertion."
+          },
+          {
+            "criterion_index": 3,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Both reasons apply the disputability cue, not length or grammar."
+          },
+          {
+            "criterion_index": 4,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Reasoned A and C topic alternatives accepted per criterion."
+          }
+        ],
+        "model_answer_valid": true,
+        "model_answer_reason": "Model labels A–C as claims with cues, accepts reasoned alternatives, matches letter.",
+        "requires_activity_repair": false
+      }
+    ],
+    "teaching_case_audits": [
+      {
+        "target": "teaching.library_statements",
+        "core_inference": "Classify each noticeboard statement as topic or claim via disputability.",
+        "quantities_and_units": "No quantities; categories are topic and claim, cue is rejectability.",
+        "decision_rule": "If a reader could reasonably say 'I disagree', label claim and underline cue; else topic.",
+        "semantically_valid": true,
+        "reason": "Nonquantitative case; logical test correctly separates naming from asserting."
+      }
+    ]
+  },
+  "numbered_draft": {
+    "id": "transfer_classify",
+    "kind": "transfer",
+    "title": "Sort a letter's sentences",
+    "instructions": "Original fictional letter to a community newspaper, written by a resident named Ines.\n\n\"Dear Editor: I write about the mobile library van. (1) The mobile library van serves our village each week. (2) The van's route matters to isolated readers. (3) Reading habits in rural areas. (4) The council should keep the van's funding in next year's budget. (5) The van's book borrowing doubled after the route added our village.\"\n\nYour task: label each numbered sentence as a topic or a claim. Quote the deciding word or phrase for each label, as in the noticeboard examples. Then, for the two hardest sentences — the ones you found closest to the line — add one short line each explaining why the sentence is or is not a position someone could reasonably reject.",
+    "data": [],
+    "hint": "For each sentence, ask whether a reader could say \"I disagree\" and point at the exact words that make that possible.",
+    "minutes_min": 1,
+    "minutes_max": 2,
+    "fields": [
+      {
+        "id": "labels",
+        "label": "Your five labels with quoted cues and two reasons",
+        "kind": "text",
+        "criteria": [
+          "Labels each of the five sentences as topic or claim, quoting the deciding phrase",
+          "Treats (2) and (5) as claims: a value claim and a factual claim, not topics, despite lacking a policy test or being factual",
+          "Treats (3) as a topic because it only names a subject and takes no position; treats (1) as a claim or, if labelled a topic, explains why a plain report is not asserted as disputable",
+          "Gives a one-line reason for the two hardest sentences that invokes the disputable-position cue rather than sentence length or grammar",
+          "Where a sentence is a claim, quotes the asserting phrase (e.g. \"matters\", \"doubled\", \"should keep\") rather than a neutral subject phrase"
+        ],
+        "explanation": "Sentences (2), (4) and (5) are claims: \"matters to isolated readers\" asserts value, \"should keep the van's funding\" asserts policy, and \"borrowing doubled\" asserts a disputable fact — each could be met with \"I disagree\" and each needs support. Sentence (3) is a bare topic: it names a subject without asserting anything. Sentence (1) sits closest to the line: read as the writer's report of fact it is a claim someone could dispute (\"No, it doesn't\"), though a reasoned case for treating a neutral descriptive note as a topic is acceptable if explained. A key error is relabelling (2) or (5) as topics because a value claim cannot be measured or because a factual claim \"is just a fact\": both are positions a reader could reject, so both need evidence, while a topic only names a subject."
+      }
+    ]
+  },
+  "six_criteria_draft": {
+    "id": "transfer_classify",
+    "kind": "transfer",
+    "title": "Sort a letter's sentences",
+    "instructions": "Original fictional letter to a community newspaper, written by a resident named Ines.\n\n\"Dear Editor: I write about the mobile library van. (1) The mobile library van serves our village each week. (2) The van's route matters to isolated readers. (3) Reading habits in rural areas. (4) The council should keep the van's funding in next year's budget. (5) The van's book borrowing doubled after the route added our village.\"\n\nYour task: label each numbered sentence as a topic or a claim. Quote the deciding word or phrase for each label, as in the noticeboard examples. Then, for the two hardest sentences — the ones you found closest to the line — add one short line each explaining why the sentence is or is not a position someone could reasonably reject.",
+    "data": [],
+    "hint": "For each sentence, ask whether a reader could say \"I disagree\" and point at the exact words that make that possible.",
+    "minutes_min": 1,
+    "minutes_max": 2,
+    "fields": [
+      {
+        "id": "labels",
+        "label": "Your five labels with quoted cues and two reasons",
+        "kind": "text",
+        "criteria": [
+          "Labels each of the five sentences as topic or claim, quoting the deciding phrase",
+          "Treats (2) and (5) as claims: a value claim and a factual claim, not topics, despite lacking a policy test or being factual",
+          "Treats (1) as a claim or, if labelled a topic, gives a reason that a plain report is not asserted as disputable — reasoned alternatives accepted",
+          "Treats (3) as a topic because it only names a subject and takes no position",
+          "Gives a one-line reason for the two hardest sentences that invokes the disputable-position cue rather than sentence length or grammar",
+          "Reasons quote the asserting phrase where the sentence is a claim (e.g. \"matters\", \"doubled\", \"should keep\") rather than a neutral subject phrase"
+        ],
+        "explanation": "Sentences (2), (4) and (5) are claims: \"matters to isolated readers\" asserts value, \"should keep the van's funding\" asserts policy, and \"borrowing doubled\" asserts a disputable fact — each could be met with \"I disagree\" and each needs support. Sentence (3) is a bare topic: it names a subject without asserting anything. Sentence (1) sits closest to the line: read as the writer's report of fact it is a claim someone could dispute (\"No, it doesn't\"), though a reasoned case for treating a neutral descriptive note as a topic is acceptable if explained. A key error is relabelling (2) or (5) as topics because a value claim cannot be measured or because a factual claim \"is just a fact\": both are positions a reader could reject, so both need evidence, while a topic only names a subject."
+      }
+    ]
+  },
+  "valid_witness_only_verdict": {
+    "acceptable": true,
+    "issues": [],
+    "choice_audits": [],
+    "text_audits": [
+      {
+        "target": "practice.guided_practice.labels",
+        "alternative_response": "A — topic; \"the library's reading room\" names a subject, asserting nothing a reader could reject. B — claim; \"should fund weekend tutoring\" asserts a policy position a councillor could deny. C — claim; \"raised attendance\" asserts a fact someone could dispute. D — claim; \"matters to families\" asserts value a critic could reject by saying families manage without it.",
+        "criteria": [
+          {
+            "criterion_index": 0,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Alternative labels A topic, B/C/D claims exactly as required."
+          },
+          {
+            "criterion_index": 1,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Quotes asserting phrases for all three claims."
+          },
+          {
+            "criterion_index": 2,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Explains A names subject; D is disputable value position."
+          },
+          {
+            "criterion_index": 3,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "No value claim relabeled a topic for lacking measurement."
+          }
+        ],
+        "model_answer_valid": true,
+        "model_answer_reason": "Correct labels, quoted cues, and reason why value assertions are claims; D alternative permitted only with reasoning.",
+        "requires_activity_repair": false
+      },
+      {
+        "target": "practice.transfer_classify.labels_and_reasons",
+        "alternative_response": "A — claim; \"lost its branch library\" could be disputed as fact. B — claim; \"deserves more support from the town\" is a position. C — claim; \"was posted at the community hall last spring\" could be false. D — claim; \"would help residents who work during the day\" is a rejectable prediction. E — topic; \"The cost of diesel for the van\" names a subject, asserting nothing. Hardest: A and C — both assert checkable facts a reader could reject, so claims.",
+        "criteria": [
+          {
+            "criterion_index": 0,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "All five labeled with quoted deciding phrases, including topic E's."
+          },
+          {
+            "criterion_index": 1,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Alternative labels B and D claims with rejecting cues."
+          },
+          {
+            "criterion_index": 2,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Labels E topic for naming a subject only."
+          },
+          {
+            "criterion_index": 3,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Both reasons rest on the disputable-position cue, not form."
+          },
+          {
+            "criterion_index": 4,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Permits reasoned alternatives for arguable A or C."
+          }
+        ],
+        "model_answer_valid": true,
+        "model_answer_reason": "Sound labels and cues; permits defended alternatives for background-like A and C.",
+        "requires_activity_repair": false
+      }
+    ],
+    "teaching_case_audits": [
+      {
+        "target": "teaching.library_statements",
+        "core_inference": "Five noticeboard statements split into topics versus claims.",
+        "quantities_and_units": "Five statements; two categories; no numeric units involved.",
+        "decision_rule": "Reader could reply \"I disagree\" makes a claim; otherwise topic.",
+        "semantically_valid": true,
+        "reason": "Disputability test correctly applied; value, policy, fact claims distinguished."
+      }
+    ]
+  },
+  "corrected_verdict": {
+    "acceptable": false,
+    "issues": [
+      {
+        "target": "practice.guided_practice.labels",
+        "description": "Criterion 0's exception 'accepting a reasoned alternative for D only if it argues no position is taken' and the worked solution's matching 'Accept D labelled as a topic' clause permit misclassifying the explicit value assertion 'The reading room matters to families' as a topic. The statement asserts a disputable position a reader could reject, exactly as the activity's own instructions state; no context in the flyer supports reading it as asserting nothing. Remove the exception from criterion 0 and the conditional acceptance clause from the worked solution, keeping D keyed as a claim with no alternative topic path."
+      },
+      {
+        "target": "practice.transfer_classify.labels_and_reasons",
+        "description": "Sentence A ('Our neighbourhood lost its branch library') and C ('The van's route schedule was posted...') are explicit factual assertions a reader could dispute, matching the taught cue and the teaching case's statement 4. Criterion 4 invites 'a reasoned alternative for a genuinely arguable sentence (such as A or C)', and the worked solution allows A as a topic 'if the closure is treated as undisputed shared background'. No supplied context removes the assertion; a 'topic if defended as background' exception for an explicit assertion is invalid. Remove this exception from criterion 4 and the worked solution so A and C are keyed as claims, leaving the five labels fully determined."
+      }
+    ],
+    "choice_audits": [],
+    "text_audits": [
+      {
+        "target": "practice.guided_practice.labels",
+        "alternative_response": "A — topic: \"The library's reading room\" only names a subject; no reader could reply \"I disagree.\" B — claim, cue \"should fund weekend tutoring\": a policy position a councillor could reject. C — claim, cue \"raised attendance\": a factual assertion someone could dispute with flat figures. D — claim, cue \"matters to families\": a value position a critic could deny — families might manage without it — so it asserts something despite having no measurable test.",
+        "criteria": [
+          {
+            "criterion_index": 0,
+            "task_aligned": false,
+            "accepts_alternative": true,
+            "reason": "Accepts correct A/B/C/D labels but its 'reasoned alternative for D' permits false topic classification of an explicit value assertion."
+          },
+          {
+            "criterion_index": 1,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Requires quoting actual asserting phrases; alternative quotes them accurately."
+          },
+          {
+            "criterion_index": 2,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Explains A names a subject and D is a disputable value position; alternative does both."
+          },
+          {
+            "criterion_index": 3,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Prohibits relabeling value or policy claims as topics; alternative labels D a claim."
+          }
+        ],
+        "model_answer_valid": false,
+        "model_answer_reason": "Correct primary labels, but 'Accept D labelled as a topic' clause licenses a false classification of an explicit assertion.",
+        "requires_activity_repair": false
+      },
+      {
+        "target": "practice.transfer_classify.labels_and_reasons",
+        "alternative_response": "A — claim, cue \"lost its branch library\": a reader could dispute the closure or its effects. B — claim, cue \"deserves more support from the town\". C — claim, cue \"was posted at the community hall last spring\": the posting assertion could be false. D — claim, cue \"would help residents who work during the day\": the prediction could be rejected. E — topic: \"The cost of diesel for the van\" names a subject, asserting nothing. Reasons: B is rejectable (\"No, it doesn't\"); E offers no position to reject, only a subject to ask about.",
+        "criteria": [
+          {
+            "criterion_index": 0,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Requires all five labels with quoted deciding cues; alternative provides both."
+          },
+          {
+            "criterion_index": 1,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "B and D are keyed as claims with rejectable assertions; alternative matches."
+          },
+          {
+            "criterion_index": 2,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "E keyed as a subject-naming topic; alternative explains nothing is asserted."
+          },
+          {
+            "criterion_index": 3,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Disputable-position cue used in two reasons; alternative names what could or could not be rejected."
+          },
+          {
+            "criterion_index": 4,
+            "task_aligned": false,
+            "accepts_alternative": true,
+            "reason": "Tolerating A or C as topics licenses false classification of explicit factual assertions; alternative needs no exception."
+          }
+        ],
+        "model_answer_valid": false,
+        "model_answer_reason": "Primary labels correct, but the shared-background exception wrongly allows explicit assertion A as a topic.",
+        "requires_activity_repair": false
+      }
+    ],
+    "teaching_case_audits": [
+      {
+        "target": "teaching.library_statements",
+        "core_inference": "Classify each noticeboard statement as topic or claim using disputability cue.",
+        "quantities_and_units": "No quantities; categories are topic (names subject) versus claim (policy, value, or fact).",
+        "decision_rule": "If a reader could reasonably reply 'I disagree', label claim and underline deciding words; otherwise label topic.",
+        "semantically_valid": true,
+        "reason": "All five classifications follow the stated rule; value, policy, and fact claims correctly distinguished from subject-naming topics."
+      }
+    ]
+  }
+}

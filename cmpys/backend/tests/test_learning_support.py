@@ -506,6 +506,7 @@ async def test_video_discovery_runs_even_when_outline_has_only_books(monkeypatch
 
 @pytest.mark.asyncio
 async def test_video_fallback_runs_after_first_candidates_are_rejected(monkeypatch):
+    monkeypatch.setattr(support.settings, "tavily_api_key", "synthetic-search-key")
     search = AsyncMock(side_effect=[
         [{"url": "https://youtu.be/abcdefghijk", "text": "First result"}],
         [{"url": "https://youtu.be/otherother1", "text": "Fallback result"}],
@@ -608,3 +609,128 @@ async def test_owner_check_precedes_any_generation(monkeypatch):
         )
     assert error.value.status_code == 404
     assert owner_check.await_args.kwargs["for_update"] is True
+
+
+def test_search_capability_invalidates_empty_support_without_key_material(monkeypatch):
+    monkeypatch.setattr(support.settings, "tavily_api_key", None)
+    disabled = support.support_input(item(), "step_1", None)
+    monkeypatch.setattr(support.settings, "tavily_api_key", "synthetic-search-key")
+    enabled = support.support_input(item(), "step_1", None)
+    assert disabled["revision"] != enabled["revision"]
+    assert enabled["source_search_available"] is True
+    assert "synthetic-search-key" not in json.dumps(enabled)
+    monkeypatch.setattr(support.settings, "tavily_api_key", "rotated-synthetic-key")
+    assert support.support_input(item(), "step_1", None)["revision"] == enabled["revision"]
+
+
+@pytest.mark.asyncio
+async def test_no_search_configuration_skips_paid_query_intent(monkeypatch):
+    monkeypatch.setattr(support.settings, "tavily_api_key", None)
+    intent, search = AsyncMock(), AsyncMock()
+    monkeypatch.setattr(support, "structured_call", intent)
+    monkeypatch.setattr(support, "search_evidence", search)
+    assert [candidate async for candidate in support.video_candidates({})] == []
+    intent.assert_not_awaited()
+    search.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("relevant", [True, False])
+async def test_video_fallback_reconsiders_richer_publisher_evidence(monkeypatch, relevant):
+    monkeypatch.setattr(support.settings, "tavily_api_key", "synthetic-search-key")
+    url = "https://www.youtube.com/watch?v=abcdefghijk"
+    publisher = {
+        "url": "https://institution.example/writing-lesson",
+        "text": url + "\n" + SOURCE * 10,
+    }
+    search = AsyncMock(side_effect=[
+        [{"url": url, "text": "A short creator description."}],
+        [publisher],
+    ])
+    monkeypatch.setattr(support, "search_evidence", search)
+    monkeypatch.setattr(sources, "_youtube_oembed_metadata", AsyncMock(return_value={
+        "title": "Writing a clear claim", "author_name": "Institution",
+        "html": '<iframe src="https://www.youtube.com/embed/abcdefghijk"></iframe>',
+    }))
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.get.return_value = httpx.Response(200, text="var ytInitialPlayerResponse = " + json.dumps({
+        "playabilityStatus": {"status": "OK", "playableInEmbed": True},
+        "videoDetails": {
+            "videoId": "abcdefghijk", "lengthSeconds": "420",
+            "shortDescription": "A short creator description.",
+        },
+    }))
+    monkeypatch.setattr(sources.httpx, "AsyncClient", Mock(return_value=client))
+    verdict = support.VideoReview(
+        credible_educational_creator=True, substantive_content_evidence=True,
+        directly_reinforces_lesson=relevant, appropriate_level=True,
+        adds_demonstration_or_explanation=True, no_material_conflicts=True,
+        why_watch="Shows a concrete worked example of the taught skill.",
+        try_after="Apply the taught skill to your own example.",
+        supporting_quote=SOURCE,
+        issues=[] if relevant else ["The evidence teaches a different skill."],
+    )
+    call = AsyncMock(side_effect=[
+        support.VideoSearchIntent(query="Writing an essay claim with concrete evidence"),
+        verdict,
+    ])
+    monkeypatch.setattr(support, "structured_call", call)
+    result = await support.find_support_video({
+        "mission": "Writing a clear claim", "lesson_title": "Narrow a claim",
+        "lesson": "Use a concrete cue and small action.",
+    })
+    assert search.await_count == 2
+    assert client.get.await_count == 2
+    assert call.await_count == 2
+    assert len(result) == int(relevant)
+    if relevant:
+        assert result[0]["url"] == url
+        assert result[0]["videoId"] == "abcdefghijk"
+        assert result[0]["evidenceType"] == "publisher_lesson"
+        assert result[0]["evidenceUrl"] == publisher["url"]
+
+
+@pytest.mark.asyncio
+async def test_video_fallback_deduplicates_same_evidence_across_url_forms(monkeypatch):
+    monkeypatch.setattr(support.settings, "tavily_api_key", "synthetic-search-key")
+    search = AsyncMock(side_effect=[
+        [{"url": "https://youtu.be/abcdefghijk", "text": "Short source evidence."}],
+        [{"url": "https://www.youtube.com/watch?v=abcdefghijk", "text": "Short  source evidence."}],
+    ])
+    verify = AsyncMock(return_value=None)
+    monkeypatch.setattr(support, "search_evidence", search)
+    monkeypatch.setattr(support, "verify_video_source", verify)
+    monkeypatch.setattr(support, "structured_call", AsyncMock(return_value=
+        support.VideoSearchIntent(query="Writing an essay claim with concrete evidence")
+    ))
+    assert await support.find_support_video({
+        "mission": "Writing a clear claim", "lesson_title": "Narrow a claim",
+    }) == []
+    assert search.await_count == 2
+    assert verify.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_video_alternative_evidence_uses_existing_candidate_budget(monkeypatch):
+    monkeypatch.setattr(support.settings, "tavily_api_key", "synthetic-search-key")
+    url = "https://www.youtube.com/watch?v=abcdefghijk"
+    batches = [[
+        {"url": f"https://institution.example/lesson-{batch}-{index}",
+         "text": url + " " + f"Different evidence {batch} {index}"}
+        for index in range(3)
+    ] for batch in range(2)]
+    search = AsyncMock(side_effect=batches)
+    verify = AsyncMock(return_value=None)
+    call = AsyncMock(return_value=
+        support.VideoSearchIntent(query="Writing an essay claim with concrete evidence")
+    )
+    monkeypatch.setattr(support, "search_evidence", search)
+    monkeypatch.setattr(support, "verify_video_source", verify)
+    monkeypatch.setattr(support, "structured_call", call)
+    assert await support.find_support_video({
+        "mission": "Writing a clear claim", "lesson_title": "Narrow a claim",
+    }) == []
+    assert search.await_count == 2
+    assert verify.await_count == 4
+    assert call.await_count == 1

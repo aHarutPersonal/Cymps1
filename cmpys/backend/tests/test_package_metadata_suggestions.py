@@ -23,10 +23,7 @@ def test_metadata_suggestion_is_source_owned_and_does_not_count_as_evidence():
 
 
 @pytest.mark.parametrize("source", [
-    "The screen said 7:42.",
     "Use *screen says 7:42* as a concrete time clue.",
-    "Submit three parts: (1) your draft, (2) your revision, and (3) a short note.",
-    "The details changed are (1) the fogged window - and (2) the scraping chair.",
 ])
 def test_reviewed_display_and_list_hints_still_require_exact_explicit_assignment(source):
     package = package_with_spans(source)
@@ -35,6 +32,19 @@ def test_reviewed_display_and_list_hints_still_require_exact_explicit_assignment
     assert ids and set(payload["metadata_candidate_ids"]) == ids
     assert _scope_failures(ReviewEvidencePatch(), ids, package)
     assert not _scope_failures(ReviewEvidencePatch(literal_fact_ids=sorted(ids)), ids, package)
+
+
+# Phase 0.2 (2026-11-04): clock times and complete inline "(1) ... (N)" lists
+# are not quantities under the shared numeral policy, so they no longer reach
+# the binder as spans (previously they needed explicit metadata assignment).
+@pytest.mark.parametrize("source", [
+    "The screen said 7:42.",
+    "Submit three parts: (1) your draft, (2) your revision, and (3) a short note.",
+    "The details changed are (1) the fogged window - and (2) the scraping chair.",
+])
+def test_clock_and_inline_list_sources_send_no_spans_to_the_binder(source):
+    payload = package_review_payload(package_with_spans(source), {}, {})
+    assert payload["numeric_spans"] == {} and payload["metadata_candidate_ids"] == []
 
 
 @pytest.mark.parametrize("source", [

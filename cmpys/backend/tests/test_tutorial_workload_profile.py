@@ -34,6 +34,8 @@ PRE_TUTORIAL_IDENTITY = {
 
 def short_package():
     source = package_payload()
+    from tests.test_short_tutorial_pipeline import short_package as teaching_package
+    source["teaching_cases"] = teaching_package().model_dump(mode="json")["teaching_cases"]
     for activity in source["workbook"]["activities"]:
         activity.update(minutes_min=1, minutes_max=2)
     return LessonPackage.model_validate(source)
@@ -59,12 +61,13 @@ def test_tutorial_planning_and_preflight_agree_without_changing_work_estimates()
     assert "worked_solution" not in json.dumps(contract)
 
 
-def test_short_profile_does_not_clamp_a_long_exercise_to_its_budget():
+def test_tutorial_exercise_time_never_fails_a_lesson():
+    # Owner decision (2026-11-06): tutorial exercise time is server-set and never fails a
+    # lesson, so even a long estimate is no feasibility issue; legacy lessons keep the check.
     activities = [{"id": "guided", "minutes_min": 8, "minutes_max": 10},
                   {"id": "transfer", "minutes_min": 8, "minutes_max": 10}]
     before = copy.deepcopy(activities)
-    issues = workload_feasibility_issues(activities, lesson_format=TUTORIAL_LESSON_FORMAT)
-    assert issues and "5–8" in issues[0]
+    assert workload_feasibility_issues(activities, lesson_format=TUTORIAL_LESSON_FORMAT) == []
     assert activities == before
 
 
@@ -92,14 +95,13 @@ def test_tutorial_package_review_receives_the_same_profile_and_private_evidence(
     assert all(a["worked_solution"] for a in payload["package"]["workbook"]["activities"])
 
 
-@pytest.mark.parametrize("practice,reading,accepted", [(2, 3, True), (4, 4, True), (1, 3, False), (5, 3, False)])
-def test_final_review_preserves_honest_workload_and_short_profile_bounds(practice, reading, accepted):
+@pytest.mark.parametrize("practice,reading", [(2, 3), (4, 4), (1, 3), (5, 3)])
+def test_final_review_never_fails_a_tutorial_on_exercise_time(practice, reading):
     review = LessonReview(acceptable=True, issues=[], practice_minutes=practice, contains_calculations=False, calculations=[])
-    error = _workload_error(review, short_package().review_context(), reading_minutes=reading,
-                            lesson_format=TUTORIAL_LESSON_FORMAT)
-    assert (error is None) is accepted
-    if accepted:
-        assert _workload_error(review, short_package().review_context(), reading_minutes=reading)
+    assert _workload_error(review, short_package().review_context(), reading_minutes=reading,
+                           lesson_format=TUTORIAL_LESSON_FORMAT) is None
+    # A legacy lesson still checks the same estimate against its own longer profile.
+    assert _workload_error(review, short_package().review_context(), reading_minutes=reading)
 
 
 @pytest.mark.parametrize("generation", [None, {}, {"lesson_package_version": 0}, {"lesson_package_version": 1}])
@@ -150,6 +152,7 @@ async def test_builder_uses_short_prompts_and_workload_without_removing_private_
     from tests.lesson_package_fixtures import multi_choice_first
 
     seed, activities = components()
+    seed["teaching_cases"] = short_package().model_dump(mode="json")["teaching_cases"]
     for activity in activities.values():
         activity.update(minutes_min=1, minutes_max=2)
         multi_choice_first(activity)  # new tutorials need a number or multi_choice answer
@@ -197,7 +200,10 @@ async def test_split_preflight_uses_short_profile_before_semantic_review(monkeyp
     from app.services.planning import package_preflight
     from tests.test_package_split_preflight import Harness
 
-    harness = Harness()
+    from tests.text_audit_fixtures import argument_text_audits, public_notice_teaching_audits
+    harness = Harness(semantic=[{"acceptable": True, "issues": [],
+        "text_audits": argument_text_audits(short_package()),
+        "teaching_case_audits": public_notice_teaching_audits(short_package())}])
     monkeypatch.setattr("app.services.llm.telemetry.record_llm_response", AsyncMock(return_value=True))
     failures, response, _ = await package_preflight.review_package(
         short_package(), {"id": "step_1", "lesson_format": TUTORIAL_LESSON_FORMAT}, {},
@@ -225,7 +231,7 @@ async def test_final_review_receives_actual_short_reading_and_visual_requirement
     request = client.generate_json.call_args.kwargs
     body = json.loads(request["user_prompt"])
     assert body["lesson"]["reading_minutes"] == 3
-    assert body["context"]["workload_contract"]["allowed_total_minutes_range"] == [5, 8]
+    assert "workload_contract" not in body["context"]  # exercise time is the server's (2026-11-06)
     assert "native diagram or comparison" in request["system_prompt"]
     assert "private-answer and transfer-independence checks" in request["system_prompt"]
 
@@ -245,8 +251,9 @@ def test_exact_mission_allocation_has_feasible_honest_reading_and_practice(alloc
     review = LessonReview(acceptable=True, issues=[], practice_minutes=practice, contains_calculations=False, calculations=[])
     assert _workload_error(review, short_package().review_context(), reading_minutes=reading,
         lesson_format=TUTORIAL_LESSON_FORMAT, allotted_lesson_minutes=allocation) is None
+    # Since 2026-11-06 an off-allocation total no longer fails a tutorial either.
     assert _workload_error(review, short_package().review_context(), reading_minutes=reading + 1,
-        lesson_format=TUTORIAL_LESSON_FORMAT, allotted_lesson_minutes=allocation)
+        lesson_format=TUTORIAL_LESSON_FORMAT, allotted_lesson_minutes=allocation) is None
 
 
 @pytest.mark.parametrize("allocation", [True, 4, 9, "6"])
@@ -288,74 +295,24 @@ async def test_approved_short_tutorial_persists_exact_private_workbook_without_o
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("allocation,practice", [(6, 2), (6, 4), (7, 3)])
-async def test_real_review_classifies_honest_allocation_mismatch_as_repairable_package_scope(allocation, practice):
+@pytest.mark.parametrize("allocation,practice", [(6, 2), (6, 4), (7, 3), (6, 5)])
+async def test_real_review_never_rejects_a_tutorial_for_its_exercise_time(monkeypatch, allocation, practice):
+    # Owner decision (2026-11-06): neither an allocation mismatch nor an estimate outside the
+    # package range is a package defect or missing evidence for a tutorial any more.
     from types import SimpleNamespace
     from app.services.llm.client import LLMResponse
     from app.services.planning.lesson_review import review_lesson
     from tests.test_lesson_review_contract import _review
 
-    response = LLMResponse(data=_review(practice_minutes=practice),
-                           effective_parameters={"provider_option": "retained"})
-    client = SimpleNamespace(generate_json=AsyncMock(return_value=response))
+    client = SimpleNamespace(generate_json=AsyncMock(return_value=LLMResponse(data=_review(practice_minutes=practice))))
+    monkeypatch.setattr("app.services.llm.telemetry.record_llm_response", AsyncMock(return_value=True))
     failures, returned, _ = await review_lesson(
         {"lesson_content": "concept " * 450, "lesson_format": TUTORIAL_LESSON_FORMAT},
         client_factory=lambda **kwargs: client,
         context={"lesson_package": short_package().review_context(), "allotted_lesson_minutes": allocation})
-    # A verified estimate of actual work is a scope finding, not unavailable
-    # evidence or permission to re-ask the reviewer for a more convenient number.
-    client.generate_json.assert_awaited_once()
-    assert returned.error is None
-    assert returned.data["acceptable"] is False
-    assert failures == returned.data["package_issues"]
-    assert returned.data["package_issue_targets"] == ["package"]
-    assert returned.effective_parameters == {
-        "provider_option": "retained", "validated_repair_targets": ["package"]}
-    assert returned.data["practice_minutes"] == practice
-    assert "do not pad or relabel" in failures[0]
-
-
-@pytest.mark.asyncio
-async def test_real_review_out_of_package_estimate_stays_unavailable_evidence(monkeypatch):
-    from types import SimpleNamespace
-    from app.services.llm.client import LLMResponse
-    from app.services.planning.lesson_review import review_lesson
-    from tests.test_lesson_review_contract import _review
-
-    first = LLMResponse(data=_review(practice_minutes=5))  # Package supports only2–4.
-    patch = LLMResponse(data={"practice_minutes": 5})
-    client = SimpleNamespace(generate_json=AsyncMock(side_effect=[first, patch]))
-    monkeypatch.setattr("app.services.llm.telemetry.record_llm_response", AsyncMock(return_value=True))
-    failures, returned, _ = await review_lesson(
-        {"lesson_content": "concept " * 450, "lesson_format": TUTORIAL_LESSON_FORMAT},
-        client_factory=lambda **kwargs: client,
-        context={"lesson_package": short_package().review_context(), "allotted_lesson_minutes": 6})
-    assert client.generate_json.await_count == 2
-    assert failures and returned.error == "Lesson review evidence patch validation failed"
-    assert not returned.data["package_issues"]
-    assert "validated_repair_targets" not in returned.effective_parameters
-
-
-@pytest.mark.asyncio
-async def test_corrected_review_evidence_can_reveal_honest_allocation_scope(monkeypatch):
-    from types import SimpleNamespace
-    from app.services.llm.client import LLMResponse
-    from app.services.planning.lesson_review import review_lesson
-    from tests.test_lesson_review_contract import _review
-
-    first = LLMResponse(data=_review(practice_minutes=5))
-    patch = LLMResponse(data={"practice_minutes": 2})  # Verified but too little work for allocated6.
-    client = SimpleNamespace(generate_json=AsyncMock(side_effect=[first, patch]))
-    monkeypatch.setattr("app.services.llm.telemetry.record_llm_response", AsyncMock(return_value=True))
-    failures, returned, _ = await review_lesson(
-        {"lesson_content": "concept " * 450, "lesson_format": TUTORIAL_LESSON_FORMAT},
-        client_factory=lambda **kwargs: client,
-        context={"lesson_package": short_package().review_context(), "allotted_lesson_minutes": 6})
-    assert client.generate_json.await_count == 2
-    assert returned.error is None and failures == returned.data["package_issues"]
-    assert returned.data["practice_minutes"] == 2
-    assert returned.data["acceptable"] is False
-    assert returned.effective_parameters["validated_repair_targets"] == ["package"]
+    client.generate_json.assert_awaited_once()  # no evidence patch for the estimate
+    assert failures == [] and returned.error is None
+    assert returned.data["acceptable"] is True and not returned.data.get("package_issues")
 
 
 DEPLOYED_RECOVERY11_IDENTITY = {'review_version': 23, 'package_version': 1, 'capability_hash': '1815a97ad0c7246f737c493fbec7b9217c6a5dd6a7d96cacd93c0c34b3afe48f', 'prompt_hash': 'fc899f550b96b760a700da1f5bac50b0118b87b2e615c8106a6b0e4d47ef69eb', 'generation_contract_hash': '80f26df4ca315e830f7ef268eb3410bb44a3130ee3bed9f200526ae7ef626db0', 'schema_hash': '6c9911659a81cbd8598269be5181940c1bd27d828843305fabac7de560b91a01'}
@@ -381,3 +338,124 @@ def test_exact_deployed_tutorial_remains_readable_but_never_new_approval(mutatio
     elif mutation == "missing_package": approval.pop("package_hash")
     assert current_package_approval(details, allow_compatible_read=True) is (mutation is None)
     assert not current_package_approval(details)
+
+
+def test_new_tutorial_activities_get_server_time_not_the_models_estimate():
+    from app.services.planning.activity_draft import TUTORIAL_ACTIVITY_MINUTES, with_tutorial_timing
+
+    draft = {"id": "guided", "minutes_min": 6, "minutes_max": 9, "fields": []}
+    assert with_tutorial_timing(draft) == {**draft, "minutes_min": 1, "minutes_max": 2}
+    assert draft["minutes_min"] == 6  # no mutation
+    assert TUTORIAL_ACTIVITY_MINUTES == {"minutes_min": 1, "minutes_max": 2}
+    # Two activities always make the tutorial's 2–4 minute practice budget.
+    assert not workload_feasibility_issues([{**TUTORIAL_ACTIVITY_MINUTES}] * 2, lesson_format=TUTORIAL_LESSON_FORMAT)
+
+
+def test_tutorial_reviewers_judge_correctness_not_exercise_time():
+    from app.services.llm.prompt_loader import load_and_render
+    from app.services.planning.package_preflight import _SEMANTIC_PROMPT, _TUTORIAL_SEMANTIC_PROMPT
+    from app.services.planning.tutorial_rules import tutorial_review_rules, tutorial_rule
+
+    assert tutorial_rule("R-TIME") not in tutorial_review_rules()
+    assert "[R-TIME]" in load_and_render("tutorial_activity_generate.txt", {})  # generators still size work
+    for timing in ("timing ledger", "2–4 minutes", "5–8 minute", "Honest workload"):
+        assert timing not in _TUTORIAL_SEMANTIC_PROMPT and timing in _SEMANTIC_PROMPT
+    assert "judge whether each exercise is correct and can be completed from its inputs" in _TUTORIAL_SEMANTIC_PROMPT
+
+
+def test_a_tutorial_timing_finding_is_advisory_but_a_legacy_one_still_blocks():
+    from app.services.planning.package_preflight import _server_owned_workload_as_advisory
+
+    finding = {"severity": "blocking", "target": "practice.transfer",
+               "description": "The transfer needs about 6 practice minutes, above the 2–4 minute workload."}
+    data = {"acceptable": False, "issues": [finding]}
+    tutorial = _server_owned_workload_as_advisory(data, {"feasible_practice_minutes_range": None}, tutorial=True)
+    assert tutorial["issues"][0]["severity"] == "advisory" and data["issues"][0]["severity"] == "blocking"
+    legacy = _server_owned_workload_as_advisory(data, {"feasible_practice_minutes_range": [20, 40]})
+    assert legacy["issues"][0]["severity"] == "blocking"  # activity-targeted, legacy: still blocks
+    content = {**finding, "description": "The transfer's answer key multiplies base by the slanted side."}
+    kept = _server_owned_workload_as_advisory({"acceptable": False, "issues": [content]}, {}, tutorial=True)
+    assert kept["issues"][0]["severity"] == "blocking"  # a correctness finding is untouched
+
+
+# Pilot 2026-11-07 (gpt-6-luna): both "Exercise contract review failed" endings
+# were the final lesson reviewer judging time, which only the exercise reviewer
+# had stopped doing.
+LUNA_TIMING_FINDINGS = (
+    "This tutorial’s actual practice is specified as 6–9 minutes across its two activities, while "
+    "tutorial_v1 permits 2–4 minutes of practice and 5–8 minutes total including the 3-minute reading.",
+    "The practice activity ranges allow at most 2 minutes for the calculation, explanation of the "
+    "diagnostic error, unit reasoning, checking, and revision. That is not a realistic estimate for all required work.",
+)
+
+
+@pytest.mark.asyncio
+async def test_the_final_tutorial_reviewer_gets_no_timing_rules_or_ledger():
+    from types import SimpleNamespace
+    from app.services.planning.lesson_review import _TUTORIAL_TIME_RULE, review_lesson
+    from tests.test_lesson_review_contract import _review
+
+    prompts = {}
+    for lesson_format in (TUTORIAL_LESSON_FORMAT, None):
+        client = SimpleNamespace(generate_json=AsyncMock(
+            return_value=SimpleNamespace(error=None, data=_review(practice_minutes=3))))
+        await review_lesson(
+            {"lesson_content": "concept " * 450, "lesson_format": lesson_format},
+            client_factory=lambda **kwargs: client,
+            context={"lesson_package": short_package().review_context(), "allotted_lesson_minutes": 7,
+                     "activity_timing_changes": [{"activity_id": "guided"}]})
+        prompts[lesson_format] = client.generate_json.call_args.kwargs
+    tutorial, legacy = prompts[TUTORIAL_LESSON_FORMAT], prompts[None]
+    for timing in ("Honest workload", "realistic workload", "unrealistic activity timing",
+                   "minutes_min..minutes_max", "2–4 minutes of actual practice", "allotted_lesson_minutes"):
+        assert timing not in tutorial["system_prompt"]
+    assert _TUTORIAL_TIME_RULE in tutorial["system_prompt"]
+    assert "Honest workload" in legacy["system_prompt"] and _TUTORIAL_TIME_RULE not in legacy["system_prompt"]
+    context = json.loads(tutorial["user_prompt"])["context"]
+    assert not {"workload_contract", "allotted_lesson_minutes", "activity_timing_changes"} & context.keys()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("finding", LUNA_TIMING_FINDINGS)
+async def test_a_final_reviewer_timing_finding_never_fails_a_tutorial(monkeypatch, finding):
+    from types import SimpleNamespace
+    from app.services.llm.client import LLMResponse
+    from app.services.planning.lesson_review import review_lesson
+    from tests.test_lesson_review_contract import _review
+
+    monkeypatch.setattr("app.services.llm.telemetry.record_llm_response", AsyncMock(return_value=True))
+    verdict = _review(acceptable=False, practice_minutes=6, package_issues=[finding], package_issue_targets=["package"])
+    client = SimpleNamespace(generate_json=AsyncMock(return_value=LLMResponse(data=verdict)))
+    failures, returned, _ = await review_lesson(
+        {"lesson_content": "concept " * 450, "lesson_format": TUTORIAL_LESSON_FORMAT},
+        client_factory=lambda **kwargs: client, context={"lesson_package": short_package().review_context()})
+    assert failures == [] and returned.data["acceptable"] is True
+    assert finding in returned.data["advisories"] and verdict["package_issues"] == [finding]  # no mutation
+
+
+def test_only_timing_findings_become_advisory():
+    from app.services.planning.lesson_review import _tutorial_timing_as_advisory
+
+    content = ("The Core Framework gives away the central risk the independent transfer asks learners to identify.",
+               "The exercise says the train takes 40 minutes, but its answer key uses 50 minutes.")
+    data = {"issues": [*content, LUNA_TIMING_FINDINGS[1]], "package_issues": [LUNA_TIMING_FINDINGS[0]],
+            "package_issue_targets": ["package"]}
+    marked = _tutorial_timing_as_advisory(data)
+    assert marked["issue_severities"] == ["blocking", "blocking", "advisory"]
+    assert marked["package_issue_severities"] == ["advisory"]
+    assert _tutorial_timing_as_advisory({"issues": list(content)}) == {"issues": list(content)}
+    misaligned = {"package_issues": [LUNA_TIMING_FINDINGS[0]], "package_issue_targets": ["package", "x"]}
+    assert _tutorial_timing_as_advisory(misaligned) is misaligned  # left for strict parsing
+
+
+def test_a_scoped_tutorial_repair_keeps_the_server_minutes():
+    from app.services.planning.lesson_package import _replace_public_activity
+
+    package = short_package()
+    original = package.workbook.activities[0]
+    replacement = original.model_copy(update={"minutes_min": 4, "minutes_max": 6, "title": original.title + " (revised)"})
+    kept = _replace_public_activity(package, {original.id: None}, replacement, keep_minutes=True)
+    repaired = next(activity for activity in kept.workbook.activities if activity.id == original.id)
+    assert (repaired.minutes_min, repaired.minutes_max, repaired.title) == (1, 2, original.title + " (revised)")
+    legacy = _replace_public_activity(package, {original.id: None}, replacement)
+    assert next(a for a in legacy.workbook.activities if a.id == original.id).minutes_max == 6

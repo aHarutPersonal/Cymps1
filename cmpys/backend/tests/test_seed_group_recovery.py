@@ -18,7 +18,7 @@ def merged_seed(seed):
 
 def response(raw):
     return LLMResponse(data={}, raw_response=raw, finish_reason='stop',
-        error='zai request failed (JSONProtocolError; finish=stop)',
+        error='anthropic request failed (JSONProtocolError; finish=stop)',
         effective_parameters={'json_protocol_error': 'duplicate_property'})
 
 

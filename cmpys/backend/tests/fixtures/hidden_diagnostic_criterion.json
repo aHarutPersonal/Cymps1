@@ -1,0 +1,59 @@
+{
+  "lesson_version": "7482523eaa3264d195e51d67a49b360980a2f8c6d06e34297f923a17d04b1700",
+  "activity": {
+    "id": "label_own_claim",
+    "title": "Label your own narrowed claim",
+    "kind": "practice",
+    "instructions": "Here is the sentence you wrote in your diagnostic, exactly as you saved it:\n\n\"The town should test Sunday library opening for six weeks, then compare attendance with staffing costs before deciding whether to continue.\"\n\nIn the market-bus example, the proposal part is the action offered for acceptance — run a free weekend bus for one summer, then decide on results — and the reason part is the stated purpose: find out whether the route is worth its cost before committing long term. A claim stays a claim when it asserts a proposal and gives one reason, and it is narrowed when it names the trial's length and the comparison the decision will use.\n\nNow annotate your own sentence. In one short response: quote or clearly name the part that is the proposal, name the part that is the reason, and name one unresolved gap you yourself flagged earlier — either choosing evidence that measures Sunday demand rather than general library popularity, or answering the cost objection fairly. Pick a gap that is genuinely missing from the sentence, not one it already answers.",
+    "data": [],
+    "fields": [
+      {
+        "id": "annotation",
+        "label": "Your annotation of the claim",
+        "kind": "text",
+        "unit": "",
+        "choices": [],
+        "expression": null,
+        "correct_choice": null,
+        "tolerance": 0.01,
+        "criteria": [
+          "Names or quotes the proposal: testing Sunday library opening for six weeks and comparing attendance with staffing costs before deciding to continue",
+          "Identifies the reason: learning whether weekday workers benefit without a permanent commitment (or equivalent purpose wording)",
+          "Names one real unresolved gap: evidence that measures Sunday demand specifically rather than general library popularity, or a fair answer to the cost objection",
+          "Names a gap that is genuinely absent from the sentence rather than one the sentence already covers"
+        ],
+        "rubric_criterion": null
+      }
+    ],
+    "hint": "Find the action the town is asked to accept, then the purpose that action serves; last, recall which missing piece you said you got stuck on.",
+    "worked_solution": {
+      "version": 1,
+      "steps": [
+        {
+          "field_id": "annotation",
+          "explanation": "The proposal part is the action offered for acceptance: test Sunday library opening for six weeks, then compare attendance with staffing costs before deciding whether to continue. The reason part is the stated purpose you gave: learn whether weekday workers benefit without committing permanently. Your sentence is narrowed because it names the trial's length and the comparison the decision will use, so it already answers what would happen after the trial — that is not a gap. What it does not answer are the two pieces you yourself flagged: it names no evidence that measures Sunday demand specifically rather than general library popularity, and it gives no fair response to the staffing-cost objection. Naming either one is a valid gap. A model annotation: \"Proposal: test Sunday opening for six weeks, comparing attendance with staffing costs before deciding. Reason: learn whether weekday workers benefit without a permanent commitment. Gap: the sentence doesn't say what evidence would show Sunday demand rather than general library popularity.\" Accept equivalent wording, and accept the objection gap if the learner instead writes that the cost objection is unanswered."
+        }
+      ]
+    },
+    "minutes_min": 1,
+    "minutes_max": 2,
+    "diagram": null
+  },
+  "submitted_answer": "Proposal: the town should test Sunday library opening for six weeks. The attendance/cost comparison gives the trial an implied purpose: learn whether continued opening is justified before committing. That is an implied reason, not an explicit because-clause. One unresolved gap is finding evidence of Sunday demand rather than general popularity; the sentence does not identify a suitable source or who the Sunday users are.",
+  "grading_diagnostic": {
+    "fields": [
+      {
+        "field_id": "annotation",
+        "criterion_met": [
+          true,
+          false,
+          true,
+          true
+        ],
+        "feedback": "Strong annotation. You clearly name the proposal, \"test Sunday library opening for six weeks,\" and pick a genuinely missing gap: Sunday-demand evidence \"rather than general popularity.\" The fix: your reason focuses on justifying continuation, but the reason you flagged earlier was learning whether weekday workers benefit without a permanent commitment. Revise to name that purpose — for example, \"learn whether weekday workers use Sunday opening before any long-term commitment.\"",
+        "uncertain": false
+      }
+    ]
+  },
+  "full_relevant_attempt": "\"My attempt is to narrow that claim: 'The town should test Sunday library opening for six weeks, then compare attendance with staffing costs before deciding whether to continue.' The reason is to learn whether weekday workers benefit without committing permanently. I do not know how to choose enough evidence or answer the strongest objection fairly.\""
+}

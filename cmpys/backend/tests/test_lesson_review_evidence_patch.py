@@ -11,6 +11,7 @@ from app.services.planning.lesson_review import (
     LessonReview, PackagedLessonReview, ReviewEvidencePatch, review_lesson,
     _canonical_review_data, _repair_scope, numeric_spans,
 )
+from tests.phase0_fixtures import model_binder_mechanics  # noqa: F401
 
 
 PACKAGE = {"teaching_cases": [{"id": "case", "data": [
@@ -99,6 +100,8 @@ async def test_patch_can_report_real_source_defect_without_a_third_call():
     assert client.generate_json.await_count == 2
 
 
+# Phase 0.4: exercises the model binder; keep earlier server bindings.
+@pytest.mark.usefixtures("model_binder_mechanics")
 @pytest.mark.asyncio
 async def test_arithmetic_mismatch_is_included_when_other_evidence_is_missing():
     source = {"lesson_content": "The combined amount is 20. The difference is 10."}
@@ -201,7 +204,7 @@ async def test_in_range_activity_time_cannot_approve_an_underfilled_session():
 @pytest.mark.asyncio
 async def test_exhausted_patch_keeps_uncertain_evidence_out_of_content_repairs():
     client = SimpleNamespace(generate_json=AsyncMock(side_effect=[
-        LLMResponse(data=verdict()), LLMResponse(data={}, error="zai request failed (TimeoutError; finish=missing)")]))
+        LLMResponse(data=verdict()), LLMResponse(data={}, error="anthropic request failed (TimeoutError; finish=missing)")]))
     failures, response, _ = await review_lesson(LESSON, client_factory=lambda **kw: client,
                                                context={"lesson_package": PACKAGE})
     assert failures and response.error

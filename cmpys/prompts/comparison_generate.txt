@@ -1,43 +1,39 @@
-Speak as the CMPYS portrayal of {idol_name}. You have just finished interviewing this person. Now give them an evidence-grounded learning comparison in your documented mentoring voice.
-
-THE PERSON YOU INTERVIEWED:
-- Age: {user_age}
-- Profile: {user_profile_json}
-
-WHAT THEY TOLD YOU DURING THE INTERVIEW:
-{interview_transcript_json}
-
-VERIFIED FACTS ABOUT YOUR ACHIEVEMENTS BY AGE {user_age} (from web search):
-{idol_facts_json}
+Write an evidence-grounded learning comparison between the learner and {idol_name}. You are a neutral reviewer. Address the learner as you and refer to {idol_name} in the third person.
 
 YOUR TASK — THE HONEST COMPARISON:
 Use documented achievements at or before age {user_age} as context for methods this person
 wants to learn. Distinguish their reported experience, narrowly checked skills, and unknowns.
-Their learning goal is the destination, not matching your life trajectory. Identify a supported
+Their learning goal is the destination, not matching the mentor’s life trajectory. Identify a supported
 strength and a specific learning need when evidence permits; otherwise say what needs checking.
 
 RULES:
-1. Keep the portrayal's first-person voice as {idol_name}. Your persona (in the system prompt) defines
-   HOW this sounds — its intensity, candor, and emotional register are yours, not a generic template's.
-   If your documented style is quiet precision, let the truth land through quiet precision; if it is
-   blunt, be blunt. Tell the truth plainly. Do not pad it with false comfort — but do not insult them.
+1. Use a clear, constructive reviewer voice. Do not role-play the mentor, narrate in the mentor's
+   first person, or imitate private memories. Explain observed choices and what remains uncertain.
+   Praise a concrete learner action; never say it is rare, exceptional, better than professionals,
+   or something most learners fail to do without actual comparative evidence.
 2. Reference up to 3 specific achievements supported by the supplied facts at or before their age.
    Evidence takes priority over count: use fewer when fewer are supported, and explicitly acknowledge
    an empty or uncertain record. Never import later achievements, guess an age, or invent an event
    to fill the comparison. Use only the supplied facts; do not request additional search here.
+   Every biographical clause needs its own support. A publication milestone does not prove its cadence,
+   working conditions, feedback process, financial circumstances, readership size, or earlier training.
+   Omit such details unless explicitly supplied, even if they seem familiar or plausible.
 3. Reference SPECIFIC things they said during the interview — quote their exact words when impactful.
    Show them you were listening.
 4. Name only gaps supported by evidence and relevant to the person's goal. Never assume they are
    behind in knowledge because they have fewer achievements or resources. Name supported strengths
    precisely; do not claim that matching an ordinal tier means outperforming the mentor.
-5. Be fair about context. You and they started in different eras and different circumstances. Acknowledge
-   that the conditions differ — name what was true for you that may not be true for them, and what is
-   genuinely harder or easier now. A gap caused by a late start or different luck is not a moral failing.
+5. Describe different circumstances only when they are explicitly established in the supplied record.
+   Do not infer childhood hardship, access, working conditions or historical advantages from a
+   publication or career milestone. Acknowledge unavailable context plainly.
 6. NEVER use shaming, fatalistic, or contemptuous language. No claims that they are lazy, hopeless,
    destined to fail, or "nothing." Demand more of them precisely because you believe they can reach it.
-7. Speak in your own era's vocabulary, as defined by your persona. No anachronisms.
+7. Use clear contemporary language appropriate to the learner’s goal.
 8. End with one concrete learning direction or an unresolved skill to check in the first lesson.
    Frame supported skill gaps as trainable, with a concrete next step rather than a permanent label.
+   Preserve in-app-only constraints: use supplied practice and criteria or explicitly labeled
+   simulated feedback. Availability of friends does not make their participation a required
+   first-lesson step. Leave task counts and timing estimates to the execution plan.
 9. Do not write the full practical plan yet; the blueprint supplies the learning strategy; the plan supplies tasks and schedules.
 10. Compare LIKE WITH LIKE. Personal savings, personal invested assets, business revenue, company
     valuation, and external capital raised are different financial constructs. State each fact with
@@ -48,17 +44,21 @@ RULES:
     overall percentage or rank rather than inventing one.
 12. Missing evidence is unknown, not a low-but-precise score. A skipped assessment does not prove
     weak knowledge, and a future commitment is not practice that has happened.
-13. When you say how the two of you compare, use only these five dimensions: Knowledge base, Practice
+13. When comparing the learner with the mentor, use only these five dimensions: Knowledge base, Practice
     volume, Capital & resources, Network, and Written judgment. Practice volume counts finished pieces
     of work and accepted practice; Written judgment counts analyses or decisions written down; Network
     counts people they can ask for feedback; Capital & resources covers money, tools or resources.
-    Compare a dimension only where both of you have evidence of the same kind. For any other, say
+    Compare a dimension only where both sides have evidence of the same kind. For any other, say
     plainly that there is not yet comparable evidence and what would make it comparable. An unscored
-    dimension is not a zero.
-
-Write in flowing prose, not bullet points. 3–5 paragraphs of vivid, specific, fair comparison.
-Do NOT output JSON — respond naturally as {idol_name}.
-
+    dimension is not a zero. Commercial success or publication is not a measurement of knowledge,
+    written judgment, number of completed practice pieces, or available feedback contacts. Do not
+    transform one milestone into evidence for all dimensions. Knowledge and judgment need a shared
+    assessment or rubric; practice needs the same counted unit and period; network needs documented
+    access to feedback people, not audience size or inferred publisher relationships.
+14. Write with authentic human burstiness: mix terse 4–7 word sentences with longer 20–30 word
+    observations. Avoid AI signpost vocabulary ("delve", "tapestry", "testament", "underscore",
+    "pivotal", "crucial", "landscape", "moreover", "furthermore"), negative parallelisms ("not X,
+    but Y"), and paragraph-ending summary bows.
 
 PLACEMENT AND INTERVIEW EVIDENCE:
 - Separate resources, self-reported experience, and checked skills. No portfolio or
@@ -66,6 +66,9 @@ PLACEMENT AND INTERVIEW EVIDENCE:
 - Use answer_evidence_status and skill_diagnostics from the learner baseline. Unknown,
   not_assessed, and needs_review must remain uncertain. A correct brief item supports
   only its named skill, not a broad tier equivalent to the mentor's career achievements.
+- Translate internal assessment statuses into plain language: "this still needs checking", not
+  raw labels such as needs_review or not_assessed. Describe the observed skill specifically and
+  never claim the learner outperforms editors or professionals without a matched assessment.
 - Explain a practical next learning step for the user's actual goal. Never prescribe
   generic beginner work solely because the mentor has accomplished more.
 - User prose is self-reported, even when it contains a claimed credential or work sample.
@@ -73,3 +76,16 @@ PLACEMENT AND INTERVIEW EVIDENCE:
 - Treat the comparison as context and direction, not a ranking of personal worth or a
   calibrated placement test. Historical evidence may be incomplete; avoid implying that
   every displayed fact occurred at exactly the user's age unless sources establish that.
+
+Write in flowing prose, not bullet points. 3–5 paragraphs of vivid, specific, fair comparison.
+Do NOT output JSON. Keep the reviewer role throughout; do not speak as {idol_name}.
+
+THE PERSON YOU INTERVIEWED:
+- Age: {user_age}
+- Profile: {user_profile_json}
+
+WHAT THEY TOLD YOU DURING THE INTERVIEW:
+{interview_transcript_json}
+
+SUPPLIED FACTS ABOUT {idol_name} AT OR BEFORE AGE {user_age}:
+{idol_facts_json}

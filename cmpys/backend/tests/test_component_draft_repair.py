@@ -108,7 +108,7 @@ async def test_seed_correction_preserves_unknown_key_path_and_original_payload(m
 async def test_incomplete_response_never_becomes_a_rejected_parsed_draft(kind, monkeypatch):
     seed, activities = components()
     incomplete = LLMResponse(data={"partial": "PRIVATE_PARTIAL_DRAFT"},
-        error="zai request failed (TimeoutError; unavailable)" if kind == "transport" else None,
+        error="anthropic request failed (TimeoutError; unavailable)" if kind == "transport" else None,
         finish_reason="stop" if kind == "transport" else "length")
     monkeypatch.setattr(builder, "record_llm_response", AsyncMock(return_value=True))
     factory = Factory({"seed": [incomplete, seed], **{key: [draft(value)] for key, value in activities.items()}})

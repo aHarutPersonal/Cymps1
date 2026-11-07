@@ -25,6 +25,7 @@ from app.services.planning.lesson_package import PrivatePackageRepair
 from app.services.planning.package_preflight import PackageSemanticReview
 from tests.test_lesson_pipeline_reliability import Scenario, ScenarioClient, run_scenario
 from tests.test_package_split_preflight import Harness, isolate, package, run  # noqa: F401
+from tests.phase0_fixtures import model_binder_mechanics  # noqa: F401
 
 OUTLINE_ISSUE = (
     "The outline names four memo sections (numbers, sources, checks, verdict) "
@@ -42,6 +43,8 @@ def _semantic(*issues):
 # ── the preflight decision ────────────────────────────────────────────────
 
 
+# Phase 0.4: exercises the model binder; keep earlier server bindings.
+@pytest.mark.usefixtures("model_binder_mechanics")
 @pytest.mark.asyncio
 async def test_outline_only_issue_is_guidance_and_the_package_is_approved():
     harness = Harness(semantic=[_semantic(("outline", OUTLINE_ISSUE))])

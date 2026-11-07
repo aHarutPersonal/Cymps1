@@ -47,6 +47,10 @@ async def prompts(lesson_format):
     seed_capture, activity_capture = Capture(), Capture()
     await builder.generate_initial_package(step, context, client_factory=seed_capture)
     seed, _ = components()
+    if lesson_format == "tutorial_v1":
+        seed["teaching_cases"] = [{"id": "public_notice", "assumptions":
+            "Original fictional notice: Please return library books by Friday. The revision names the action and deadline so a reader can act.",
+            "data": [], "results": []}]
     await builder.generate_initial_package(step, context, client_factory=activity_capture,
                                            existing_parts=snapshot(seed))
     activity = next(prompt for name, prompt in activity_capture.prompts.items() if name.endswith("ActivityDraft"))

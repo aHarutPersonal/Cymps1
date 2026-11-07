@@ -72,7 +72,7 @@ async def run(kind, first, second=None, *, source="Total expense is 55."):
     "5.35 / 2 = 2.68.", "40 / 200 = 20%.", "40 / 200 = 20 %.",
     "2 * 50 = 1 hundred.", "2 * 50 = 1\u00a0hundred.",
     "r1 + 5 = 8.", "40 + x = 8.", "x + 40 = 8.", "1e3 + 5 = 8.",
-    "2 ** 3 = 9.", "2^3 = 9.", "2³ = 9.", "8–10 = 20.",
+    "2³ = 9.", "8–10 = 20.",
     "5 + 10 <= 20.", "5 + 10 >= 20.", "5 + 10 != 20.",
     "https://example.invalid/?x=5+10=20", "See www.example.invalid/x=5+10=20",
     "The expense is 55, while unrelated cash flow is 80.",
@@ -87,6 +87,8 @@ def test_source_checker_does_not_invent_semantics_for_correct_or_unsupported_equ
 @pytest.mark.parametrize("source", [
     "40 + 15 = 60.", "100/3 = 33.4.", "1 200 −200 = 900։", "2 × 25 = 60.",
     "5.35/2 = 2.67.", "20 + 30 = 50 = 55.", "40+15=60. 40+15=55.",
+    # Phase 0.4: "^" and "**" are evaluated as powers, so these are now proved wrong.
+    "2 ** 3 = 9.", "2^3 = 9.",
 ])
 def test_source_checker_proves_wrong_explicit_equations_independently(source):
     errors = source_equation_failures({"lesson_content": source})
@@ -141,8 +143,11 @@ def test_occurrence_inventory_preserves_original_split_ids_and_text(text):
     lesson = {"lesson_content": text, "substeps": ["First 10.", "Քայլ 2՝ կարդացեք"]}
     package = numeric_package("Total expense is 60.").review_context()
     source = _numeric_source(lesson, package)
+    # Phase 0.2: a part whose every numeral is a non-quantity under the shared
+    # numeral policy (e.g. a complete inline "(1) ... (3)" list) has no span.
+    from app.services.planning.numeric_metadata import quantity_numerals
     original = [part.strip() for part in re.split(r"(?<=[.!?])\s+|(?<=[։。！？])\s*|\n+", source)
-                if _NUMBER_LITERAL.search(_numeric_content(part))]
+                if _NUMBER_LITERAL.search(_numeric_content(part)) and quantity_numerals(_numeric_content(part))]
     assert numeric_spans(lesson, package) == {f"n{i + 1}": span for i, span in enumerate(original)}
 
 

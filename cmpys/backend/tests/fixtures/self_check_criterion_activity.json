@@ -1,0 +1,23 @@
+{
+  "id": "transfer_verdict",
+  "title": "Weigh a check that mostly misses",
+  "kind": "transfer",
+  "instructions": "Original fictional case. A learner named Marcus was given this task: \"State one check that could expose a mistake in your solution. Say what result would count as a failure.\" His attempt: \"I would re-read my paragraph about bike lanes and fix sentences that feel weak. If it still reads well to me, it passes.\"\n\nHis stated task asks for a check that could expose a mistake and a stated failure condition. Write a short verdict on Marcus's attempt against that task. Name one strength that is honestly available, one unresolved gap, and one small observable result for his mission. Weigh failure fairly: if the attempt largely misses the criterion, say so instead of balancing it away with praise.",
+  "data": [],
+  "hint": "Ask what Marcus's check would actually expose — a mistake in the claim, or only his own confidence in the sentences.",
+  "minutes_min": 1,
+  "minutes_max": 2,
+  "fields": [
+    {
+      "id": "verdict",
+      "label": "Your verdict on Marcus's attempt",
+      "kind": "text",
+      "criteria": [
+        "Names a strength honestly available in the wording (an act of review exists) or fairly judges that the attempt largely misses the stated task because a self-re-read tests confidence, not the claim",
+        "Identifies the gap: no outside reader who could state the claim, no test of whether the evidence supports it, and no stated failure condition beyond \"reads well to me\"",
+        "Proposes a small observable result, such as one outside-reader summary test with a stated failure sign, tied to the mission"
+      ],
+      "explanation": "A strong verdict weighs the failure rather than hiding it. The honest strength is narrow: Marcus does propose an act of review rather than skipping checking entirely. But measured against his stated task, the attempt largely misses. Re-reading his own paragraph and fixing weak-sounding sentences tests whether he still likes his wording, not whether the bike-lane claim is accurate or supported; the same writer who wrote the mistake is unlikely to spot it by re-reading. The task also asked for a failure condition, and \"if it still reads well to me, it passes\" gives a pass condition instead — no result of his check could expose a mistake. A small observable result fits both the gap and his mission: one outside-reader summary test, where a reader states the claim and the supporting evidence without help, with a stated failure sign such as the reader summarizing a different claim than intended or being unable to say how a cited fact supports it. Accept reasoned alternatives, including a verdict that argues no real strength exists; do not accept praise for effort or a gap framed only as \"add more research\" without tying it to the stated task."
+    }
+  ]
+}

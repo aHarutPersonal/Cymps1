@@ -20,7 +20,10 @@ from dataclasses import dataclass, field
 from app.core.config import settings
 from app.models.plan import PlanItemType
 from app.services.llm import get_llm_client
+from app.services.llm.client import direct_client, provider_configured
+from app.services.llm.protocol import DIRECT_PROVIDERS
 from app.services.llm.recovery import operational_recovery_client, CompleteRecoveryClient
+from app.services.llm.routes import route_for
 from app.services.curriculum.hashing import sha256_json
 from app.services.planning.checkpoints import PlanCheckpointStore
 from app.services.llm.prompt_loader import (
@@ -63,17 +66,18 @@ def _recover_plan_outage(response, **kwargs):
     client = operational_recovery_client(response, **kwargs)
     if client is not None and _plan_run_active.get():
         # Carry an observed outage through this run only. Subsequent stages
-        # must not pay for another call to the same unavailable gateway.
+        # must not pay for another call to the same unavailable provider.
         _plan_recovery_response.set(response)
     return client
 
 
 
-def _plan_client(**kwargs):
+def _plan_client(*, operation, **kwargs):
+    """The plan route's primary; this module owns the one backup-model recovery."""
     recovery = operational_recovery_client(
         _plan_recovery_response.get(), timeout=max(90, kwargs["timeout"]), max_tokens=kwargs["max_tokens"]
     )
-    return recovery or get_llm_client(**kwargs)
+    return recovery or get_llm_client(**kwargs, operation=operation, allow_fallback=False)
 
 
 class BackboneWeekRepair(BaseModel):
@@ -214,6 +218,57 @@ def validate_roadmap_structure(roadmap, duration_weeks) -> list[str]:
     return warnings
 
 
+_INTERNAL_ASSESSMENT_STATE = re.compile(
+    r"\b(?:needs_review|not_assessed|correct_on_item|needs_practice_on_item|"
+    r"completed_with_support|transfer_without_hint|passed_with_help|passed_without_help)\b"
+)
+_UNASSIGNED_TUTORIAL_COUNT = re.compile(
+    r"\b(?:[0-9]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
+    r"thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)"
+    r"[ -]+(?:(?:short|guided|in-app|brief)[ -]+)*tutorials?\b", re.IGNORECASE
+)
+
+
+def public_plan_copy_issues(value, *, location: str) -> list[str]:
+    """Check objective copy contradictions before any outline count exists.
+
+    Only prose fields are inspected; identifiers and phase/status metadata remain
+    untouched. Pedagogical judgments stay in the generation/review prompts.
+    """
+    if hasattr(value, "model_dump"):
+        value = value.model_dump()
+    prose_fields = {"title", "description", "success_metric", "daily_instructions",
+                    "primary_mission", "outcome", "roadmap_thesis", "anti_goals"}
+    issues = []
+    def visit(node, path, prose=False, check_reader=True):
+        if isinstance(node, dict):
+            if isinstance(node.get("week_number"), int):
+                path = f"week {node['week_number']}"
+            if node.get("type") in {"habit", "practice"}:
+                copy = " ".join(str(node.get(key) or "") for key in
+                                ("description", "daily_instructions", "success_metric"))
+                if re.search(r"\b(?:[0-9]+|one|two|three|four|five|six|seven)(?:[ -]+(?:of|[0-9]+|one|two|three|four|five|six|seven|short))*[ -]+sessions?\b", copy, re.I):
+                    issues.append(f"{path} prescribes a session count; the server owns the routine schedule")
+                if re.search(r"\b(?:fresh|new)\s+(?:(?:reader-confusion|practice|review)\s+)?(?:cases?|items?|claims?|exercises?)\b", copy, re.I):
+                    issues.append(f"{path} promises fresh routine cases; routines reuse already attempted lesson exercises")
+            for key, child in node.items():
+                visit(child, f"{path}.{key}", key in prose_fields,
+                      check_reader and node.get("type") not in {"habit", "practice"})
+        elif isinstance(node, list):
+            for index, child in enumerate(node):
+                visit(child, f"{path}[{index}]", prose, check_reader)
+        elif prose and isinstance(node, str):
+            if (check_reader and path.endswith(".success_metric") and re.search(r"\breader\b", node, re.I)
+                    and not re.search(r"\b(?:simulated|in-app|self-review|real reader|screen reader|card reader)\b", node, re.I)):
+                issues.append(f"{path} leaves reader feedback undefined; name the supplied in-app simulated check or explicitly agreed real-reader task")
+            if _INTERNAL_ASSESSMENT_STATE.search(node):
+                issues.append(f"{path} exposes an internal assessment state; describe the uncertainty in plain language")
+            if _UNASSIGNED_TUTORIAL_COUNT.search(node):
+                issues.append(f"{path} promises a tutorial count before the outline assigns it; use 'tutorial sequence'")
+    visit(value, location)
+    return issues
+
+
 def validate_plan_contract(
     plan: PlanGenerationResponse,
     *,
@@ -232,7 +287,7 @@ def validate_plan_contract(
     """
     capacity = _capacity_minutes(hours_per_week, weekly_minutes)
     mission_low, mission_high = _mission_minutes_bounds(capacity)
-    issues: list[str] = []
+    issues = public_plan_copy_issues(plan, location="plan")
     ordered_weeks = list(range(start_week, start_week + duration_weeks))
     expected_weeks = set(ordered_weeks)
     week_numbers = [week.week_number for week in plan.weeks]
@@ -344,7 +399,7 @@ def validate_plan_backbone(
     capacity = _capacity_minutes(hours_per_week, weekly_minutes)
     mission_low, mission_high = _mission_minutes_bounds(capacity)
     daily_minimum = _daily_minimum_minutes(capacity)
-    issues: list[str] = []
+    issues = public_plan_copy_issues(backbone, location="backbone")
     expected_weeks = list(range(1, duration_weeks + 1))
     actual_weeks = [week.week_number for week in backbone.weeks]
     if actual_weeks != expected_weeks:
@@ -752,13 +807,11 @@ async def _generate_plan_backbone(
     weekly_minutes = _capacity_minutes(hours_per_week, weekly_minutes)
     telemetry_context = telemetry_context or {}
     active_client = _plan_client(
-        timeout=90 if settings.llm_provider == "zai" else PLAN_BACKBONE_TIMEOUT_SECONDS,
+        operation="plan_backbone_generation",
+        timeout=PLAN_BACKBONE_TIMEOUT_SECONDS,
         max_tokens=PLAN_BACKBONE_MAX_TOKENS,
         tier="balanced",
-        # Z.ai maps medium to high reasoning. The compact roadmap timed out
-        # at 90 seconds, while its same-model low-reasoning recovery completed.
-        # Keep the model and every quality gate; avoid that wasted first call.
-        thinking_level="low" if settings.llm_provider == "zai" else "medium",
+        thinking_level="medium",
     )
     validated, response = await active_client.generate_and_validate(
         system_prompt=system_prompt,
@@ -790,7 +843,7 @@ async def _generate_plan_backbone(
     )
     if issues and not localized_failure and not (isinstance(active_client, CompleteRecoveryClient) and _plan_recovery_response.get() is not None):
         finish_reason = str(getattr(response, "finish_reason", "") or "")
-        was_truncated = "MAX_TOKENS" in finish_reason.upper()
+        was_truncated = finish_reason.upper() in {"LENGTH", "MAX_TOKENS"}
         recovery_reason = (
             "truncated"
             if was_truncated
@@ -819,16 +872,17 @@ async def _generate_plan_backbone(
             },
         )
 
-        # Gemini counts hidden reasoning inside max_output_tokens. A balanced
-        # fallback can therefore stop at MAX_TOKENS despite emitting only a
-        # few thousand visible tokens. Escalate exactly once to the quality
-        # model with enough total headroom and low reasoning so the complete
-        # JSON artifact, rather than hidden thoughts, receives the budget.
+        # Hidden reasoning shares the output budget, so a balanced draft can
+        # stop at its limit despite emitting only a few thousand visible
+        # tokens. Escalate exactly once to the quality tier with enough total
+        # headroom and low reasoning so the complete JSON artifact, rather
+        # than hidden thoughts, receives the budget.
         active_client = _recover_plan_outage(
             response,
             timeout=PLAN_BACKBONE_RECOVERY_TIMEOUT_SECONDS,
             max_tokens=PLAN_BACKBONE_RECOVERY_MAX_TOKENS,
         ) or _plan_client(
+            operation="plan_backbone_generation",
             timeout=PLAN_BACKBONE_RECOVERY_TIMEOUT_SECONDS,
             max_tokens=PLAN_BACKBONE_RECOVERY_MAX_TOKENS,
             tier="quality",
@@ -937,11 +991,14 @@ async def _checkpointed_backbone(*, store, system_prompt, user_prompt,
     await store.put("backbone", candidate.model_dump(mode="json"),
                     provider=saved.get("provider"), model=saved.get("model"),
                     issues=issues, repair_attempts=1)
+    # A backbone the backup model wrote is corrected by that same model.
+    saved_provider = saved.get("provider")
     client = (
-        CompleteRecoveryClient(model=settings.gemini_quality_model, timeout=90,
-                               max_tokens=6000, thinking_level="low")
-        if saved.get("provider") == "gemini" and settings.gemini_api_key
-        else _plan_client(timeout=90, max_tokens=6000, tier="quality", thinking_level="low")
+        CompleteRecoveryClient(direct_client(saved_provider, timeout=90, max_tokens=6000, thinking_level="low"))
+        if saved_provider in DIRECT_PROVIDERS and saved_provider != route_for("plan_backbone_targeted_repair")[0]
+        and provider_configured(saved_provider)
+        else _plan_client(operation="plan_backbone_targeted_repair", timeout=90, max_tokens=6000,
+                          tier="quality", thinking_level="low")
     )
     prompt = user_prompt + "\n\nTARGETED BACKBONE CORRECTION:\n" + json.dumps({
         "replace_only_week_numbers": sorted(numbers), "errors": issues,
@@ -1020,10 +1077,11 @@ async def generate_plan_week_from_backbone(
         strict=True,
     )
     active_client = _plan_client(
-        timeout=90 if settings.llm_provider == "zai" else PLAN_WEEK_TIMEOUT_SECONDS,
+        operation="plan_week_generation",
+        timeout=PLAN_WEEK_TIMEOUT_SECONDS,
         max_tokens=PLAN_WEEK_MAX_TOKENS,
         tier="balanced",
-        thinking_level="low" if settings.llm_provider == "zai" else "medium",
+        thinking_level="medium",
     )
     validated, response = await active_client.generate_and_validate(
         system_prompt=system_prompt,
@@ -1055,7 +1113,7 @@ async def generate_plan_week_from_backbone(
     issues = _issues(validated)
     if issues and not (isinstance(active_client, CompleteRecoveryClient) and _plan_recovery_response.get() is not None):
         finish_reason = str(getattr(response, "finish_reason", "") or "")
-        was_truncated = "MAX_TOKENS" in finish_reason.upper()
+        was_truncated = finish_reason.upper() in {"LENGTH", "MAX_TOKENS"}
         recovery_reason = (
             "truncated"
             if was_truncated
@@ -1086,14 +1144,15 @@ async def generate_plan_week_from_backbone(
             },
         )
 
-        # Hidden Gemini reasoning consumes max_output_tokens even when little
-        # visible JSON is returned. Give the one bounded quality rewrite enough
-        # total headroom and low reasoning so it can finish the approved week.
+        # Hidden reasoning consumes the output budget even when little visible
+        # JSON is returned. Give the one bounded quality rewrite enough total
+        # headroom and low reasoning so it can finish the approved week.
         active_client = _recover_plan_outage(
             response,
             timeout=PLAN_WEEK_RECOVERY_TIMEOUT_SECONDS,
             max_tokens=PLAN_WEEK_RECOVERY_MAX_TOKENS,
         ) or _plan_client(
+            operation="plan_week_generation",
             timeout=PLAN_WEEK_RECOVERY_TIMEOUT_SECONDS,
             max_tokens=PLAN_WEEK_RECOVERY_MAX_TOKENS,
             tier="quality",
@@ -1303,11 +1362,8 @@ async def _generate_llm_items(
         )
         store = PlanCheckpointStore(generation_checkpoint, sha256_json({
             "version": "planning-checkpoints-v1", "system": system_prompt, "user": user_prompt,
-            "provider": settings.llm_provider, "openlux_model": settings.openlux_model,
-            "zai_model": settings.zai_model, "zai_quality_model": settings.zai_quality_model,
-            "zai_fast_model": settings.zai_fast_model,
-            "openlux_quality_model": settings.openlux_quality_model,
-            "gemini_model": settings.gemini_model, "gemini_quality_model": settings.gemini_quality_model,
+            "provider": settings.llm_provider, "plan_route": route_for("plan_backbone_generation"),
+            "anthropic_model": settings.anthropic_model, "openai_model": settings.openai_model,
             "week_prompt": load_prompt("plan_week_generate"),
             # Whole hours keep their historical identity value (an int).
             "duration_weeks": duration_weeks, "hours_per_week": hours_value(weekly_minutes),

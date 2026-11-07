@@ -1,8 +1,9 @@
 """
 LLM client abstraction for structured JSON generation.
 
-Provides an abstract interface and a DummyLLMClient for development
-that returns deterministic fixtures.
+Provides the abstract interface, a DummyLLMClient for development that returns
+deterministic fixtures, the backup wrapper, and the routed client factory. The
+direct provider clients live in ``anthropic_direct.py`` and ``openai_direct.py``.
 """
 
 import asyncio
@@ -10,20 +11,12 @@ import json
 import logging
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator
+from contextlib import aclosing
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError
-
-from app.services.llm.gemini_compat import (
-    ThinkingLevel,
-    generation_config_kwargs,
-    resolve_thinking_config,
-)
-
-if TYPE_CHECKING:
-    import openai
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +45,7 @@ def _repair_json(raw: str) -> dict | None:
     """
     Attempt to repair malformed JSON from LLM output.
 
-    Handles common Gemini failure modes:
+    Handles common model failure modes:
     - Markdown code fences (```json ... ```)
     - Trailing commas before } or ]
     - Invalid backslash escape sequences
@@ -383,28 +376,40 @@ class DummyLLMClient(BaseLLMClient):
         # Default to profile
         return "profile_extract"
 
+    async def stream_text(self, system_prompt: str, user_prompt: str, *, operation: str) -> AsyncIterator[str]:
+        """A fixed reply, so interactive streams work offline."""
+        yield f"[dummy {operation} reply]"
+
 
 class FallbackLLMClient(BaseLLMClient):
-    """Retry failed structured generation through an independent provider."""
+    """Retry a call on the backup provider when the primary cannot serve it.
 
-    # A gateway outage should cost a worker one timeout, not one timeout per
-    # prompt.  The breaker is deliberately process-local: it avoids adding a
-    # Redis dependency to every LLM call while still protecting each web or
-    # worker process from repeatedly waiting on the same unhealthy endpoint.
+    Only unavailability (provider error, rate limit, out of credit, missing
+    credential) switches providers. A content, schema or refusal failure is
+    the operation's own answer and returns to its caller unchanged.
+    """
+
+    # An outage should cost a worker one timeout, not one timeout per prompt.
+    # The breaker is deliberately process-local: it avoids adding a Redis
+    # dependency to every LLM call while still protecting each web or worker
+    # process from repeatedly waiting on the same unhealthy endpoint.
     _circuit_open_until: dict[tuple[str, str], float] = {}
     _circuit_last_error: dict[tuple[str, str], str] = {}
     _circuit_cooldown_seconds = 300.0
-    # A rate limit is not an outage. Free/shared-pool routes (e.g. OpenRouter's
-    # stealth models) answer 429 with "retry shortly" and recover in seconds, so
-    # holding the circuit open for the full outage cooldown converts a momentary
-    # limit into minutes of paid-fallback traffic. Genuine transport failures keep
-    # the long cooldown.
+    # A rate limit is not an outage: it usually clears in seconds, so holding
+    # the circuit open for the full outage cooldown would turn a momentary
+    # limit into minutes of backup traffic.
     _rate_limit_cooldown_seconds = 20.0
 
     def __init__(self, primary: BaseLLMClient, fallback: BaseLLMClient):
         self.primary = primary
         self.fallback = fallback
         self.model = getattr(primary, "model", None)
+        self.provider_name = getattr(primary, "provider_name", None)
+
+    def __getattr__(self, name):
+        # Callers read client options (max_tokens, timeout, thinking_level, ...).
+        return getattr(self.primary, name)
 
     def _primary_circuit_key(self) -> tuple[str, str]:
         return (
@@ -412,22 +417,20 @@ class FallbackLLMClient(BaseLLMClient):
                 getattr(self.primary, "provider_name", None)
                 or self.primary.__class__.__name__
             ),
-            str(getattr(self.primary, "base_url", None) or "default"),
+            str(getattr(self.primary, "model", None) or "default"),
         )
 
     @staticmethod
-    def _is_rate_limit_failure(error: str | None) -> bool:
+    def _is_rate_limit_failure(response: LLMResponse) -> bool:
         """Throttling that the provider itself says will clear shortly."""
-        if not error:
-            return False
-        normalized = error.casefold()
-        return any(
-            marker in normalized
-            for marker in ("rate limit", "rate-limited", "429", "quota")
-        )
+        if response.error_code == "generation_rate_limited":
+            return True
+        normalized = str(response.error or "").casefold()
+        return any(marker in normalized for marker in ("rate limit", "ratelimiterror", "http 429"))
 
     @staticmethod
     def _is_operational_failure(error: str | None) -> bool:
+        """Legacy text markers of an unavailable provider (timeouts, 5xx, quota)."""
         if not error:
             return False
         normalized = error.casefold()
@@ -451,10 +454,15 @@ class FallbackLLMClient(BaseLLMClient):
                 "http 503",
                 "http 504",
                 "insufficient_quota",
-                "quota is not enough",
                 "quota exceeded",
             )
         )
+
+    @classmethod
+    def unavailable(cls, response: LLMResponse) -> bool:
+        from app.services.llm.protocol import provider_unavailable
+
+        return provider_unavailable(response) or cls._is_operational_failure(response.error)
 
     @classmethod
     def reset_circuits_for_tests(cls) -> None:
@@ -483,11 +491,12 @@ class FallbackLLMClient(BaseLLMClient):
                     f"Primary provider circuit open for {remaining}s after: "
                     f"{last_error}"
                 ),
+                error_code="generation_unavailable",
                 model=getattr(self.primary, "model", None),
                 provider=getattr(self.primary, "provider_name", None),
             )
             logger.warning(
-                "[LLM] Skipping unhealthy primary provider=%s endpoint=%s for %ss",
+                "[LLM] Skipping unhealthy primary provider=%s model=%s for %ss",
                 circuit_key[0],
                 circuit_key[1],
                 remaining,
@@ -506,14 +515,15 @@ class FallbackLLMClient(BaseLLMClient):
                 )
                 primary_response = LLMResponse(
                     data={},
-                    error=f"Primary provider error: {exc}",
+                    error=f"Primary provider error: {type(exc).__name__}",
+                    error_code="generation_failed",
                     model=getattr(self.primary, "model", None),
                     provider=getattr(self.primary, "provider_name", None),
                 )
-            if self._is_operational_failure(primary_response.error):
+            if self.unavailable(primary_response):
                 cooldown = (
                     self._rate_limit_cooldown_seconds
-                    if self._is_rate_limit_failure(primary_response.error)
+                    if self._is_rate_limit_failure(primary_response)
                     else self._circuit_cooldown_seconds
                 )
                 self._circuit_open_until[circuit_key] = time.monotonic() + cooldown
@@ -521,11 +531,12 @@ class FallbackLLMClient(BaseLLMClient):
             elif not primary_response.error:
                 self._circuit_open_until.pop(circuit_key, None)
                 self._circuit_last_error.pop(circuit_key, None)
-        if not primary_response.error:
+        if not primary_response.error or not self.unavailable(primary_response):
+            self.last_attempt = primary_response
             return primary_response
 
         logger.warning(
-            "[LLM] Primary provider failed for model=%s; using model=%s: %s",
+            "[LLM] Primary provider unavailable for model=%s; using model=%s: %s",
             getattr(self.primary, "model", "unknown"),
             getattr(self.fallback, "model", "unknown"),
             primary_response.error,
@@ -543,7 +554,8 @@ class FallbackLLMClient(BaseLLMClient):
             )
             fallback_response = LLMResponse(
                 data={},
-                error=f"Fallback provider error: {exc}",
+                error=f"Fallback provider error: {type(exc).__name__}",
+                error_code="generation_failed",
                 model=getattr(self.fallback, "model", None),
                 provider=getattr(self.fallback, "provider_name", None),
             )
@@ -561,899 +573,40 @@ class FallbackLLMClient(BaseLLMClient):
         fallback_response.duration_ms = float(
             primary_response.duration_ms or 0.0
         ) + float(fallback_response.duration_ms or 0.0)
+        self.last_attempt = fallback_response
         return fallback_response
 
 
-class OpenAILLMClient(BaseLLMClient):
-    """
-    OpenAI LLM client for production use.
+def provider_configured(provider: str) -> bool:
+    from app.core.config import settings
 
-    Supports OpenAI and OpenAI-compatible gateways.
-    Uses connection pooling isolated by endpoint, credential, and timeout.
-    """
-
-    # Singleton client instance for connection reuse
-    _client_instances: dict[
-        tuple[str, str, float, int, asyncio.AbstractEventLoop],
-        "openai.AsyncOpenAI",
-    ] = {}
-
-    def __init__(
-        self,
-        model: str = "gpt-4o",
-        api_key: str | None = None,
-        timeout: float = 60.0,
-        max_tokens: int | None = None,
-        base_url: str | None = None,
-        provider_name: str = "openai",
-        temperature: float = 0.1,
-    ):
-        self.model = model
-        self.api_key = api_key
-        self.timeout = timeout
-        self.max_tokens = max_tokens
-        self.base_url = base_url.rstrip("/") if base_url else None
-        self.provider_name = provider_name
-        self.temperature = temperature
-
-    def _get_client(self, api_key: str) -> "openai.AsyncOpenAI":
-        """Get or create a singleton OpenAI client for connection reuse."""
-        import openai
-        import httpx
-
-        loop = asyncio.get_running_loop()
-        # Yunwu already has an independent Gemini fallback. Retrying the same
-        # timed-out gateway first can multiply a 60-second user-facing wait.
-        max_retries = 0 if self.provider_name in {"yunwu", "openlux", "zai"} else 2
-        cache_key = (
-            self.base_url or "https://api.openai.com/v1",
-            api_key,
-            self.timeout,
-            max_retries,
-            loop,
-        )
-        cached = OpenAILLMClient._client_instances.get(cache_key)
-        if cached is not None:
-            return cached
-
-        # Create new client with optimized settings
-        kwargs: dict[str, Any] = {
-            "api_key": api_key,
-            "timeout": httpx.Timeout(self.timeout, connect=10.0),
-            "max_retries": max_retries,
-        }
-        if self.base_url:
-            kwargs["base_url"] = self.base_url
-        client = openai.AsyncOpenAI(
-            **kwargs,
-        )
-        OpenAILLMClient._client_instances[cache_key] = client
-        return client
-
-    async def generate_json(
-        self,
-        system_prompt: str,
-        user_prompt: str,
-        json_schema: dict[str, Any] | None = None,
-        output_model: type[BaseModel] | None = None,
-    ) -> LLMResponse:
-        """Generate JSON using OpenAI API with optimized settings."""
-        import time
-
-        try:
-            import openai
-        except ImportError:
-            logger.error("[LLM] OpenAI package not installed")
-            return LLMResponse(
-                data={},
-                error="openai package not installed. Run: pip install openai",
-                model=self.model,
-                provider=self.provider_name,
-            )
-
-        from app.core.config import settings
-
-        api_key = self.api_key or (
-            settings.openai_api_key if self.provider_name == "openai" else None
-        )
-        if not api_key:
-            credential = f"{self.provider_name.upper()}_API_KEY"
-            logger.error("[LLM] %s not configured", credential)
-            return LLMResponse(
-                data={},
-                error=f"{credential} not configured",
-                model=self.model,
-                provider=self.provider_name,
-            )
-
-        client = self._get_client(api_key)
-        provider_label = self.provider_name.upper()
-
-        # Log request details
-        model_name = output_model.__name__ if output_model else "generic"
-        prompt_preview = user_prompt[:200].replace("\n", " ")
-        logger.info(
-            f"[LLM] Request: model={self.model}, output={model_name}, max_tokens={self.max_tokens}"
-        )
-        logger.debug(f"[LLM] Prompt preview: {prompt_preview}...")
-
-        start_time = time.perf_counter()
-
-        try:
-            # Build request kwargs
-            request_kwargs: dict[str, Any] = {
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "response_format": {"type": "json_object"},
-                "temperature": self.temperature,
-            }
-
-            # Add max_tokens if specified (helps speed up response)
-            if self.max_tokens:
-                request_kwargs["max_tokens"] = self.max_tokens
-
-            response = await client.chat.completions.create(**request_kwargs)
-
-            duration_ms = (time.perf_counter() - start_time) * 1000
-
-            raw_content = response.choices[0].message.content
-            usage = response.usage
-            if not raw_content:
-                logger.warning(
-                    "[LLM] Empty response from %s after %.0fms",
-                    provider_label,
-                    duration_ms,
-                )
-                return LLMResponse(
-                    data={},
-                    error=f"Empty response from {provider_label}",
-                    model=self.model,
-                    prompt_tokens=usage.prompt_tokens if usage else None,
-                    completion_tokens=usage.completion_tokens if usage else None,
-                    total_tokens=usage.total_tokens if usage else None,
-                    duration_ms=duration_ms,
-                    provider=self.provider_name,
-                )
-
-            # Log usage stats
-            if usage:
-                logger.info(
-                    f"[LLM] Response received: {duration_ms:.0f}ms, "
-                    f"prompt_tokens={usage.prompt_tokens}, "
-                    f"completion_tokens={usage.completion_tokens}, "
-                    f"total_tokens={usage.total_tokens}"
-                )
-            else:
-                logger.info(f"[LLM] Response received: {duration_ms:.0f}ms")
-
-            try:
-                data = json.loads(raw_content)
-                logger.debug(
-                    f"[LLM] JSON parsed successfully, keys: {list(data.keys()) if isinstance(data, dict) else 'array'}"
-                )
-                return LLMResponse(
-                    data=data,
-                    raw_response=raw_content,
-                    model=self.model,
-                    prompt_tokens=usage.prompt_tokens if usage else None,
-                    completion_tokens=usage.completion_tokens if usage else None,
-                    total_tokens=usage.total_tokens if usage else None,
-                    duration_ms=duration_ms,
-                    provider=self.provider_name,
-                )
-            except json.JSONDecodeError as e:
-                logger.warning(
-                    f"[LLM] Invalid JSON in response: {e}, attempting repair..."
-                )
-
-                # Attempt repair
-                repaired = _repair_json(raw_content)
-                if repaired is not None:
-                    logger.info("[LLM] JSON repair succeeded (%s)", provider_label)
-                    return LLMResponse(
-                        data=repaired,
-                        raw_response=raw_content,
-                        retried=True,
-                        model=self.model,
-                        prompt_tokens=usage.prompt_tokens if usage else None,
-                        completion_tokens=usage.completion_tokens if usage else None,
-                        total_tokens=usage.total_tokens if usage else None,
-                        duration_ms=duration_ms,
-                        provider=self.provider_name,
-                    )
-
-                logger.error("[LLM] JSON repair failed for %s response", provider_label)
-                logger.debug(f"[LLM] Raw content: {raw_content[:500]}...")
-                return LLMResponse(
-                    data={},
-                    raw_response=raw_content,
-                    error=f"Invalid JSON in response: {e}",
-                    model=self.model,
-                    prompt_tokens=usage.prompt_tokens if usage else None,
-                    completion_tokens=usage.completion_tokens if usage else None,
-                    total_tokens=usage.total_tokens if usage else None,
-                    duration_ms=duration_ms,
-                    provider=self.provider_name,
-                )
-
-        except openai.APITimeoutError:
-            duration_ms = (time.perf_counter() - start_time) * 1000
-            logger.error(
-                f"[LLM] API timeout after {duration_ms:.0f}ms (limit: {self.timeout}s)"
-            )
-            return LLMResponse(
-                data={},
-                error=f"{provider_label} API timeout after {self.timeout}s",
-                model=self.model,
-                duration_ms=duration_ms,
-                provider=self.provider_name,
-            )
-        except openai.RateLimitError as e:
-            duration_ms = (time.perf_counter() - start_time) * 1000
-            logger.error(f"[LLM] Rate limit exceeded: {e}")
-            return LLMResponse(
-                data={},
-                error=f"{provider_label} rate limit exceeded: {e}",
-                model=self.model,
-                duration_ms=duration_ms,
-                provider=self.provider_name,
-            )
-        except Exception as e:
-            duration_ms = (time.perf_counter() - start_time) * 1000
-            logger.exception(f"[LLM] API error after {duration_ms:.0f}ms: {e}")
-            return LLMResponse(
-                data={},
-                error=f"{provider_label} API error: {e}",
-                model=self.model,
-                duration_ms=duration_ms,
-                provider=self.provider_name,
-            )
-
-    async def generate_json_streaming(
-        self,
-        system_prompt: str,
-        user_prompt: str,
-        output_model: type[BaseModel] | None = None,
-        on_chunk: "Callable[[str], Awaitable[None]] | None" = None,
-    ) -> LLMResponse:
-        """
-        Generate JSON using OpenAI API with streaming.
-
-        Streams tokens in real-time and calls on_chunk callback with accumulated text.
-        This provides a better UX by showing "thinking" as it happens.
-
-        Args:
-            system_prompt: System message
-            user_prompt: User message
-            output_model: Optional Pydantic model for validation
-            on_chunk: Async callback called with accumulated text after each chunk
-        """
-        import time
-
-        try:
-            import openai
-        except ImportError:
-            logger.error("[LLM] OpenAI package not installed")
-            return LLMResponse(
-                data={},
-                error="openai package not installed. Run: pip install openai",
-                model=self.model,
-                provider=self.provider_name,
-            )
-
-        from app.core.config import settings
-
-        api_key = self.api_key or (
-            settings.openai_api_key if self.provider_name == "openai" else None
-        )
-        if not api_key:
-            credential = f"{self.provider_name.upper()}_API_KEY"
-            logger.error("[LLM] %s not configured", credential)
-            return LLMResponse(
-                data={},
-                error=f"{credential} not configured",
-                model=self.model,
-                provider=self.provider_name,
-            )
-
-        client = self._get_client(api_key)
-        provider_label = self.provider_name.upper()
-
-        model_name = output_model.__name__ if output_model else "generic"
-        logger.info(f"[LLM] Streaming request: model={self.model}, output={model_name}")
-
-        start_time = time.perf_counter()
-        accumulated_text = ""
-        chunk_count = 0
-        last_callback_len = 0
-
-        try:
-            request_kwargs: dict[str, Any] = {
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "response_format": {"type": "json_object"},
-                "temperature": self.temperature,
-                "stream": True,
-            }
-
-            if self.max_tokens:
-                request_kwargs["max_tokens"] = self.max_tokens
-
-            stream = await client.chat.completions.create(**request_kwargs)
-
-            async for chunk in stream:
-                chunk_count += 1
-                delta = chunk.choices[0].delta
-                if delta.content:
-                    accumulated_text += delta.content
-
-                    # Call callback every ~200 chars to update UI
-                    if on_chunk and len(accumulated_text) - last_callback_len >= 200:
-                        try:
-                            await on_chunk(accumulated_text)
-                            last_callback_len = len(accumulated_text)
-                        except Exception as e:
-                            logger.warning(f"[LLM] on_chunk callback error: {e}")
-
-            # Final callback with complete text
-            if on_chunk and len(accumulated_text) > last_callback_len:
-                try:
-                    await on_chunk(accumulated_text)
-                except Exception as e:
-                    logger.warning(f"[LLM] Final on_chunk callback error: {e}")
-
-            duration_ms = (time.perf_counter() - start_time) * 1000
-            logger.info(
-                f"[LLM] Streaming complete: {duration_ms:.0f}ms, "
-                f"chunks={chunk_count}, chars={len(accumulated_text)}"
-            )
-
-            if not accumulated_text:
-                return LLMResponse(
-                    data={},
-                    error=f"Empty streaming response from {provider_label}",
-                    model=self.model,
-                    duration_ms=duration_ms,
-                    provider=self.provider_name,
-                )
-
-            try:
-                data = json.loads(accumulated_text)
-                return LLMResponse(
-                    data=data,
-                    raw_response=accumulated_text,
-                    model=self.model,
-                    duration_ms=duration_ms,
-                    provider=self.provider_name,
-                )
-            except json.JSONDecodeError as e:
-                logger.error(f"[LLM] Invalid JSON in streamed response: {e}")
-                return LLMResponse(
-                    data={},
-                    raw_response=accumulated_text,
-                    error=f"Invalid JSON in response: {e}",
-                    model=self.model,
-                    duration_ms=duration_ms,
-                    provider=self.provider_name,
-                )
-
-        except openai.APITimeoutError:
-            duration_ms = (time.perf_counter() - start_time) * 1000
-            logger.error(f"[LLM] Streaming timeout after {duration_ms:.0f}ms")
-            return LLMResponse(
-                data={},
-                error=f"{provider_label} API timeout after {self.timeout}s",
-                model=self.model,
-                duration_ms=duration_ms,
-                provider=self.provider_name,
-            )
-        except Exception as e:
-            duration_ms = (time.perf_counter() - start_time) * 1000
-            logger.exception(f"[LLM] Streaming error after {duration_ms:.0f}ms: {e}")
-            return LLMResponse(
-                data={},
-                error=f"{provider_label} API error: {e}",
-                model=self.model,
-                duration_ms=duration_ms,
-                provider=self.provider_name,
-            )
+    return bool(settings.anthropic_api_key if provider == "anthropic" else settings.openai_api_key)
 
 
-def _is_gemini_invalid_argument_error(exc: Exception) -> bool:
-    """Return whether Gemini rejected request configuration before generation."""
-    message = str(exc).casefold()
-    status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
-    return (
-        status == 400
-        or str(status).casefold() in {"400", "invalid_argument"}
-        or "invalid_argument" in message
-        or "invalid argument" in message
-    )
+def provider_model(provider: str) -> str:
+    """The one model a direct provider serves for every tier."""
+    from app.core.config import settings
+
+    return settings.anthropic_model if provider == "anthropic" else settings.openai_model
 
 
-def _gemini_compatibility_prompt(
-    user_prompt: str,
+def direct_client(
+    provider: str,
     *,
-    json_schema: dict[str, Any] | None,
-    output_model: type[BaseModel] | None,
-) -> str:
-    """Move an unsupported native response schema into the prompt contract."""
-    schema = (
-        output_model.model_json_schema() if output_model is not None else json_schema
-    )
-    if schema is None:
-        return user_prompt
-    return (
-        user_prompt
-        + "\n\nCOMPATIBILITY MODE: Return only one complete JSON value matching this "
-        "schema exactly:\n" + json.dumps(schema, ensure_ascii=False)
-    )
+    timeout: float,
+    max_tokens: int | None,
+    thinking_level: str,
+) -> BaseLLMClient:
+    """One single-provider client for ``provider`` ("anthropic" or "openai")."""
+    if provider == "anthropic":
+        from app.services.llm.anthropic_direct import AnthropicDirectLLMClient
 
+        return AnthropicDirectLLMClient(timeout=timeout, max_tokens=max_tokens, thinking_level=thinking_level)
+    if provider == "openai":
+        from app.services.llm.openai_direct import OpenAIDirectLLMClient
 
-def _gemini_compatible_shape(
-    value: object,
-    *,
-    definitions: dict[str, Any],
-    resolving_refs: frozenset[str] = frozenset(),
-) -> dict[str, Any]:
-    """Recursively reduce one schema node to provider-safe structure.
-
-    Gemini accepts the structural JSON Schema subset used here, while some
-    generated Pydantic constraints make otherwise valid schemas fail request
-    validation.  Keep object fields, required lists, arrays, primitive types,
-    and enums so nested objects cannot collapse to empty placeholders.  The
-    complete schema still lives in the compatibility prompt and Pydantic
-    remains the authoritative response validator.
-    """
-
-    if not isinstance(value, dict):
-        return {}
-    ref = value.get("$ref")
-    if isinstance(ref, str) and ref.startswith("#/$defs/"):
-        ref_name = ref.rsplit("/", 1)[-1]
-        if ref_name in resolving_refs:
-            return {"type": "object"}
-        target = definitions.get(ref_name, {})
-        return _gemini_compatible_shape(
-            target,
-            definitions=definitions,
-            resolving_refs=resolving_refs | {ref_name},
-        )
-    variants = value.get("anyOf")
-    if isinstance(variants, list):
-        compatible_variants = [
-            _gemini_compatible_shape(
-                item,
-                definitions=definitions,
-                resolving_refs=resolving_refs,
-            )
-            for item in variants
-            if isinstance(item, dict)
-        ]
-        compatible_variants = [item for item in compatible_variants if item]
-        if compatible_variants:
-            return {"anyOf": compatible_variants}
-    kind = value.get("type")
-    if isinstance(kind, list):
-        kind = next((item for item in kind if item != "null"), None)
-    result: dict[str, Any] = {"type": kind} if isinstance(kind, str) else {}
-    if isinstance(value.get("enum"), list):
-        result["enum"] = value["enum"]
-    required = value.get("required")
-    if isinstance(required, list):
-        result["required"] = required
-    properties = value.get("properties")
-    if isinstance(properties, dict):
-        result["properties"] = {
-            key: _gemini_compatible_shape(
-                field_schema,
-                definitions=definitions,
-                resolving_refs=resolving_refs,
-            )
-            for key, field_schema in properties.items()
-        }
-    items = value.get("items")
-    if isinstance(items, dict):
-        result["items"] = _gemini_compatible_shape(
-            items,
-            definitions=definitions,
-            resolving_refs=resolving_refs,
-        )
-    return result
-
-
-def _gemini_compatibility_schema(
-    *,
-    json_schema: dict[str, Any] | None,
-    output_model: type[BaseModel] | None,
-) -> dict[str, Any]:
-    """Keep complete structural shape when a full schema is too complex.
-
-    Some Gemini generate-content models reject otherwise valid, deeply nested
-    JSON Schemas.  A recursively simplified schema is broadly supported and
-    prevents malformed JSON as well as empty nested-object responses.  The full
-    schema remains in the prompt and the caller's Pydantic model remains the
-    authoritative validator.
-    """
-
-    schema = (
-        output_model.model_json_schema() if output_model is not None else json_schema
-    )
-    if not isinstance(schema, dict):
-        return {"type": "object"}
-    definitions = schema.get("$defs")
-    if not isinstance(definitions, dict):
-        definitions = {}
-    result = _gemini_compatible_shape(schema, definitions=definitions)
-    return result or {"type": "object"}
-
-
-class GeminiLLMClient(BaseLLMClient):
-    """
-    Google Gemini LLM client for production use.
-
-    Uses google.genai SDK with JSON output mode.
-    """
-
-    def __init__(
-        self,
-        model: str = "gemini-3.6-flash",
-        api_key: str | None = None,
-        timeout: float = 60.0,
-        max_tokens: int | None = None,
-        thinking_budget: int | None = None,
-        thinking_level: ThinkingLevel | None = None,
-        temperature: float = 0.1,
-    ):
-        self.model = model
-        self.api_key = api_key
-        self.timeout = timeout
-        self.max_tokens = max_tokens
-        inferred_tier = (
-            "quality"
-            if "pro" in model.casefold()
-            else "fast"
-            if "lite" in model.casefold()
-            else "balanced"
-        )
-        self.thinking_level, self.thinking_budget = resolve_thinking_config(
-            model=model,
-            tier=inferred_tier,
-            thinking_level=thinking_level,
-            thinking_budget=thinking_budget,
-        )
-        self.temperature = temperature
-        self.provider_name = "gemini"
-
-    async def generate_json(
-        self,
-        system_prompt: str,
-        user_prompt: str,
-        json_schema: dict[str, Any] | None = None,
-        output_model: type[BaseModel] | None = None,
-    ) -> LLMResponse:
-        """Generate JSON using Google Gemini API."""
-        import time
-
-        try:
-            from google import genai
-            from google.genai import types
-        except ImportError:
-            logger.error("[LLM] google-genai package not installed")
-            return LLMResponse(
-                data={},
-                error="google-genai package not installed. Run: pip install google-genai",
-                model=self.model,
-                provider="gemini",
-            )
-
-        from app.core.config import settings
-
-        api_key = self.api_key or settings.gemini_api_key
-        if not api_key:
-            logger.error("[LLM] GEMINI_API_KEY not configured")
-            return LLMResponse(
-                data={},
-                error="GEMINI_API_KEY not configured",
-                model=self.model,
-                provider="gemini",
-            )
-
-        model_name = output_model.__name__ if output_model else "generic"
-        logger.info(f"[LLM] Gemini request: model={self.model}, output={model_name}")
-
-        start_time = time.perf_counter()
-        compatibility_retried = False
-
-        try:
-            # Reuse the shared warm client (avoids a TCP+TLS handshake per
-            # call) and enforce the configured timeout — previously stored
-            # but never applied, so user-facing paths could hang unbounded.
-            from app.services.gemini import _gemini_client
-
-            client = (
-                _gemini_client()
-                if api_key == settings.gemini_api_key
-                else genai.Client(api_key=api_key)
-            )
-
-            # Build config
-            config_kwargs: dict[str, Any] = {
-                "response_mime_type": "application/json",
-                "http_options": types.HttpOptions(timeout=int(self.timeout * 1000)),
-                **generation_config_kwargs(
-                    model=self.model,
-                    temperature=self.temperature,
-                    thinking_level=self.thinking_level,
-                    thinking_budget=self.thinking_budget,
-                ),
-            }
-            if self.max_tokens:
-                config_kwargs["max_output_tokens"] = self.max_tokens
-            if output_model is not None:
-                # Pydantic models may contain standard JSON Schema keywords such
-                # as ``additionalProperties`` (for example on strict objects or
-                # mapping fields).  Passing the model through ``response_schema``
-                # makes the SDK convert it to Gemini's narrower OpenAPI ``Schema``
-                # shape, where those keywords have historically been rejected.
-                # ``response_json_schema`` is the API's standard JSON Schema path
-                # and keeps native constrained decoding for those models.
-                config_kwargs["response_json_schema"] = (
-                    output_model.model_json_schema()
-                )
-            elif json_schema is not None:
-                config_kwargs["response_json_schema"] = json_schema
-            config = types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                **config_kwargs,
-            )
-
-            try:
-                response = await client.aio.models.generate_content(
-                    model=self.model,
-                    contents=user_prompt,
-                    config=config,
-                )
-            except Exception as exc:
-                if not _is_gemini_invalid_argument_error(exc):
-                    raise
-                # Gemini model/API versions do not all accept the same native
-                # response-schema and thinking fields. A request-shape 400 is
-                # deterministic, so retry once without those optional fields
-                # and keep the exact schema in the prompt instead.
-                compatibility_retried = True
-                logger.warning(
-                    "[LLM] Gemini rejected native config for model=%s; "
-                    "retrying in compatibility mode: %s",
-                    self.model,
-                    exc,
-                )
-                compatibility_kwargs: dict[str, Any] = {
-                    "response_mime_type": "application/json",
-                    "response_json_schema": _gemini_compatibility_schema(
-                        json_schema=json_schema,
-                        output_model=output_model,
-                    ),
-                    "http_options": types.HttpOptions(timeout=int(self.timeout * 1000)),
-                    **generation_config_kwargs(
-                        model=self.model,
-                        temperature=self.temperature,
-                        thinking_level=self.thinking_level,
-                        thinking_budget=self.thinking_budget,
-                    ),
-                }
-                if self.max_tokens:
-                    compatibility_kwargs["max_output_tokens"] = self.max_tokens
-                compatibility_config = types.GenerateContentConfig(
-                    system_instruction=system_prompt,
-                    **compatibility_kwargs,
-                )
-                compatibility_prompt = _gemini_compatibility_prompt(
-                    user_prompt,
-                    json_schema=json_schema,
-                    output_model=output_model,
-                )
-                try:
-                    response = await client.aio.models.generate_content(
-                        model=self.model,
-                        contents=compatibility_prompt,
-                        config=compatibility_config,
-                    )
-                except Exception as compatibility_exc:
-                    if not _is_gemini_invalid_argument_error(compatibility_exc):
-                        raise
-                    # If the original 400 was caused by a thinking option rather
-                    # than schema complexity, retry the shallow native schema once
-                    # more without reasoning controls.  This remains bounded at
-                    # three request shapes, and only the accepted request is billed.
-                    logger.warning(
-                        "[LLM] Gemini rejected compatibility thinking config for "
-                        "model=%s; retrying with JSON framing only: %s",
-                        self.model,
-                        compatibility_exc,
-                    )
-                    framing_kwargs: dict[str, Any] = {
-                        "response_mime_type": "application/json",
-                        "response_json_schema": _gemini_compatibility_schema(
-                            json_schema=json_schema,
-                            output_model=output_model,
-                        ),
-                        "http_options": types.HttpOptions(
-                            timeout=int(self.timeout * 1000)
-                        ),
-                    }
-                    if self.max_tokens:
-                        framing_kwargs["max_output_tokens"] = self.max_tokens
-                    response = await client.aio.models.generate_content(
-                        model=self.model,
-                        contents=compatibility_prompt,
-                        config=types.GenerateContentConfig(
-                            system_instruction=system_prompt,
-                            **framing_kwargs,
-                        ),
-                    )
-
-            duration_ms = (time.perf_counter() - start_time) * 1000
-
-            raw_content = response.text
-            if not raw_content:
-                logger.warning(
-                    f"[LLM] Empty response from Gemini after {duration_ms:.0f}ms"
-                )
-                return LLMResponse(
-                    data={},
-                    error="Empty response from Gemini",
-                    retried=compatibility_retried,
-                    model=self.model,
-                    duration_ms=duration_ms,
-                    provider="gemini",
-                )
-
-            finish_reason = "unknown"
-            if getattr(response, "candidates", None):
-                reason = getattr(response.candidates[0], "finish_reason", None)
-                finish_reason = getattr(reason, "name", None) or str(reason)
-
-            # Log usage
-            if response.usage_metadata:
-                logger.info(
-                    f"[LLM] Gemini response: {duration_ms:.0f}ms, "
-                    f"prompt_tokens={response.usage_metadata.prompt_token_count}, "
-                    f"completion_tokens={response.usage_metadata.candidates_token_count}, "
-                    f"finish_reason={finish_reason}"
-                )
-            else:
-                logger.info(
-                    f"[LLM] Gemini response: {duration_ms:.0f}ms, "
-                    f"finish_reason={finish_reason}"
-                )
-
-            try:
-                data = json.loads(raw_content)
-                logger.debug(
-                    f"[LLM] JSON parsed, keys: {list(data.keys()) if isinstance(data, dict) else 'array'}"
-                )
-                return LLMResponse(
-                    data=data,
-                    raw_response=raw_content,
-                    retried=compatibility_retried,
-                    model=self.model,
-                    prompt_tokens=(
-                        response.usage_metadata.prompt_token_count
-                        if response.usage_metadata
-                        else None
-                    ),
-                    completion_tokens=(
-                        response.usage_metadata.candidates_token_count
-                        if response.usage_metadata
-                        else None
-                    ),
-                    total_tokens=(
-                        response.usage_metadata.total_token_count
-                        if response.usage_metadata
-                        else None
-                    ),
-                    thoughts_tokens=(
-                        getattr(response.usage_metadata, "thoughts_token_count", None)
-                        if response.usage_metadata
-                        else None
-                    ),
-                    duration_ms=duration_ms,
-                    finish_reason=finish_reason,
-                    provider="gemini",
-                )
-            except json.JSONDecodeError as e:
-                logger.warning(
-                    f"[LLM] Invalid JSON in Gemini response: {e}, attempting repair..."
-                )
-
-                # Attempt repair
-                repaired = _repair_json(raw_content)
-                if repaired is not None:
-                    logger.info("[LLM] JSON repair succeeded")
-                    return LLMResponse(
-                        data=repaired,
-                        raw_response=raw_content,
-                        retried=True,
-                        model=self.model,
-                        prompt_tokens=(
-                            response.usage_metadata.prompt_token_count
-                            if response.usage_metadata
-                            else None
-                        ),
-                        completion_tokens=(
-                            response.usage_metadata.candidates_token_count
-                            if response.usage_metadata
-                            else None
-                        ),
-                        total_tokens=(
-                            response.usage_metadata.total_token_count
-                            if response.usage_metadata
-                            else None
-                        ),
-                        thoughts_tokens=(
-                            getattr(
-                                response.usage_metadata,
-                                "thoughts_token_count",
-                                None,
-                            )
-                            if response.usage_metadata
-                            else None
-                        ),
-                        duration_ms=duration_ms,
-                        finish_reason=finish_reason,
-                        provider="gemini",
-                    )
-
-                logger.error("[LLM] JSON repair failed for Gemini response")
-                logger.debug(f"[LLM] Raw content (first 500): {raw_content[:500]}")
-                return LLMResponse(
-                    data={},
-                    raw_response=raw_content,
-                    retried=compatibility_retried,
-                    error=f"Invalid JSON in response: {e}",
-                    model=self.model,
-                    prompt_tokens=(
-                        response.usage_metadata.prompt_token_count
-                        if response.usage_metadata
-                        else None
-                    ),
-                    completion_tokens=(
-                        response.usage_metadata.candidates_token_count
-                        if response.usage_metadata
-                        else None
-                    ),
-                    total_tokens=(
-                        response.usage_metadata.total_token_count
-                        if response.usage_metadata
-                        else None
-                    ),
-                    thoughts_tokens=(
-                        getattr(response.usage_metadata, "thoughts_token_count", None)
-                        if response.usage_metadata
-                        else None
-                    ),
-                    duration_ms=duration_ms,
-                    finish_reason=finish_reason,
-                    provider="gemini",
-                )
-
-        except Exception as e:
-            duration_ms = (time.perf_counter() - start_time) * 1000
-            logger.exception(f"[LLM] Gemini API error after {duration_ms:.0f}ms: {e}")
-            return LLMResponse(
-                data={},
-                error=f"Gemini API error: {e}",
-                model=self.model,
-                duration_ms=duration_ms,
-                provider="gemini",
-            )
+        return OpenAIDirectLLMClient(timeout=timeout, max_tokens=max_tokens, thinking_level=thinking_level)
+    raise ValueError(f"Unknown LLM provider: {provider}")
 
 
 def get_llm_client(
@@ -1461,217 +614,93 @@ def get_llm_client(
     max_tokens: int | None = None,
     fast: bool = False,
     tier: str | None = None,
-    thinking_budget: int | None = None,
-    thinking_level: ThinkingLevel | None = None,
+    thinking_level: str | None = None,
     temperature: float = 0.1,
     allow_fallback: bool = True,
+    operation: str | None = None,
+    provider: str | None = None,
 ) -> BaseLLMClient:
     """
-    Factory function to get the configured LLM client.
+    The configured client for ``operation`` (see ``app/services/llm/routes.py``).
 
-    Uses LLM_PROVIDER: dummy, openai, gemini, yunwu, openlux, or openrouter.
+    LLM_PROVIDER=dummy returns fixtures; ``routed`` sends the operation to its
+    primary provider with the other provider as backup.
 
     Args:
         timeout: Request timeout in seconds (default: 60s)
-        max_tokens: Optional max tokens to generate (limits response size)
+        max_tokens: Visible output budget; the reasoning reserve is added on top.
         fast: Backward-compatible alias for ``tier="fast"``
-        tier: ``fast`` (Flash-Lite), ``balanced`` (Flash), or ``quality`` (Pro)
-        thinking_budget: Legacy Gemini 2.5 numeric reasoning control.
-        thinking_level: Gemini 3 reasoning control. The factory translates a
-            legacy budget when callers have not migrated yet.
-        allow_fallback: Whether Yunwu failures may retry through Gemini. Disable
-            for latency-sensitive calls that already have focused retries.
+        tier: ``fast``/``balanced`` reason at low effort, ``quality`` at high,
+            unless ``thinking_level`` says otherwise. One model serves every tier.
+        thinking_level: Reasoning effort (low, medium or high).
+        temperature: Ignored: the direct reasoning models reject sampling parameters.
+        allow_fallback: Whether an unavailable primary may retry on the backup.
+            Disable where the caller owns its recovery (see ``recovery.py``).
+        operation: The usage-telemetry operation; selects the route.
+        provider: Force one provider with no backup (a tutorial attempt).
     """
     from app.core.config import settings
+    from app.services.llm.routes import route_for
 
-    provider = settings.llm_provider
     resolved_tier = tier or ("fast" if fast else "balanced")
     if resolved_tier not in {"fast", "balanced", "quality"}:
         raise ValueError(f"Unknown LLM tier: {resolved_tier}")
-
-    if provider == "zai":
-        from app.services.llm.zai import ZaiLLMClient
-
-        return ZaiLLMClient(
-            model={"fast": settings.zai_fast_model, "balanced": settings.zai_model,
-                   "quality": settings.zai_quality_model}[resolved_tier],
-            api_key=settings.zai_api_key, base_url=settings.zai_base_url,
-            timeout=timeout, max_tokens=max_tokens,
-            thinking_level=thinking_level or ("low" if resolved_tier == "fast" else "high"),
-            temperature=temperature,
-        )
-    if provider == "openlux":
-        from app.services.llm.openlux import OpenLuxLLMClient
-
-        return OpenLuxLLMClient(
-            model={
-                "fast": settings.openlux_fast_model,
-                "balanced": settings.openlux_model,
-                "quality": settings.openlux_quality_model,
-            }[resolved_tier],
-            api_key=settings.openlux_api_key,
-            base_url=settings.openlux_base_url,
-            timeout=timeout,
-            max_tokens=max_tokens,
-            thinking_level=thinking_level or ("high" if resolved_tier == "quality" else "low"),
-            temperature=temperature,
-        )
-    if provider == "gemini":
-        if not settings.gemini_api_key:
-            logger.warning(
-                "LLM_PROVIDER=gemini but GEMINI_API_KEY not set. "
-                "Falling back to dummy client."
-            )
-            return DummyLLMClient()
-
-        model = {
-            "fast": settings.gemini_fast_model,
-            "balanced": settings.gemini_model,
-            "quality": settings.gemini_quality_model,
-        }[resolved_tier]
-        thinking_level, thinking_budget = resolve_thinking_config(
-            model=model,
-            tier=resolved_tier,
-            thinking_level=thinking_level,
-            thinking_budget=thinking_budget,
-        )
-        return GeminiLLMClient(
-            model=model,
-            timeout=timeout,
-            max_tokens=max_tokens,
-            thinking_budget=thinking_budget,
-            thinking_level=thinking_level,
-            temperature=temperature,
-        )
-    elif provider == "openai":
-        if not settings.openai_api_key:
-            logger.warning(
-                "LLM_PROVIDER=openai but OPENAI_API_KEY not set. "
-                "Falling back to dummy client."
-            )
-            return DummyLLMClient()
-
-        model = {
-            "fast": settings.openai_fast_model,
-            "balanced": settings.openai_model,
-            "quality": settings.openai_quality_model,
-        }[resolved_tier]
-        return OpenAILLMClient(
-            model=model,
-            timeout=timeout,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
-    elif provider == "openrouter":
-        # OpenRouter speaks the OpenAI wire format, so it reuses OpenAILLMClient
-        # exactly as the Yunwu gateway does. Gemini remains the fallback because
-        # grounded discovery is Gemini-native regardless of this setting.
-        fallback_client = None
-        if (
-            allow_fallback
-            and settings.openrouter_fallback_enabled
-            and settings.gemini_api_key
-        ):
-            fallback_model = {
-                "fast": settings.gemini_fast_model,
-                "balanced": settings.gemini_model,
-                "quality": settings.gemini_quality_model,
-            }[resolved_tier]
-            fallback_thinking_level, fallback_thinking_budget = resolve_thinking_config(
-                model=fallback_model,
-                tier=resolved_tier,
-                thinking_level=thinking_level,
-                thinking_budget=thinking_budget,
-            )
-            fallback_client = GeminiLLMClient(
-                model=fallback_model,
-                timeout=timeout,
-                max_tokens=max_tokens,
-                thinking_budget=fallback_thinking_budget,
-                thinking_level=fallback_thinking_level,
-                temperature=temperature,
-            )
-
-        if not settings.openrouter_api_key:
-            if fallback_client is not None:
-                logger.warning(
-                    "LLM_PROVIDER=openrouter but OPENROUTER_API_KEY not set; using Gemini."
-                )
-                return fallback_client
-            logger.warning(
-                "Neither OPENROUTER_API_KEY nor Gemini fallback is configured."
-            )
-            return DummyLLMClient()
-
-        model = {
-            "fast": settings.openrouter_fast_model,
-            "balanced": settings.openrouter_model,
-            "quality": settings.openrouter_quality_model,
-        }[resolved_tier]
-        primary_client = OpenAILLMClient(
-            model=model,
-            api_key=settings.openrouter_api_key,
-            base_url=settings.openrouter_base_url,
-            provider_name="openrouter",
-            timeout=timeout,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
-        if fallback_client is not None:
-            return FallbackLLMClient(primary_client, fallback_client)
-        return primary_client
-    elif provider == "yunwu":
-        fallback_client = None
-        if (
-            allow_fallback
-            and settings.yunwu_fallback_enabled
-            and settings.gemini_api_key
-        ):
-            fallback_model = {
-                "fast": settings.gemini_fast_model,
-                "balanced": settings.gemini_model,
-                "quality": settings.gemini_quality_model,
-            }[resolved_tier]
-            fallback_thinking_level, fallback_thinking_budget = resolve_thinking_config(
-                model=fallback_model,
-                tier=resolved_tier,
-                thinking_level=thinking_level,
-                thinking_budget=thinking_budget,
-            )
-            fallback_client = GeminiLLMClient(
-                model=fallback_model,
-                timeout=timeout,
-                max_tokens=max_tokens,
-                thinking_budget=fallback_thinking_budget,
-                thinking_level=fallback_thinking_level,
-                temperature=temperature,
-            )
-
-        if not settings.yunwu_api_key:
-            if fallback_client is not None:
-                logger.warning(
-                    "LLM_PROVIDER=yunwu but YUNWU_API_KEY not set; using Gemini."
-                )
-                return fallback_client
-            logger.warning("Neither YUNWU_API_KEY nor Gemini fallback is configured.")
-            return DummyLLMClient()
-
-        model = {
-            "fast": settings.yunwu_fast_model,
-            "balanced": settings.yunwu_model,
-            "quality": settings.yunwu_quality_model,
-        }[resolved_tier]
-        primary_client = OpenAILLMClient(
-            model=model,
-            api_key=settings.yunwu_api_key,
-            base_url=settings.yunwu_base_url,
-            provider_name="yunwu",
-            timeout=timeout,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
-        if fallback_client is not None:
-            return FallbackLLMClient(primary_client, fallback_client)
-        return primary_client
-    else:
+    if settings.llm_provider == "dummy":
         return DummyLLMClient()
+
+    level = thinking_level or ("high" if resolved_tier == "quality" else "low")
+    primary, backup = (provider, None) if provider else route_for(operation)
+    options = {"timeout": timeout, "max_tokens": max_tokens, "thinking_level": level}
+    if not provider_configured(primary) and backup and provider_configured(backup):
+        logger.warning("[LLM] %s key not set; %s serves operation=%s", primary, backup, operation)
+        return direct_client(backup, **options)
+    client = direct_client(primary, **options)
+    if allow_fallback and backup and provider_configured(backup):
+        return FallbackLLMClient(client, direct_client(backup, **options))
+    # A missing credential stays a recorded generation_unavailable failure:
+    # never silently serve fixtures in production.
+    return client
+
+
+async def stream_routed_text(
+    system_prompt: str,
+    user_prompt: str,
+    *,
+    operation: str,
+    max_tokens: int | None,
+    thinking_level: str = "low",
+    primary_timeout: float = 60.0,
+    backup_timeout: float = 60.0,
+) -> AsyncIterator[str]:
+    """Stream visible text from the operation's primary model.
+
+    The backup takes over only before any text arrived and only when the
+    primary was unavailable: switching mid-answer would splice two replies.
+    """
+    from app.core.config import settings
+    from app.services.llm.protocol import ProviderStreamError
+    from app.services.llm.routes import route_for
+
+    if settings.llm_provider == "dummy":
+        async with aclosing(DummyLLMClient().stream_text(system_prompt, user_prompt, operation=operation)) as pieces:
+            async for piece in pieces:
+                yield piece
+        return
+    primary, backup = route_for(operation)
+    providers = [name for name in (primary, backup) if provider_configured(name)] or [primary]
+    for index, provider in enumerate(providers):
+        client = direct_client(provider, timeout=primary_timeout if index == 0 else backup_timeout,
+                               max_tokens=max_tokens, thinking_level=thinking_level)
+        received_text = False
+        try:
+            async with aclosing(client.stream_text(system_prompt, user_prompt, operation=operation)) as pieces:
+                async for piece in pieces:
+                    received_text = received_text or bool(piece)
+                    yield piece
+            return
+        except ProviderStreamError as exc:
+            unavailable = exc.retryable or exc.code in {"generation_unavailable", "generation_rate_limited"}
+            if index + 1 == len(providers) or received_text or not unavailable:
+                raise
+            logger.warning("[LLM] %s stream unavailable before text (%s); %s takes over",
+                           provider, operation, providers[index + 1])

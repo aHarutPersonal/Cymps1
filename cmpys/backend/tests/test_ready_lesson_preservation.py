@@ -79,6 +79,7 @@ def test_malformed_predecessor_is_rejected_before_approval_hashing(mutation):
         del details["_generation"]["lesson_validation"]["step_1"]
     original = copy.deepcopy(details)
     assert plans._approved_readable_step_ids(details) == frozenset()
+    assert plans._historically_published_step_ids(details) == frozenset()
     assert details == original
 
 
@@ -147,7 +148,7 @@ async def test_failed_or_cancelled_generation_keeps_prior_public_lessons(monkeyp
         async def generate_json(self, *, output_model, **kwargs):
             if cancel and output_model is LessonReview:
                 await asyncio.Event().wait()
-            return LLMResponse(data={}, error="zai request failed (GenerationUnavailable; provider unavailable)")
+            return LLMResponse(data={}, error="anthropic request failed (GenerationUnavailable; provider unavailable)")
 
     async def checkpoint(payload, stage):
         approved = plans._approved_candidate_step_ids(payload, {"step_1": package, "step_3": package}, records)
@@ -469,7 +470,7 @@ async def test_retry_carries_completion_only_for_exact_approved_lesson_and_exerc
 def test_tutorial_upgrade_revalidates_all_protected_steps_before_new_batches(monkeypatch):
     pending = [{"id": f"step_{i}"} for i in range(1, 9)]
     prior = {"marker": "saved artifact"}
-    monkeypatch.setattr(plans, "_approved_readable_step_ids", lambda checkpoint: frozenset(
+    monkeypatch.setattr(plans, "_historically_published_step_ids", lambda checkpoint: frozenset(
         {"step_1", "step_2", "step_3", "step_4", "step_5"}) if checkpoint is prior else frozenset())
     # Five old lessons must all pass the publication guard in one attempt.
     assert plans._detail_generation_batch(pending, prior, tutorial=True) == pending[:5]
@@ -478,3 +479,291 @@ def test_tutorial_upgrade_revalidates_all_protected_steps_before_new_batches(mon
     assert plans._detail_generation_batch(pending[5:], prior, tutorial=True) == []
     assert plans._detail_generation_batch(pending, None, tutorial=True) == []
     assert plans._detail_generation_batch(pending, prior, tutorial=False) == pending
+
+
+def stale_publication(details):
+    """A real-shaped prior identity invalidated by a later source edit."""
+    from app.services.planning.lesson_package import validation_identity
+    identity = {**validation_identity(), "generation_contract_hash": "0" * 64}
+    generation = details["_generation"]
+    generation["validation_identity"] = identity
+    generation["lesson_validation"] = {step_id: {
+        **identity, "content_hash": record["content_hash"], "package_hash": record["package_hash"],
+    } for step_id, record in generation["lesson_validation"].items()}
+    return details
+
+
+def test_stale_published_provenance_protects_retention_but_never_approves_read_or_candidate():
+    details, package = ready_prior_artifact()
+    stale_publication(details)
+    original = copy.deepcopy(details)
+    assert plans._approved_readable_step_ids(details) == frozenset()
+    assert plans._historically_published_step_ids(details) == {"step_1", "step_3"}
+    assert plans._approved_candidate_step_ids(details, {"step_1": package, "step_3": package},
+        details["_generation"]["lesson_validation"]) == frozenset()
+    assert plans._detail_generation_batch(details["steps"], details, tutorial=True) == [
+        details["steps"][0], details["steps"][2]]
+    assert details == original
+
+
+@pytest.mark.parametrize("mutation", [
+    "identity_missing", "identity_extra", "identity_bad_hash", "identity_bad_version",
+    "approval_identity", "approval_extra", "content_hash", "package_hash",
+    "job_marker", "job_absent", "unknown_ready", "duplicate_ready", "unpublished_status",
+    "unknown_format", "unapproved_content",
+])
+def test_historical_retention_rejects_invalid_provenance(mutation):
+    details, _ = ready_prior_artifact()
+    stale_publication(details)
+    generation = details["_generation"]
+    identity = generation["validation_identity"]
+    approval = generation["lesson_validation"]["step_1"]
+    if mutation == "identity_missing": identity.pop("schema_hash")
+    elif mutation == "identity_extra": identity["unknown"] = "unapproved"
+    elif mutation == "identity_bad_hash": identity["prompt_hash"] = "not-a-hash"
+    elif mutation == "identity_bad_version": identity["review_version"] = True
+    elif mutation == "approval_identity": approval["review_version"] += 1
+    elif mutation == "approval_extra": approval["unreviewed"] = True
+    elif mutation == "content_hash": approval["content_hash"] = "f" * 64
+    elif mutation == "package_hash": approval["package_hash"] = "not-a-hash"
+    elif mutation == "job_marker": generation["job_id"] = "not-a-job"
+    elif mutation == "job_absent": generation.pop("job_id")
+    elif mutation == "unknown_ready": generation["ready_step_ids"].append("step_99")
+    elif mutation == "duplicate_ready": generation["ready_step_ids"].append("step_1")
+    elif mutation == "unpublished_status": generation["status"] = "draft"
+    elif mutation == "unknown_format": details["lesson_format"] = "future"
+    else: details["steps"][0]["lesson_content"] += " Unapproved content."
+    original = copy.deepcopy(details)
+    assert plans._historically_published_step_ids(details) == frozenset()
+    assert details == original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changed_hash", ["content_hash", "package_hash"])
+async def test_stale_started_tutorial_still_blocks_hash_replacement(monkeypatch, changed_hash):
+    from app.services.planning.tutorial_capacity import TutorialCapacityError
+    _, item, job, package = locked_artifact(monkeypatch)
+    stale_publication(item.details_json)
+    approvals = {step["id"]: provenance(step, package) for step in item.details_json["steps"]
+                 if step.get("lesson_content")}
+    approvals["step_1"][changed_hash] = "f" * 64
+    before = copy.deepcopy(item.details_json)
+    protected = AsyncMock(return_value={"step_1"})
+    monkeypatch.setattr("app.services.planning.tutorial_capacity.protected_tutorial_ids", protected)
+    db = AsyncMock(); db.add = MagicMock()
+    with pytest.raises(TutorialCapacityError, match="Started tutorials"):
+        await plans._prepare_current_detail_artifact_publication(db, plan_id="plan", item_id="item",
+            user_id="owner", job_id=str(job.id), candidate_approved_step_ids=frozenset(approvals),
+            candidate_validations=approvals)
+    assert protected.await_args.kwargs["lock"] is True
+    assert item.details_json == before and not job.supersedes_artifact
+    db.add.assert_not_called(); db.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_stale_tutorial_revalidation_defers_outline_then_inherits_exact_completion(monkeypatch):
+    from tests.test_short_tutorial_pipeline import complete_step, outline, short_package
+    from app.services.llm.schemas import plan_detail_step_model
+    from app.services.planning.lesson_package import validation_identity
+
+    saved_outline = outline(3)
+    step = complete_step(saved_outline["steps"][0])
+    step = plan_detail_step_model(step).model_validate(step).model_dump(mode="json")
+    package = short_package()
+    previous_id, next_id = str(uuid4()), str(uuid4())
+    details = {**copy.deepcopy(saved_outline), "steps": [step, *copy.deepcopy(saved_outline["steps"][1:])],
+        "_generation": {"status": "partial", "job_id": previous_id, "lesson_package_version": 1,
+            "ready_step_ids": ["step_1"], "outline": copy.deepcopy(saved_outline),
+            "outline_contract_version": 3, "validation_identity": validation_identity(),
+            "lesson_validation": {"step_1": provenance(step, package)}}}
+    stale_publication(details)
+    original, package_json = copy.deepcopy(details), package.model_dump_json()
+    item = SimpleNamespace(id="item", details_json=details, status=PlanItemStatus.IN_PROGRESS, progress_percent=33)
+    job = SimpleNamespace(id=next_id, status="running", supersedes_artifact=False)
+    plan = SimpleNamespace(id="plan", completed_at=None)
+    monkeypatch.setattr(plans, "_lock_current_detail_artifact_publication", AsyncMock(return_value=(plan, item, job)))
+    monkeypatch.setattr("app.services.llm.telemetry.record_llm_response", AsyncMock())
+    monkeypatch.setattr("app.services.planning.package_preflight.review_package",
+                        AsyncMock(return_value=([], LLMResponse(data={}), None)))
+    review_calls = []
+    async def approve(lesson, **kwargs):
+        review_calls.append(copy.deepcopy(lesson))
+        assert lesson == original["steps"][0]
+        return [], LLMResponse(data={"practice_minutes": 3}), None
+    monkeypatch.setattr("app.services.planning.lesson_review.review_lesson", approve)
+    writer = AsyncMock(side_effect=AssertionError("Saved tutorial must be revalidated verbatim"))
+    monkeypatch.setattr("app.services.planning.lesson_writer.generate_lesson_sections", writer)
+    completed_at = datetime.now(timezone.utc) - timedelta(days=1)
+    old_completion = SimpleNamespace(step_id="step_1", completed_at=completed_at, artifact_job_id=previous_id)
+    db = AsyncMock(); db.add = MagicMock()
+    def execute(statement):
+        params = statement.compile().params
+        assert previous_id in params.values()
+        assert "owner" in params.values() and "item" in params.values()
+        assert ["step_1"] in params.values()
+        return SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: [old_completion]))
+    db.execute.side_effect = execute
+    records, stages = {}, []
+    packages = {"step_1": package}
+    async def checkpoint(payload, stage):
+        stages.append(stage)
+        approved = plans._approved_candidate_step_ids(payload, packages, records)
+        if stage == "outline_ready":
+            assert not approved and not payload["steps"][0].get("lesson_content")
+            with pytest.raises(plans.DetailArtifactPublicationDeferred):
+                await plans._prepare_current_detail_artifact_publication(db, plan_id="plan", item_id="item",
+                    user_id="owner", job_id=next_id, candidate_approved_step_ids=approved,
+                    candidate_validations=records)
+            assert item.details_json == original and item.progress_percent == 33
+            assert not job.supersedes_artifact
+            db.add.assert_not_called(); db.execute.assert_not_awaited()
+            return
+        assert stage == "step_1_ready" and approved == {"step_1"}
+        assert payload["steps"][0] == original["steps"][0]
+        assert records["step_1"] == provenance(step, package)
+        await plans._prepare_current_detail_artifact_publication(db, plan_id="plan", item_id="item",
+            user_id="owner", job_id=next_id, candidate_approved_step_ids=approved,
+            candidate_validations=records)
+        inherited = db.add.call_args.args[0]
+        assert inherited.completed_at == completed_at and inherited.artifact_job_id == next_id
+        # Model the caller's actual publication after the guard has inherited completion.
+        item.details_json = {**copy.deepcopy(payload), "_generation": {**copy.deepcopy(original["_generation"]),
+            "job_id": next_id, "validation_identity": validation_identity(), "lesson_validation": copy.deepcopy(records)}}
+
+    result, _, error = await plans._generate_plan_item_details_parallel(
+        system_prompt="Teach accurately", task_title="Claim", mission_hours=.3, user_goal="Reason",
+        learning_preferences="", idol_name="Mentor", idol_domain="writing", idol_evidence={}, session_context="",
+        active_tier="balanced", routing_reason="test", client_factory=lambda **kw: (_ for _ in ()).throw(
+            AssertionError("No provider calls during saved-lesson revalidation")),
+        existing_checkpoint=copy.deepcopy(original), prepared_packages=packages, validation_records=records,
+        on_checkpoint=checkpoint, capacity_protected_steps=AsyncMock(return_value={"step_1"}),
+        learner_completed_step_ids=AsyncMock(return_value={"step_1"}),
+        deadline=asyncio.get_running_loop().time() + 30)
+    assert not error and result["_tutorial_window_continuation"] is True
+    assert stages == ["outline_ready", "step_1_ready"] and len(review_calls) == 1
+    assert item.details_json["_generation"]["job_id"] == next_id
+    assert old_completion.artifact_job_id == previous_id and old_completion.completed_at == completed_at
+    assert item.status == PlanItemStatus.IN_PROGRESS and item.progress_percent == 33
+    assert package.model_dump_json() == package_json
+    writer.assert_not_awaited()
+    db.add.assert_called_once()
+    # Repeated current-artifact publication cannot create another completion row.
+    db.reset_mock()
+    await plans._prepare_current_detail_artifact_publication(db, plan_id="plan", item_id="item",
+        user_id="owner", job_id=next_id, candidate_approved_step_ids=frozenset({"step_1"}),
+        candidate_validations=records)
+    db.add.assert_not_called(); db.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_retained_publication_reconciles_inherited_private_sections_before_repair(monkeypatch):
+    from app.services.llm.schemas import PlanTutorialOutlineOutput, plan_detail_step_model
+    from app.services.planning.lesson_package import validation_identity
+    from tests.test_private_generation_checkpoint import Database
+    from tests.test_short_tutorial_pipeline import complete_step, outline, sections, short_package
+
+    scaffold = PlanTutorialOutlineOutput.model_validate(outline(3)).model_dump(mode="json")
+    package = short_package()
+    prior_steps = [plan_detail_step_model(s).model_validate(complete_step(s)).model_dump(mode="json")
+                   for s in scaffold["steps"]]
+    private_db = Database()
+    predecessor = private_db.new_job()
+    identity = validation_identity()
+    prior_store = private_db.store(predecessor, validation_identity=identity)
+    step_hash = digest({"step": scaffold["steps"][1], "system": "Teach", "materials": scaffold["materials"],
+        "goal": "Reason", "preferences": "", "mentor": "Mentor", "domain": "writing", "evidence": {},
+        "context": "", "minutes": 6, "tutorial_workload_policy": "honest_5_to_8_minutes"})
+    invalid_draft = sections()
+    invalid_draft["core_framework"] = "Incomplete inherited draft."
+    assert await prior_store.save_package("step_2", step_hash, package.model_dump(mode="json"), preflight_passed=True)
+    assert await prior_store.save_sections("step_2", step_hash, digest(package.model_dump(mode="json")), invalid_draft)
+    predecessor.status = "failed"
+    previous_checkpoint = copy.deepcopy(predecessor.private_checkpoint_json)
+    successor = private_db.new_job()
+    successor.supersedes_artifact = False
+    store = private_db.store(successor, validation_identity=identity)
+    details = {**copy.deepcopy(scaffold), "steps": prior_steps, "_generation": {
+        "status": "partial", "job_id": str(predecessor.id), "lesson_package_version": 1,
+        "ready_step_ids": [s["id"] for s in prior_steps], "outline": copy.deepcopy(scaffold),
+        "outline_contract_version": 3, "validation_identity": identity,
+        "lesson_validation": {s["id"]: provenance(s, package) for s in prior_steps}}}
+    stale_publication(details)
+    original = copy.deepcopy(details)
+    item = SimpleNamespace(id=private_db.item_id, details_json=details,
+                           status=PlanItemStatus.IN_PROGRESS, progress_percent=33)
+    plan = SimpleNamespace(id="plan", completed_at=None)
+    monkeypatch.setattr(plans, "_lock_current_detail_artifact_publication",
+                        AsyncMock(return_value=(plan, item, successor)))
+    monkeypatch.setattr("app.services.planning.tutorial_capacity.protected_tutorial_ids",
+                        AsyncMock(return_value={"step_1"}))
+    monkeypatch.setattr("app.services.llm.telemetry.record_llm_response", AsyncMock())
+    monkeypatch.setattr("app.services.planning.package_preflight.review_package",
+                        AsyncMock(return_value=([], LLMResponse(data={}), None)))
+    review_order = []
+    async def review(lesson, **kwargs):
+        review_order.append(lesson["id"])
+        if lesson["id"] == "step_2" and lesson["lesson_content"] == original["steps"][1]["lesson_content"]:
+            return ["Correct the public explanation."], LLMResponse(data={"practice_minutes": 3}), None
+        return [], LLMResponse(data={"practice_minutes": 3}), None
+    monkeypatch.setattr("app.services.planning.lesson_review.review_lesson", review)
+    writer_calls = []
+    repaired_sections = sections()
+    repaired_sections["core_framework"] += "\n\nRepaired explanation."
+    async def writer(**kwargs):
+        writer_calls.append(kwargs["lesson_title"])
+        assert item.details_json == original  # Old public pointer is still retained.
+        assert kwargs["completed_sections"] == {}
+        # Same-package inherited prose was explicitly cleared before rewriting.
+        assert (await store.load_step("step_2", step_hash))["sections"] == {}
+        await kwargs["on_sections"](copy.deepcopy(repaired_sections))
+        saved = await store.load_step("step_2", step_hash)
+        assert saved["sections"]["core_framework"].endswith("Repaired explanation.")
+        return LLMResponse(data=copy.deepcopy(repaired_sections)), []
+    monkeypatch.setattr("app.services.planning.lesson_writer.generate_lesson_sections", writer)
+    completed_at = datetime.now(timezone.utc) - timedelta(days=1)
+    old_completion = SimpleNamespace(step_id="step_1", completed_at=completed_at)
+    publication_db = AsyncMock(); publication_db.add = MagicMock()
+    publication_db.execute.return_value = SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: [old_completion]))
+    records, stages = {}, []
+    packages = {s["id"]: package for s in prior_steps}
+    async def checkpoint(payload, stage):
+        stages.append(stage)
+        approved = plans._approved_candidate_step_ids(payload, packages, records)
+        if stage != "step_3_ready":
+            with pytest.raises(plans.DetailArtifactPublicationDeferred):
+                await plans._prepare_current_detail_artifact_publication(publication_db, plan_id="plan",
+                    item_id=item.id, user_id=private_db.user_id, job_id=str(successor.id),
+                    candidate_approved_step_ids=approved, candidate_validations=records)
+            assert item.details_json == original
+            publication_db.add.assert_not_called()
+            return
+        assert approved == {"step_1", "step_2", "step_3"}
+        await plans._prepare_current_detail_artifact_publication(publication_db, plan_id="plan",
+            item_id=item.id, user_id=private_db.user_id, job_id=str(successor.id),
+            candidate_approved_step_ids=approved, candidate_validations=records)
+        item.details_json = {**copy.deepcopy(payload), "_generation": {**copy.deepcopy(original["_generation"]),
+            "job_id": str(successor.id), "validation_identity": validation_identity(), "lesson_validation": records}}
+
+    payload, _, error = await plans._generate_plan_item_details_parallel(
+        system_prompt="Teach", task_title="Claim", mission_hours=.3, user_goal="Reason", learning_preferences="",
+        idol_name="Mentor", idol_domain="writing", idol_evidence={}, session_context="", active_tier="balanced",
+        routing_reason="test", client_factory=lambda **kw: (_ for _ in ()).throw(AssertionError("No live providers")),
+        existing_checkpoint=copy.deepcopy(original), prepared_packages=packages, validation_records=records,
+        on_checkpoint=checkpoint, private_checkpoint_store=store,
+        capacity_protected_steps=AsyncMock(return_value={"step_1"}),
+        learner_completed_step_ids=AsyncMock(return_value={"step_1"}))
+    assert not error and payload["steps"][0] == original["steps"][0]
+    assert stages == ["outline_ready", "step_1_ready", "step_2_ready", "step_3_ready"]
+    assert review_order == ["step_1", "step_2", "step_2", "step_3"]
+    assert writer_calls == [scaffold["steps"][1]["title"]]
+    assert predecessor.private_checkpoint_json == previous_checkpoint
+    assert item.details_json["_generation"]["job_id"] == str(successor.id)
+    inherited = publication_db.add.call_args.args[0]
+    assert inherited.step_id == "step_1" and inherited.completed_at == completed_at
+    assert inherited.artifact_job_id == str(successor.id)
+    # The successful repair does not weaken real newer-job fencing.
+    saved = copy.deepcopy(successor.private_checkpoint_json)
+    private_db.new_job(status="failed")
+    assert not await store.save_sections("step_2", step_hash, digest(package.model_dump(mode="json")),
+                                         {"references": "Late conflicting callback"})
+    assert successor.private_checkpoint_json == saved

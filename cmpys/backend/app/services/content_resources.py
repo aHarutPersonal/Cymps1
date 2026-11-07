@@ -815,6 +815,7 @@ async def _generate_book_module_unbounded(
     )
     active_tier = routing_decision.tier
     client = get_llm_client(
+        operation="book_module_generation",
         timeout=BOOK_MODULE_PROVIDER_TIMEOUT_SECONDS,
         max_tokens=16000,
         tier=active_tier,
@@ -901,10 +902,7 @@ async def _generate_book_module_unbounded(
 
         # Rewriting the JSON prompt cannot recover a transport outage. Record
         # the paid attempt once and let the durable scheduler handle retry.
-        if FallbackLLMClient._is_operational_failure(response.error) or (
-            getattr(response, "provider", None) == "openlux"
-            and "finish=missing" in response.error
-        ):
+        if FallbackLLMClient.unavailable(response):
             await _persist_usage("provider_unavailable", None)
             raise RuntimeError(response.error)
         logger.warning(
@@ -915,6 +913,7 @@ async def _generate_book_module_unbounded(
         if active_tier == "fast":
             active_tier = "balanced"
             client = get_llm_client(
+                operation="book_module_generation",
                 timeout=BOOK_MODULE_PROVIDER_TIMEOUT_SECONDS,
                 max_tokens=16000,
                 tier="balanced",
@@ -967,6 +966,7 @@ async def _generate_book_module_unbounded(
         ):
             return current_data, current_report
         metadata_client = get_llm_client(
+            operation="book_module_generation",
             timeout=60.0,
             max_tokens=5000,
             tier="fast",
@@ -1050,6 +1050,7 @@ async def _generate_book_module_unbounded(
             )
         )
         grounding_client = get_llm_client(
+            operation="book_module_generation",
             timeout=60.0,
             max_tokens=3000,
             tier="balanced",
@@ -1188,6 +1189,7 @@ async def _generate_book_module_unbounded(
         if active_tier == "fast":
             active_tier = "balanced"
             client = get_llm_client(
+                operation="book_module_generation",
                 timeout=BOOK_MODULE_PROVIDER_TIMEOUT_SECONDS,
                 max_tokens=16000,
                 tier="balanced",
@@ -1229,6 +1231,7 @@ async def _generate_book_module_unbounded(
     # without becoming the default cost for every catalog item.
     if not report.passed:
         quality_client = get_llm_client(
+            operation="book_module_generation",
             timeout=BOOK_MODULE_QUALITY_TIMEOUT_SECONDS,
             max_tokens=16000,
             tier="quality",
@@ -1640,17 +1643,24 @@ async def lookup_book_source(
     author: str | None,
 ) -> dict[str, Any] | None:
     """Prefer full public-domain text, then fall back to canonical metadata."""
-    public_domain, reference = await asyncio.gather(
-        lookup_public_domain_book(title=title, author=author),
-        lookup_book_reference_context(title=title, author=author),
-    )
-    from app.services.book_fidelity import sufficient_source
-    if public_domain and sufficient_source(str(public_domain.get("source_context") or "")):
-        return public_domain
-    official_source = await lookup_gutenberg_book(title=title, author=author)
-    if official_source:
-        return official_source
-    return public_domain or reference
+    # Metadata cannot improve a sufficient full-text source, and must not
+    # delay either its use or the official full-text fallback.
+    public_task = asyncio.create_task(lookup_public_domain_book(title=title, author=author))
+    reference_task = asyncio.create_task(lookup_book_reference_context(title=title, author=author))
+    try:
+        public_domain = await public_task
+        from app.services.book_fidelity import sufficient_source
+        if public_domain and sufficient_source(str(public_domain.get("source_context") or "")):
+            return public_domain
+        official_source = await lookup_gutenberg_book(title=title, author=author)
+        if official_source:
+            return official_source
+        return public_domain or await reference_task
+    finally:
+        for task in (public_task, reference_task):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(public_task, reference_task, return_exceptions=True)
 
 
 async def get_or_create_book_module_resource(

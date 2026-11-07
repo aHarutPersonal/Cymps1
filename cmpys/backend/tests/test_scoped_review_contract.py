@@ -17,8 +17,7 @@ from app.services.planning.package_review import (
     package_review_payload, review_package,
 )
 from tests.test_geometry_evidence_roles import triangle_package
-from tests.test_json_generation_errors import client_for
-from tests.test_openlux import chunk, transport
+from tests.direct_wire import PROVIDERS, Reply, client_for, sent_schema, serve
 
 
 def assert_ids(schema, expected):
@@ -49,20 +48,20 @@ def test_number_free_schema_requires_empty_evidence_without_invalid_empty_enums(
     assert '"enum": []' not in json.dumps(schema)
 
 
-@pytest.mark.parametrize('provider', ['zai', 'openlux'])
+@pytest.mark.parametrize('provider', PROVIDERS)
 @pytest.mark.asyncio
 async def test_actual_offline_transport_receives_scoped_schema(provider, monkeypatch):
     monkeypatch.setattr(settings, 'llm_admission_limits', {})
     monkeypatch.setattr('app.services.llm.telemetry.record_llm_response', AsyncMock())
     client = client_for(provider)
-    stream, request = transport(monkeypatch, client, [chunk('{"acceptable":false,"issues":["Transfer merely recalls the public answer."]}', 'stop')])
+    wire = serve(client, Reply('{"acceptable":false,"issues":["Transfer merely recalls the public answer."]}', 'stop'))
     model = scoped_review_model(PackageReview, {'n4': 'A numeric source.'})
     response = await client.generate_json('Review independently', 'Reference package', output_model=model)
     assert response.error is None and response.data['acceptable'] is False
-    prompt = request['messages'][0]['content']
-    schema = json.loads(prompt[prompt.index('{'):])
-    assert_ids(schema, ['n4'])
-    assert stream.closed and request['stream'] is True
+    assert_ids(sent_schema(wire.request), ['n4'])
+    assert wire.streams and all(stream.closed for stream in wire.streams)
+    if provider == 'openai':
+        assert wire.request['stream'] is True
 
 
 @pytest.mark.parametrize('source,quote', [

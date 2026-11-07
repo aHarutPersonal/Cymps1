@@ -124,20 +124,39 @@ class LessonActivityDraft(StrictModel):
         return schema
 
 
+def check_tutorial_response_pairing(activity_id: str, fields) -> None:
+    """Short tutorials use one grading contract for a selected, justified judgment.
+
+    Even independent choice and text questions must occupy separate phases. A
+    structural restriction avoids guessing whether two private keys agree.
+    Numeric work may still be paired with a written explanation.
+    """
+    kinds = {field.kind for field in fields}
+    if "text" in kinds and kinds & {"choice", "multi_choice"}:
+        raise ValueError(
+            f"Tutorial activity {activity_id} cannot combine choice/multi_choice with text. "
+            "Combine selection and justification into one rubric-assessed text response; "
+            "remove the parallel fixed choice key and update instructions and explanation together. "
+            "Standalone fixed choice and number plus text remain valid."
+        )
+
+
 class TutorialActivityDraft(LessonActivityDraft):
     """A short phase has one response, or two tightly coupled responses.
 
     The response format follows the skill; text alone is valid. At most one
     text field keeps review bounded, and each fixed-answer field names its
-    result-panel criterion. Legacy lesson drafts keep their original contract.
+    result-panel criterion. Choice plus text uses one text response instead.
+    Legacy lesson drafts keep their original contract.
     """
 
     fields: list[DraftAnswerField] = Field(min_length=1, max_length=2,
-        description="One meaningful response, optionally a second necessary response; text-only is valid, with at most one text field. Match the format to the skill. Simplify the task, not its timing; do not bundle a long quiz inside one text field.")
+        description="One meaningful response, optionally a second necessary response; text-only is valid, with at most one text field. Never combine choice/multi_choice with text: use one text response for selection and justification. Number plus text is valid. Do not bundle a long quiz inside one text field.")
 
     @model_validator(mode="after")
     def new_workbook_rules(self):
         check_generated_fields(self.id, self.fields)
+        check_tutorial_response_pairing(self.id, self.fields)
         return self
 
     @classmethod
@@ -146,6 +165,11 @@ class TutorialActivityDraft(LessonActivityDraft):
         schema["properties"]["fields"].update({
             "contains": {"properties": {"kind": {"const": "text"}}, "required": ["kind"]},
             "minContains": 0, "maxContains": 1,
+            "not": {"allOf": [
+                {"contains": {"properties": {"kind": {"const": "text"}}, "required": ["kind"]}},
+                {"contains": {"properties": {"kind": {"enum": ["choice", "multi_choice"]}},
+                              "required": ["kind"]}},
+            ]},
         })
         # Make the conditional rule visible before a paid response is written.
         for name in ("NumberDraftField", "ChoiceDraftField", "MultiChoiceDraftField"):
@@ -254,6 +278,86 @@ def _without_empty_text_criteria(data: Any) -> Any:
     return normalized
 
 
+# Owner decision (2026-11-06): a tutorial exercise's time is not the model's estimate
+# and never fails a lesson. Two activities of 1–2 minutes make the 2–4 minute practice.
+TUTORIAL_ACTIVITY_MINUTES = {"minutes_min": 1, "minutes_max": 2}
+
+
+def with_tutorial_timing(data: Any) -> Any:
+    """Replace a tutorial draft's own minute estimates with the server's, without mutation."""
+    return {**data, **TUTORIAL_ACTIVITY_MINUTES} if isinstance(data, dict) else data
+
+
+def without_overlong_text_rubric(data: Any) -> Any:
+    """Null a text field's optional rubric_criterion over its limit, without mutation.
+
+    A text field falls back to its label. A correction once filled it with
+    the whole model answer (pilot 2026-11-06 audit, A17); shortening could
+    keep that answer public, so the value is dropped, never truncated. Other
+    kinds require the criterion and stay strict.
+    """
+    if not isinstance(data, dict) or type(data.get("fields")) is not list:
+        return data
+    limit = next(item.max_length for item in AnswerField.model_fields["rubric_criterion"].metadata
+                 if getattr(item, "max_length", None) is not None)
+    result = data
+    for index, field in enumerate(data["fields"]):
+        if (isinstance(field, dict) and field.get("kind") == "text"
+                and type(field.get("rubric_criterion")) is str and len(field["rubric_criterion"].strip()) > limit):
+            if result is data:
+                result = copy.deepcopy(data)
+            result["fields"][index]["rubric_criterion"] = None
+    return result
+
+
+def with_default_qualitative_data(data: Any) -> Any:
+    """A draft with no number field and no expression that omits ``data`` declares none.
+
+    Default it to ``[]`` without mutation. Any number then shown in its text is
+    still rejected as undeclared (``require_declared_numbers``).
+    """
+    if (isinstance(data, dict) and "data" not in data and type(data.get("fields")) is list
+            and all(isinstance(field, dict) and field.get("kind") != "number" and "expression" not in field
+                    for field in data["fields"])):
+        return {**data, "data": []}
+    return data
+
+
+# Properties that only one answer-field kind carries (contracts.AnswerField).
+_KIND_EVIDENCE = {"expression": "number", "correct_choice": "choice",
+                  "correct_choices": "multi_choice", "criteria": "text"}
+
+
+def without_wire_noise(data: Any) -> Any:
+    """Drop remark-only wire noise without touching any authored content.
+
+    A short string under a key ending in ``_note`` ("minutes_max_note") is a
+    remark beside the schema; no draft property ends in ``_note``. An empty value
+    under a key with no letter or digit (``"_": null``) is a placeholder; no draft
+    property is spelled that way (pilot 2026-11-06). A field that
+    omits ``kind`` gets the one kind its own properties prove; an ambiguous field
+    stays as written for strict validation to reject.
+    """
+    def clean(node):
+        if isinstance(node, list):
+            return [clean(item) for item in node]
+        if not isinstance(node, dict):
+            return node
+        return {key: clean(value) for key, value in node.items()
+                if not (str(key).endswith("_note") and type(value) is str and len(value) <= 200)
+                and not (not re.search(r"[^\W_]", str(key)) and value in (None, "", [], {}))}
+
+    if not isinstance(data, dict):
+        return data
+    result = clean(data)
+    for field in result.get("fields") if type(result.get("fields")) is list else []:
+        if isinstance(field, dict) and "kind" not in field:
+            kinds = {kind for key, kind in _KIND_EVIDENCE.items() if field.get(key) not in (None, "", [])}
+            if len(kinds) == 1:
+                field["kind"] = kinds.pop()
+    return result
+
+
 _ID_TOKEN = re.compile(r"[a-z][a-z0-9_]{0,39}")
 
 
@@ -353,7 +457,7 @@ def parse_activity_draft(data: Any) -> LessonPackageActivity:
     """
     if isinstance(data, LessonActivityDraft):
         data = data.model_dump(mode="python")
-    draft = LessonActivityDraft.model_validate(_without_empty_text_criteria(data))
+    draft = LessonActivityDraft.model_validate(_without_empty_text_criteria(without_overlong_text_rubric(data)))
     canonical = draft.model_dump(mode="json")
     steps = [{"field_id": field["id"], "explanation": field.pop("explanation")}
              for field in canonical["fields"]]
@@ -412,6 +516,8 @@ def activity_repair_reference(activity: Activity) -> dict:
 
 
 def parse_activity_repair_draft(data: Any, *, tutorial: bool = False) -> LessonPackageActivity:
+    # Server timing is set where tutorial activities are first built; a scoped
+    # repair keeps the prior activity's minutes (``_replace_public_activity``).
     model = TutorialActivityDraft if tutorial else LessonActivityDraft
-    draft = model.model_validate(_without_inactive_field_defaults(data))
+    draft = model.model_validate(_without_inactive_field_defaults(without_wire_noise(without_overlong_text_rubric(data))))
     return parse_activity_draft(draft)

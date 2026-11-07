@@ -148,7 +148,7 @@ async def test_negative_content_review_is_not_retried_for_approval():
 async def test_review_timeout_retries_identical_draft_without_content_changes(monkeypatch):
     from app.services.llm.client import LLMResponse
     monkeypatch.setattr("app.services.llm.telemetry.record_llm_response", AsyncMock())
-    timeout = LLMResponse(data={}, error="zai request failed (TimeoutError; finish=missing)")
+    timeout = LLMResponse(data={}, error="anthropic request failed (TimeoutError; finish=missing)")
     valid = LLMResponse(data=_review())
     client = SimpleNamespace(generate_json=AsyncMock(side_effect=[timeout, valid]))
     failures, response, _ = await review_lesson(
@@ -162,7 +162,7 @@ async def test_review_timeout_retries_identical_draft_without_content_changes(mo
 async def test_review_rate_limit_does_not_trigger_transport_retries():
     from app.services.llm.client import LLMResponse
     client = SimpleNamespace(generate_json=AsyncMock(return_value=LLMResponse(
-        data={}, error="zai request failed (RateLimitError; finish=missing)")))
+        data={}, error="anthropic request failed (RateLimitError; finish=missing)")))
     failures, _, _ = await review_lesson(
         {"lesson_content": "Useful teaching content"}, client_factory=lambda **kw: client, context={})
     assert failures
@@ -211,7 +211,7 @@ async def test_malformed_review_json_recovers_once_without_changing_lesson(monke
     from app.services.llm.client import LLMResponse
     monkeypatch.setattr("app.services.llm.telemetry.record_llm_response", AsyncMock())
     client = SimpleNamespace(generate_json=AsyncMock(side_effect=[
-        LLMResponse(data={}, error="zai request failed (JSONDecodeError; finish=stop)"),
+        LLMResponse(data={}, error="anthropic request failed (JSONDecodeError; finish=stop)"),
         LLMResponse(data=_review(acceptable=False, issues=["Wrong private answer key"])),
     ]))
     failures, _, _ = await review_lesson(
@@ -309,19 +309,11 @@ async def test_workload_inconsistency_rechecks_same_artifact_once(monkeypatch, c
     "Reflect on your 1000-word draft.",
     "Write a 600‑word scene.",
     "Revise a 250–400-word draft.",
-    "She made the desk at 4:58 but missed the recital.",
-    "Deliver the package before 5:00.",
-    "At 11:40 the only person who could approve was absent.",
-    "The time pressure (11:40 against midnight) tightens it.",
     "After each 60-minute writing session, name what changed.",
     "PASS ONE (self-time about 8 minutes): draft roughly 600 words.",
-    '\"Question 1 (goal?): I guessed she wants to fix her mistake.',
-    "The reader answered no to question 4, so revise the ending.",
     "PASS 1 — Write the opening half of your scene.",
     "A strong Pass 1 establishes goal and obstacle in action.",
     "Pass 1 planned a confession, but Pass 2 makes silence the choice.",
-    "Mira wants to hand in her essay before the 5 p.m. deadline.",
-    "She arrived at 12:30 PM before sunset.",
 ])
 def test_hyphenated_writing_quotas_are_covered_workload_metadata(text):
     from app.services.planning.lesson_review import LessonReview, grounded_failures, numeric_spans
@@ -388,8 +380,6 @@ def test_quoted_model_response_does_not_exempt_unproven_numbers(text):
 
 
 @pytest.mark.parametrize("text", [
-    "Can the reader identify (1) Maya's goal, (2) the obstacle and its cost, (3) the choice, (4) the change?",
-    "Name (1) the goal, (2) the obstacle and (3) the consequence.",
     "Explain 1) the goal; 2) the choice; 3) the change.",
 ])
 def test_explicit_inline_lists_require_reviewer_coverage(text):
@@ -420,8 +410,6 @@ def test_inline_list_markers_do_not_hide_quantities_or_ambiguity(text):
 
 
 @pytest.mark.parametrize("text", [
-    "SCENE DRAFT — 'Dev, 3 a.m.' (original prose)",
-    "The title reads 11:45 PM.",
     "Checklist to send: '1) What does the character want? 2) What blocks them? 3) What do they choose? 4) What changes?'",
     "Reader questions: '1) What is the goal? 2) What changes?'",
 ])
@@ -451,12 +439,7 @@ def test_clock_and_checklist_metadata_keep_quantitative_failures(text):
 
 
 @pytest.mark.parametrize("text", [
-    "The station screen said 7:42.",
     "The example uses *screen says 7:42* as a specific time clue.",
-    "The watch shows 00:05 while the clock reads 23:59.",
-    "Submit three parts: (1) your vague sentence, (2) your revised sentence, and (3) a short note.",
-    "The details changed are (1) the fogged window - and (2) the scraping chair.",
-    "The details were (1) the fogged window, (2) the scraping chair, or (3) the open door.",
 ])
 def test_displayed_clock_and_complete_copular_lists_need_independent_coverage(text):
     from app.services.planning.lesson_review import LessonReview, grounded_failures, numeric_spans
@@ -474,7 +457,6 @@ def test_displayed_clock_and_complete_copular_lists_need_independent_coverage(te
     "The screen says 7:62.",
     "The screen says -7:42.",
     "The screen says 1.7:42.",
-    "The screen says 7:42:15.",
     "The screen says 7:42 as the ratio.",
     "The scores on the screen said 7:42.",
     "The scoreboard display shows 7:42.",
@@ -501,6 +483,38 @@ def test_displayed_clock_and_copular_lists_do_not_hide_quantities_or_ambiguity(t
     assert ids
     review = LessonReview.model_validate(_review(literal_fact_ids=ids))
     assert grounded_failures(review, lesson, {})
+
+
+# Phase 0.2 (2026-11-04): the shared numeral policy (numeric_metadata.
+# non_quantity_numeral_intervals) treats clock times, "Question N" references
+# and complete inline "(1) ... (N)" lists as non-quantities in every gate.
+# These texts previously had to be covered by reviewer metadata; they are now
+# outside the inventory, so there is nothing left to prove or to omit.
+@pytest.mark.parametrize("text", [
+    "She made the desk at 4:58 but missed the recital.",
+    "Deliver the package before 5:00.",
+    "At 11:40 the only person who could approve was absent.",
+    "The time pressure (11:40 against midnight) tightens it.",
+    '\"Question 1 (goal?): I guessed she wants to fix her mistake.',
+    "The reader answered no to question 4, so revise the ending.",
+    "Mira wants to hand in her essay before the 5 p.m. deadline.",
+    "She arrived at 12:30 PM before sunset.",
+    "Can the reader identify (1) Maya's goal, (2) the obstacle and its cost, (3) the choice, (4) the change?",
+    "Name (1) the goal, (2) the obstacle and (3) the consequence.",
+    "SCENE DRAFT — 'Dev, 3 a.m.' (original prose)",
+    "The title reads 11:45 PM.",
+    "The station screen said 7:42.",
+    "The watch shows 00:05 while the clock reads 23:59.",
+    "Submit three parts: (1) your vague sentence, (2) your revised sentence, and (3) a short note.",
+    "The details changed are (1) the fogged window - and (2) the scraping chair.",
+    "The details were (1) the fogged window, (2) the scraping chair, or (3) the open door.",
+    "The screen says 7:42:15.",
+])
+def test_clock_times_question_labels_and_inline_lists_are_not_quantities(text):
+    from app.services.planning.lesson_review import LessonReview, grounded_failures, numeric_spans
+    lesson = {"lesson_content": text}
+    assert numeric_spans(lesson, {}) == {}
+    assert not grounded_failures(LessonReview.model_validate(_review()), lesson, {})
 
 
 def test_copular_list_metadata_never_joins_source_fields_or_masks_equal_quoted_occurrences():

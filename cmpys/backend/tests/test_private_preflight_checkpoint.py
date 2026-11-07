@@ -77,7 +77,8 @@ async def test_known_negative_survives_older_success_callback_and_cannot_be_appr
     assert await store.save_review_state(STEP_ID, STEP_HASH, digest(payload), negative)
     assert await store.save_review_state(STEP_ID, STEP_HASH, digest(payload), accepted)
     entry = await store.load_step(STEP_ID, STEP_HASH)
-    assert entry["review_state"]["rejection"] == negative["rejection"]
+    assert entry["review_state"]["rejection"] == {**negative["rejection"], "issues": [
+        dict(issue, severity="blocking") for issue in negative["rejection"]["issues"]]}
     assert entry["preflight_passed"] is False
     assert not await store.save_package(STEP_ID, STEP_HASH, payload, preflight_passed=True)
 

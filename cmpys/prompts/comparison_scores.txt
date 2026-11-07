@@ -118,3 +118,26 @@ PLACEMENT AND INTERVIEW EVIDENCE:
 - Treat the comparison as context and direction, not a ranking of personal worth or a
   calibrated placement test. Historical evidence may be incomplete; avoid implying that
   every displayed fact occurred at exactly the user's age unless sources establish that.
+
+
+SOURCE-ANCHORED MEASUREMENTS FOR COMPARABLE DIMENSIONS:
+For each comparable non-capital dimension, add you_measurement and idol_measurement objects.
+Each has five string fields: kind, unit, scope, rubric, evidence_quote. Omit these objects for
+unscored dimensions. Copy evidence_quote verbatim from a relevant learner answer or the supplied
+mentor fact; never quote your comparison summary or your own notes. The excerpt must explicitly
+state a quantity for unit and include scope. Do not invent a measurement, timeframe, or rubric.
+- knowledge: kind knowledge_assessment. Both excerpts must give an actual assessment score using
+  the same named rubric, skill/scope, and unit. Publication, credentials, success, self-confidence,
+  and a provisional short diagnostic are not a matched broad knowledge assessment.
+- judgment: kind written_judgment_assessment. Both need scored written work on the same supplied
+  rubric and skill/scope. Sales and publication do not measure written judgment.
+- practice: kind completed_work_count. Both need explicit completed quantities in the same unit
+  and scope/timeframe. Three essays and one serial novel are different units; a publication fact
+  with a date but no count of the matched practice unit is insufficient mentor evidence.
+- network: kind feedback_contact_count. Both need an explicit count of people available for
+  feedback, advice, review or help in the same scope/timeframe. Audience size, fame and inferred
+  publisher relationships do not establish that access.
+Use unit/scope/rubric exactly as written in each excerpt. The matched fields must agree across
+both sides; use an empty rubric for count dimensions. Where either excerpt is missing or the
+bases differ, return the corresponding unscored status. A supported fact remains useful context
+even when it cannot support numerical tiers. Never add a measurement merely to preserve a score.

@@ -302,58 +302,24 @@ async def list_library_resources(
     Includes: vault saves, plan-linked materials, and public-domain books.
     Supports filtering by kind, searching by title/author, and sorting.
     """
-    # Collect resource IDs from three sources: vault, plan links, and public domain
-    resource_ids: set[str] = set()
-
-    # 1. Vault saves
-    vault_result = await db.execute(
-        select(UserContentSave.content_resource_id).where(
-            UserContentSave.user_id == current_user.id
-        )
-    )
-    resource_ids.update(row[0] for row in vault_result.fetchall())
-
-    # 2. Plan-linked materials
-    plan_result = await db.execute(
-        select(Plan.id).where(Plan.user_id == current_user.id).limit(1)
-    )
-    plan_id = plan_result.scalar_one_or_none()
-    if plan_id:
-        link_result = await db.execute(
-            select(PlanItemContentResource.content_resource_id)
-            .join(PlanItem, PlanItemContentResource.plan_item_id == PlanItem.id)
-            .where(PlanItem.plan_id == plan_id)
-        )
-        resource_ids.update(row[0] for row in link_result.fetchall())
-
-    # 3. Every published shared book guide. Autonomous catalog books should be
-    # discoverable here once (and only once) they pass the same quality gate as
-    # user-requested guides.
-    pd_result = await db.execute(
-        select(ContentResource.id).where(
-            ContentResource.kind.in_(
-                [
-                    ContentResourceKind.PUBLIC_DOMAIN_BOOK,
-                    ContentResourceKind.LLM_BOOK_SUMMARY,
-                ]
-            ),
-            servable_content_resource_clause(),
-        )
-    )
-    resource_ids.update(row[0] for row in pd_result.fetchall())
-
-    if not resource_ids:
-        return ContentResourceListResponse(resources=[], total=0)
-
-    # Build base query filtering to accessible resource IDs
-    stmt = (
-        select(ContentResource)
-        .options(defer(ContentResource.content_markdown))
-        .where(
-            ContentResource.id.in_(resource_ids),
-            servable_content_resource_clause(),
-        )
-    )
+    # Keep membership in SQL: a paginated shelf must not first load every
+    # accessible resource ID. Correlate only the shared resource, not the
+    # user-state joins below, so saves never cross account boundaries.
+    plan_id = select(Plan.id).where(Plan.user_id == current_user.id).limit(1).scalar_subquery()
+    saved = select(UserContentSave.id).where(
+        UserContentSave.user_id == current_user.id,
+        UserContentSave.content_resource_id == ContentResource.id,
+    ).correlate(ContentResource).exists()
+    linked = select(PlanItemContentResource.id).join(
+        PlanItem, PlanItemContentResource.plan_item_id == PlanItem.id,
+    ).where(
+        PlanItem.plan_id == plan_id,
+        PlanItemContentResource.content_resource_id == ContentResource.id,
+    ).correlate(ContentResource).exists()
+    accessible = or_(saved, linked, ContentResource.kind.in_([
+        ContentResourceKind.PUBLIC_DOMAIN_BOOK, ContentResourceKind.LLM_BOOK_SUMMARY,
+    ]))
+    filters = [accessible, servable_content_resource_clause()]
 
     # Apply kind filter
     if kind:
@@ -363,12 +329,12 @@ async def list_library_resources(
             raise HTTPException(
                 status_code=400, detail="Invalid resource kind"
             ) from exc
-        stmt = stmt.where(ContentResource.kind == parsed_kind)
+        filters.append(ContentResource.kind == parsed_kind)
 
     # Apply search filter
     if q:
         needle = f"%{q}%"
-        stmt = stmt.where(
+        filters.append(
             or_(
                 ContentResource.title.ilike(needle),
                 ContentResource.author_or_creator.ilike(needle),
@@ -376,8 +342,22 @@ async def list_library_resources(
         )
 
     # Count total before pagination
-    total_result = await db.execute(select(func.count()).select_from(stmt.subquery()))
+    total_result = await db.execute(select(func.count()).select_from(ContentResource).where(*filters))
     total = total_result.scalar() or 0
+
+    stmt = (
+        select(ContentResource, UserContentSave, UserContentProgress)
+        .options(defer(ContentResource.content_markdown), defer(ContentResource.embedding))
+        .outerjoin(UserContentSave, and_(
+            UserContentSave.content_resource_id == ContentResource.id,
+            UserContentSave.user_id == current_user.id,
+        ))
+        .outerjoin(UserContentProgress, and_(
+            UserContentProgress.content_resource_id == ContentResource.id,
+            UserContentProgress.user_id == current_user.id,
+        ))
+        .where(*filters)
+    )
 
     # Apply sort
     if sort == "duration":
@@ -390,41 +370,13 @@ async def list_library_resources(
         stmt = stmt.order_by(ContentResource.updated_at.desc())
 
     result = await db.execute(stmt.offset(offset).limit(limit))
-    resources = list(result.scalars().all())
-
-    # Fetch user state for all resources
-    saves_by_resource: dict[str, UserContentSave] = {}
-    progress_by_resource: dict[str, UserContentProgress] = {}
-    if resources:
-        resource_id_list = [r.id for r in resources]
-        save_result = await db.execute(
-            select(UserContentSave).where(
-                UserContentSave.user_id == current_user.id,
-                UserContentSave.content_resource_id.in_(resource_id_list),
-            )
-        )
-        saves_by_resource = {
-            s.content_resource_id: s for s in save_result.scalars().all()
-        }
-        progress_result = await db.execute(
-            select(UserContentProgress).where(
-                UserContentProgress.user_id == current_user.id,
-                UserContentProgress.content_resource_id.in_(resource_id_list),
-            )
-        )
-        progress_by_resource = {
-            p.content_resource_id: p for p in progress_result.scalars().all()
-        }
-
     return ContentResourceListResponse(
         resources=[
             _resource_response(
-                r,
-                save=saves_by_resource.get(r.id),
-                progress=progress_by_resource.get(r.id),
+                resource, save=save, progress=progress,
                 include_content=False,
             )
-            for r in resources
+            for resource, save, progress in result.all()
         ],
         total=total,
     )
@@ -644,8 +596,8 @@ async def prepare_content_narration(
     except BookNarrationUnavailableError as exc:
         # Do not log the passage, provider body, signed URLs or exception chain.
         logger.warning(
-            "Book narration unavailable reason=%s http_status=%s provider_status=%s retryable=%s",
-            exc.reason_code, exc.http_status, exc.provider_status, exc.retryable,
+            "Book narration unavailable reason=%s http_status=%s retryable=%s",
+            exc.reason_code, exc.http_status, exc.retryable,
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

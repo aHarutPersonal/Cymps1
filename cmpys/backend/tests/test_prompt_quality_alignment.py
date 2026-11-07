@@ -21,7 +21,7 @@ from app.services.llm.schemas import (
 def test_blueprint_is_a_strategic_verdict_not_a_second_execution_plan() -> None:
     prompt = load_prompt("blueprint_generate")
 
-    assert "mentor's STRATEGIC VERDICT, not a second roadmap" in prompt
+    assert "evidence-grounded STRATEGIC VERDICT, not a second roadmap" in prompt
     assert "The separate 12-week plan owns weekly missions" in prompt
     assert "Do NOT provide task lists" in prompt
     assert "## Phase Intent" in prompt
@@ -115,11 +115,12 @@ def test_immersive_personas_keep_a_truthful_ai_portrayal_boundary(
     assert "never narrate it to the user" not in lower
 
 
-def test_interview_uses_only_supplied_verified_facts() -> None:
+def test_interview_keeps_biography_out_of_learner_questions() -> None:
     prompt = load_prompt("interview_system.xml")
 
-    assert 'name="SUPPLIED_FACTS_ONLY"' in prompt
-    assert "Treat those supplied\nfacts as the only authority" in prompt
+    assert 'name="LEARNER_ONLY_INTAKE"' in prompt
+    assert "Every visible intake question is about the learner" in prompt
+    assert "Do not narrate or compare the mentor's biography" in prompt
     assert "Do not browse, invoke search" in prompt
     assert "Use the Google Search tool" not in prompt
     assert "USE IT for every historical claim" not in prompt
@@ -194,3 +195,54 @@ def test_plan_has_one_authoritative_capacity_based_task_count_rule() -> None:
     assert "MUST be at least 50 words" in prompt
     assert "MUST be at least 30 words" in prompt
     assert "MUST be at least 30 words and reference" in prompt
+
+
+def test_prompts_enforce_human_burstiness_and_ban_ai_cliches() -> None:
+    for name in (
+        "book_writer_system",
+        "book_module_generate",
+        "planner_system",
+        "tutorial_contract",
+        "plan_item_detail_lesson",
+        "comparison_generate",
+        "blueprint_generate",
+        "guided_learning_system",
+    ):
+        prompt = load_prompt(name).lower()
+        assert "delve" in prompt and "tapestry" in prompt, name
+        assert "negative parallelism" in prompt, name
+
+
+def test_learning_science_sequence_and_habit_contracts_are_explicit() -> None:
+    sequence = load_prompt("learning_sequence_contract")
+    week_prompt = load_prompt("plan_week_generate")
+
+    assert "Step 1 (Diagnostic + Quick Win)" in sequence
+    assert "Core Steps (Worked-Example Fading)" in sequence
+    assert "Interleaved Discrimination Checkpoints" in sequence
+    assert "Final Step (Capstone Transfer)" in sequence
+    assert "If-Then implementation" in week_prompt
+    assert "reconstruct the taught rule and its deciding cue" in week_prompt
+
+
+def test_major_generation_prompts_place_static_contracts_before_dynamic_context() -> None:
+    backbone = load_prompt("plan_backbone_generate")
+    week = load_prompt("plan_week_generate")
+    outline = load_prompt("plan_item_tutorial_outline")
+    book = load_prompt("book_module_generate")
+
+    assert backbone.index("BACKBONE CONTRACT:") < backbone.index("USER CONTEXT:\n{user_context}")
+    assert week.index("EXECUTION CONTRACT:") < week.index("APPROVED WEEK BACKBONE:\n{backbone_week_json}")
+    assert outline.index("CURRICULUM RULES:") < outline.index("DOCUMENTED MENTOR EVIDENCE")
+    assert book.index("QUALITY CONTRACT:") < book.index("SOURCE CONTEXT:\n{source_context}")
+
+
+@pytest.mark.parametrize("name", ["plan_backbone_generate.txt", "plan_week_generate.txt"])
+def test_public_plan_overviews_leave_numeric_teaching_cases_to_validated_lessons(name) -> None:
+    from app.services.llm.prompt_loader import resolve_prompt_text
+
+    prompt = " ".join(resolve_prompt_text(name).split())
+    assert "Plan overviews describe learner actions and success criteria" in prompt
+    assert "numeric worked examples, invented datasets or solved sample claims" in prompt
+    assert "validated lessons supply teaching examples and their declared inputs" in prompt
+    assert "attendance totals do not identify weekday workers or demonstrate learning" in prompt

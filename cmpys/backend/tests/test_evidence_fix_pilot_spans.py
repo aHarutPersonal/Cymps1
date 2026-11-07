@@ -14,6 +14,7 @@ from app.services.planning.evidence_resolver import package_cases, resolve_liter
 from app.services.planning.lesson_review import (
     LessonReview, grounded_failures, numeric_spans, review_lesson, source_equation_failures,
 )
+from tests.phase0_fixtures import model_binder_mechanics  # noqa: F401
 
 
 def review(*, calculations=(), literal_facts=(), literal_fact_ids=(), math_roles=()):
@@ -465,6 +466,8 @@ async def test_final_review_does_not_bind_an_ambiguous_or_derived_span(no_teleme
     assert client.generate_json.await_count == 2
 
 
+# Phase 0.4: exercises the model binder; keep earlier server bindings.
+@pytest.mark.usefixtures("model_binder_mechanics")
 @pytest.mark.asyncio
 async def test_final_review_never_replaces_a_reviewer_calculation_with_a_literal_fact(no_telemetry):
     # The reviewer called n2 derived; a wrong calculation is not overridden by data matching.

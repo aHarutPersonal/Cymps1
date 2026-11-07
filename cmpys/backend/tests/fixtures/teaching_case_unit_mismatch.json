@@ -1,0 +1,180 @@
+{
+  "package": {
+    "teaching_cases": [
+      {
+        "id": "sunday_pilot_check",
+        "assumptions": "Original fictional example. Draft claim: \"The town should try opening the library on Sundays.\" Worked analysis against three criteria. Who acts: \"the town\" is vague \u2014 no office or council named that could actually decide or fund a pilot; the actor fails. What exactly to do: \"try opening\" names a direction, not a step \u2014 no hours, staffing, or duration; the action fails. What counts as success: no measure is stated, so any result could be declared a success or failure; the success test fails. Revised version that passes all three: \"The town council should run a six-week Sunday-opening pilot at the main branch, 12 to 5, with two staff on duty, and continue only if average Sunday visits cover the added staffing cost.\" Actor: council. Action: six-week pilot, named branch, hours, staffing. Success: visits covering staffing cost. Note: naming a missing element is what makes a rating useful, not just 'weak'.",
+        "data": [],
+        "results": []
+      }
+    ],
+    "workbook": {
+      "title": "Test Your Claim Draft",
+      "activities": [
+        {
+          "id": "guided_claim_score",
+          "title": "Score a clinic claim",
+          "kind": "practice",
+          "instructions": "Original fictional example. A resident writes this claim to the local paper: \"The county health office should take action on the long waits at the community clinic, because mornings are crowded and people give up and go home \u2014 and any change should stay in place only if the share of morning visitors seen within an hour goes up.\"\n\nRecall the three-criterion check from the worked example. Who acts: a named decider who could actually decide or fund the change. What exactly to do: a concrete step with details, not just a direction. What counts as success: a stated measure that could show the change worked or failed.\n\nScore this clinic draft. It names a real decider \u2014 the county health office \u2014 so who acts passes. It also states a measurable standard \u2014 the share of morning visitors seen within an hour rising \u2014 so what counts as success passes. Exactly one criterion fails, and it fails clearly, so there is a single right pick below.\n\nFirst, pick the criterion this clinic draft meets least. Then, for the criterion you picked, name the specific missing element in the draft and write one sentence that would supply it.",
+          "fields": [
+            {
+              "id": "least_met",
+              "label": "Which criterion does the clinic draft meet least?",
+              "kind": "choice",
+              "choices": [
+                {
+                  "id": "who_acts",
+                  "label": "Who acts \u2014 no real decider is named"
+                },
+                {
+                  "id": "what_to_do",
+                  "label": "What exactly to do \u2014 no concrete step is given"
+                },
+                {
+                  "id": "success_test",
+                  "label": "What counts as success \u2014 no measure is stated"
+                }
+              ],
+              "correct_choice": "what_to_do",
+              "rubric_criterion": "Identifies the criterion the draft genuinely fails"
+            },
+            {
+              "id": "gap_and_fix",
+              "label": "For your picked criterion: the missing element and one sentence that would supply it",
+              "kind": "text",
+              "criteria": [
+                "Names the specific missing element in the draft for the criterion picked, quoting or clearly identifying the vague words",
+                "Writes one sentence that supplies a concrete actor, action detail, or measurable success standard matching that criterion",
+                "Keeps the fix consistent with the supplied facts about the clinic without inventing statistics as evidence"
+              ]
+            }
+          ],
+          "hint": "For each criterion, ask what words in the draft supply or fail it: is a real decider named, is \"take action\" a concrete step with details, and is a success measure stated?",
+          "worked_solution": "Which criterion does the clinic draft meet least?\n\nWhat exactly to do \u2014 no concrete step is given\n\nThe draft names the county health office, an actual decision-maker over clinic operations, so who acts passes. It also sets a measurable standard \u2014 keep the change only if the share of morning visitors seen within an hour rises \u2014 so what counts as success passes. What fails is what exactly to do: \"take action\" names only a direction, with no concrete step such as extra staffing, added hours, or a walk-in window. \"What to do\" is therefore the uniquely least-met criterion.\n\nFor your picked criterion: the missing element and one sentence that would supply it\n\nModel answer: the missing element is any concrete step \u2014 the draft says only \"take action,\" with no hours, staffing level, or schedule change specified. A supplying sentence is \"The county health office should open an extra walk-in window at the clinic on weekday mornings from opening until noon.\" A fix that instead changes the actor or the success measure addresses a criterion the draft already passes and would not count, nor would a vague improvement like \"handle the waits better.\"",
+          "minutes_min": 1,
+          "minutes_max": 2
+        },
+        {
+          "id": "transfer_own_draft",
+          "title": "Score your own Sunday draft",
+          "kind": "transfer",
+          "instructions": "Original fictional example for practice; here it is your own unaided draft, quoted from your earlier work sample: \"Our town should keep the library open on Sundays. Many people work on weekdays. Libraries have books and computers. Last Sunday I saw people waiting outside. Sunday opening would help everyone.\"\n\nYour task: apply the three-criterion check you just practised \u2014 who acts, what exactly to do, what counts as success. Rate this draft on each criterion, and whenever a criterion is not met, name the specific missing element (for example, the exact words the draft relies on instead of a concrete actor, action or measure). A rating like \"weak\" or \"vague\" only counts if you say what is missing. If you think part of the draft does some of the work \u2014 such as the waiting-outside observation hinting at a success cue \u2014 you may treat it that way, as long as you explain how it would need to link to a real measure.",
+          "fields": [
+            {
+              "id": "three_criterion_rating",
+              "label": "Rate your draft on who acts, what exactly to do, and what counts as success, naming each missing element",
+              "kind": "text",
+              "criteria": [
+                "Identifies whether a concrete deciding actor is named, or notes the draft only says \"our town\"",
+                "States what a complete action would require (such as pilot details, hours, staffing or duration) or notes that these are absent",
+                "Names a measurable success standard, or notes that none is given",
+                "Ratings name specific missing words or elements rather than only calling the draft weak or vague",
+                "Treats the waiting-outside observation as a partial success cue only by explaining the link to a measure"
+              ]
+            }
+          ],
+          "hint": "Go one criterion at a time: ask who could actually decide this, what steps and details the draft commits to, and what result would count as success.",
+          "worked_solution": "Rate your draft on who acts, what exactly to do, and what counts as success, naming each missing element\n\nA strong response rates each criterion and names its gap. Actor: the draft says only \"our town\" \u2014 no council or office that could fund and decide Sunday opening is named. Action: \"keep the library open on Sundays\" gives a direction but no hours, staffing, branch or duration; a pilot with those details would complete it. Success: no measure is stated \u2014 \"would help everyone\" cannot be tested; the waiting-outside observation could serve as a partial cue only if tied to something countable, such as Sunday visit numbers or a comparison with weekday use. Accept reasoned alternatives, including a defensible pass on a criterion, provided the specific missing element is named whenever a rating says the criterion is not met.",
+          "minutes_min": 2,
+          "minutes_max": 3
+        }
+      ]
+    }
+  },
+  "recorded_verdict": {
+    "acceptable": true,
+    "issues": [],
+    "choice_audits": [
+      {
+        "target": "practice.guided_claim_score.least_met",
+        "depends_on_learner_response": false,
+        "dependency_reason": "The choice asks which criterion the supplied clinic draft fails; its facts fully determine the answer before the follow-up text is written.",
+        "options": [
+          {
+            "option_id": "who_acts",
+            "defensible": false,
+            "reason": "Draft names the county health office, a real decider, so this criterion passes."
+          },
+          {
+            "option_id": "what_to_do",
+            "defensible": true,
+            "reason": "\"Take action\" names only a direction with no concrete step or details."
+          },
+          {
+            "option_id": "success_test",
+            "defensible": false,
+            "reason": "Draft states a measurable standard: share seen within an hour rising."
+          }
+        ]
+      }
+    ],
+    "text_audits": [
+      {
+        "target": "practice.guided_claim_score.gap_and_fix",
+        "alternative_response": "The missing element is any concrete step: the draft says only \"take action on the long waits,\" with no hours, staffing level, or schedule change. Supplying sentence: \"The county health office should add a second walk-in intake window on weekday mornings from opening until noon.\"",
+        "criteria": [
+          {
+            "criterion_index": 0,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Requires naming the missing element for the picked criterion; alternative quotes \"take action.\""
+          },
+          {
+            "criterion_index": 1,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Alternative supplies a concrete action sentence with hours, staffing and schedule details."
+          },
+          {
+            "criterion_index": 2,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Alternative invents no statistics and stays consistent with supplied clinic facts."
+          }
+        ],
+        "model_answer_valid": true,
+        "model_answer_reason": "Model names the missing concrete step, supplies a valid action sentence, and warns off off-criterion fixes.",
+        "requires_activity_repair": false
+      },
+      {
+        "target": "practice.transfer_own_draft.three_criterion_rating",
+        "alternative_response": "Actor: fails \u2014 the draft only says \"our town,\" no council or office that could decide and fund Sunday opening. Action: fails \u2014 \"keep the library open on Sundays\" gives no hours, staffing, branch or duration; a six-week pilot with those details would complete it. Success: fails \u2014 \"would help everyone\" is untestable; the waiting-outside observation is only a partial cue, usable if linked to a countable measure such as Sunday visit numbers.",
+        "criteria": [
+          {
+            "criterion_index": 0,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Addresses the actor criterion using the draft's actual words; alternative notes \"our town.\""
+          },
+          {
+            "criterion_index": 1,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Alternative states what a complete action requires and notes these details are absent."
+          },
+          {
+            "criterion_index": 2,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Alternative notes no measurable success standard is given in the draft."
+          },
+          {
+            "criterion_index": 3,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Ratings name specific missing words rather than only calling the draft weak."
+          },
+          {
+            "criterion_index": 4,
+            "task_aligned": true,
+            "accepts_alternative": true,
+            "reason": "Permissive clause constraining cue use only; alternative explains the link to a countable measure."
+          }
+        ],
+        "model_answer_valid": true,
+        "model_answer_reason": "Rates all three criteria with named gaps and explains the observation's conditional link to a measure.",
+        "requires_activity_repair": false
+      }
+    ]
+  }
+}

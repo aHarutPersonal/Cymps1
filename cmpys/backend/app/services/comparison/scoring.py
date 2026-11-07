@@ -104,6 +104,15 @@ def comparison_score_retry_delay(attempts: int) -> int:
     return COMPARISON_SCORE_RETRY_DELAYS_SECONDS[index]
 
 
+_MEASUREMENT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        key: {"type": "string"}
+        for key in ("kind", "unit", "scope", "rubric", "evidence_quote")
+    },
+    "required": ["kind", "unit", "scope", "rubric", "evidence_quote"],
+}
+
 _SCORES_SCHEMA = {
     "type": "object",
     "properties": {
@@ -125,6 +134,8 @@ _SCORES_SCHEMA = {
                     "idol_metric_kind": {"type": "string"},
                     "you_note": {"type": "string"},
                     "idol_note": {"type": "string"},
+                    "you_measurement": _MEASUREMENT_SCHEMA,
+                    "idol_measurement": _MEASUREMENT_SCHEMA,
                 },
                 "required": [
                     "id",
@@ -307,7 +318,109 @@ def _normalize_dimension(seed: dict[str, str], raw: dict | None) -> dict:
         "idol_metric_kind": idol_metric_kind,
         "you_note": you_note,
         "idol_note": idol_note,
+        "you_measurement": _clean_measurement(raw.get("you_measurement")),
+        "idol_measurement": _clean_measurement(raw.get("idol_measurement")),
     }
+
+
+_MEASUREMENT_KINDS = {
+    "knowledge": "knowledge_assessment",
+    "practice": "completed_work_count",
+    "network": "feedback_contact_count",
+    "judgment": "written_judgment_assessment",
+}
+
+
+def _clean_measurement(value: object) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        key: _clean_text(value.get(key))[:1200]
+        for key in ("kind", "unit", "scope", "rubric", "evidence_quote")
+    }
+
+
+def _fact_texts(value: object) -> list[str]:
+    """Keep source prose separate from the model's own comparison/note text."""
+    if isinstance(value, list):
+        return [text for item in value for text in _fact_texts(item)]
+    if not isinstance(value, dict):
+        return []
+    texts = []
+    for key, item in value.items():
+        if key in {"title", "description", "snippet", "claim", "quote", "raw_facts"} and isinstance(item, str):
+            texts.append(item)
+        elif isinstance(item, (list, dict)):
+            texts.extend(_fact_texts(item))
+    return texts
+
+
+def _measurement_supported(measurement: dict, dimension: str, sources: list[str]) -> bool:
+    """A classification cannot manufacture its own measurement evidence.
+
+    This deliberately requires a directly stated quantity and basis on both
+    sides. Publication, fame or a credential alone cannot stand in for a scored
+    assessment, counted practice, or access to feedback contacts.
+    """
+    quote = measurement.get("evidence_quote", "").casefold()
+    unit = measurement.get("unit", "").casefold()
+    scope = measurement.get("scope", "").casefold()
+    if (
+        measurement.get("kind") != _MEASUREMENT_KINDS[dimension]
+        or len(quote) < 12
+        or not unit
+        or not scope
+        or not any(quote in _clean_text(source).casefold() for source in sources)
+        or not re.search(rf"(?<!\w){re.escape(unit)}(?!\w)", quote)
+        or not re.search(rf"(?<!\w){re.escape(scope)}(?!\w)", quote)
+    ):
+        return False
+    # The quantity must qualify the claimed unit, not an unrelated year, age,
+    # word length, or revenue elsewhere in the same excerpt.
+    quantity = r"(?:\d+(?:[.,]\d+)?|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)"
+    if not re.search(rf"\b{quantity}(?:[ -]+[a-z]+){{0,2}}[ -]+{re.escape(unit)}(?!\w)", quote):
+        return False
+    if dimension in {"knowledge", "judgment"}:
+        rubric = measurement.get("rubric", "").casefold()
+        return bool(
+            rubric and rubric in quote
+            and re.search(r"\b(?:score[ds]?|assessment|rubric|rated)\b", quote)
+        )
+    if dimension == "practice":
+        return bool(re.search(r"\b(?:completed|finished|published|submitted|delivered|produced)\b", quote))
+    return bool(re.search(r"\b(?:feedback|advice|review|help)\b", quote))
+
+
+def _enforce_measurement_evidence(dimensions: list[dict], baseline: dict, idol_facts: dict) -> None:
+    bindings = _answer_bindings_for(baseline)
+    mentor_sources = _fact_texts(idol_facts)
+    for dimension in dimensions:
+        key = dimension["id"]
+        if key not in _MEASUREMENT_KINDS or dimension["status"] != "comparable":
+            continue
+        you = dimension.get("you_measurement", {})
+        idol = dimension.get("idol_measurement", {})
+        user_sources = [
+            _answer_text(baseline, answer_key) for answer_key in bindings[key]
+            if _key_counts_as_evidence(baseline, answer_key)
+        ]
+        if not _measurement_supported(idol, key, mentor_sources):
+            status = "insufficient_idol_evidence"
+            reason = "The supplied mentor record does not contain a usable measurement for this dimension."
+        elif not _measurement_supported(you, key, user_sources):
+            status = "insufficient_user_evidence"
+            reason = "The interview does not contain a usable measurement for this dimension."
+        elif any(you.get(field, "").casefold() != idol.get(field, "").casefold()
+                 for field in ("kind", "unit", "scope", "rubric")):
+            status = "different_basis"
+            reason = "The supplied measurements use different units, scope, or assessment rubrics."
+        else:
+            continue
+        dimension.update(status=status, you=None, idol=None, comparison_basis=reason)
+        if status == "insufficient_idol_evidence":
+            dimension.update(idol_evidence="none", idol_note=reason)
+        elif status == "insufficient_user_evidence":
+            dimension.update(you_evidence="none", you_note=reason)
 
 
 # ---------------------------------------------------------------------------
@@ -518,8 +631,13 @@ def normalize_comparison_scores(
     *,
     achievement_baseline_status: str = "missing",
     learner_baseline: dict | None = None,
+    idol_facts: dict | None = None,
 ) -> dict:
-    """Normalize model output into the server-owned comparison v3 contract."""
+    """Normalize scores; new generation also verifies measurements against sources.
+
+    Omitted idol_facts retains legacy normalization for already-stored payloads.
+    Generation always supplies facts (including an empty record).
+    """
     raw = raw or {}
     achievement_status = _choice(
         achievement_baseline_status,
@@ -556,6 +674,9 @@ def normalize_comparison_scores(
                 # A text interview does not authenticate user claims or work.
                 dimension["you_evidence"] = "self_reported"
 
+    if idol_facts is not None:
+        _enforce_measurement_evidence(dimensions, learner_baseline or {}, idol_facts)
+
     milestones = []
     for index, milestone in enumerate((raw.get("milestones") or [])[:5]):
         if not isinstance(milestone, dict):
@@ -574,7 +695,7 @@ def normalize_comparison_scores(
     return {
         "version": COMPARISON_SCORE_VERSION,
         "placement_version": 1,
-        "evidence_policy_version": 2,
+        "evidence_policy_version": 3 if idol_facts is not None else 2,
         "learner_diagnostics": (learner_baseline or {}).get("skill_diagnostics", []),
         "methodology": COMPARISON_SCORE_METHOD,
         "achievement_baseline_status": achievement_status,
@@ -654,8 +775,7 @@ async def generate_comparison_scores(
             await record(response, active_client, stage)
             return response
 
-        primary_timeout = 40.0 if getattr(client, "provider_name", None) == "zai" else COMPARISON_SCORE_PROVIDER_TIMEOUT_SECONDS
-        resp = await call(client, "primary", min(timeout_s, primary_timeout))
+        resp = await call(client, "primary", min(timeout_s, COMPARISON_SCORE_PROVIDER_TIMEOUT_SECONDS))
         remaining = timeout_s - (time.monotonic() - started)
         recovery = operational_recovery_client(
             resp, timeout=min(COMPARISON_SCORE_PROVIDER_TIMEOUT_SECONDS, max(remaining, 0.1)),
@@ -675,10 +795,15 @@ async def generate_comparison_scores(
             )
         except (TypeError, ValueError):
             baseline = {}
+        try:
+            facts = json.loads(idol_facts_json)
+        except (TypeError, ValueError):
+            facts = {}
         return normalize_comparison_scores(
             resp.data,
             achievement_baseline_status=baseline_status,
             learner_baseline=baseline if isinstance(baseline, dict) else {},
+            idol_facts=facts if isinstance(facts, dict) else {},
         )
     except TimeoutError as exc:
         # TimeoutError stringifies to an empty string, which previously left a

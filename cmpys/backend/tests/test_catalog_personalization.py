@@ -1379,72 +1379,40 @@ def test_rendered_session_prompt_digest_is_part_of_default_cache_identity(monkey
 def test_default_composer_cache_identity_tracks_resolved_llm_route(monkeypatch):
     from app.core.config import settings
 
-    monkeypatch.setattr(settings, "llm_provider", "yunwu")
-    monkeypatch.setattr(settings, "yunwu_api_key", "yunwu-secret-a")
-    monkeypatch.setattr(settings, "gemini_api_key", "gemini-secret-a")
-    monkeypatch.setattr(settings, "yunwu_fallback_enabled", True)
-    monkeypatch.setattr(settings, "yunwu_base_url", "https://gateway-a.invalid/v1")
-    monkeypatch.setattr(settings, "yunwu_model", "yunwu-balanced-a")
-    monkeypatch.setattr(settings, "yunwu_quality_model", "yunwu-quality-a")
-    monkeypatch.setattr(settings, "gemini_model", "gemini-balanced-a")
+    monkeypatch.setattr(settings, "llm_provider", "routed")
+    monkeypatch.setattr(settings, "llm_route_overrides", {})
+    monkeypatch.setattr(settings, "openai_api_key", "openai-secret-a")
+    monkeypatch.setattr(settings, "anthropic_api_key", "anthropic-secret-a")
+    monkeypatch.setattr(settings, "openai_model", "openai-model-a")
+    monkeypatch.setattr(settings, "anthropic_model", "anthropic-model-a")
 
     provenance = catalog._default_composer_route_provenance()
-    assert provenance["attempts"][0]["route"] == {
-        "primary": {
-            "provider": "yunwu",
-            "model": "yunwu-balanced-a",
-            "endpoint_fingerprint": hashlib.sha256(
-                b"https://gateway-a.invalid/v1"
-            ).hexdigest(),
-        },
-        "fallback": {
-            "provider": "gemini",
-            "model": "gemini-balanced-a",
-            "endpoint_fingerprint": None,
-        },
-    }
-    assert provenance["attempts"][1]["route"] == {
-        "primary": {
-            "provider": "yunwu",
-            "model": "yunwu-quality-a",
-            "endpoint_fingerprint": hashlib.sha256(
-                b"https://gateway-a.invalid/v1"
-            ).hexdigest(),
-        },
-        "fallback": None,
-    }
-    assert "yunwu-secret-a" not in str(provenance)
-    assert "gemini-secret-a" not in str(provenance)
-    assert "https://gateway-a.invalid/v1" not in str(provenance)
+    # This loop owns its one backup-model recovery, so both attempts name the primary alone.
+    for attempt in provenance["attempts"]:
+        assert attempt["allow_fallback"] is False
+        assert attempt["route"] == {
+            "primary": {"provider": "openai", "model": "openai-model-a", "endpoint_fingerprint": None},
+            "fallback": None,
+        }
+    assert provenance["operational_recovery"]["provider"] == "anthropic"
+    assert provenance["operational_recovery"]["available"] is True
+    assert provenance["key_available"] == {"openai": True, "anthropic": True}
+    assert "openai-secret-a" not in str(provenance)
+    assert "anthropic-secret-a" not in str(provenance)
 
     base = catalog._composition_input_hash("version", [_session()], "brief")
-    monkeypatch.setattr(settings, "yunwu_model", "yunwu-balanced-b")
-    assert catalog._composition_input_hash("version", [_session()], "brief") != base
-    monkeypatch.setattr(settings, "yunwu_model", "yunwu-balanced-a")
-    monkeypatch.setattr(settings, "yunwu_quality_model", "yunwu-quality-b")
-    assert catalog._composition_input_hash("version", [_session()], "brief") != base
-    monkeypatch.setattr(settings, "yunwu_quality_model", "yunwu-quality-a")
-    monkeypatch.setattr(settings, "gemini_model", "gemini-balanced-b")
-    assert catalog._composition_input_hash("version", [_session()], "brief") != base
-    monkeypatch.setattr(settings, "gemini_model", "gemini-balanced-a")
-    monkeypatch.setattr(settings, "yunwu_fallback_enabled", False)
-    assert catalog._composition_input_hash("version", [_session()], "brief") != base
-    monkeypatch.setattr(settings, "yunwu_fallback_enabled", True)
-    monkeypatch.setattr(settings, "gemini_api_key", None)
-    assert catalog._composition_input_hash("version", [_session()], "brief") != base
-    monkeypatch.setattr(settings, "gemini_api_key", "gemini-secret-a")
-    monkeypatch.setattr(settings, "yunwu_base_url", "https://gateway-b.invalid/v1")
-    assert catalog._composition_input_hash("version", [_session()], "brief") != base
-
-    monkeypatch.setattr(settings, "llm_provider", "openai")
-    monkeypatch.setattr(settings, "openai_api_key", "openai-secret")
-    monkeypatch.setattr(settings, "openai_model", "shared-model-name")
-    openai_hash = catalog._composition_input_hash("version", [_session()], "brief")
-    monkeypatch.setattr(settings, "llm_provider", "gemini")
-    monkeypatch.setattr(settings, "gemini_api_key", "gemini-secret-b")
-    monkeypatch.setattr(settings, "gemini_model", "shared-model-name")
-    gemini_hash = catalog._composition_input_hash("version", [_session()], "brief")
-    assert openai_hash != gemini_hash
+    for setting_name, replacement in (
+        ("openai_model", "openai-model-b"),
+        ("anthropic_model", "anthropic-model-b"),
+        ("anthropic_api_key", None),
+        ("llm_route_overrides", {"default": "anthropic"}),
+        ("llm_provider", "dummy"),
+    ):
+        original = getattr(settings, setting_name)
+        monkeypatch.setattr(settings, setting_name, replacement)
+        assert catalog._composition_input_hash("version", [_session()], "brief") != base, setting_name
+        monkeypatch.setattr(settings, setting_name, original)
+    assert catalog._composition_input_hash("version", [_session()], "brief") == base
 
 
 def test_default_composer_cache_identity_tracks_system_prompt(monkeypatch):
@@ -1474,8 +1442,8 @@ def test_custom_composer_cache_identity_ignores_default_provider_route(monkeypat
         "brief",
         using_default_composer=False,
     )
-    monkeypatch.setattr(settings, "llm_provider", "yunwu")
-    monkeypatch.setattr(settings, "yunwu_model", "unrelated-new-default")
+    monkeypatch.setattr(settings, "llm_provider", "routed")
+    monkeypatch.setattr(settings, "openai_model", "unrelated-new-default")
     assert (
         catalog._composition_input_hash(
             "version",

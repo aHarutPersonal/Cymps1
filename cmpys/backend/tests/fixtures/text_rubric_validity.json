@@ -1,0 +1,95 @@
+{
+  "transfer_gap": {
+    "id": "transfer_gap",
+    "data": [],
+    "hint": "Ask of each fact: what would this prove for or against a weekly market, and would the claim change if the fact did? For your sentence, name what the evidence means for the argument rather than repeating the fact.",
+    "kind": "transfer",
+    "title": "Write the missing link yourself",
+    "fields": [
+      {
+        "id": "diagnosis_and_link",
+        "kind": "text",
+        "unit": "",
+        "label": "Your diagnosis and the missing link sentence",
+        "choices": [],
+        "criteria": [
+          "Names the irrelevant fact (stall fees) and gives a reason it does not support holding the market",
+          "States that the useful facts, such as the summer crowds or neighbors driving across town, have no sentence connecting them to the claim",
+          "Writes a link sentence that explains how the chosen evidence supports a weekly market, not just restating the fact or the claim",
+          "Uses only facts present in the draft, without invented statistics or quotations",
+          "Justifies the choice of which fact to connect"
+        ],
+        "tolerance": 0.01,
+        "expression": null,
+        "correct_choice": null,
+        "rubric_criterion": null
+      }
+    ],
+    "diagram": null,
+    "minutes_max": 2,
+    "minutes_min": 1,
+    "instructions": "Original fictional draft, written by a fictional neighbor for a community newsletter.\n\n\"Our neighborhood should hold a weekly farmers market in Willow Park. Vendors at a market must rent a stall, and the fees could cover the cost of setting up tables and signs. The park already hosts large weekend crowds for summer concerts. Many neighbors currently drive to a supermarket across town to buy fresh vegetables. A market would be a lovely gathering place for everyone.\"\n\nThis draft has a different problem from the one you labeled before: here, useful facts sit beside the claim with no sentence at all explaining how they support it, and one fact in the draft does not genuinely support the claim.\n\nDo three things. First, name which fact is irrelevant to the claim and say why. Second, point out that the remaining useful facts have no connecting sentence. Third, write the missing link sentence yourself, and say briefly why you chose that fact to connect. Use only the facts in the draft; do not invent numbers, statistics or quotations.",
+    "worked_solution": {
+      "steps": [
+        {
+          "field_id": "diagnosis_and_link",
+          "explanation": "The stall-fee fact is about who pays for setup, not about whether neighbors want or need a market, so it does not support the claim; it belongs in a feasibility discussion. The concert-crowd fact and the driving-to-supermarket fact both speak to demand and audience, yet the draft never says what they mean for a market, which is the explicit gap. A strong link for the driving fact is: \"When neighbors already drive across town for fresh vegetables, a weekly market in the park meets an existing need close to home, so attendance does not depend on creating new shopping habits.\" That sentence explains how the evidence supports the claim instead of repeating either one. A strong link for the concert fact would work too, if it explained that proven weekend foot traffic gives vendors a ready audience. The common failure is swapping in a flourish like \"A market would bring our community together,\" which adds a new persuasive-sounding idea rather than connecting the supplied facts to the claim."
+        }
+      ],
+      "version": 1
+    }
+  },
+  "transfer_warrant": {
+    "id": "transfer_warrant",
+    "data": [
+      {
+        "id": "afternoon_job_volunteers",
+        "unit": "volunteers",
+        "label": "Regular volunteer waterers with afternoon jobs who miss evening slots (per the garden message)",
+        "value": 3.0
+      },
+      {
+        "id": "total_regular_volunteers",
+        "unit": "volunteers",
+        "label": "Total regular volunteer waterers (per the garden message)",
+        "value": 5.0
+      }
+    ],
+    "hint": "First ask: what is the committee asking readers to accept (claim), what do they point to as support (evidence), and what must be assumed for that support to count (warrant)? Then ask what must be true for \"volunteers can make mornings\" to prove \"mornings are the right schedule\" — and check whether the message gives any evidence about that.",
+    "kind": "transfer",
+    "title": "Label the parts in a new proposal, then test the warrant",
+    "fields": [
+      {
+        "id": "warrant_evaluation",
+        "kind": "text",
+        "unit": "",
+        "label": "The claim, evidence, and warrant of the garden message in your own words; then whether the warrant fully supports the claim or leaves a gap (and why)",
+        "choices": [],
+        "criteria": [
+          "Names the claim in the learner's own words as the position being argued (switching watering shifts to mornings)",
+          "Names the evidence in the learner's own words as the stated support (volunteers' afternoon jobs causing missed evening shifts)",
+          "Names the warrant as a connecting assumption (e.g., a schedule volunteers cannot follow will not be followed), not a repeated fact or the claim itself, accurately reflecting the message's link between availability and the schedule change",
+          "The strength judgment names at least one thing the evidence does not measure, such as the plants' watering needs or afternoon volunteers who were not counted, and gives a reason connecting that gap or lack of gap to the final judgment, accepting either a reasoned defense or a reasoned qualification",
+          "Invents no statistics, dates, or facts not present in the message"
+        ],
+        "tolerance": 0.01,
+        "expression": null,
+        "correct_choice": null,
+        "rubric_criterion": null
+      }
+    ],
+    "diagram": null,
+    "minutes_max": 2,
+    "minutes_min": 1,
+    "instructions": "Original fictional passage. A community-garden committee posts this message:\n\n\"We propose switching the garden's watering shifts to mornings. Three of our five regular volunteer waterers work afternoon jobs and keep missing their evening slots, so the watering doesn't always get done. Under a morning schedule, those volunteers could water before work, and the shifts would actually be covered.\"\n\nYour task has two parts, using only the facts in the message. Do not add statistics, dates, or outside facts.\n\nPart one — labeling. In your own words, name all three parts of the argument in this message: the claim (the position being argued), the evidence (the stated support), and the warrant (the unstated assumption linking the evidence to the claim). This case rests on a different link than the park-curfew example, so do not reuse the curfew warrant; work out this message's own connecting assumption.\n\nPart two — evaluation. Judge whether that warrant fully supports the claim or leaves a gap, and say why. Consider what the evidence does not measure — for example, what plants need, or whether other volunteers were overlooked. Either a well-reasoned defense or a well-reasoned qualification earns full credit.",
+    "worked_solution": {
+      "steps": [
+        {
+          "field_id": "warrant_evaluation",
+          "explanation": "A strong response first labels all three parts in its own words. The claim: the garden's watering shifts should switch to mornings. The evidence: three of the five regular volunteer waterers work afternoon jobs and keep missing their evening slots, so shifts go uncovered; under a morning schedule they could water before work. The warrant — never stated in the message — is the connecting assumption that a watering schedule works only if the volunteers assigned to it can actually show up, so moving shifts to when the available volunteers are free is the way to get the watering done. The response then weighs that link. One reasonable judgment is that the warrant has a gap: the evidence measures volunteer availability, not the garden's needs. It says nothing about whether morning watering suits the plants — some gardens do better with evening watering to reduce evaporation — and it counts only the three volunteers with afternoon jobs, overlooking whether the other two or any afternoon-only helpers are worse off. If the plants need evening watering, a schedule everyone can attend could still fail the garden's purpose, so the claim needs qualification. A defensible alternative is that the warrant supports the claim narrowly: the message's stated problem is missed shifts, and the evidence directly shows morning shifts fix missed shifts, so the proposal is justified as far as that problem goes. What earns credit is correctly naming all three parts and connecting a specific thing the evidence does not measure to the judgment — merely repeating the volunteer facts, or asserting the warrant is strong because the committee seems sensible, does not test the link."
+        }
+      ],
+      "version": 1
+    }
+  }
+}

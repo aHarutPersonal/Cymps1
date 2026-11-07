@@ -1,0 +1,197 @@
+{
+  "package": {
+    "teaching_cases": [
+      {
+        "id": "town_forum_lines",
+        "assumptions": "Original fictional example. At a fictional town forum about a new market pavilion, three statements appear in the local newsletter: (1) \"The proposed market pavilion on Harbor Street.\" (2) \"The pavilion will draw shoppers away from the existing Saturday stalls and should not be built.\" (3) \"The pavilion should be built, because covered stalls let vendors sell in bad weather.\" Worked analysis: Sentence 1 names a subject but takes no position anyone could reject, so it is a topic. Sentence 2 asserts an arguable position a reader could deny (it will not draw shoppers away; it should be built), so it is a claim. Sentence 3 also takes that arguable position and adds a stated reason (\"because covered stalls let vendors sell in bad weather\"), so it is a claim-plus-reason. The deciding cue throughout is whether the sentence commits the writer to a contestable position, not whether it mentions a subject or sounds assertive.",
+        "data": [],
+        "results": []
+      }
+    ],
+    "workbook": {
+      "title": "Topic, claim, or claim-plus-reason",
+      "activities": [
+        {
+          "id": "guided_classify",
+          "title": "Sort four newsletter statements",
+          "kind": "practice",
+          "instructions": "Original fictional example. A neighborhood newsletter prints four statements about a proposed community garden plot in Mill Lane Park:\n\n(1) \"The community garden proposal for Mill Lane Park.\"\n(2) \"The park already has a water tap near the tennis courts.\"\n(3) \"The garden plot should not be approved.\"\n(4) \"The garden should be placed beside the tennis courts, because that corner gets full sun and is otherwise unused.\"\n\nFirst, select every statement that commits its writer to a position a reader could reject. Then, in the text field, classify each of the four statements as a topic, a claim, or a claim-plus-reason, and name the cue that decided the hardest one for you. Remember the taught cue: a claim commits the writer to a contestable position someone could deny, whether or not it sounds assertive.",
+          "fields": [
+            {
+              "id": "rejectable_set",
+              "label": "Select every statement that commits its writer to a position a reader could reject",
+              "kind": "multi_choice",
+              "choices": [
+                {
+                  "id": "garden_proposal",
+                  "label": "\"The community garden proposal for Mill Lane Park.\""
+                },
+                {
+                  "id": "water_tap",
+                  "label": "\"The park already has a water tap near the tennis courts.\""
+                },
+                {
+                  "id": "not_approved",
+                  "label": "\"The garden plot should not be approved.\""
+                },
+                {
+                  "id": "tennis_corner",
+                  "label": "\"The garden should be placed beside the tennis courts, because that corner gets full sun and is otherwise unused.\""
+                }
+              ],
+              "rubric_criterion": "Selects the two statements taking a rejectable position, excluding the topic phrase and the plain factual statement",
+              "correct_choices": [
+                "not_approved",
+                "tennis_corner"
+              ]
+            },
+            {
+              "id": "classify_and_cue",
+              "label": "Classify each of the four statements and name the cue that decided the hardest one",
+              "kind": "text",
+              "criteria": [
+                "Classifies \"The community garden proposal for Mill Lane Park\" as a topic because it names a subject without taking a position",
+                "Explains that the water tap statement is a checkable factual assertion that urges no rejectable position, so it is not a claim here",
+                "Classifies \"The garden plot should not be approved\" as a claim and the tennis-courts statement as a claim-plus-reason, naming its attached reason",
+                "Names rejectability — whether a reader could take the opposite position — as the deciding cue, rather than tone or mentioning a subject"
+              ]
+            }
+          ],
+          "hint": "Ask of each statement: could a reasonable reader disagree with it by taking the opposite position? If it only names a subject or states something checkable without urging anything, it does not commit the writer.",
+          "worked_solution": "Select every statement that commits its writer to a position a reader could reject\n\n\"The garden plot should not be approved.\"\n\n\"The garden should be placed beside the tennis courts, because that corner gets full sun and is otherwise unused.\"\n\nOnly two statements commit the writer to a contestable position. \"The garden plot should not be approved\" takes a stance a reader could deny by supporting approval, so it is a claim. The tennis-courts statement also takes a stance (a reader could back a different location) and attaches a stated reason, so it is a claim-plus-reason. \"The community garden proposal for Mill Lane Park\" only names a subject; no one can reject it as a position, so it is a topic. \"The park already has a water tap near the tennis courts\" sounds assertive and can be checked, but it urges nothing: agreeing or disagreeing with it does not commit anyone to a course of action, so it is a factual assertion rather than a claim in this classification. The misconception this resolves is treating any confident-sounding or factual sentence as a claim; the deciding cue is rejectability, not tone.\n\nClassify each of the four statements and name the cue that decided the hardest one\n\nA complete response reads: \"The community garden proposal for Mill Lane Park\" is a topic: it names a subject but takes no position anyone could reject. The water tap statement is a factual assertion: it can be checked, but it urges nothing, so a reader cannot take an opposing stance on it; it is not a claim in this classification. \"The garden plot should not be approved\" is a claim: a reader could deny it by supporting the garden, so the writer is committed to a contestable position. The tennis-courts statement is a claim-plus-reason: it commits the writer to a location a reader could dispute, and it attaches the stated reason that the corner gets full sun and is otherwise unused. The hardest was the water tap statement, and the deciding cue was rejectability: only sentences a reader could deny by taking the opposite position are claims, regardless of how confident they sound or whether they mention the subject. Accept equivalent wording, and accept a reasoned alternative classification of the water tap statement if the learner correctly argues it as a factual claim while still applying the rejectability cue consistently to the others.",
+          "minutes_min": 1,
+          "minutes_max": 2
+        },
+        {
+          "id": "transfer_forum_reply",
+          "title": "Find the claim-plus-reason in a reply",
+          "kind": "transfer",
+          "instructions": "Original fictional passage. A city notice asks residents for views on extending the outdoor pool's open hours into the evening this summer. One resident, Dana, replies:\n\n\"Evening hours at the outdoor pool. The pool is currently open until early evening, so the change would add only a short window of time. The pool should extend its hours into the evening, because many working residents can only swim after their shifts end. That extra evening use would justify the added staffing.\"\n\nThe passage is not labeled. A topic phrase, a plain claim, and a claim-plus-reason are woven together, and one sentence states facts without taking a contestable position.\n\nYour task: quote the sentence that is a claim-plus-reason (give its opening words), and explain why it qualifies — what position does it commit Dana to that a reader could reject, and what stated reason does it attach? Also say how it differs from the neighboring topic phrase or plain claim, rather than treating the whole passage as one claim. If you think a different sentence is the better choice, quote that one and justify it with the same rejectability cue.",
+          "fields": [
+            {
+              "id": "claim_reason_choice",
+              "label": "Your quoted claim-plus-reason sentence and why it qualifies",
+              "kind": "text",
+              "criteria": [
+                "Quotes the sentence beginning \"The pool should extend its hours\" by its opening words",
+                "Names the arguable position Dana takes, such as that the pool ought to add evening hours, which a reader could reject",
+                "Identifies the attached stated reason that many working residents can only swim after their shifts end",
+                "Distinguishes it from the topic phrase \"Evening hours at the outdoor pool\" and the plain claim about justifying staffing, rather than treating the whole passage as one claim"
+              ],
+              "rubric_criterion": "Locates and justifies the claim-plus-reason using the rejectability cue"
+            }
+          ],
+          "hint": "Ask of each sentence: could a reader reasonably deny it? Then look for the one that both takes such a position and attaches a stated reason with \"because\" or an equivalent.",
+          "worked_solution": "Your quoted claim-plus-reason sentence and why it qualifies\n\nThe claim-plus-reason is the sentence beginning \"The pool should extend its hours.\" It commits Dana to a contestable position — that the pool ought to stay open into the evening — which a reader could reject by replying that the current hours are enough or that the staffing cost outweighs the benefit. It attaches a stated reason: many working residents can only swim after their shifts end, so the extension serves a real need. This is what separates it from its neighbors. \"Evening hours at the outdoor pool\" names a subject but takes no position, so it is a topic phrase. The sentence about adding only a short window of time states facts without committing Dana to a stance a reader must accept or reject. The sentence about justifying added staffing takes an arguable position on whether the use is worth it, but it offers no stated reason of its own, so it works as a plain claim. The deciding cue throughout is whether the sentence commits the writer to a position someone could deny, not whether it sounds assertive or mentions the subject. Accept a reasoned alternative quote, such as the staffing sentence, only if the learner argues it as the claim-plus-reason with a sound rejectability cue and identifies an attached reason; a defensible link must be present, since the stated justification for staffing sits in the neighboring sentence.",
+          "minutes_min": 2,
+          "minutes_max": 2
+        }
+      ]
+    }
+  },
+  "verdict": {
+    "acceptable": false,
+    "issues": [
+      {
+        "target": "practice.guided_classify.classify_and_cue",
+        "description": "Criterion 1 requires explaining that the water tap statement 'is not a claim here', but the task's own worked solution says to accept a reasoned alternative that classifies it as a factual claim while applying the rejectability cue consistently. Calling a checkable assertion a 'factual claim' is a defensible interpretation (an asserted, verifiable statement) and a learner giving that framing with correct reasoning would fail this criterion. Fix criterion 1 to accept either classification provided the learner distinguishes checkable factual assertions from contestable positions, e.g. 'Classifies the water tap statement as a checkable factual assertion rather than a contestable position, explaining why it does not take a rejectable stance (a factual-claim label is acceptable with that reasoning).'"
+      }
+    ],
+    "choice_audits": [
+      {
+        "target": "practice.guided_classify.rejectable_set",
+        "depends_on_learner_response": false,
+        "dependency_reason": "The four statements are fully supplied fixed inputs; the correct set is determined by the case, not by anything the learner writes.",
+        "options": [
+          {
+            "option_id": "garden_proposal",
+            "defensible": false,
+            "reason": "Topic phrase only names a subject; no rejectable position is taken."
+          },
+          {
+            "option_id": "water_tap",
+            "defensible": false,
+            "reason": "Checkable fact urging nothing; disagreeing commits no one to a position."
+          },
+          {
+            "option_id": "not_approved",
+            "defensible": true,
+            "reason": "Takes an arguable stance a reader could deny by supporting approval."
+          },
+          {
+            "option_id": "tennis_corner",
+            "defensible": true,
+            "reason": "Commits writer to a disputable location and attaches a stated reason."
+          }
+        ]
+      }
+    ],
+    "text_audits": [
+      {
+        "target": "practice.guided_classify.classify_and_cue",
+        "alternative_response": "Statement 1 is a topic: it names the garden proposal without taking any position. Statement 2 is a factual claim: it asserts something checkable about the water tap, though nothing contestable. Statement 3 is a claim; statement 4 is a claim-plus-reason, attaching the full-sun, otherwise-unused reason. The deciding cue was rejectability.",
+        "criteria": [
+          {
+            "criterion_index": 0,
+            "required_by_task": true,
+            "accepts_alternative": true,
+            "reason": "Task asks to classify all four; statement 1 as topic is correct here."
+          },
+          {
+            "criterion_index": 1,
+            "required_by_task": true,
+            "accepts_alternative": false,
+            "reason": "Requires 'not a claim' wording, rejecting a defensible factual-claim classification."
+          },
+          {
+            "criterion_index": 2,
+            "required_by_task": true,
+            "accepts_alternative": true,
+            "reason": "Alternative correctly classifies statements 3 and 4 with the reason."
+          },
+          {
+            "criterion_index": 3,
+            "required_by_task": true,
+            "accepts_alternative": true,
+            "reason": "Alternative names rejectability as the deciding cue, as required."
+          }
+        ],
+        "model_answer_valid": true,
+        "model_answer_reason": "Model answer matches the case and explicitly accepts the defensible factual-claim alternative.",
+        "requires_activity_repair": false
+      },
+      {
+        "target": "practice.transfer_forum_reply.claim_reason_choice",
+        "alternative_response": "I quote 'That extra evening use would justify the added staffing.' Dana commits to the position that the added use is worth the staffing cost, which a reader could reject, and the attached reason is the extra evening use itself.",
+        "criteria": [
+          {
+            "criterion_index": 0,
+            "required_by_task": true,
+            "accepts_alternative": false,
+            "reason": "Requires quoting the keyed sentence; alternative quotes the staffing sentence."
+          },
+          {
+            "criterion_index": 1,
+            "required_by_task": true,
+            "accepts_alternative": false,
+            "reason": "Alternative names a position, but on the wrong sentence for this task."
+          },
+          {
+            "criterion_index": 2,
+            "required_by_task": true,
+            "accepts_alternative": false,
+            "reason": "Alternative never identifies the working-residents stated reason."
+          },
+          {
+            "criterion_index": 3,
+            "required_by_task": true,
+            "accepts_alternative": false,
+            "reason": "Alternative treats the staffing sentence itself as claim-plus-reason."
+          }
+        ],
+        "model_answer_valid": true,
+        "model_answer_reason": "The because-sentence uniquely takes a rejectable position with an attached stated reason; the alternative lacks any stated reason, so strict criteria are justified."
+      }
+    ]
+  }
+}

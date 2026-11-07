@@ -490,26 +490,43 @@ async def test_generation_uses_registered_prompts_without_live_provider(monkeypa
     assert call["output_model"] is GeneratedWorkbook  # new workbooks only; stored ones stay lenient
 
 
+def _routed_practice_client(monkeypatch, config):
+    """Build the client ``config`` asks for on the real routed factory."""
+    from app.core.config import settings
+    from app.services.llm import get_llm_client
+
+    monkeypatch.setattr(settings, "llm_provider", "routed")
+    monkeypatch.setattr(settings, "anthropic_api_key", "fake-anthropic-key")
+    monkeypatch.setattr(settings, "openai_api_key", "fake-openai-key")
+    monkeypatch.setattr(settings, "llm_route_overrides", {})
+    return get_llm_client(**config)
+
+
 @pytest.mark.asyncio
 async def test_workbook_uses_balanced_route_with_budget_below_its_lease(monkeypatch):
+    from app.services.llm.openai_direct import OpenAIDirectLLMClient
     from app.services.practice import generation
 
     client = SimpleNamespace(generate_and_validate=AsyncMock(
         return_value=(workbook(), SimpleNamespace(error=None))
     ))
     factory = Mock(return_value=client)
-    monkeypatch.setattr(generation.settings, "llm_provider", "zai")
     monkeypatch.setattr(generation, "get_llm_client", factory)
     monkeypatch.setattr(generation, "record_llm_response", AsyncMock())
     await generation.generate_workbook({"lesson_content": "lesson"}, {})
     config = factory.call_args.kwargs
     assert config["tier"] == "balanced"
-    assert config["thinking_level"] == "low"
+    assert config["operation"] == "lesson_practice_generate"
     assert config["max_tokens"] == 4000
-    assert config["timeout"] == 60
+    assert config["timeout"] == 15  # one primary deadline for every provider
+    assert config["allow_fallback"] is False  # the module owns its one recovery
     assert config["timeout"] + 6 < generation.PRACTICE_GENERATION_BUDGET_SECONDS
     assert generation.PRACTICE_GENERATION_BUDGET_SECONDS < api.PRACTICE_GENERATION_LEASE_SECONDS
     assert generation.PRACTICE_REVIEW_BUDGET_SECONDS < 60
+    # On the real route: luna alone, low reasoning, the 15 s deadline.
+    routed = _routed_practice_client(monkeypatch, config)
+    assert isinstance(routed, OpenAIDirectLLMClient)
+    assert (routed.thinking_level, routed.timeout, routed.max_tokens) == ("low", 15, 4000)
 
 
 @pytest.mark.asyncio
@@ -519,7 +536,7 @@ async def test_provider_timeout_preserves_failure_classification(monkeypatch):
     from app.services.llm.client import LLMResponse
 
     client = SimpleNamespace(generate_and_validate=AsyncMock(return_value=(
-        None, LLMResponse(data={}, provider="zai", error="zai request failed (TimeoutError; finish=missing)")
+        None, LLMResponse(data={}, provider="openai", error="openai request failed (TimeoutError; deadline)")
     )))
     recorder = AsyncMock()
     monkeypatch.setattr(generation, "get_llm_client", lambda **kwargs: client)
@@ -842,10 +859,11 @@ async def test_practice_operational_recovery_records_both_attempts(monkeypatch):
     from app.services.llm import recovery
     from app.services.llm.client import LLMResponse
     primary = SimpleNamespace(generate_and_validate=AsyncMock(return_value=(
-        None, LLMResponse(data={}, provider='openlux', error='timeout'))))
+        None, LLMResponse(data={}, provider='openai', error='openai request failed (TimeoutError; deadline)',
+                          error_code='generation_failed'))))
     result = workbook()
     secondary = SimpleNamespace(generate_and_validate=AsyncMock(return_value=(
-        result, LLMResponse(data={}, provider='gemini', finish_reason='STOP'))))
+        result, LLMResponse(data={}, provider='anthropic', finish_reason='stop'))))
     monkeypatch.setattr(generation, 'get_llm_client', lambda **kw: primary)
     monkeypatch.setattr(recovery, 'operational_recovery_client', lambda *a, **kw: secondary)
     recorder = AsyncMock()
@@ -873,14 +891,14 @@ async def test_wrong_calculation_returns_immediate_feedback_without_model(state)
 
 
 @pytest.mark.asyncio
-async def test_practice_scoped_outage_avoids_second_gateway_call(monkeypatch):
+async def test_practice_scoped_outage_avoids_second_primary_call(monkeypatch):
     from app.services.practice import generation
     from app.services.llm import recovery
     from app.services.llm.client import LLMResponse
     proof = object()
-    primary = Mock(side_effect=AssertionError('The audited pilot must not call the gateway again'))
+    primary = Mock(side_effect=AssertionError('The audited pilot must not call the unavailable primary again'))
     native = SimpleNamespace(generate_and_validate=AsyncMock(return_value=(workbook(),
-        LLMResponse(data={}, provider='gemini', finish_reason='STOP'))))
+        LLMResponse(data={}, provider='anthropic', finish_reason='stop'))))
     monkeypatch.setattr(generation, 'get_llm_client', primary)
     monkeypatch.setattr(recovery, 'operational_recovery_client', lambda response, **kw: native if response is proof else None)
     monkeypatch.setattr(generation, 'record_llm_response', AsyncMock())
@@ -913,19 +931,25 @@ async def test_practice_pilot_rejects_wrong_owner_and_expired_evidence(monkeypat
 
 @pytest.mark.asyncio
 async def test_text_review_has_time_to_finish_within_review_lease(monkeypatch):
+    from app.services.llm.openai_direct import OpenAIDirectLLMClient
     from app.services.practice import generation
     result = TextReview.model_validate({'fields': [{'field_id': 'reason', 'criterion_met': [True], 'feedback': 'Correct assumption stated.'}]})
     client = SimpleNamespace(generate_and_validate=AsyncMock(return_value=(result, SimpleNamespace(error=None))))
     factory = Mock(return_value=client)
-    monkeypatch.setattr(generation.settings, 'llm_provider', 'zai')
     monkeypatch.setattr(generation, 'get_llm_client', factory)
     monkeypatch.setattr(generation, 'record_llm_response', AsyncMock())
     assert await generation.review_text(activity(text=True), {'case_a.reason': 'The triangle is right-angled.'}, 'Lesson') == result
     config = factory.call_args.kwargs
-    assert config['timeout'] == 45
+    assert config['timeout'] == 15
+    assert config['operation'] == 'lesson_practice_review'
     assert config['timeout'] + 6 < generation.PRACTICE_REVIEW_BUDGET_SECONDS < 60
+    # A primary that uses its whole deadline (+3 s grace, +3 s telemetry) still
+    # leaves the one recovery its 15 s minimum plus the 5 s margin.
+    assert config['timeout'] + 3 + 3 + 15 + 5 <= generation.PRACTICE_REVIEW_BUDGET_SECONDS
     assert config['allow_fallback'] is False
-    assert config['thinking_level'] == 'low'
+    routed = _routed_practice_client(monkeypatch, config)
+    assert isinstance(routed, OpenAIDirectLLMClient)
+    assert (routed.thinking_level, routed.timeout) == ('low', 15)
 
 
 @pytest.mark.asyncio

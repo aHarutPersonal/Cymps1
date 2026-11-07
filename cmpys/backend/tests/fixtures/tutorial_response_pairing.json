@@ -1,0 +1,111 @@
+{
+  "title": "Diagnose a narrowed claim",
+  "activities": [
+    {
+      "id": "guided_practice",
+      "data": [],
+      "hint": "Ask what a reader would need to be told for each element, and which element leaves the most uncertainty about what would count as a win.",
+      "kind": "practice",
+      "title": "Test your own claim",
+      "fields": [
+        {
+          "id": "weakest_element",
+          "kind": "choice",
+          "unit": "",
+          "label": "Which element of your claim is weakest?",
+          "choices": [
+            {
+              "id": "actor",
+              "label": "The actor: 'the town' is vague about who runs the pilot"
+            },
+            {
+              "id": "action",
+              "label": "The action: 'test Sunday library opening for six weeks' is not specific"
+            },
+            {
+              "id": "success",
+              "label": "The success measure: 'compare attendance with staffing costs before deciding' gives no decision rule"
+            }
+          ],
+          "criteria": [],
+          "tolerance": 0.01,
+          "expression": null,
+          "correct_choice": "success",
+          "rubric_criterion": "Identifies the element that most blocks a reader judging the trial"
+        },
+        {
+          "id": "revision_target",
+          "kind": "text",
+          "unit": "",
+          "label": "Your sentence naming the weakest element as your first revision target",
+          "choices": [],
+          "criteria": [
+            "Names one of the three elements (actor, action or success measure) as the first revision target",
+            "Gives a reason grounded in the quoted claim's wording, such as the missing decision rule for comparing attendance with staffing costs, or the vagueness of 'the town' as an actor",
+            "States the label in one sentence a reader could act on as a revision target"
+          ],
+          "tolerance": 0.01,
+          "expression": null,
+          "correct_choice": null,
+          "rubric_criterion": null
+        }
+      ],
+      "diagram": null,
+      "minutes_max": 2,
+      "minutes_min": 1,
+      "instructions": "Your own narrowed claim, quoted in full from your diagnostic answer: \"The town should test Sunday library opening for six weeks, then compare attendance with staffing costs before deciding whether to continue.\"\n\nRun the three-question diagnostic from the reading on it. Ask: who acts, what exactly they do, and what counts as success. In the bus-lane example, 'see if it helps' failed because it named no measure a reader could use to judge the trial.\n\nHere the action names a trial length, so it is specific. The actor, 'the town,' could be judged either way: it is vague about who actually runs the pilot, but it can also stand in for an organizational actor like a council. The success element, 'compare attendance with staffing costs before deciding,' names quantities to compare but no rule for how the comparison decides the outcome, and the two measures are in different units.\n\nFirst choose which element is weakest. Then write one sentence naming that element as your first revision target and why it is weak.",
+      "worked_solution": {
+        "steps": [
+          {
+            "field_id": "weakest_element",
+            "explanation": "The success element is the weakest link. The claim says attendance will be compared with staffing costs, but it never states what comparison would count as continuing: attendance and costs are in different units, and no threshold or rule connects them to the decision. A reader cannot tell what result would make the pilot a success. The action is specific, including the six-week trial length. The actor 'the town' is vague but can stand for an organizational actor such as a council, so it is a weaker candidate than the missing decision rule."
+          },
+          {
+            "field_id": "revision_target",
+            "explanation": "A strong sentence names the element and its flaw, for example: 'The success measure is my first revision target, because comparing attendance with staffing costs names quantities but no rule for what comparison would justify continuing.' An answer naming the actor is also acceptable if it points to the real vagueness, for example: 'The actor is my first revision target, because \"the town\" does not say whether the council or library staff runs the pilot.' An answer that only restates the claim or names a flaw without tying it to one element does not yet give a workable revision target."
+          }
+        ],
+        "version": 1
+      }
+    },
+    {
+      "id": "independent_transfer",
+      "data": [],
+      "hint": "Ask what a reader could actually check: could they tell who would set up the drop-off, what would happen and when, and what result would count as residents wanting it?",
+      "kind": "transfer",
+      "title": "Diagnose a compost claim",
+      "fields": [
+        {
+          "id": "diagnostic",
+          "kind": "text",
+          "unit": "",
+          "label": "Your three-element diagnosis and weakest-element sentence",
+          "choices": [],
+          "criteria": [
+            "Labels the actor (\"we\"/the association) present or vague with a reason grounded in the claim's wording, or accepts it as an organizational actor",
+            "Labels the action of running a weekend compost drop-off this autumn as present, and may flag the missing location or scope as a gap",
+            "Labels the success element as missing because \"find out whether residents want it\" names no measure of wanting, or names a concrete measure (attendance, sign-ups, survey responses) the claim lacks",
+            "Ends with one sentence naming a single weakest element as the first revision target"
+          ],
+          "tolerance": 0.01,
+          "expression": null,
+          "correct_choice": null,
+          "rubric_criterion": null
+        }
+      ],
+      "diagram": null,
+      "minutes_max": 3,
+      "minutes_min": 2,
+      "instructions": "Original fictional case, new to this lesson. A neighbourhood association newsletter states: \"We should run a weekend compost drop-off this autumn and find out whether residents want it.\"\n\nRun the same three-question diagnostic you practised on the library claim:\n\nWho acts? Name the actor, and judge whether it is precise enough or too vague (an association or council can count as an organizational actor).\nWhat exactly do they do? State the action the claim proposes, and judge whether it is specific enough for a reader to picture what would happen.\nWhat counts as success? Judge whether the claim names a measurable result that would tell the association whether to continue.\n\nWrite one short answer that labels each of the three elements present or missing, with a reason drawn from the quoted claim's own words, and end with one sentence naming the weakest element as your first revision target.\n\nWork from the claim exactly as written. Do not invent details the newsletter does not state.",
+      "worked_solution": {
+        "steps": [
+          {
+            "field_id": "diagnostic",
+            "explanation": "A strong answer reads like this: The actor is \"we,\" the association, which is present as an organizational actor even though no person is named. The action is present and fairly specific: run a weekend compost drop-off this autumn, though the claim names no location or scope, so a reader cannot picture where or how large the trial would be. Success is missing: \"find out whether residents want it\" gives no measure of wanting, so attendance, sign-ups or survey responses could each decide the question and the claim chooses none. Weakest element: the success measure, because without a stated result the association cannot tell whether to continue the drop-off. Accept reasoned alternatives: a learner may instead call the action weakest for lacking location and scope, or call the actor vague \u2014 each is defensible when justified from the claim's own words, provided all three elements are labelled and one weakest element is named as the first revision target."
+          }
+        ],
+        "version": 1
+      }
+    }
+  ]
+}

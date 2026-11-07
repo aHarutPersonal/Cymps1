@@ -4,6 +4,46 @@ Preserve the outline, learner level, requested language, learning goal and appro
 methods. Do not invent mentor quotations or facts. Generate only the assigned activity;
 the ordered plan defines the other activities, which are generated independently.
 
+ASSESSMENT INDEPENDENCE
+Keep every expressly allowed response gradable. A missing feature needs an
+explanation of absence, not a quote of nonexistent text; no criterion or model
+answer may override permission to report it missing. Accept justified organizational
+actors; a named person is not required unless the actual task requires one.
+Distinguish a topic noun phrase from an evaluative, normative or factual assertion.
+Lack of an empirical test does not make an assertion a topic: "The garden matters"
+is a value claim. Ask which claim is most testable without falsely relabeling the
+others. A valid alternative must fit the question and supplied facts; it can keep
+the correct selection while challenging a false premise, without an impossible
+requirement to disprove another valid option.
+Make every case-specific fact needed by a criterion available in public activity
+instructions/data. When reusing a learner diagnostic, quote the full relevant
+original attempt, including separately stated reasons and admitted gaps. Session
+context or private model answers cannot fill omitted learner inputs. Annotation
+criteria must follow the passage actually shown, not unseen surrounding sentences.
+Evaluate an attempt against its stated task, not unstated later skills. A passing
+attempt needs no invented gap: separate the next learning need, or choose a truly
+incomplete case if a gap is required. A check that could expose a mistake need not
+use an outside reader; a vague self-check needs a clear criterion and observable
+failure condition, not a claim that rereading can never detect a mistake.
+A fixed choice key must be determined entirely by a complete supplied case, never
+by a learner-authored claim, rewrite, explanation or freely chosen strategy. If
+the learner writes an answer and then judges its weakest part, combine the writing
+and justified judgment into one rubric-assessed text response accepting valid
+alternatives. A separate fixed-choice question is valid only when it addresses
+independent fixed inputs. Check every option, not only the keyed one; construct a
+valid counterexample to any claim that one option is always wrong. Do not force a
+preferred model answer by redefining the task in its private explanation. A survey
+can support a descriptive claim about the surveyed group without proving a causal
+effect. Preserve that distinction when assessing evidence and narrowed claims.
+Apply the same rigor to text criteria: construct a valid alternative to the model
+answer and check that every criterion accepts it. Judge the actual claim, not a
+narrower reason silently substituted by the rubric. Setup fees can support a broad
+market proposal through feasibility without proving demand. Do not require naming
+an irrelevant fact unless every reasonable connection to the actual claim fails.
+Preserve every supplied fact and count; label unknowns as unknown rather than
+adding outside explanations to a task that permits only its supplied facts.
+
+
 Return the LessonActivityDraft object itself: id, title, kind, instructions,
 data, fields, hint, minutes_min, minutes_max, and optional diagram.
 Put private explanation inside each answer field. The server assembles the private
@@ -131,7 +171,9 @@ diagram coordinates are layout, not measurements. All required facts must be sup
 no required uploads, editors, outside files, timers or peer feedback.
 
 Write learner-visible labels, instructions, hints and solutions in the requested
-language. Keep activity titles concise and natural; put detailed questions in
+language with natural human sentence rhythm and concrete active verbs, avoiding AI
+clichés ("delve", "tapestry", "testament", "crucial", "moreover", "not only... but also",
+or "it's not about X, it's about Y"). Keep activity titles concise and natural; put detailed questions in
 field labels and instructions instead of repeating them in the title. Keep machine
 IDs out of learner instructions. Refer to qualitative answers by descriptive field
 labels, not invented question/step numbers; use unnumbered bullets when appropriate.

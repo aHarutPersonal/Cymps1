@@ -278,24 +278,25 @@ async def test_shared_admission_releases_cancelled_inference(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_transport_attempt_identity_survives_semantic_failure(monkeypatch):
+@pytest.mark.parametrize("provider", ["anthropic", "openai"])
+async def test_transport_attempt_identity_survives_semantic_failure(monkeypatch, provider):
     from app.core.config import settings
     from app.services.llm.tracing import traced_operation
     from app.services.llm.telemetry import usage_record_from_response
-    from app.services.llm.zai import ZaiLLMClient
-    from tests.test_openlux import chunk, transport
+    from tests.direct_wire import Reply, client_for, serve
     monkeypatch.setattr(settings, "llm_admission_limits", {})
     recorder = AsyncMock(return_value=True)
     monkeypatch.setattr("app.services.llm.telemetry.record_llm_response", recorder)
-    client = ZaiLLMClient(api_key="test", model="glm-5.3", base_url="https://api.z.ai/api/paas/v4", max_tokens=500)
-    _, request = transport(monkeypatch, client, [chunk('{"ok":true}', "stop")])
+    client = client_for(provider, max_tokens=500, reasoning_reserve=2048)
+    wire = serve(client, [Reply('{"ok":true}', "stop")])
     @traced_operation("lesson_test")
     async def run():
         return await client.generate_json("S", "U")
     response = await run()
     assert recorder.await_count == 2
     assert recorder.call_args_list[0].kwargs["response"].attempt_id == response.attempt_id
-    assert response.effective_parameters["max_tokens"] == request["max_tokens"] == 2548
+    cap = "max_tokens" if provider == "anthropic" else "max_completion_tokens"
+    assert response.effective_parameters[cap] == wire.request[cap] == 2548
     assert "messages" not in response.effective_parameters
     response.semantic_accepted, response.critical_defect, response.error = False, True, "Incorrect answer"
     record = usage_record_from_response(operation="lesson_test", response=response)

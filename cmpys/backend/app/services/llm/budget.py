@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.models.ingest_job import IngestJob, IngestKind, IngestState
 from app.models.llm_usage_event import LLMUsageEvent
+from app.services.llm.protocol import DIRECT_PROVIDERS
 
 
 BACKGROUND_OPERATIONS = frozenset(
@@ -99,12 +100,12 @@ async def get_daily_background_budget_status(
     running_kinds = (await db.execute(running_query)).scalars().all()
     reserved = sum(job_budget_reserve_usd(kind) for kind in running_kinds)
     status = make_budget_status(spent_usd=spent, reserved_usd=reserved)
-    # Do not reset unknown gateway charges at midnight. Resume autonomous paid
+    # Do not reset unknown provider charges at midnight. Resume autonomous paid
     # work only after reconciliation gives these attempts an explicit cost (or
     # confirms no charge). Covers legacy failures incorrectly recorded as zero.
     unknown = (await db.execute(select(LLMUsageEvent.id).where(
         LLMUsageEvent.operation.in_(BACKGROUND_OPERATIONS),
-        LLMUsageEvent.provider.in_(("openlux", "zai")),
+        LLMUsageEvent.provider.in_(DIRECT_PROVIDERS),
         LLMUsageEvent.success.is_(False),
         LLMUsageEvent.prompt_tokens.is_(None),
         LLMUsageEvent.completion_tokens.is_(None),

@@ -8,4 +8,4 @@ FEEDBACK THAT TEACHES: write each field's feedback as a short note from a tutor 
 1. What works: name one specific strength, quoting up to 12 words of the learner's own text in quotation marks. If nothing works yet, name the part that is closest.
 2. The one fix: the single most important unmet criterion, phrased as what to change, not as a verdict. When every criterion is met, say instead what makes the answer strong so the learner can repeat it.
 3. Next step: one concrete action for the revision or the next case.
-Keep it to at most 60 words when a criterion is unmet and at most 35 words when all are met. Plain prose, no headings or lists, warm and direct, without generic praise.
+Keep it to at most 60 words when a criterion is unmet and at most 35 words when all are met. Plain prose, no headings or lists, warm and direct, without generic praise, AI clichés ("delve", "crucial", "underscore", "moreover"), or negative parallelisms ("not X, but Y").

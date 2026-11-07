@@ -11,6 +11,12 @@ import json
 
 import pytest
 
+from tests.phase0_fixtures import model_binder_mechanics  # noqa: F401
+
+# Phase 0.4 binds exact computed values in code; these tests exercise the model
+# binder's mechanics, so they keep the earlier server bindings (tests/phase0_fixtures.py).
+pytestmark = pytest.mark.usefixtures("model_binder_mechanics")
+
 from app.services.planning import package_preflight as preflight
 from app.services.planning.lesson_package import LessonPackage
 from tests.test_package_fix2_repair_normalization import PACKAGE
@@ -48,7 +54,33 @@ async def run_accounting(harness, existing=None):
 
 @pytest.mark.asyncio
 async def test_accounting_negative_after_server_mismatch_forwards_server_facts_only(isolate):
-    harness = Harness({"transfer": [copy.deepcopy(EVIDENCE_1), copy.deepcopy(EVIDENCE_2)]})
+    # The semantic stage explicitly audits this independent fixed-ledger choice
+    # before this test exercises its separate numerical evidence rejection.
+    audit = {"target": "practice.guided.accrual_only", "depends_on_learner_response": False,
+        "dependency_reason": "Classification uses the supplied ledger, not another learner response.",
+        "options": [
+            {"option_id": "credit_sales", "defensible": True, "reason": "Earned sales are recognized before collection."},
+            {"option_id": "utilities_owed", "defensible": True, "reason": "Used utilities are expensed before payment."},
+            {"option_id": "cash_sales", "defensible": False, "reason": "Cash sales already affect both cash and accrual."},
+            {"option_id": "rent_paid", "defensible": False, "reason": "Current rent already affects both cash and accrual."},
+        ]}
+    # Intentionally positive semantic evidence: the independent numeric gate
+    # must still reject its wrong arithmetic and forward only server facts.
+    text_audit = {"target": "practice.transfer.difference",
+        "alternative_response": "Prepaid advertising affects cash now but accrual expense later; unpaid supplies affect expense now but cash later. The opposing timing differences must both enter the comparison.",
+        "criteria": [{"criterion_index": index, "required_by_task": True, "accepts_alternative": True,
+            "reason": "The answer explains both cash-versus-accrual timing differences."} for index in range(3)],
+        "model_answer_valid": True, "model_answer_reason": "Synthetic semantic approval intentionally leaves arithmetic to the independent numeric gate.",
+        "requires_activity_repair": False}
+    harness = Harness({"transfer": [copy.deepcopy(EVIDENCE_1), copy.deepcopy(EVIDENCE_2)]},
+                      semantic=[{"acceptable": True, "issues": [], "choice_audits": [audit],
+                                 "text_audits": [text_audit],
+                                 "teaching_case_audits": [{"target": "teaching.riverside_cafe_month",
+                                     "core_inference": "Profit recognizes earning/incurrence; cash flow recognizes cash movements.",
+                                     "quantities_and_units": "All revenue and expense inputs are dollars for this month.",
+                                     "decision_rule": "Profit includes credit sales and owed utilities; cash flow excludes both.",
+                                     "semantically_valid": True,
+                                     "reason": "Both formulas use consistent currency, periods and recognition rules."}]}])
     (failures, response, _), snapshots = await asyncio.wait_for(run_accounting(harness), 2)
     assert harness.counts["transfer"] == 2 and response.error is None
     assert response.effective_parameters["validated_repair_targets"] == ["practice.transfer"]
@@ -74,15 +106,18 @@ async def test_exhausted_wrong_arithmetic_names_span_path_and_server_values(isol
     [failure] = failures
     assert failure.startswith("practice.a1: ") and "wrong_arithmetic" in failure
     # a1: receipts 130, revenue 100; the bound formula was receipts + revenue for "Difference: 30".
-    assert "at practice.a1.worked_solution" in failure and "Difference: 30" not in failure
+    # The span is named by path and quoted by the server (repair path R7), once.
+    assert 'at practice.a1.worked_solution quoting "Difference: 30."' in failure
+    assert failure.count("Difference: 30") == 1
     assert "states 30" in failure and "130 + 100 = 230" in failure
 
 
 @pytest.mark.asyncio
 async def test_negative_without_server_check_still_forwards_no_model_text(isolate):
     issue = "n1 (practice.a0): the span needs to display the computed net cash change of 1300."
-    harness = Harness({"a0": [{"issues": [issue]}], "a1": ["good"]})
+    harness = Harness({"a0": [{"issues": [issue]}, {"issues": [issue]}], "a1": ["good"]})
     (failures, _, _), _ = await asyncio.wait_for(run(harness), 2)
+    assert harness.counts["a0"] == 2  # The first negative took the shared correction.
     [failure] = failures
     assert "evidence_model_rejected" in failure and "n1 at practice.a0.worked_solution" in failure
     assert not any(token in failure for token in ("1300", "display the computed", "net cash change"))

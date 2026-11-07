@@ -44,52 +44,19 @@ def test_current_gemini_price_cards_cover_all_configured_tiers():
         2.0,
         12.0,
     )
-    assert PRICING_VERSION.startswith("multi-provider-")
+    assert PRICING_VERSION.startswith("direct-providers-")
 
 
-def test_yunwu_default_route_price_cards_use_effective_cash_cost(monkeypatch):
-    monkeypatch.setattr(settings, "yunwu_group_ratio", 1.0)
-    monkeypatch.setattr(settings, "yunwu_quota_price_cny", 0.5)
-    monkeypatch.setattr(settings, "yunwu_usd_exchange_rate", 7.3)
-    fast = price_card_for_model("gpt-5.6-luna", provider="yunwu")
-    balanced = price_card_for_model("grok-4.5", provider="yunwu")
-    quality = price_card_for_model("claude-fable-5", provider="yunwu")
+def test_direct_provider_price_cards_cover_both_routed_models():
+    haiku = price_card_for_model("claude-haiku-5-5", provider="anthropic")
+    luna = price_card_for_model("gpt-6-luna-2026-08-01", provider="openai")  # a dated snapshot
 
-    assert fast.input_usd_per_million == pytest.approx(1 / 14.6)
-    assert fast.output_usd_per_million == pytest.approx(6 / 14.6)
-    assert balanced.input_usd_per_million == pytest.approx(2 / 14.6)
-    assert balanced.output_usd_per_million == pytest.approx(6 / 14.6)
-    assert quality.input_usd_per_million == pytest.approx(10 / 14.6)
-    assert quality.output_usd_per_million == pytest.approx(50 / 14.6)
-    assert balanced.token_rates(200_001) == pytest.approx((4 / 14.6, 12 / 14.6))
-
-
-def test_yunwu_gemini_tiers_use_gateway_cash_conversion(monkeypatch):
-    monkeypatch.setattr(settings, "yunwu_group_ratio", 1.0)
-    monkeypatch.setattr(settings, "yunwu_quota_price_cny", 0.5)
-    monkeypatch.setattr(settings, "yunwu_usd_exchange_rate", 7.3)
-
-    fast = price_card_for_model("gemini-3.5-flash-lite", provider="yunwu")
-    balanced = price_card_for_model("gemini-3.6-flash", provider="yunwu")
-    quality = price_card_for_model("gemini-3.1-pro-preview", provider="yunwu")
-
-    assert fast.input_usd_per_million == pytest.approx(0.30 / 14.6)
-    assert fast.output_usd_per_million == pytest.approx(2.50 / 14.6)
-    assert balanced.input_usd_per_million == pytest.approx(1.50 / 14.6)
-    assert balanced.output_usd_per_million == pytest.approx(7.50 / 14.6)
-    assert quality.input_usd_per_million == pytest.approx(2.00 / 14.6)
-    assert quality.output_usd_per_million == pytest.approx(12.00 / 14.6)
-
-
-def test_yunwu_price_card_respects_assigned_route_multiplier(monkeypatch):
-    monkeypatch.setattr(settings, "yunwu_group_ratio", 6.0)
-    monkeypatch.setattr(settings, "yunwu_quota_price_cny", 0.5)
-    monkeypatch.setattr(settings, "yunwu_usd_exchange_rate", 7.3)
-
-    balanced = price_card_for_model("grok-4.5", provider="yunwu")
-
-    assert balanced.input_usd_per_million == pytest.approx(12 / 14.6)
-    assert balanced.output_usd_per_million == pytest.approx(36 / 14.6)
+    assert (haiku.input_usd_per_million, haiku.output_usd_per_million) == (0.10, 0.50)
+    # Haiku 5.5 bills prompts above 100K tokens at the higher card.
+    assert haiku.token_rates(100_000) == (0.10, 0.50)
+    assert haiku.token_rates(100_001) == (0.50, 2.50)
+    # Budgeted above its third-party list price so spend caps stay conservative.
+    assert (luna.input_usd_per_million, luna.output_usd_per_million) == (0.20, 1.20)
 
 
 def test_search_overage_is_opt_in_and_25_is_billed_per_grounded_prompt(monkeypatch):

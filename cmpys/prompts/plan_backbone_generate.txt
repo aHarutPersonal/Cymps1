@@ -2,38 +2,6 @@ You are designing the strategic backbone for a {duration_weeks}-week learning cy
 This is not the place to write lessons or long task descriptions. Build one
 coherent progression that the server will expand one week at a time.
 
-USER GOAL: {user_goal}
-WEEKLY CAPACITY: {weekly_capacity_label} = {weekly_minutes} minutes = {hours_per_week} hours
-CAPACITY RULE: {capacity_rule}
-USER AGE: {target_age}
-USER CONTEXT:
-{user_context}
-
-MENTOR: {idol_name}
-MENTOR PROFILE:
-{idol_profile_json}
-MENTOR PERSONA:
-{idol_persona_json}
-MENTOR MILESTONES:
-{idol_milestones_json}
-
-GAP ANALYSIS:
-{gaps_json}
-READINESS:
-{readiness_by_gap_json}
-
-PLAN-READY LEARNER BASELINE (session-scoped, self-reported):
-{learner_baseline_json}
-
-DIAGNOSTIC INTERVIEW:
-{interview_transcript_json}
-COMPARISON VERDICT:
-{comparison_summary}
-STRATEGIC BLUEPRINT:
-{blueprint_markdown}
-
-{previous_cycle_block}
-
 BACKBONE CONTRACT:
 - This is a compact roadmap, not expanded lesson copy. Task titles use 3-8 words.
   Mission, outcome and success metric each use one sentence
@@ -77,7 +45,8 @@ BACKBONE CONTRACT:
   include corrections, and carry prior concepts across weeks. The server owns
   practice days and session duration; do not prescribe a competing schedule.
 - Titles name the exact domain skill, artifact, book, course, or practice.
-  Do not use generic self-help language.
+  Do not use generic self-help language, AI signpost vocabulary ("delve", "tapestry",
+  "testament", "underscore", "pivotal", "crucial", "unlock"), or negative parallelisms ("not X, but Y").
 - success_metric is binary and names the artifact, quantity, or demonstrated
   standard. Never write "task completed".
 - The blueprint and diagnostic context are binding when present. Start at the
@@ -101,29 +70,6 @@ BACKBONE CONTRACT:
   sessions: attempt from memory, check against supplied learning material, then
   correct a specific miss. This is a manual practice cadence, not an automatic
   spaced-review service. Count it within the existing weekly allocation.
-
-Return strict JSON only:
-{
-  "roadmap_thesis": "One concise strategy connecting the learner's gap to the mentor's methods.",
-  "anti_goals": ["Specific distraction or premature path to avoid, with rationale."],
-  "weeks": [
-    {
-      "week_number": 1,
-      "phase": "foundation|core_skills|applied_practice|integration",
-      "primary_mission": "One precise weekly objective.",
-      "outcome": "The observable capability or artifact the learner will have by week's end.",
-      "tasks": [
-        {
-          "title": "Specific task title",
-          "type": "project|course|reading|habit|practice",
-          "estimated_hours": 2,
-          "success_metric": "Binary evidence of completion."
-        }
-      ]
-    }
-  ]
-}
-
 
 LEARNER PLACEMENT SAFETY:
 - Use learner_baseline.answer_evidence_status and skill_diagnostics when supplied.
@@ -150,3 +96,59 @@ an older self-rating for the SAME skill. Never generalize it to unrelated skills
   in-app hint, not proof of broad mastery, retention, or absence of outside help.
 - not_assessed/in_progress: a draft or partial attempt is not evidence of poor knowledge.
 Do not overwrite already completed work or demand that the learner repeat all foundations.
+
+{{include:plan_public_copy_contract.txt}}
+
+Return strict JSON only:
+{
+  "roadmap_thesis": "One concise strategy connecting the learner's gap to the mentor's methods.",
+  "anti_goals": ["Specific distraction or premature path to avoid, with rationale."],
+  "weeks": [
+    {
+      "week_number": 1,
+      "phase": "foundation|core_skills|applied_practice|integration",
+      "primary_mission": "One precise weekly objective.",
+      "outcome": "The observable capability or artifact the learner will have by week's end.",
+      "tasks": [
+        {
+          "title": "Specific task title",
+          "type": "project|course|reading|habit|practice",
+          "estimated_hours": 2,
+          "success_metric": "Binary evidence of completion."
+        }
+      ]
+    }
+  ]
+}
+
+USER GOAL: {user_goal}
+WEEKLY CAPACITY: {weekly_capacity_label} = {weekly_minutes} minutes = {hours_per_week} hours
+CAPACITY RULE: {capacity_rule}
+USER AGE: {target_age}
+USER CONTEXT:
+{user_context}
+
+MENTOR: {idol_name}
+MENTOR PROFILE:
+{idol_profile_json}
+MENTOR PERSONA:
+{idol_persona_json}
+MENTOR MILESTONES:
+{idol_milestones_json}
+
+GAP ANALYSIS:
+{gaps_json}
+READINESS:
+{readiness_by_gap_json}
+
+PLAN-READY LEARNER BASELINE (session-scoped, self-reported):
+{learner_baseline_json}
+
+DIAGNOSTIC INTERVIEW:
+{interview_transcript_json}
+COMPARISON VERDICT:
+{comparison_summary}
+STRATEGIC BLUEPRINT:
+{blueprint_markdown}
+
+{previous_cycle_block}

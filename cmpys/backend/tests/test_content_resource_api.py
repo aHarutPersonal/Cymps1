@@ -69,17 +69,17 @@ async def test_prepare_narration_only_renders_text_from_the_resource(monkeypatch
     )
     renderer = AsyncMock(
         return_value=NarrationAsset(
-            audio_url="/media/book_narration_example.mp3",
+            audio_url="/media/book_narration_example.wav",
             style="expressive",
-            voice="English_expressive_narrator",
+            voice="Sulafat",
             voice_display_name="Expressive narrator",
             narrator_profile="expressive_narrator",
-            provider="yunwu",
-            model="speech-2.8-hd",
+            provider="gemini",
+            model="gemini-3.8-flash-tts",
             duration_ms=2100,
             alignment=(NarrationCue(start=0, end=1, startMs=0, endMs=100, text="A"),),
-            alignment_source="provider",
-            alignment_granularity="phrase",
+            alignment_source="transcription",
+            alignment_granularity="word",
             offset_encoding="utf16",
             source_text_hash="example-hash",
             disclosure="AI-generated voice; not the real person.",
@@ -107,15 +107,16 @@ async def test_prepare_narration_only_renders_text_from_the_resource(monkeypatch
         "expressive_narrator",
     )
     db.commit.assert_awaited_once()
-    assert response.audioUrl == "/media/book_narration_example.mp3"
-    assert response.voice == "English_expressive_narrator"
+    assert response.audioUrl == "/media/book_narration_example.wav"
+    assert response.voice == "Sulafat"
     assert response.voiceDisplayName == "Expressive narrator"
     assert response.narratorProfile.value == "expressive_narrator"
     assert response.narratorProfileLabel == "Expressive narrator"
-    assert response.provider == "yunwu"
-    assert response.model == "speech-2.8-hd"
-    assert response.alignmentSource == "provider"
-    assert response.alignmentGranularity == "phrase"
+    assert response.provider == "gemini"
+    assert response.model == "gemini-3.8-flash-tts"
+    assert response.alignment[0].text == "A"
+    assert response.alignmentSource == "transcription"
+    assert response.alignmentGranularity == "word"
     assert response.offsetEncoding == "utf16"
     assert response.sourceTextHash == "example-hash"
     assert response.isAiGenerated is True

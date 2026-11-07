@@ -51,7 +51,7 @@ class ScenarioClient:
             activity_id = json.loads(user_prompt)["activity_brief"]["id"]
             case.activity_counts[activity_id] += 1
             if case.mode == "package_activity_outage" and activity_id == "transfer":
-                return LLMResponse(data={}, error="zai request failed (TimeoutError; finish=missing)")
+                return LLMResponse(data={}, error="anthropic request failed (TimeoutError; finish=missing)")
             data = activity_draft_fixture(next(activity for activity in package_payload()["workbook"]["activities"]
                         if activity["id"] == activity_id))
         elif issubclass(output_model, PackageSemanticReview):
@@ -67,7 +67,7 @@ class ScenarioClient:
         elif name.startswith("LessonSectionGroup_"):
             if name.endswith("mechanism") and (case.mode.startswith("timeout_") or case.mode == "exhausted"):
                 if attempt == 1 or case.mode == "exhausted":
-                    return LLMResponse(data={}, error="zai request failed (TimeoutError; finish=missing)")
+                    return LLMResponse(data={}, error="anthropic request failed (TimeoutError; finish=missing)")
             source = _lesson_sections_payload()
             data = {field: source[field] for field in output_model.model_fields}
         elif output_model is PlanDetailSectionsRepairOutput:
@@ -76,7 +76,7 @@ class ScenarioClient:
             request = json.loads(user_prompt)
             case.reviewed.append(copy.deepcopy(request["lesson"]))
             if case.mode == "review_unavailable" or (case.mode.endswith("_then_outage") and attempt > 1):
-                return LLMResponse(data={}, error="zai request failed (TimeoutError; finish=missing)")
+                return LLMResponse(data={}, error="anthropic request failed (TimeoutError; finish=missing)")
             private_defect = case.mode in {"timeout_package", "timeout_package_then_outage"} and attempt == 1
             prose_defect = case.mode in {"timeout_semantic", "timeout_semantic_then_outage"} and attempt == 1
             data = {"acceptable": not (private_defect or prose_defect),
@@ -340,11 +340,12 @@ async def test_activity_outage_resumes_private_plan_and_completed_activity_witho
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("configured,expected_max", [(False, 4), (True, 2)])
-async def test_all_lesson_stages_share_bounded_job_concurrency(monkeypatch, configured, expected_max):
+@pytest.mark.parametrize("route,expected_max", [(None, 4), ("anthropic:test", 2), ("openai:test", 2)])
+async def test_all_lesson_stages_share_bounded_job_concurrency(monkeypatch, route, expected_max):
     from app.tasks.plans import settings
     monkeypatch.setattr(settings, "llm_provider", "dummy")
-    monkeypatch.setattr(settings, "llm_admission_limits", {"dummy:test": 5} if configured else {})
+    # A limit on either direct provider's route bounds the job's shared queue.
+    monkeypatch.setattr(settings, "llm_admission_limits", {route: 5} if route else {})
     monkeypatch.setattr(settings, "llm_admission_per_user", 2)
     case = Scenario("accepted")
     active = maximum = 0

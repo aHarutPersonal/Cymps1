@@ -845,6 +845,7 @@ async def _llm_closed_world_gap_classifier(
     from app.services.llm.telemetry import record_llm_response
 
     client = get_llm_client(
+        operation="catalog_gap_resolution",
         timeout=45,
         max_tokens=1800,
         tier="fast",
@@ -2391,11 +2392,13 @@ async def _llm_session_composer(
             previous_response, timeout=90,
             max_tokens=4_000 if reusable_base else 12_000,
         ) or get_llm_client(
+            operation="catalog_lesson_personalization",
             timeout=150,
             max_tokens=4_000 if reusable_base else 12_000,
             tier=tier,
             thinking_level="minimal" if tier == "balanced" else "high",
-            allow_fallback=tier == "balanced",
+            # This loop owns the one backup-model recovery.
+            allow_fallback=False,
         )
         response = await client.generate_json(
             system_prompt=system_prompt,
@@ -2530,55 +2533,39 @@ def _default_composer_route_provenance() -> dict[str, Any]:
 
     from app.core.config import settings
     from app.services.llm import get_llm_client
+    from app.services.llm.client import provider_configured, provider_model
     from app.services.llm.prompt_loader import load_and_render
+    from app.services.llm.routes import route_for
 
     attempts: list[dict[str, Any]] = []
     for tier in ("balanced", "quality"):
-        allow_fallback = tier == "balanced"
         client = get_llm_client(
+            operation="catalog_lesson_personalization",
             timeout=150,
             max_tokens=12_000,
             tier=tier,
             thinking_level="minimal" if tier == "balanced" else "high",
-            allow_fallback=allow_fallback,
+            allow_fallback=False,
         )
         attempts.append(
             {
                 "tier": tier,
-                "allow_fallback": allow_fallback,
+                "allow_fallback": False,
                 "route": _safe_client_route(client),
             }
         )
-    configured_provider = str(settings.llm_provider)
-    key_available: dict[str, bool] = {}
-    if configured_provider == "zai":
-        key_available["zai"] = bool(settings.zai_api_key)
-    elif configured_provider == "openlux":
-        key_available["openlux"] = bool(settings.openlux_api_key)
-    elif configured_provider == "openai":
-        key_available["openai"] = bool(settings.openai_api_key)
-    elif configured_provider == "gemini":
-        key_available["gemini"] = bool(settings.gemini_api_key)
-    elif configured_provider == "yunwu":
-        key_available = {
-            "yunwu": bool(settings.yunwu_api_key),
-            "gemini_fallback": bool(settings.gemini_api_key),
-        }
+    primary, backup = route_for("catalog_lesson_personalization")
     return {
-        "configured_provider": configured_provider,
+        "configured_provider": str(settings.llm_provider),
         "operational_recovery": {
-            "policy": "complete-after-operational-failure-v1",
-            "model": settings.gemini_quality_model,
-            "available": bool(settings.gemini_api_key),
+            "policy": "backup-model-after-operational-failure-v2",
+            "provider": backup,
+            "model": provider_model(backup),
+            "available": provider_configured(backup),
         },
         "compact_adaptation_max_tokens": 4_000,
         # Presence affects the resolved client but the secret value never does.
-        "key_available": key_available,
-        "yunwu_fallback_enabled": (
-            bool(settings.yunwu_fallback_enabled)
-            if configured_provider == "yunwu"
-            else None
-        ),
+        "key_available": {name: provider_configured(name) for name in (primary, backup)},
         "system_prompt_hash": hashlib.sha256(
             load_and_render("planner_system.txt", {}, strict=False).encode("utf-8")
         ).hexdigest(),

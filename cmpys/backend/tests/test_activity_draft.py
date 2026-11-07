@@ -405,9 +405,13 @@ def test_tutorial_draft_enforces_the_new_workbook_rules():
     # Legacy lesson drafts (their prompt is unchanged) keep accepting text-only work.
     LessonActivityDraft.model_validate(only_text)
     parse_activity_draft(only_text)
-    # The intended pair is accepted, in either order of kinds.
+    # Numeric reasoning may retain its explanation; mixed choice/text must consolidate.
+    paired = v3_draft(); paired["fields"] = [paired["fields"][0], text]
+    assert [f.kind for f in parse_activity_repair_draft(paired, tutorial=True).fields] == ["number", "text"]
     paired = v3_draft(); paired["fields"] = [paired["fields"][1], text]
-    assert [f.kind for f in parse_activity_repair_draft(paired, tutorial=True).fields] == ["multi_choice", "text"]
+    with pytest.raises(ValueError, match="cannot combine choice/multi_choice with text"):
+        parse_activity_repair_draft(paired, tutorial=True)
+    assert [f.kind for f in parse_activity_repair_draft(paired).fields] == ["multi_choice", "text"]
 
 
 @pytest.mark.parametrize("index", [0, 1])

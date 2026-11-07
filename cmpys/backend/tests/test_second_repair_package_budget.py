@@ -14,11 +14,13 @@ from app.core.config import Settings, settings
 from app.services.llm.client import LLMResponse
 from app.services.planning.lesson_package import LessonPackage
 from tests.test_short_tutorial_pipeline import short_package
-from tests.test_tutorial_speculative_writer import DRAFT, RETRY_DRAFT, Harness, RecordingStore, run, stages
+from tests.test_tutorial_speculative_writer import DRAFT, Harness, RecordingStore, run, stages
 
 PREFIX = "parallel_lesson_step_1_"
 REPAIR, REPAIR_2 = PREFIX + "package_repair", PREFIX + "package_repair_2"
-THIRD_DRAFT = PREFIX + "draft_3_tutorial_1"
+# A practice-only correction keeps the tutorial reading, which is written from
+# teaching cases alone, and reviews it again (repair path round 1, 2026-11-05).
+RE_REVIEW, RE_REVIEW_2 = PREFIX + "package_repair_review", PREFIX + "package_repair_review_2"
 GUIDED = {"failures": ["practice.guided: the answer key contradicts its criteria"], "targets": ["practice.guided"]}
 TRANSFER = {"failures": ["practice.transfer: the data omit the stated total"], "targets": ["practice.transfer"]}
 UNTARGETED = {"failures": ["The package asks for more than the outline promises"]}
@@ -121,8 +123,8 @@ async def test_default_review_path_ends_after_its_single_repair(monkeypatch):
     _, calls, error = await run(harness, monkeypatch)
 
     assert error == "step_1: " + "Exercise contract review failed after correction: " + TRANSFER_REVIEW["package_issues"][0]
-    assert harness.events == ["preflight_end", "write", "final_review", "package_repair", "write", "final_review"]
-    assert stages(calls) == [DRAFT, PREFIX + "review_1", REPAIR, RETRY_DRAFT, PREFIX + "review_2"]
+    assert harness.events == ["preflight_end", "write", "final_review", "package_repair", "final_review"]
+    assert stages(calls) == [DRAFT, PREFIX + "review_1", REPAIR, RE_REVIEW]
 
 
 @pytest.mark.asyncio
@@ -212,16 +214,15 @@ async def test_rejected_speculative_draft_is_still_discarded_and_rechecks_never_
 # --- Review path ------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_review_path_second_repair_rewrites_and_reviews_again(monkeypatch):
+async def test_review_path_second_repair_keeps_the_reading_and_reviews_again(monkeypatch):
     two_repairs(monkeypatch)
     harness = RepairHarness(verdicts=[{"request": False}], reviews=[GUIDED_REVIEW, TRANSFER_REVIEW, {}])
     payload, calls, error = await run(harness, monkeypatch)
 
     assert error is None and payload["steps"][0]["lesson_content"]
-    assert harness.events == ["preflight_end", "write", "final_review", "package_repair", "write", "final_review",
-                              "package_repair", "write", "final_review"]
-    assert stages(calls) == [DRAFT, PREFIX + "review_1", REPAIR, RETRY_DRAFT, PREFIX + "review_2",
-                             REPAIR_2, THIRD_DRAFT, PREFIX + "review_3"]
+    assert harness.events == ["preflight_end", "write", "final_review", "package_repair", "final_review",
+                              "package_repair", "final_review"]
+    assert stages(calls) == [DRAFT, PREFIX + "review_1", REPAIR, RE_REVIEW, REPAIR_2, RE_REVIEW_2]
     assert harness.repair_contexts[1]["targets"] == ["practice.transfer"]
     assert harness.writer_packages[-1] == revised_package(2).review_context()
 
@@ -234,7 +235,7 @@ async def test_review_path_second_repair_needs_validated_targets(monkeypatch):
 
     assert error == "step_1: " + "Exercise contract review failed after correction: " + UNTARGETED_REVIEW["package_issues"][0]
     assert harness.repairs == 1
-    assert stages(calls) == [DRAFT, PREFIX + "review_1", REPAIR, RETRY_DRAFT, PREFIX + "review_2"]
+    assert stages(calls) == [DRAFT, PREFIX + "review_1", REPAIR, RE_REVIEW]
 
 
 @pytest.mark.asyncio
@@ -246,7 +247,7 @@ async def test_review_path_never_repairs_a_third_time(monkeypatch):
 
     assert error == "step_1: " + "Exercise contract review failed after correction: " + GUIDED_REVIEW["package_issues"][0]
     assert harness.repairs == 2
-    assert stages(calls)[-2:] == [THIRD_DRAFT, PREFIX + "review_3"]
+    assert stages(calls)[-2:] == [REPAIR_2, RE_REVIEW_2]
 
 
 @pytest.mark.asyncio
@@ -255,7 +256,7 @@ async def test_preflight_and_review_paths_share_one_repair_count(monkeypatch):
     harness = RepairHarness(verdicts=[GUIDED, {}], reviews=[TRANSFER_REVIEW, {}])
     payload, calls, error = await run(harness, monkeypatch)
     assert error is None and payload["steps"][0]["lesson_content"]
-    assert stages(calls) == [REPAIR, DRAFT, PREFIX + "review_1", REPAIR_2, RETRY_DRAFT, PREFIX + "review_2"]
+    assert stages(calls) == [REPAIR, DRAFT, PREFIX + "review_1", REPAIR_2, RE_REVIEW_2]
 
     harness = RepairHarness(verdicts=[GUIDED, {}], reviews=[TRANSFER_REVIEW, GUIDED_REVIEW])
     _, calls, error = await run(harness, monkeypatch)

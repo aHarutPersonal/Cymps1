@@ -50,31 +50,31 @@ def test_usage_record_falls_back_to_visible_token_sum():
     assert infer_provider(record.model) == "openai"
 
 
-def test_yunwu_provider_is_preserved_for_gateway_models(monkeypatch):
-    monkeypatch.setattr(settings, "llm_provider", "yunwu")
-    response = LLMResponse(data={}, model="gpt-5.6-luna")
+def test_direct_provider_is_inferred_from_the_served_model(monkeypatch):
+    monkeypatch.setattr(settings, "llm_provider", "routed")
+    claude = usage_record_from_response(operation="extraction", response=LLMResponse(data={}, model="claude-haiku-5-5"))
+    luna = usage_record_from_response(operation="extraction", response=LLMResponse(data={}, model="gpt-6-luna"))
 
-    record = usage_record_from_response(operation="extraction", response=response)
-
-    assert record.provider == "yunwu"
+    assert (claude.provider, luna.provider) == ("anthropic", "openai")
+    assert infer_provider("unlisted-model") == "unknown"
 
 
 def test_fallback_response_records_actual_provider_and_reason(monkeypatch):
-    monkeypatch.setattr(settings, "llm_provider", "yunwu")
+    monkeypatch.setattr(settings, "llm_provider", "routed")
     response = LLMResponse(
         data={"ok": True},
-        model="gemini-2.5-flash",
-        provider="gemini",
-        fallback_from_model="grok-4.5",
-        fallback_from_provider="yunwu",
+        model="gpt-6-luna",
+        provider="openai",
+        fallback_from_model="claude-haiku-5-5",
+        fallback_from_provider="anthropic",
         fallback_error="timeout",
     )
 
     record = usage_record_from_response(operation="generation", response=response)
 
-    assert record.provider == "gemini"
-    assert record.metadata["fallback_from_model"] == "grok-4.5"
-    assert record.metadata["fallback_from_provider"] == "yunwu"
+    assert record.provider == "openai"
+    assert record.metadata["fallback_from_model"] == "claude-haiku-5-5"
+    assert record.metadata["fallback_from_provider"] == "anthropic"
     assert record.metadata["fallback_error"] == "timeout"
 
 
@@ -102,7 +102,7 @@ async def test_record_usage_adds_events_to_existing_transaction(monkeypatch):
     assert event.quality_score == 0.9
     assert event.estimated_cost_usd is not None
     assert event.estimated_cost_usd > 0
-    assert event.metadata_json["pricing_version"].startswith("multi-provider-")
+    assert event.metadata_json["pricing_version"].startswith("direct-providers-")
     db.flush.assert_awaited_once()
 
 

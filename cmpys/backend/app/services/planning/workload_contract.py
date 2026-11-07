@@ -178,6 +178,8 @@ def workload_feasibility_issues(
     allotted_lesson_minutes: int | None = None,
 ) -> list[str]:
     """Reject impossible supported totals before spending on lesson prose."""
+    if lesson_format == TUTORIAL_LESSON_FORMAT:
+        return []  # Tutorial exercise time is server-set and never fails a lesson (2026-11-06).
     try:
         contract = build_workload_contract(
             activities, reading_minutes=reading_minutes,

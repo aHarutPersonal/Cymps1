@@ -68,7 +68,13 @@ def test_generation_and_repair_contracts_agree_on_response_flexibility():
     for name in ("tutorial_activity_generate.txt", "tutorial_package_seed.txt",
                  "lesson_practice_generate.txt"):
         prompt = load_and_render(name, {})
-        assert "text-only" in prompt
+        if name == "lesson_practice_generate.txt":
+            assert "text-only response is valid" in prompt
+        else:
+            from app.services.planning.tutorial_rules import tutorial_rule
+            fields = tutorial_rule("R-FIELDS")
+            assert fields in prompt
+            assert "one text response, not choice plus text" in fields
         assert "every activity needs at least one number" not in prompt
         assert "rather than recall" not in prompt
     schema = TutorialActivityDraft.model_json_schema()["properties"]["fields"]
@@ -81,4 +87,4 @@ def test_writer_keeps_quick_check_within_reader_capabilities():
     prompt = _tutorial_contract()
     assert "supported numeric or choice response" in prompt
     assert "reader reveals it after an answer" in prompt
-    assert "Keep independent workbook answers private" in prompt
+    assert "Activities open in\nPractice; keep assessed cases, deciding cues and solutions out of this reading" in prompt

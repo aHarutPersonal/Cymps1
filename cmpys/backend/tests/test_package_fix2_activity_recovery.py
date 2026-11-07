@@ -13,7 +13,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.services.planning import package_builder as builder
-from app.services.planning.activity_draft import TutorialActivityDraft, best_effort_activity, recover_misnamed_ids
+from app.services.planning.activity_draft import LessonActivityDraft, TutorialActivityDraft, best_effort_activity, recover_misnamed_ids
 from tests.test_staged_package_builder import Factory
 
 SEED = json.loads('{"workbook_title":"Revise an argument for your reader","teaching_cases":[],"activity_briefs":[{"id":"guided","kind":"practice","scope":"Guided practice on an original fictional case: a short (about 60-word) memo arguing that a town should keep its evening bus service, written for a general audience with its evidence buried and its claim softened. The activity instructions show a brief worked example: a one-sentence claim revised for a specific reader (the town budget committee) with an element-by-element analysis of what changed — explicit claim, chosen evidence, audience-fit. The learner then selects from a multi_choice list which weaknesses the supplied memo sentence has (missing clear claim, evidence not connected, wrong audience focus), and rewrites the topic sentence in one text field so the strongest evidence and the audience\'s main concern come first. Learning demand: recognizing which parts of an argument a specific reader needs, guided by the shown example. Output: selected weaknesses plus one rewritten sentence."},{"id":"transfer","kind":"transfer","scope":"Independent transfer to a genuinely new original fictional case: a short letter to a school principal arguing that the school should add a morning walking club, where the letter opens with a personal anecdote, states its request only vaguely near the end, and cites one relevant fact (many students live within walking distance) without linking it to the principal\'s concern about arriving on time and ready to learn. The learner selects which sentences carry the actual request and evidence (multi_choice, graded as exact set), then rewrites the opening paragraph so the request, the audience\'s concern, and the linked evidence appear in the first two sentences (text field, criteria accept valid alternative wording). Differs from guided practice: the learner must first locate the argument pieces in unfamiliar text and adapt the revision to a different audience\'s stated concern, not merely diagnose a shown memo. Output: selected sentences plus one rewritten opening paragraph of about 40 words."}]}')
@@ -26,6 +26,25 @@ CONTEXT = {"lesson_format": "tutorial_v1", "allotted_lesson_minutes": None, "tar
            "goal": "Revise an evidence-backed argument for a specific audience",
            "component_recovery": "bounded_per_component"}
 STATISTIC = "40 adults swim before work each day"
+
+# Current tutorial seeds require a worked public example distinct from practice.
+SEED["teaching_cases"] = [{"id": "public_notice", "assumptions":
+    "Original fictional notice: Please return library books by Friday. The revision names the action and deadline so a reader can act.",
+    "data": [], "results": []}]
+
+
+def one_text_answer(draft):
+    """Current tutorials combine a written answer and explanation in one field."""
+    result = copy.deepcopy(draft)
+    result["fields"] = [result["fields"][-1]]
+    if result["id"] == "guided":
+        result["instructions"] = result["instructions"].replace(
+            "Select the weaknesses this sentence shows, then rewrite it", "Explain the weaknesses this sentence shows, then rewrite it")
+    else:
+        result["instructions"] = result["instructions"].replace(
+            "First, select the sentences that carry the actual request and the evidence. Then rewrite", "Identify the request and evidence in your explanation, then rewrite")
+    return result
+
 
 
 def without_statistic(draft):
@@ -43,7 +62,9 @@ def test_recorded_guided_draft_recovers_both_misnamed_ids():
     weaknesses, rewrite = recovered["fields"]
     assert weaknesses["choices"][2] == {"id": "wrong_audience", "label": "It does not address the audience's concern"}
     assert list(rewrite)[0] == "id" and rewrite["id"] == "rewrite" and ": " not in rewrite
-    TutorialActivityDraft.model_validate(recovered)  # Schema-valid; component checks still apply.
+    LessonActivityDraft.model_validate(recovered)  # Historical provider shape is recoverable.
+    with pytest.raises(ValidationError):
+        TutorialActivityDraft.model_validate(recovered)  # Mixed choice/text is no longer a valid tutorial.
     with pytest.raises(ValidationError):
         TutorialActivityDraft.model_validate(GUIDED)
 
@@ -86,13 +107,13 @@ def test_best_effort_preview_drops_only_invalid_fields_and_reports_undeclared_nu
 @pytest.mark.asyncio
 async def test_recovered_draft_gets_one_correction_naming_the_statistic(monkeypatch):
     monkeypatch.setattr(builder, "record_llm_response", AsyncMock(return_value=True))
-    factory = Factory({"seed": [SEED], "guided": [GUIDED, without_statistic(recover_misnamed_ids(GUIDED)[0])],
-                       "transfer": [TRANSFER]})
+    factory = Factory({"seed": [SEED], "guided": [one_text_answer(GUIDED), one_text_answer(without_statistic(recover_misnamed_ids(GUIDED)[0]))],
+                       "transfer": [one_text_answer(TRANSFER)]})
     package, _, _ = await builder.generate_initial_package(STEP, CONTEXT, client_factory=factory)
     assert package is not None and factory.counts["guided"] == 2
     correction = [data for name, _, data in factory.requests if name == "guided"][1]["correction"]
     assert [item["type"] for item in correction["validation_errors"]] == ["undeclared_numbers"]
-    assert correction["rejected_component"]["fields"][1]["id"] == "rewrite"
+    assert correction["rejected_component"]["fields"][0]["id"] == "rewrite"
 
 
 @pytest.mark.asyncio
@@ -101,8 +122,8 @@ async def test_schema_failure_correction_also_hears_component_check_defects(monk
     monkeypatch.setattr(builder, "record_llm_response", record)
     broken = copy.deepcopy(GUIDED)
     broken["fields"][1]["criteria"] = []  # A real schema error recovery must not hide.
-    factory = Factory({"seed": [SEED], "guided": [broken, without_statistic(recover_misnamed_ids(GUIDED)[0])],
-                       "transfer": [TRANSFER]})
+    factory = Factory({"seed": [SEED], "guided": [broken, one_text_answer(without_statistic(recover_misnamed_ids(GUIDED)[0]))],
+                       "transfer": [one_text_answer(TRANSFER)]})
     package, _, _ = await builder.generate_initial_package(STEP, CONTEXT, client_factory=factory)
     assert package is not None and factory.counts["guided"] == 2
     errors = [data for name, _, data in factory.requests if name == "guided"][1]["correction"]["validation_errors"]
@@ -139,16 +160,16 @@ async def test_an_unexpected_preview_check_error_keeps_the_original_schema_error
     monkeypatch.setattr(builder, "record_llm_response", AsyncMock(return_value=True))
     real = builder.require_component_checks
 
-    def flaky(activity):
-        if len(activity.fields) == 1:  # Only the one-field preview of the broken guided draft.
+    def flaky(activity, *teaching_cases):  # Phase 0.3 passes the seed's teaching cases.
+        if len(activity.fields) == 1 and activity.fields[0].id == "weaknesses":  # Only the broken draft preview.
             raise RuntimeError("unexpected preview failure")
-        return real(activity)
+        return real(activity, *teaching_cases)
 
     monkeypatch.setattr(builder, "require_component_checks", flaky)
     broken = copy.deepcopy(GUIDED)
     broken["fields"][1]["criteria"] = []
-    factory = Factory({"seed": [SEED], "guided": [broken, without_statistic(recover_misnamed_ids(GUIDED)[0])],
-                       "transfer": [TRANSFER]})
+    factory = Factory({"seed": [SEED], "guided": [broken, one_text_answer(without_statistic(recover_misnamed_ids(GUIDED)[0]))],
+                       "transfer": [one_text_answer(TRANSFER)]})
     package, _, _ = await builder.generate_initial_package(STEP, CONTEXT, client_factory=factory)
     assert package is not None and factory.counts["guided"] == 2
     errors = [data for name, _, data in factory.requests if name == "guided"][1]["correction"]["validation_errors"]

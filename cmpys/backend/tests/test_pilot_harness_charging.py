@@ -95,12 +95,13 @@ async def test_cancelled_after_streaming_started_keeps_the_full_reservation(tmp_
 
 @pytest.mark.asyncio
 async def test_error_response_with_unknown_usage_keeps_the_full_reservation(tmp_path):
-    failed = LLMResponse(data={}, error="zai request failed (ValueError; finish=missing)",
+    # A stream that closed without a finish reason: text arrived, usage is unknown.
+    failed = LLMResponse(data={}, error="anthropic request failed (IncompleteStreamError; finish=missing)",
                          raw_response='{"partial"', first_event_ms=10.0, response_chars=10)
     provider = FakeProvider(response=failed)
     _guard(tmp_path, provider)
     response = await provider.generate_json(system_prompt="sys", user_prompt="user")
-    assert response.error.startswith("zai request failed")
+    assert response.error == "anthropic request failed (IncompleteStreamError; finish=missing)"
     reserved, finished = _rows(tmp_path / "usage.jsonl")
     assert finished["charged_basis"] == "full_reserve"
     assert finished["charged_usd"] == reserved["reserved_usd"]

@@ -158,10 +158,12 @@ async def _backfill_comparison_scores_async(session_id: str) -> dict:
 
         scores = await generate_comparison_scores(
             get_llm_client(
+                operation="comparison_scores",
                 timeout=COMPARISON_SCORE_PROVIDER_TIMEOUT_SECONDS,
                 max_tokens=3500,
                 tier="fast",
                 thinking_level="minimal",
+                allow_fallback=False,
             ),
             idol_name=session.idol.name if session.idol else "Unknown",
             user_age=session.user_age,

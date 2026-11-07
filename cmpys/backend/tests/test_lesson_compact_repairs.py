@@ -131,6 +131,7 @@ async def test_public_correction_shares_retry_limit_and_revalidates_full_contrac
     client = SimpleNamespace(generate_json=AsyncMock(side_effect=[
         LLMResponse(data={'public_defects': ['The case facts do not support the task.']}),
         LLMResponse(data={'workbook': {'activities': []}}),
+        LLMResponse(data={'workbook': {'activities': []}}),
     ]))
     def factory(**kwargs):
         requests.append(kwargs)
@@ -138,10 +139,11 @@ async def test_public_correction_shares_retry_limit_and_revalidates_full_contrac
     package, response, _ = await generate_package({}, {}, client_factory=factory,
         prior_package=prior, defects=['Incorrect exercise'], repair_targets=['practice.guided'])
     assert package is None and response.error
-    assert client.generate_json.await_count == 2
+    # The invalid scoped draft gets its one correction, with the same bounds.
+    assert client.generate_json.await_count == 3
     assert client.generate_json.await_args_list[0].kwargs['output_model'] is PrivatePackageRepair
     assert issubclass(client.generate_json.await_args_list[1].kwargs['output_model'], LessonActivityDraft)
-    assert [(request['timeout'], request['max_tokens']) for request in requests] == [(120, 3500), (90, 4000)]
+    assert [(request['timeout'], request['max_tokens']) for request in requests] == [(120, 3500), (90, 4000), (90, 4000)]
     second = client.generate_json.await_args_list[1].kwargs
     prompt = json.loads(second['user_prompt'])
     assert prompt['previous_activity'] == before['workbook']['activities'][0]

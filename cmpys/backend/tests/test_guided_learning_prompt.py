@@ -42,8 +42,10 @@ class TestGuidedLearningSystemPrompt:
     def test_keeps_socratic_method(self):
         rendered = load_and_render("guided_learning_system.txt", FULL_PARAMS, strict=True)
 
+        assert "Attempt-First Gate" in rendered
         assert "Guide with questions" in rendered
         assert "misconception" in rendered.lower()
+        assert "40–90 words" in rendered
 
     def test_requires_all_fields(self):
         with pytest.raises(PromptRenderError):

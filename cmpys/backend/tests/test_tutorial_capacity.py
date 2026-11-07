@@ -148,7 +148,8 @@ async def test_last_moment_saved_work_blocks_publication_before_progress_reset(m
     lock = AsyncMock(return_value=(SimpleNamespace(), item, SimpleNamespace(id="job")))
     mutation = Mock(return_value=False)
     monkeypatch.setattr("app.tasks.plans._lock_current_detail_artifact_publication", lock)
-    monkeypatch.setattr("app.tasks.plans._approved_readable_step_ids", lambda details: frozenset({"step_1"}))
+    retained = Mock(return_value=frozenset({"step_1"}))
+    monkeypatch.setattr("app.tasks.plans._historically_published_step_ids", retained)
     monkeypatch.setattr("app.tasks.plans._prepare_detail_artifact_publish", mutation)
     protected = AsyncMock(return_value={"step_1"})
     monkeypatch.setattr("app.services.planning.tutorial_capacity.protected_tutorial_ids", protected)
@@ -157,6 +158,7 @@ async def test_last_moment_saved_work_blocks_publication_before_progress_reset(m
             user_id="owner", job_id="job", candidate_approved_step_ids=frozenset({"step_1"}),
             candidate_validations={"step_1": {"content_hash": "new"}})
     mutation.assert_not_called()
+    retained.assert_called_once_with(item.details_json)
     assert protected.await_args.kwargs["lock"] is True
 
 
@@ -213,7 +215,8 @@ async def test_already_published_shortening_can_keep_newly_started_work(monkeypa
         'step_1': {'content_hash': 'same'}}}})
     monkeypatch.setattr('app.tasks.plans._lock_current_detail_artifact_publication',
         AsyncMock(return_value=(SimpleNamespace(), item, SimpleNamespace(id='job'))))
-    monkeypatch.setattr('app.tasks.plans._approved_readable_step_ids', lambda details: frozenset({'step_1'}))
+    retained = Mock(return_value=frozenset({'step_1'}))
+    monkeypatch.setattr('app.tasks.plans._historically_published_step_ids', retained)
     mutation = Mock(return_value=False)
     monkeypatch.setattr('app.tasks.plans._prepare_detail_artifact_publish', mutation)
     protected = AsyncMock(return_value={'step_1'})
@@ -222,6 +225,7 @@ async def test_already_published_shortening_can_keep_newly_started_work(monkeypa
         user_id='owner', job_id='job', candidate_approved_step_ids=frozenset({'step_1'}),
         candidate_validations={'step_1': {'content_hash': 'same'}}, capacity_revised_step_ids={'step_1'})
     mutation.assert_called_once()
+    retained.assert_called_once_with(item.details_json)
     protected.assert_not_awaited()
 
 

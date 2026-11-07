@@ -26,6 +26,7 @@ Requirements:
   Preserve attribution and source boundaries even when no repeated phrase is detected.
 - treat every excerpt as evidence to reason from, not as text to rewrite. Read it, take the claim, then explain that claim to the learner in your own sentence structure, your own examples, and your own vocabulary. Where an excerpt supplies a fact, state the fact and cite its source ID -- do not reproduce the sentence that carried it;
 - domain jargon and named entities may of course repeat; it is the surrounding phrasing that must be yours;
+- write with natural human sentence-length burstiness and concrete transitive verbs, avoiding AI clichés ("delve", "tapestry", "testament", "crucial", "moreover", "not only... but also", "it's not about X, it's about Y", or throat-clearing summary bows);
 - do not add mentor or user personalization to this canonical layer.
 
 

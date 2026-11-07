@@ -48,8 +48,8 @@ class UnavailableScenario(Scenario):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("error,attempts", [
-    ("zai request failed (TimeoutError; finish=missing)", 2),
-    ("zai request failed (JSONProtocolError; finish=stop)", 2),
+    ("anthropic request failed (TimeoutError; finish=missing)", 2),
+    ("anthropic request failed (JSONProtocolError; finish=stop)", 2),
     ("GenerationUnavailable: provider credits exhausted", 1),
 ])
 async def test_saved_lesson_review_outage_preserves_work_and_stops_before_rewriting(monkeypatch, error, attempts):

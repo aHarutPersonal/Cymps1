@@ -4,12 +4,13 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from html import unescape
 import json
+import logging
 import math
 import re
 import uuid
 
 from pydantic import Field, model_validator
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from app.core.db import async_session_maker
@@ -21,12 +22,15 @@ from app.models.content_resource import (
 from app.models.idol import CatalogStatus
 from app.services.learning_sources import search_evidence
 from app.services.llm.admission import background_generation
-from app.services.llm.client import get_llm_client
+from app.services.llm.client import BaseLLMClient, LLMResponse, get_llm_client
 from app.services.llm.telemetry import record_llm_response
+from app.services.llm.tracing import trace_context
 from app.services.planning.lesson_package import digest
 from app.services.practice.contracts import StrictModel
 
 VERSION = 5
+_FINALIZATION_SECONDS = 5
+logger = logging.getLogger(__name__)
 
 
 class CompanionLesson(StrictModel):
@@ -130,24 +134,101 @@ def public_companion(resource: ContentResource) -> dict:
     }
 
 
+async def _finish_support(finalize):
+    """Bound cleanup, drain it under repeated cancellation, then propagate cancellation."""
+    async def finish():
+        async with asyncio.timeout(_FINALIZATION_SECONDS):
+            await finalize()
+
+    task = asyncio.create_task(finish())
+    cancelled = False
+    while True:
+        try:
+            await asyncio.shield(task)
+            break
+        except asyncio.CancelledError:
+            cancelled = True
+            if task.done():
+                if not task.cancelled():
+                    try:
+                        task.result()
+                    except Exception as exc:
+                        logger.warning("Supporting material finalization failed (%s)", type(exc).__name__)
+                break
+        except Exception as exc:
+            logger.warning("Supporting material finalization failed (%s)", type(exc).__name__)
+            break
+    if cancelled:
+        raise asyncio.CancelledError
+
+
 async def structured_call(operation, model, system, data, *, max_tokens=6000):
     client = get_llm_client(
+        operation=operation,
         tier="balanced",
         timeout=90,
         max_tokens=max_tokens,
         thinking_level="low",
-        allow_fallback=False,
     )
-    validated, response = await client.generate_and_validate(
-        system_prompt=system,
-        user_prompt=json.dumps(data, ensure_ascii=False),
-        output_model=model,
-        repair_on_failure=True,
-    )
-    await record_llm_response(operation=operation, response=response)
-    if response.error or validated is None:
-        raise ValueError("Supporting material generation unavailable")
-    return validated
+    parent_trace = trace_context.get() or {}
+    context = {**parent_trace, "trace_id": parent_trace.get("trace_id") or str(uuid.uuid4()),
+               "operation": operation}
+    # Inherit an existing provider trace without creating one: per-attempt
+    # snapshots below cover cancellation without extra synchronous trace writes.
+    attempts = []
+
+    class TrackedClient(BaseLLMClient):
+        async def generate_json(self, **request):
+            previous = getattr(client, "last_attempt", None)
+            previous_id = getattr(previous, "attempt_id", None)
+            try:
+                response = await client.generate_json(**request)
+            except (asyncio.CancelledError, Exception) as exc:
+                if getattr(client, "request_started", True) is not False:
+                    current = getattr(client, "last_attempt", None)
+                    fresh = (isinstance(current, LLMResponse) and current is not previous
+                             and (previous_id is None or current.attempt_id != previous_id))
+                    response = (current.model_copy(deep=True) if fresh else LLMResponse(
+                        data={}, model=getattr(client, "model", None),
+                        provider=getattr(client, "provider_name", None)))
+                    response.error = ("Supporting material request cancelled; usage may be unknown"
+                                      if isinstance(exc, asyncio.CancelledError)
+                                      else "Supporting material request failed (" + type(exc).__name__ + ")")
+                    remember(response, "cancelled" if isinstance(exc, asyncio.CancelledError) else "unavailable")
+                raise
+            # BaseLLMClient aggregates repair usage into its final response. Keep
+            # independent snapshots so a cancelled repair cannot recount that
+            # earlier attempt, and provider trace IDs still update the same row.
+            remember(response.model_copy(deep=True), "completed")
+            return response
+
+        def _build_repair_prompt(self, **kwargs):
+            return client._build_repair_prompt(**kwargs)
+
+    def remember(response, status):
+        response.trace_id = response.trace_id or context["trace_id"]
+        response.attempt_id = response.attempt_id or str(uuid.uuid4())
+        attempts.append((response, status))
+
+    async def finalize():
+        for response, status in attempts:
+            await record_llm_response(operation=operation, response=response,
+                                      model=getattr(client, "model", None), result_status=status)
+
+    try:
+        validated, response = await TrackedClient().generate_and_validate(
+            system_prompt=system,
+            user_prompt=json.dumps(data, ensure_ascii=False),
+            output_model=model,
+            repair_on_failure=True,
+        )
+        if attempts and response.error:
+            attempts[-1][0].error = response.error
+        if response.error or validated is None:
+            raise ValueError("Supporting material generation unavailable")
+        return validated
+    finally:
+        await _finish_support(finalize)
 
 
 def _normal(text: str) -> str:
@@ -348,73 +429,92 @@ async def build_companion(title: str, author: str | None) -> tuple[dict, dict] |
     return content, report
 
 
+async def _release_companion_lease(key: str, token: str):
+    """Release only the cancelled worker's lease; never overwrite a new owner."""
+    async with async_session_maker() as db:
+        await db.execute(
+            update(ContentResource)
+            .where(
+                ContentResource.canonical_key == key,
+                ContentResource.status == CatalogStatus.PENDING,
+                ContentResource.metadata_json["token"].astext == token,
+            )
+            .values(status=CatalogStatus.FLAGGED, metadata_json={})
+        )
+        await db.commit()
+
+
 async def get_companion(title: str, author: str | None) -> dict:
     """Short DB leases deduplicate across users without holding locks over providers."""
     key, token = companion_key(title, author), str(uuid.uuid4())
-    now = datetime.now(timezone.utc)
-    async with async_session_maker() as db:
-        await db.execute(
-            insert(ContentResource)
-            .values(
-                id=str(uuid.uuid4()),
-                canonical_key=key,
-                kind=ContentResourceKind.IN_APP_LESSON,
-                title=title[:300],
-                author_or_creator=(author or "")[:300],
-                license_status=LicenseStatus.LLM_SUMMARY,
-                status=CatalogStatus.PENDING,
-                metadata_json={},
-            )
-            .on_conflict_do_nothing(index_elements=["canonical_key"])
-        )
-        resource = (
-            await db.execute(
-                select(ContentResource)
-                .where(ContentResource.canonical_key == key)
-                .with_for_update()
-            )
-        ).scalar_one()
-        if companion_ready(resource):
-            return public_companion(resource)
-        lease = resource.metadata_json or {}
-        if lease.get("retry_after", "") > now.isoformat():
-            return public_companion(resource)
-        resource.status = CatalogStatus.PENDING
-        resource.metadata_json = {
-            "token": token,
-            "retry_after": (now + timedelta(minutes=12)).isoformat(),
-        }
-        await db.commit()
-    result = None
     try:
-        result = await asyncio.wait_for(build_companion(title, author), timeout=220)
-    except Exception:
-        # Fail closed; never publish a partial draft or leak provider response text.
-        pass
-    async with async_session_maker() as db:
-        resource = (
+        now = datetime.now(timezone.utc)
+        async with async_session_maker() as db:
             await db.execute(
-                select(ContentResource)
-                .where(ContentResource.canonical_key == key)
-                .with_for_update()
+                insert(ContentResource)
+                .values(
+                    id=str(uuid.uuid4()),
+                    canonical_key=key,
+                    kind=ContentResourceKind.IN_APP_LESSON,
+                    title=title[:300],
+                    author_or_creator=(author or "")[:300],
+                    license_status=LicenseStatus.LLM_SUMMARY,
+                    status=CatalogStatus.PENDING,
+                    metadata_json={},
+                )
+                .on_conflict_do_nothing(index_elements=["canonical_key"])
             )
-        ).scalar_one()
-        if (resource.metadata_json or {}).get("token") != token:
-            return public_companion(resource)
-        resource.status = CatalogStatus.PUBLISHED if result else CatalogStatus.FLAGGED
-        resource.metadata_json = {"retry_after": (now + timedelta(days=1)).isoformat()}
-        if result:
-            resource.summary_json, report = result
+            resource = (
+                await db.execute(
+                    select(ContentResource)
+                    .where(ContentResource.canonical_key == key)
+                    .with_for_update()
+                )
+            ).scalar_one()
+            if companion_ready(resource):
+                return public_companion(resource)
+            lease = resource.metadata_json or {}
+            if lease.get("retry_after", "") > now.isoformat():
+                return public_companion(resource)
+            resource.status = CatalogStatus.PENDING
             resource.metadata_json = {
-                **resource.metadata_json,
-                "companion_review": report,
+                "token": token,
+                "retry_after": (now + timedelta(minutes=12)).isoformat(),
             }
-            resource.content_markdown = "\n\n".join(
-                lesson["content"] for lesson in result[0]["lessons"]
-            )
-            resource.source_url = result[0]["sources"][0]["url"]
-            resource.duration_minutes = sum(
-                lesson["minutes"] for lesson in result[0]["lessons"]
-            )
-        await db.commit()
-        return public_companion(resource)
+            await db.commit()
+        result = None
+        try:
+            result = await asyncio.wait_for(build_companion(title, author), timeout=220)
+        except Exception:
+            # Fail closed; never publish a partial draft or leak provider response text.
+            pass
+        async with async_session_maker() as db:
+            resource = (
+                await db.execute(
+                    select(ContentResource)
+                    .where(ContentResource.canonical_key == key)
+                    .with_for_update()
+                )
+            ).scalar_one()
+            if (resource.metadata_json or {}).get("token") != token:
+                return public_companion(resource)
+            resource.status = CatalogStatus.PUBLISHED if result else CatalogStatus.FLAGGED
+            resource.metadata_json = {"retry_after": (now + timedelta(days=1)).isoformat()}
+            if result:
+                resource.summary_json, report = result
+                resource.metadata_json = {
+                    **resource.metadata_json,
+                    "companion_review": report,
+                }
+                resource.content_markdown = "\n\n".join(
+                    lesson["content"] for lesson in result[0]["lessons"]
+                )
+                resource.source_url = result[0]["sources"][0]["url"]
+                resource.duration_minutes = sum(
+                    lesson["minutes"] for lesson in result[0]["lessons"]
+                )
+            await db.commit()
+            return public_companion(resource)
+    except asyncio.CancelledError:
+        await _finish_support(lambda: _release_companion_lease(key, token))
+        raise

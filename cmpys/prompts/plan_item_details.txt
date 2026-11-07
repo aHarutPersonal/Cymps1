@@ -65,7 +65,7 @@ CRITICAL RULES:
 
 10. **CHOOSE THE BEST RESOURCE MIX.** Select 1-6 materials based on the mission and learning preference, with no forced type quota. Every material must support at least one lesson; never pad the list.
 
-11. **NO FILLER LANGUAGE.** Do not write "In this section we'll explore...", "Let's dive in...", "It's important to note...", "As we've seen...". Write directly and specifically.
+11. **NO FILLER LANGUAGE & HUMAN EDITORIAL VOICE.** Do not write "In this section we'll explore...", "Let's dive in...", "It's important to note...", "As we've seen...", or AI clichés ("delve", "tapestry", "testament", "landscape", "crucial", "pivotal", "foster", "moreover", "furthermore", "not only... but also", "it's not about X, it's about Y", or "In summary,"). Write directly and specifically with natural human sentence-length burstiness (mix crisp 5–8 word declarative sentences with longer 22–32 word analytical sentences) and concrete transitive verbs.
 
 12. **SUBSTEPS MUST BE ACTIONABLE.** Use one substep per necessary action with no fixed count or maximum length. Each must contain at least 12 substantive words and should target 20-60 words while retaining any detail genuinely needed for execution. BAD: "Practice regularly". GOOD: "Set a 20-minute timer and write 3 application scenarios for this concept to your current project".
 

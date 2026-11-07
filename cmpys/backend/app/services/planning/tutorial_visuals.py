@@ -11,6 +11,7 @@ No remote image download or extra media-generation request is needed.
 from __future__ import annotations
 
 import re
+import textwrap
 from typing import Mapping
 
 from app.services.content_quality import PLAN_DETAIL_SECTION_ROWS
@@ -41,6 +42,88 @@ def normalize_native_fences(text: str, *, units: frozenset[str] | set[str] = fro
         start, end = match.start(2) - match.start(), match.end(2) - match.start()
         return match[0][:start] + normalize_fence(match[1], match[2], units=units) + match[0][end:]
     return _FENCE.sub(rewrite, text or "")
+
+
+# "steps", "steps:" or "check: Q: ..." (the first body line after the colon).
+_BARE_LABEL = re.compile(r"[ \t]*(" + "|".join(BLOCK_KINDS) + r")[ \t]*(?::[ \t]*(.*?))?[ \t]*", re.I)
+_CHECK_LINE = re.compile(r"[ \t]*(?:-\s+\[[ xX]\]\s+\S.*|answer\s*:.*)", re.I)
+_FENCE_LINE = re.compile(r"[ \t]*```")
+# The first body line a bare label must be followed by before it is fenced.
+# Anything else stays prose, so a missing block is still reported as missing.
+_BARE_BODY_START = {
+    "formula": re.compile(r"title\s*:.*|[=+\-−±×÷]\s+\S.*", re.I),
+    "chart": re.compile(r"(?:type|title)\s*:.*", re.I),
+    "steps": re.compile(r"title\s*:.*|[^|]*\|.*", re.I),
+    "check": re.compile(r"Q\s*:.*", re.I),
+    "diagram": re.compile(r"\[[^\[\]]{1,80}\]"),
+}
+
+
+def _bare_body_fits(kind: str, body: list[str]) -> bool:
+    first = body[0].strip()
+    if kind == "comparison":
+        # A heading, then its first "- item".
+        return (len(body) > 1 and not re.match(r"[-•]\s", first)
+                and re.match(r"[-•]\s+\S", body[1].strip()) is not None)
+    return _BARE_BODY_START[kind].fullmatch(first) is not None
+
+
+def _is_bare_check(body: list[str]) -> bool:
+    """A label-less check paragraph: Q:, two or more options (or one answer line), Why: last."""
+    rows = [row for row in body if row.strip()]
+    return (len(rows) >= 3 and _BARE_BODY_START["check"].fullmatch(rows[0].strip()) is not None
+            and re.match(r"[ \t]*Why\s*:\s*\S", rows[-1], re.I) is not None
+            and all(_CHECK_LINE.fullmatch(row) for row in rows[1:-1])
+            and (len(rows) >= 4 or re.match(r"[ \t]*answer\s*:", rows[1], re.I) is not None))
+
+
+def wrap_bare_block_labels(text: str) -> str:
+    """Fence a block written as a bare ``kind`` / ``kind:`` label line.
+
+    Drafts sometimes write ``steps:`` and the block lines without backticks.
+    Only a label line that starts a paragraph (start of field or after a
+    blank line), outside any fence, and whose next line (or the text after
+    ``kind:`` on the same line) opens that kind's grammar (see
+    ``_BARE_BODY_START``) is wrapped: its paragraph becomes the fence body,
+    lines trimmed (a diagram keeps relative indentation), and a check also
+    takes one following ``Why:`` paragraph after a single blank line. A
+    label-less paragraph that is exactly a check (``Q:``, options, ``Why:``)
+    is fenced too. Everything else is left unchanged, and the fenced body is
+    still validated in full.
+    """
+    lines = (text or "").split("\n")
+    out: list[str] = []
+    index, in_fence = 0, False
+    while index < len(lines):
+        line = lines[index]
+        if _FENCE_LINE.match(line):
+            in_fence = not in_fence
+        label = None if in_fence else _BARE_LABEL.fullmatch(line)
+        paragraph_start = index == 0 or not lines[index - 1].strip()
+        unlabeled_check = (not in_fence and not label and paragraph_start
+                           and _BARE_BODY_START["check"].fullmatch(line.strip()) is not None)
+        if (label or unlabeled_check) and paragraph_start:
+            kind = label[1].lower() if label else "check"
+            end = index + 1
+            while end < len(lines) and lines[end].strip() and not _FENCE_LINE.match(lines[end]):
+                end += 1
+            first = [label[2]] if label and label[2] else [] if label else [line]
+            body = first + lines[index + 1:end]
+            if (kind == "check" and end + 1 < len(lines) and not lines[end].strip()
+                    and re.match(r"[ \t]*Why\s*:", lines[end + 1], re.I)):
+                tail = end + 1
+                while tail < len(lines) and lines[tail].strip() and not _FENCE_LINE.match(lines[tail]):
+                    tail += 1
+                body, end = body + lines[end + 1:tail], tail
+            if body and _bare_body_fits(kind, body) and (label or _is_bare_check(body)):
+                body = (textwrap.dedent("\n".join(body)).split("\n") if kind == "diagram"
+                        else [row.strip() for row in body])
+                out.extend(["```" + kind, *body, "```"])
+                index = end
+                continue
+        out.append(line)
+        index += 1
+    return "\n".join(out)
 
 
 def lesson_sections(markdown: str) -> dict[str, str]:

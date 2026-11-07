@@ -80,10 +80,9 @@ class GroundedDiscovery:
     model: str
 
 
-# Same reasoning-model headroom the generation stages use: ox-alpha spends part of
-# the completion budget thinking before emitting JSON, and a ceiling sized for the
-# answer alone comes back as "Empty response from OPENROUTER" rather than as a
-# short answer. max_tokens is a cap, not a target -- providers bill what is
+# Same reasoning-model headroom the generation stages use: a reasoning model spends
+# part of the completion budget thinking before emitting JSON, and a ceiling sized
+# for the answer alone comes back as an empty response rather than a short answer. max_tokens is a cap, not a target -- providers bill what is
 # actually generated, so the extra headroom is free for models that never use it.
 CURRICULUM_STRUCTURED_MAX_TOKENS = 16000
 
@@ -689,24 +688,18 @@ async def curate_research_manifest(
         for source in allowed_sources.values()
     ]
     if recovery_route is not None:
+        from app.services.curriculum.generation import recovery_route_client, supported_recovery_route
+
         from app.services.llm.recovery import CompleteRecoveryClient
-        if (
-            recovery_route.get("provider") != "gemini"
-            or recovery_route.get("model") != settings.gemini_quality_model
-            or recovery_route.get("from_provider") != "openlux"
-            or not settings.gemini_api_key
-        ):
+
+        if not supported_recovery_route(recovery_route):
             raise ValueError("unsupported research curation recovery route")
-        client = CompleteRecoveryClient(
-            model=settings.gemini_quality_model, timeout=120,
-            max_tokens=CURRICULUM_STRUCTURED_MAX_TOKENS,
-            thinking_level="low", temperature=0.1,
-        )
+        client = CompleteRecoveryClient(recovery_route_client(
+            recovery_route, timeout=120, max_tokens=CURRICULUM_STRUCTURED_MAX_TOKENS, thinking_level="low"))
     else:
         client = get_llm_client(
-            tier=tier, timeout=90,
+            operation="curriculum_research_curation", tier=tier, timeout=90,
             max_tokens=CURRICULUM_STRUCTURED_MAX_TOKENS,
-            temperature=0.1,
         )
     async with asyncio.timeout(125 if recovery_route else 185):
         validated, response = await client.generate_and_validate(
@@ -734,7 +727,7 @@ async def curate_research_manifest(
         )
     if recovery_route:
         response.retried = True
-        response.fallback_from_provider = "openlux"
+        response.fallback_from_provider = recovery_route.get("from_provider")
         response.fallback_error = recovery_route.get("reason")
     await record_llm_response(
         operation="curriculum_research_curation",
@@ -878,24 +871,16 @@ async def verify_research_manifest(
         for claim in manifest.claims
     ]
     if recovery_route is not None:
-        from app.services.llm.client import GeminiLLMClient
+        from app.services.curriculum.generation import recovery_route_client, supported_recovery_route
 
-        if (
-            recovery_route.get("provider") != "gemini"
-            or recovery_route.get("model") != settings.gemini_quality_model
-            or recovery_route.get("from_provider") != "openlux"
-            or not settings.gemini_api_key
-        ):
+        if not supported_recovery_route(recovery_route):
             raise ValueError("unsupported research verification recovery route")
-        client = GeminiLLMClient(
-            model=settings.gemini_quality_model, timeout=120,
-            max_tokens=CURRICULUM_STRUCTURED_MAX_TOKENS,
-            thinking_level="high", temperature=0.0,
-        )
+        client = recovery_route_client(recovery_route, timeout=120, max_tokens=CURRICULUM_STRUCTURED_MAX_TOKENS,
+                                       thinking_level="high")
     else:
         client = get_llm_client(
-            tier=tier, timeout=90,
-            max_tokens=CURRICULUM_STRUCTURED_MAX_TOKENS, temperature=0.0,
+            operation="curriculum_research_claim_verification", tier=tier, timeout=90,
+            max_tokens=CURRICULUM_STRUCTURED_MAX_TOKENS,
         )
     async with asyncio.timeout(125 if recovery_route else 185):
         validated, response = await client.generate_and_validate(
@@ -909,7 +894,7 @@ async def verify_research_manifest(
         )
     if recovery_route:
         response.retried = True
-        response.fallback_from_provider = "openlux"
+        response.fallback_from_provider = recovery_route.get("from_provider")
         response.fallback_from_model = recovery_route.get("from_model")
         response.fallback_error = recovery_route.get("reason")
         if response.finish_reason not in {"STOP", "stop"} and not response.error:

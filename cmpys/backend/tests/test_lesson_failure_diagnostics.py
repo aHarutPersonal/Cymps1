@@ -2,7 +2,6 @@
 import copy
 import json
 from dataclasses import asdict
-from types import SimpleNamespace as NS
 from unittest.mock import AsyncMock
 
 import pytest
@@ -14,8 +13,7 @@ from app.services.planning import package_builder as builder
 from app.services.planning.activity_draft import LessonActivityDraft
 from tests.test_activity_draft import draft_payload
 from tests.test_component_draft_repair import draft
-from tests.test_json_generation_errors import client_for
-from tests.test_openlux import chunk, transport
+from tests.direct_wire import PROVIDERS, Reply, client_for, serve
 from tests.test_staged_package_builder import Factory, components, run
 
 
@@ -122,7 +120,7 @@ def test_diagnostics_are_bounded_for_many_unknown_fields():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('provider', ['zai', 'openlux'])
+@pytest.mark.parametrize('provider', PROVIDERS)
 @pytest.mark.parametrize('raw, code', [
     ('{"PRIVATE_KEY":"PRIVATE_VALUE","PRIVATE_KEY":2}', 'duplicate_property'),
     ('{"value":NaN}', 'non_finite_number'),
@@ -132,18 +130,19 @@ def test_diagnostics_are_bounded_for_many_unknown_fields():
 ])
 async def test_real_collector_reports_precise_safe_protocol_category(monkeypatch, provider, raw, code):
     monkeypatch.setattr('app.services.llm.telemetry.record_llm_response', AsyncMock(return_value=True))
+    monkeypatch.setattr('app.core.config.settings.llm_admission_limits', {})
     client = client_for(provider)
-    usage = NS(prompt_tokens=31, completion_tokens=47, total_tokens=78)
-    stream, _ = transport(monkeypatch, client, [chunk(raw, 'stop'), NS(choices=[], usage=usage)])
+    wire = serve(client, Reply(raw, 'stop'))
     response = await client.generate_json('System', 'User')
     assert response.data == {} and response.error and not response.json_valid
-    assert response.total_tokens == 78 and stream.closed
+    assert response.total_tokens == 78 and all(stream.closed for stream in wire.streams)
     assert response.effective_parameters['json_protocol_error'] == code
     diagnostics = builder._provider_correction_diagnostics(response)
     assert diagnostics[0]['code'] == code
     record = usage_record_from_response(operation='offline', response=response)
     assert 'PRIVATE_' not in json.dumps(asdict(record))
     assert 'PRIVATE_' not in json.dumps(diagnostics)
+    assert 'PRIVATE_' not in response.error
     assert response.retryable is None
 
 

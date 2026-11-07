@@ -256,19 +256,15 @@ _FREE_ROUTE_STAGE_RESERVE_USD = 0.005
 
 def generation_route_bills() -> bool:
     """Whether the configured generation provider actually charges per token."""
+    from app.services.llm.client import provider_model
     from app.services.llm.pricing import price_card_for_model
+    from app.services.llm.routes import route_for
 
-    provider = str(settings.llm_provider or "").casefold()
-    model = {
-        "openrouter": settings.openrouter_model,
-        "yunwu": settings.yunwu_model,
-        "gemini": settings.gemini_model,
-        "openai": settings.openai_model,
-    }.get(provider)
-    if not model:
+    if settings.llm_provider != "routed":
         return True
+    provider = route_for("curriculum_module_draft")[0]
     try:
-        card = price_card_for_model(str(model), provider=provider)
+        card = price_card_for_model(provider_model(provider), provider=provider)
         input_rate, output_rate = card.token_rates(1000)
     except Exception:
         # Unknown pricing must not be mistaken for free.
@@ -283,7 +279,7 @@ def curriculum_stage_reserve_usd(stage: str | None = None) -> float:
         if stage == "factual_review" and settings.curriculum_parallel_reviews:
             base += _STAGE_RESERVE_USD["pedagogy_review"]
         # Reserving Gemini-sized money for stages served by a free route starves
-        # admission on spend that will never happen: with OpenRouter serving
+        # admission on spend that will never happen: with a free gateway serving
         # generation, ~$0.225 per job was held against ~$0.06 of real search
         # cost, so the daily ceiling was reached having spent a fraction of it.
         if (

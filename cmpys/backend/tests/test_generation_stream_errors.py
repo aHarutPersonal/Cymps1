@@ -1,20 +1,38 @@
 """Provider billing failures must not become reconnect/retry loops."""
-import httpx
 import pytest
-from openai import RateLimitError
 
 from app.api.v1.sessions import _results_error_event
-from app.services.llm.openlux import OpenLuxStreamError
+from app.core.config import settings
+from app.services.llm.protocol import ProviderStreamError
+from tests.direct_wire import PROVIDERS, Reply, client_for, serve
+from tests.test_json_generation_errors import api_error, credit_error
 
 
+async def stream_failure(provider, error):
+    """The ``ProviderStreamError`` a direct client raises for an SDK error."""
+    client = client_for(provider)
+    serve(client, Reply(usage=None, open_error=error))
+    with pytest.raises(ProviderStreamError) as raised:
+        async for _ in client.stream_text("System", "User", operation="comparison_stream"):
+            pass
+    return raised.value
+
+
+@pytest.fixture(autouse=True)
+def quiet(monkeypatch):
+    monkeypatch.setattr(settings, "llm_admission_limits", {})
+    monkeypatch.setattr("app.services.llm.telemetry.record_usage_records", _ignore)
+
+
+async def _ignore(*_, **__):
+    return True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", PROVIDERS)
 @pytest.mark.parametrize("nested", [False, True])
-def test_exhausted_credit_is_not_transient_or_exposed(nested):
-    details = {"code": "1113", "message": "PRIVATE prompt and credential"}
-    error = RateLimitError(
-        "PRIVATE", response=httpx.Response(429, request=httpx.Request("POST", "https://example.test")),
-        body={"error": details} if nested else details,
-    )
-    wrapped = OpenLuxStreamError(error, "zai")
+async def test_exhausted_credit_is_not_transient_or_exposed(provider, nested):
+    wrapped = await stream_failure(provider, credit_error(provider, nested=nested))
     event = _results_error_event(wrapped, "comparison")
     assert event["code"] == "generation_unavailable"
     assert event["retryable"] is False
@@ -23,17 +41,16 @@ def test_exhausted_credit_is_not_transient_or_exposed(nested):
     assert "PRIVATE" not in str(wrapped) + str(event)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", PROVIDERS)
 @pytest.mark.parametrize("header,expected", [("120", 120), ("invalid", 60), ("-1", 1), ("99999", 3600)])
-def test_transient_limit_preserves_bounded_retry_delay(header, expected):
-    error = RateLimitError(
-        "PRIVATE", response=httpx.Response(429, headers={"retry-after": header}, request=httpx.Request("POST", "https://example.test")),
-        body={"code": "1302", "message": "PRIVATE"},
-    )
-    event = _results_error_event(OpenLuxStreamError(error, "zai"), "blueprint")
+async def test_transient_limit_preserves_bounded_retry_delay(provider, header, expected):
+    error = api_error(provider, 429, {"code": "rate_limit_exceeded", "message": "PRIVATE"}, header)
+    event = _results_error_event(await stream_failure(provider, error), "blueprint")
     assert event["code"] == "generation_rate_limited"
     assert event["retryable"] is True
-    assert event["retry_after_seconds"] == expected
     assert "PRIVATE" not in str(event)
+    assert event.get("retry_after_seconds") == expected
 
 
 def test_unknown_failure_stays_generic_and_private():
@@ -75,8 +92,8 @@ async def test_unavailable_stream_preserves_saved_work_and_never_dispatches(monk
 
     async def fail(*args, **kwargs):
         yield "Unfinished output"
-        raise OpenLuxStreamError(RateLimitError("PRIVATE", body={"code": "1113"},
-            response=httpx.Response(429, request=httpx.Request("POST", "https://example.test"))), "zai")
+        raise ProviderStreamError("openai", "GenerationUnavailable", code="generation_unavailable",
+                                  retryable=False)
 
     monkeypatch.setattr(api, f"{section}_stream", fail)
     response = await api.generate_results("session-1", db, SimpleNamespace(id="user-1"))

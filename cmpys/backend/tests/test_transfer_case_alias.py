@@ -5,6 +5,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from tests.phase0_fixtures import model_binder_mechanics  # noqa: F401
+
+# Phase 0.4 binds exact computed values in code; these tests exercise the model
+# binder's mechanics, so they keep the earlier server bindings (tests/phase0_fixtures.py).
+pytestmark = pytest.mark.usefixtures("model_binder_mechanics")
+
 from app.services.llm.client import LLMResponse
 from app.services.planning.lesson_package import LessonPackage
 from app.services.planning.lesson_review import normalize_evidence_case_aliases, review_lesson

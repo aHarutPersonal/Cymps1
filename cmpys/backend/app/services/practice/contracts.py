@@ -21,11 +21,18 @@ class Datum(StrictModel):
     unit: str = Field(default="", max_length=40)
 
 
+# Typeset notation evaluates like its ASCII spelling: "a × b", "a ÷ 2", "a − b",
+# and "x ^ 2" (a power, never XOR). Only squares and cubes are supported.
+_TYPESET_OPERATORS = str.maketrans({"×": "*", "÷": "/", "−": "-", "·": "*", "⋅": "*", "^": "**"})
+_POWER_EXPONENTS = (2, 3)
+
+
 def calculate(expression: str, data: dict[str, float], *, allow_comparisons: bool = False) -> float:
     """Evaluate bounded arithmetic only. Never execute generated/user code."""
     try:
-        tree = ast.parse(expression, mode="eval")
-    except (SyntaxError, RecursionError) as exc:
+        tree = ast.parse(expression.translate(_TYPESET_OPERATORS) if isinstance(expression, str) else expression,
+                         mode="eval")
+    except (SyntaxError, RecursionError, TypeError) as exc:
         raise ValueError("Invalid arithmetic expression") from exc
     if len(list(ast.walk(tree))) > 64:
         raise ValueError("Expression is too complex")
@@ -49,6 +56,10 @@ def calculate(expression: str, data: dict[str, float], *, allow_comparisons: boo
             result = visit(node.operand) * (-1 if isinstance(node.op, ast.USub) else 1)
         elif isinstance(node, ast.BinOp) and type(node.op) in operations:
             result = operations[type(node.op)](visit(node.left), visit(node.right))
+        elif (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow)
+              and isinstance(node.right, ast.Constant) and type(node.right.value) is int
+              and node.right.value in _POWER_EXPONENTS):
+            result = visit(node.left) ** node.right.value
         elif allow_comparisons and isinstance(node, ast.Compare) and len(node.ops) == 1:
             comparisons = {ast.Lt: operator.lt, ast.LtE: operator.le,
                            ast.Gt: operator.gt, ast.GtE: operator.ge,

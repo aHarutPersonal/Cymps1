@@ -1,0 +1,141 @@
+{
+  "original": {
+    "id": "transfer_narrowing",
+    "title": "Narrow the centre notice yourself",
+    "kind": "transfer",
+    "instructions": "Original fictional case. A notice taped to a community centre door reads: \"The community centre should offer more evening programmes because people are busy during the day.\"\n\nWrite your own one-sentence narrowed version of this claim. Build all three checklist elements yourself: name a concrete actor or decision-maker (for example, the centre's programme coordinator), propose one specific trial action with a bounded scope the centre could actually run, and name a result an outsider could check (for instance, a sign-in count after a few trial evenings). Any sensible observable result works — an attendance tally, a survey count, a sign-in sheet — and any reasonable trial length stated in words.\n\nThen decide which single checklist item a sceptical reader would most likely challenge first in your sentence.",
+    "data": [],
+    "hint": "Start by naming who could actually decide this, then give them one bounded trial to run, and finish with something a stranger could count or read to judge whether it worked.",
+    "minutes_min": 2,
+    "minutes_max": 3,
+    "fields": [
+      {
+        "id": "narrowed_claim",
+        "label": "Your one-sentence narrowed claim",
+        "kind": "text",
+        "criteria": [
+          "Names a concrete actor or decision-maker who could actually run the decision, such as the centre's programme coordinator",
+          "Proposes one specific trial action with a bounded scope the centre could really run, such as a short series of trial evenings",
+          "Names a result an outsider could check, such as a sign-in count, survey tally or attendance figure"
+        ],
+        "explanation": "A model answer is: \"The centre's programme coordinator should run four trial evening programmes this autumn and check the sign-in count from those evenings before deciding to continue.\" It names the actor who can decide (the coordinator), sets one bounded trial action (four trial evenings this autumn) the centre could actually staff, and ends with a result an outsider could verify from the sign-in sheets. Any equivalent sentence works if it fixes an actor, one runnable trial and a checkable result; hedging words or extra detail alone do not narrow a claim — testability does. The misconception this resolves is that narrowing means adding detail or softer language, when it actually means making the claim something someone could check.",
+        "hint": null
+      },
+      {
+        "id": "first_challenge",
+        "label": "Which single checklist item would a sceptical reader challenge first in your sentence?",
+        "kind": "choice",
+        "choices": [
+          {
+            "id": "actor",
+            "label": "The actor is not the one who can decide"
+          },
+          {
+            "id": "action",
+            "label": "The action is not specific enough to run"
+          },
+          {
+            "id": "result",
+            "label": "The result is not observable"
+          }
+        ],
+        "correct_choice": "result",
+        "rubric_criterion": "Names a defensible first challenge tied to the learner's own sentence",
+        "explanation": "In the model answer the weakest point for a sceptic is the result: a sign-in count measures who attended, not whether evening timing helped people who were busy during the day, so a reader would push on what the count actually proves. Accept the actor option if your sentence named a general body like \"the centre\" rather than a specific decision-maker, or the action option if your trial was open-ended rather than bounded. All three are defensible when tied to your own wording; what matters is that you can point to the words a sceptic would seize on, not that a longer sentence sounds safer.",
+        "hint": null
+      }
+    ]
+  },
+  "two_text_repair": {
+    "id": "transfer_narrowing",
+    "title": "Narrow the centre notice yourself",
+    "kind": "transfer",
+    "instructions": "Original fictional case. A notice taped to a community centre door reads: \"The community centre should offer more evening programmes because people are busy during the day.\"\n\nWrite your own one-sentence narrowed version of this claim. Build all three checklist elements yourself: name a concrete actor or decision-maker (for example, the centre's programme coordinator), propose one specific trial action with a bounded scope the centre could actually run, and name a result an outsider could check (for instance, a sign-in count after a few trial evenings). Any sensible observable result works — an attendance tally, a survey count, a sign-in sheet — and any reasonable trial length stated in words.\n\nThen decide which single checklist item a sceptical reader would most likely challenge first in your sentence.",
+    "data": [],
+    "hint": "Start by naming who could actually decide this, then give them one bounded trial to run, and finish with something a stranger could count or read to judge whether it worked.",
+    "minutes_min": 2,
+    "minutes_max": 3,
+    "diagram": null,
+    "fields": [
+      {
+        "id": "narrowed_claim",
+        "label": "Your one-sentence narrowed claim",
+        "unit": "",
+        "rubric_criterion": null,
+        "hint": null,
+        "explanation": "A model answer is: \"The centre's programme coordinator should run four trial evening programmes this autumn and check the sign-in count from those evenings before deciding to continue.\" It names the actor who can decide (the coordinator), sets one bounded trial action (four trial evenings this autumn) the centre could actually staff, and ends with a result an outsider could verify from the sign-in sheets. Any equivalent sentence works if it fixes an actor, one runnable trial and a checkable result; hedging words or extra detail alone do not narrow a claim — testability does. The misconception this resolves is that narrowing means adding detail or softer language, when it actually means making the claim something someone could check.",
+        "kind": "text",
+        "criteria": [
+          "Names a concrete actor or decision-maker who could actually run the decision, such as the centre's programme coordinator",
+          "Proposes one specific trial action with a bounded scope the centre could really run, such as a short series of trial evenings",
+          "Names a result an outsider could check, such as a sign-in count, survey tally or attendance figure"
+        ]
+      },
+      {
+        "id": "first_challenge",
+        "label": "Which checklist item would a sceptical reader challenge first in your sentence, and why?",
+        "unit": "",
+        "rubric_criterion": "Names one checklist item (actor, action, or result) and justifies it as the weakest link by pointing to specific words in the learner's own sentence",
+        "hint": null,
+        "explanation": "Which item a sceptic seizes on depends on the wording you wrote, so there is no single hidden key — actor, action and result can all be defensible first challenges. In the model answer the weakest point is the result: a sign-in count measures who attended, not whether evening timing helped people who were busy during the day. But if your sentence named a vague body like \"the centre\" instead of a specific decision-maker, the actor is your defensible first challenge; if your trial was open-ended with no bounded scope, the action is. What earns credit is pointing to the actual words a sceptic would seize on and explaining why they are the weakest link, not hedging across all three. The misconception this resolves is that self-critique means listing every possible weakness, when it actually means naming the one place your own sentence is most vulnerable.",
+        "kind": "text",
+        "criteria": [
+          "Names one specific checklist item — actor, action, or result — as the first thing a sceptical reader would challenge",
+          "Points to the actual words in your own one-sentence claim that a sceptic would seize on",
+          "Explains in a sentence or two why that item is the weakest link in your wording, for example what your named result does or does not actually measure"
+        ]
+      }
+    ]
+  },
+  "rationalized_key_repair": {
+    "id": "transfer_narrowing",
+    "title": "Narrow the centre notice yourself",
+    "kind": "transfer",
+    "instructions": "Original fictional case. A notice taped to a community centre door reads: \"The community centre should offer more evening programmes because people are busy during the day.\"\n\nWrite your own one-sentence narrowed version of this claim. Build all three checklist elements yourself: name a concrete actor or decision-maker (for example, the centre's programme coordinator), propose one specific trial action with a bounded scope the centre could actually run, and name a result an outsider could check (for instance, a sign-in count after a few trial evenings). Any sensible observable result works — an attendance tally, a survey count, a sign-in sheet — and any reasonable trial length stated in words.\n\nThen decide which single checklist item a sceptical reader would most likely challenge first in your sentence.",
+    "data": [],
+    "hint": "Start by naming who could actually decide this, then give them one bounded trial to run, and finish with something a stranger could count or read to judge whether it worked.",
+    "minutes_min": 2,
+    "minutes_max": 3,
+    "diagram": null,
+    "fields": [
+      {
+        "id": "narrowed_claim",
+        "label": "Your one-sentence narrowed claim",
+        "unit": "",
+        "rubric_criterion": null,
+        "hint": null,
+        "explanation": "A model answer is: \"The centre's programme coordinator should run four trial evening programmes this autumn and check the sign-in count from those evenings before deciding to continue.\" It names the actor who can decide (the coordinator), sets one bounded trial action (four trial evenings this autumn) the centre could actually staff, and ends with a result an outsider could verify from the sign-in sheets. Any equivalent sentence works if it fixes an actor, one runnable trial and a checkable result; hedging words or extra detail alone do not narrow a claim — testability does. The misconception this resolves is that narrowing means adding detail or softer language, when it actually means making the claim something someone could check.",
+        "kind": "text",
+        "criteria": [
+          "Names a concrete actor or decision-maker who could actually run the decision, such as the centre's programme coordinator",
+          "Proposes one specific trial action with a bounded scope the centre could really run, such as a short series of trial evenings",
+          "Names a result an outsider could check, such as a sign-in count, survey tally or attendance figure"
+        ]
+      },
+      {
+        "id": "first_challenge",
+        "label": "Which single checklist item would a sceptical reader challenge first in your sentence?",
+        "unit": "",
+        "rubric_criterion": "Identifies the result as the first item a sceptic would challenge, because any observable count of trial-evening use shows attendance but not whether evening timing reaches people who were busy during the day.",
+        "hint": null,
+        "explanation": "The result is the first thing a sceptic challenges, whatever your exact wording. The notice's reason is that people are busy during the day, so the claim stands or falls on whether evening timing specifically helps busy daytime people. But the observable results this task invites — a sign-in count, an attendance tally, a survey count — measure only how many people showed up, not whether they were the weekday-busy people the claim is about. A sceptic will seize on that gap before questioning your actor or your trial, because even a perfectly run trial with a named coordinator proves nothing if its count cannot answer the claim's actual reason. That is why the result is the correct single answer here, not because the other items never fail, but because the result fails in the same way for every well-formed version of this sentence.",
+        "kind": "choice",
+        "choices": [
+          {
+            "id": "actor",
+            "label": "The actor is not the one who can decide"
+          },
+          {
+            "id": "action",
+            "label": "The action is not specific enough to run"
+          },
+          {
+            "id": "result",
+            "label": "The result is not observable"
+          }
+        ],
+        "correct_choice": "result"
+      }
+    ]
+  }
+}

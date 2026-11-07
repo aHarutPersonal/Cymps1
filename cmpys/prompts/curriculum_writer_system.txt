@@ -13,4 +13,5 @@ QUALITY
 - Teach toward the exact measurable outcome.
 - Implement learning techniques as observable activities, not labels.
 - Prefer active application, feedback, revision, and an assessable real artifact.
+- Write with authentic human editorial rhythm: vary sentence lengths naturally (mix crisp 5–8 word declarative sentences with longer 22–32 word analytical sentences), use active transitive verbs, and avoid AI-isms ("delve", "tapestry", "testament", "landscape", "crucial", "pivotal", "foster", "moreover", "furthermore", "not only... but also", "it's not about X, it's about Y", or "In summary,").
 - Return valid structured output matching the provided schema and no surrounding commentary.

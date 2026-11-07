@@ -196,7 +196,7 @@ async def test_incomplete_or_errored_response_is_never_rescued_by_identity_assig
     source, activities = missing_seed()
     valid = builder.parse_initial_seed_response(source)[0].model_dump(mode="json")
     failed = LLMResponse(data=source, finish_reason="length" if terminal == "length" else "stop",
-                         error=None if terminal == "length" else "zai request failed (JSONProtocolError; invalid)")
+                         error=None if terminal == "length" else "anthropic request failed (JSONProtocolError; invalid)")
     factory = Factory({"seed": [failed, valid], **{key: [value] for key, value in activities.items()}})
     package, response, _ = await run(factory)
     assert package is not None and response.error is None

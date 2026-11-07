@@ -389,8 +389,7 @@ async def _run_ai_comparison(
         prompt_name="comparison_analyze.txt",
     )
     
-    # Use the unified LLM client
-    client = get_llm_client(timeout=90.0)
+    client = get_llm_client(operation="comparison_analysis", timeout=90.0)
     
     validated, response = await client.generate_and_validate(
         system_prompt="You are an expert life coach. Return only valid JSON, no markdown code blocks.",

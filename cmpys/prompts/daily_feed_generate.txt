@@ -16,6 +16,7 @@ RULES FOR EACH INSIGHT:
 5. **Vary the categories when supported.** Use up to 3 distinct categories across the set
    (Mindset, Strategy, Leadership, Productivity, Finance, Creativity, Discipline, Growth).
 6. **Never repeat the same insight** or restate another card with new words.
+7. **Write with human editorial sharpness.** Mix short, punchy 4–7 word sentences with specific cause-and-effect sentences. Ban AI clichés ("delve", "tapestry", "testament", "underscore", "pivotal", "crucial", "landscape", "unlock") and negative parallelisms ("It is not X, it is Y").
 
 ANTI-FABRICATION (CRITICAL):
 - Use only the supplied documented evidence for attributed principles, habits, and biographical claims.

@@ -86,7 +86,7 @@ async def run_profile_extraction(
     Returns:
         ProfileExtractionResponse or None if extraction fails
     """
-    client = client or get_llm_client()
+    client = client or get_llm_client(operation="idol_profile_extraction")
     
     # Load prompt templates
     system_prompt = load_prompt("extractor_system")
@@ -151,7 +151,7 @@ async def run_achievements_extraction(
     Returns:
         AchievementsExtractionResponse or None if extraction fails
     """
-    client = client or get_llm_client()
+    client = client or get_llm_client(operation="idol_achievements_extraction")
     
     # Load prompt templates
     system_prompt = load_prompt("extractor_system")
@@ -209,7 +209,7 @@ async def run_timeline_normalize(
     Returns:
         TimelineNormalizationResponse or None if normalization fails
     """
-    client = client or get_llm_client()
+    client = client or get_llm_client(operation="idol_timeline_normalization")
     
     # Load prompt templates
     system_prompt = load_prompt("extractor_system")
@@ -271,7 +271,7 @@ async def run_milestones_by_age(
     Returns:
         MilestonesByAgeResponse or None if query fails
     """
-    client = client or get_llm_client()
+    client = client or get_llm_client(operation="idol_milestones_by_age")
     
     # Load prompt templates
     system_prompt = load_prompt("extractor_system")
@@ -333,7 +333,7 @@ async def run_persona_pack(
     Returns:
         PersonaPackResponse or None if generation fails
     """
-    client = client or get_llm_client()
+    client = client or get_llm_client(operation="idol_persona_generation")
     
     # Load prompt templates
     system_prompt = load_prompt("extractor_system")

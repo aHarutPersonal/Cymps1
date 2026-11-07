@@ -551,17 +551,13 @@ def test_parallel_outline_rejects_unapproved_resource_names() -> None:
     assert "resources" in response.error
 
 
-def test_writing_uses_tiered_modern_thinking_levels(monkeypatch) -> None:
-    monkeypatch.setattr("app.tasks.plans.settings.llm_provider", "dummy")
+@pytest.mark.parametrize("provider", ["dummy", "routed"])
+def test_writing_uses_tiered_modern_thinking_levels(monkeypatch, provider) -> None:
+    # One tier table for every provider: the GLM-only "low" override is gone.
+    monkeypatch.setattr("app.tasks.plans.settings.llm_provider", provider)
     assert _writing_thinking_level("fast") == "minimal"
     assert _writing_thinking_level("balanced") == "minimal"
     assert _writing_thinking_level("quality") == "high"
-
-
-@pytest.mark.parametrize("tier", ["fast", "balanced", "quality"])
-def test_zai_writing_keeps_corrections_within_the_generation_budget(monkeypatch, tier):
-    monkeypatch.setattr("app.tasks.plans.settings.llm_provider", "zai")
-    assert _writing_thinking_level(tier) == "low"
 
 
 @pytest.mark.asyncio
@@ -948,15 +944,17 @@ async def test_parallel_generation_retries_only_the_failed_lesson() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider_error,recovers", [
-    ("zai request failed (TimeoutError; finish=missing)", True),
-    ("zai request failed (JSONDecodeError; finish=stop)", False),
+    ("anthropic request failed (TimeoutError; finish=missing)", True),
+    ("anthropic request failed (JSONDecodeError; finish=stop)", False),
 ])
 async def test_group_retry_does_not_change_provider_or_repeat_other_groups(monkeypatch, provider_error, recovers):
     from app.services.llm import recovery
     from app.services.llm.client import LLMResponse
     from app.services.planning.lesson_review import LessonReview
 
-    monkeypatch.setattr(recovery.settings, "gemini_api_key", "test-only")
+    # A configured backup model: a section retry must still not switch to it.
+    monkeypatch.setattr(recovery.settings, "llm_provider", "routed")
+    monkeypatch.setattr(recovery.settings, "openai_api_key", "test-only")
     attempts = {}
     recovered = []
 
@@ -967,12 +965,13 @@ async def test_group_retry_does_not_change_provider_or_repeat_other_groups(monke
         @section_client
         async def generate_json(self, **kwargs):
             recovered.append(kwargs)
-            return LLMResponse(data=_lesson_sections_payload(), provider="gemini")
+            return LLMResponse(data=_lesson_sections_payload(), provider="openai")
 
     monkeypatch.setattr(recovery, "CompleteRecoveryClient", RecoveryClient)
 
     class Client:
-        model = "zai-test"
+        model = "claude-haiku-5-5"
+        provider_name = "anthropic"
         @section_client
         async def generate_json(self, *, output_model, user_prompt, **kwargs):
             if output_model is LessonPackage:
@@ -985,8 +984,8 @@ async def test_group_retry_does_not_change_provider_or_repeat_other_groups(monke
             step = next(s["id"] for s in _outline_payload()["steps"] if f'"id":"{s["id"]}"' in user_prompt)
             attempts[step] = attempts.get(step, 0) + 1
             if step == "step_1" and attempts[step] == 1:
-                return LLMResponse(data={}, error=provider_error, provider="zai")
-            return LLMResponse(data=_lesson_sections_payload(), provider="zai")
+                return LLMResponse(data={}, error=provider_error, provider="anthropic")
+            return LLMResponse(data=_lesson_sections_payload(), provider="anthropic")
 
     result, calls, error = await _generate_plan_item_details_parallel(
         system_prompt="planner", task_title="Build a validated experiment",

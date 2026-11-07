@@ -14,20 +14,20 @@ import logging
 import re
 import unicodedata
 from contextlib import nullcontext
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Awaitable, Callable, Literal, get_args
 
 from pydantic import Field, ValidationError, model_validator
 from pydantic_core import ErrorType
 
 from app.services.llm.client import LLMResponse
-from app.services.llm.openlux import incomplete_stream_error
+from app.services.llm.protocol import incomplete_stream_error, provider_request_failed
 from app.services.llm.prompt_loader import load_and_render
-from app.services.llm.routing import operation_thinking_level
 from app.services.llm.telemetry import record_llm_response
 from app.services.content_quality import TUTORIAL_LESSON_FORMAT
 from app.services.planning.lesson_package import (
-    CAPABILITIES, LessonPackage, TeachingCase, TransferIndependenceError, digest,
-    validate_derivation, validate_transfer_independence,
+    CAPABILITIES, InternalIdLeakError, LessonPackage, TeachingCase, TransferIndependenceError, digest,
+    relabel_internal_ids, require_no_internal_ids, validate_derivation, validate_transfer_independence,
 )
 from app.services.practice.contracts import Activity, Datum, SolutionDocument, StrictModel, calculate
 from app.services.planning.workload_contract import build_workload_planning_context
@@ -37,8 +37,8 @@ logger = logging.getLogger(__name__)
 _STAGE_SECONDS = 240.0
 _REQUEST_SECONDS = 90.0
 # These requested capacities plus the provider reserve form bounded combined-
-# output headroom, not a guaranteed visible-text allowance. Z.ai adds its reserve
-# to the same shared max_tokens ceiling (currently 4,248 / 6,048 on the wire).
+# output headroom, not a guaranteed visible-text allowance. The direct clients add
+# their reasoning reserve to the same output ceiling (4,248 / 6,048 on the wire).
 # Request count, provider-active time and the one shared correction remain bound.
 _SEED_TOKENS = 2200
 _ACTIVITY_TOKENS = 4000
@@ -70,7 +70,7 @@ _EXECUTION_CONTRACT = {
     "available_inputs": "Only outline/context content and facts explicitly supplied in this activity are available now.",
     "activity_isolation": "Activities are authored independently. Other activity briefs are plans, not completed learner answers or supplied source passages.",
     "missing_feedback": "Supply clearly labeled simulated reader feedback and its original fictional passage when actual feedback is absent. A real friend's response may be optional later application only.",
-    "missing_draft": "Supply an original fictional practice draft if required draft text is absent; personal application may use the learner's own draft optionally.",
+    "missing_draft": "Assess the exact learner draft/revision named by the outline. A requested diagnostic uses its skill_diagnostics.answer, not an earlier work_sample on the same topic. Fictional fallback is allowed only if the required text is absent or substitution is permitted.",
     "source_fidelity": "A title or URL is not source text. Never invent an attributed quotation or present simulated feedback as real evidence.",
 }
 
@@ -152,6 +152,32 @@ class LessonPackageSeed(StrictModel):
         if len({case.id for case in self.teaching_cases}) != len(self.teaching_cases):
             raise ValueError("Teaching case IDs must be unique")
         return self
+
+
+class TutorialTeachingCaseError(ValueError):
+    pass
+
+
+def validate_tutorial_seed(seed: LessonPackageSeed, lesson_format: str | None) -> LessonPackageSeed:
+    if lesson_format == TUTORIAL_LESSON_FORMAT and not seed.teaching_cases:
+        raise TutorialTeachingCaseError("Tutorial seed needs a distinct public teaching case with a complete worked example")
+    if lesson_format == TUTORIAL_LESSON_FORMAT:
+        from app.services.planning.numeric_metadata import quantity_numerals
+
+        for case in seed.teaching_cases:
+            if case.data:
+                continue
+            # The shared numeral policy: identifiers ("order 418"), dates, clock
+            # times, labels ("step 1") and versions are not numeric facts.
+            quantities = quantity_numerals(case.assumptions)
+            if quantities:
+                shown = ", ".join(dict.fromkeys(text for _, _, text in quantities[:6]))
+                raise TutorialTeachingCaseError(
+                    f"Teaching case {case.id} contains numeric facts but data is empty (quantities shown: "
+                    f"{shown}); declare the raw quantities as data plus at least one result derived "
+                    "from them (data without a result is rejected), or remove every number to make a "
+                    "genuinely qualitative case")
+    return seed
 
 
 def _recover_grouped_seed_briefs(response: LLMResponse) -> LessonPackageSeed | None:
@@ -247,11 +273,18 @@ def _parse_initial_seed_response_details(data: Any) -> tuple[LessonPackageSeed, 
         return LessonPackageSeed.model_validate(data), 0, 0
     except ValidationError as exc:
         failures = exc.errors(include_input=False, include_context=False, include_url=False)
-        missing, notes = set(), set()
+        missing, notes, top_notes = set(), set(), set()
         if not failures or not isinstance(data, dict):
             raise
         for failure in failures:
             location = failure["loc"]
+            # A short top-level "<x>_note" ("activity_briefs_note": "unused") is a
+            # remark beside the seed, never seed content; drop it like an empty note.
+            if (len(location) == 1 and failure["type"] == "extra_forbidden"
+                    and str(location[0]).endswith("_note") and type(data.get(location[0])) is str
+                    and len(data[location[0]]) <= 40):
+                top_notes.add(location[0])
+                continue
             if len(location) != 3 or type(location[1]) is not int:
                 raise
             if failure["type"] == "missing" and location[0] == "teaching_cases" and location[2] == "id":
@@ -261,7 +294,7 @@ def _parse_initial_seed_response_details(data: Any) -> tuple[LessonPackageSeed, 
                 notes.add((location[1], location[2]))
             else:
                 raise
-        normalized = copy.deepcopy(data)
+        normalized = {key: value for key, value in copy.deepcopy(data).items() if key not in top_notes}
         briefs = data.get("activity_briefs")
         for index, note_key in sorted(notes):
             if (not isinstance(briefs, list) or index < 0 or index >= len(briefs)
@@ -280,7 +313,7 @@ def _parse_initial_seed_response_details(data: Any) -> tuple[LessonPackageSeed, 
             del normalized["activity_briefs"][index][note_key]
 
         if not missing:
-            return LessonPackageSeed.model_validate(normalized), 0, len(notes)
+            return LessonPackageSeed.model_validate(normalized), 0, len(notes) + len(top_notes)
 
         cases = data.get("teaching_cases")
         missing = sorted(missing)
@@ -315,31 +348,137 @@ def _parse_initial_seed_response_details(data: Any) -> tuple[LessonPackageSeed, 
             normalized["teaching_cases"][index]["id"] = identifier
         # Missing identities can suppress nested model validators on the first
         # pass. Revalidate every formula, datum, result and cross-case invariant.
-        return LessonPackageSeed.model_validate(normalized), len(missing), len(notes)
+        return LessonPackageSeed.model_validate(normalized), len(missing), len(notes) + len(top_notes)
 
 
 class UndeclaredNumbersError(ValueError):
-    """An activity shows raw numbers but declares no case data for them."""
+    """An activity shows quantities that neither its data nor its fields declare.
 
-    def __init__(self, span_count: int):
+    ``numbers`` lists (location, numeral) pairs, e.g. ("instructions", "300"),
+    so the one component correction knows exactly what to declare or remove.
+    """
+
+    def __init__(self, span_count: int, numbers: list[tuple[str, str]] | tuple = (), *, has_data: bool = False):
         super().__init__("Activity shows numbers without declared case data")
         self.span_count = span_count
+        self.numbers = list(numbers)
+        self.has_data = has_data
 
 
-def require_declared_numbers(activity: LessonPackageActivity) -> None:
-    """Reject numbers the evidence review could never bind to case data.
+def _span_location(path: tuple, activity: LessonPackageActivity) -> str:
+    """"instructions", "hint", "worked_solution" or "fields[<id>].label"."""
+    if len(path) >= 7 and path[-3] == "fields" and type(path[-2]) is int and path[-2] < len(activity.fields):
+        return f"fields[{activity.fields[path[-2]].id}].label"
+    return str(path[-1])
 
-    The review rejects any activity whose numeric spans have no raw datum IDs.
-    Catching the empty-data case here costs one component correction instead
-    of a whole package, its preflight and its repair.
+
+def _shows_declared_value(literal: str, values) -> bool:
+    """A displayed numeral equals a declared value, exactly or at its shown precision.
+
+    This is a generation-time gap check, not a proof: the evidence gate still
+    verifies every binding, so the source precision rule it applies is reused.
     """
-    if activity.data:
+    try:
+        shown = abs(Decimal(literal))
+    except InvalidOperation:
+        return False
+    for item in values:
+        actual = abs(item.value)
+        if actual == shown or item.displays(literal):
+            return True
+        try:
+            if shown.as_tuple().exponent <= 0 and actual.quantize(shown, rounding=ROUND_HALF_UP) == shown:
+                return True
+        except InvalidOperation:
+            continue
+    return False
+
+
+def _one_step_values(values) -> set[Decimal]:
+    """a ± b, a × b and a ÷ b of two raw data values, exact (no display rounding).
+
+    "900 earned, 600 paid, so 300 still owed" shows a correct derived number the
+    evidence gate can still prove with one calculation (2026-11-06 replay).
+    Only raw data pair up: a result or misconception paired with a datum
+    matches wrong answers by chance (6200 − 2800 = 3400), and a datum never
+    pairs with itself (no free doubles, 0 or 1). Two-step values and rounded
+    quotients ("33" for 100 ÷ 3) stay undeclared.
+    """
+    base = [abs(item.value) for item in values if item.kind == "datum"]
+    derived = set()
+    for index, left in enumerate(base):
+        for right in base[index + 1:]:
+            derived.update((abs(left - right), left + right, left * right))
+            derived.update(numerator / denominator for numerator, denominator in ((left, right), (right, left))
+                           if denominator)
+    return derived
+
+
+def _formula_constants(cases) -> set[Decimal]:
+    import ast
+    constants = set()
+    for case in cases:
+        expressions = [item.get("expression") for item in case.get("results", []) or [] if isinstance(item, dict)]
+        for field in case.get("fields", []) or []:
+            if isinstance(field, dict):
+                expressions.append(field.get("expression"))
+                expressions += [item.get("expression") for item in field.get("misconceptions") or []
+                                if isinstance(item, dict)]
+        for expression in expressions:
+            try:
+                tree = ast.parse(str(expression or "").translate(str.maketrans({"×": "*", "÷": "/", "−": "-", "^": "**"})),
+                                 mode="eval")
+            except (SyntaxError, ValueError, RecursionError):
+                continue
+            constants.update(Decimal(str(node.value)) for node in ast.walk(tree)
+                             if isinstance(node, ast.Constant) and type(node.value) in (int, float))
+    return constants
+
+
+def require_declared_numbers(activity: LessonPackageActivity, teaching_cases=()) -> None:
+    """Reject quantities the evidence review could never bind to declared data.
+
+    Runs on EVERY activity at generation time (Phase 0.3). A quantity numeral
+    (per the shared numeral policy) in learner-visible activity text must equal
+    a datum of this activity, a value one of its number fields or
+    misconceptions computes (or a step of that computation), one exact step
+    from two of this activity's values (``_one_step_values``), a constant that
+    one of the declared formulas uses ("÷ 2"), or a restated datum/result of a
+    public teaching case. Anything else would surface only at the paid model binder; here it
+    costs one component correction. An activity with data [] may show no
+    quantity at all, as before.
+    """
+    from app.services.planning.evidence_resolver import ServerValue, case_server_values
+    from app.services.planning.lesson_review import numeric_span_occurrences, span_quantity_literals
+    package = {"private_workbook": {"activities": [activity.model_dump(mode="json")]}}
+    spans = numeric_span_occurrences({}, package)
+    if not activity.data:
+        if spans:
+            numbers = [(_span_location(record.path, activity), literal) for record in spans
+                       for literal in span_quantity_literals(record, package)]
+            raise UndeclaredNumbersError(len(spans), numbers)
         return
-    from app.services.planning.lesson_review import numeric_span_occurrences
-    spans = numeric_span_occurrences(
-        {}, {"private_workbook": {"activities": [activity.model_dump(mode="json")]}})
-    if spans:
-        raise UndeclaredNumbersError(len(spans))
+    cases = [package["private_workbook"]["activities"][0]] + [
+        case.model_dump(mode="json") if hasattr(case, "model_dump") else case for case in teaching_cases]
+    values = case_server_values(cases[0], teaching=False)
+    for case in cases[1:]:
+        values += case_server_values(case, teaching=True)
+    # A formula constant ("÷ 2", "× 100") is declared only where a declared
+    # formula of these cases uses it; "100 credits" elsewhere is a quantity.
+    values += [ServerValue(constant, str(constant), "constant") for constant in _formula_constants(cases)]
+    one_step = _one_step_values(case_server_values(cases[0], teaching=False))
+    undeclared, owners = [], set()
+    for record in spans:
+        for literal in span_quantity_literals(record, package):
+            try:
+                derived = abs(Decimal(literal)) in one_step
+            except InvalidOperation:
+                derived = False
+            if not derived and not _shows_declared_value(literal, values):
+                undeclared.append((_span_location(record.path, activity), literal))
+                owners.add(record.claim_id)
+    if undeclared:
+        raise UndeclaredNumbersError(len(owners), list(dict.fromkeys(undeclared)), has_data=True)
 
 
 class AnswerLeakError(ValueError):
@@ -543,15 +682,17 @@ class ActivityDraftChecksError(ValueError):
         self.primary, self.checks = primary, checks
 
 
-_COMPONENT_CHECK_ERRORS = (UndeclaredNumbersError, AnswerLeakError, DerivedDataError, ActivityChecksError)
+_COMPONENT_CHECK_ERRORS = (UndeclaredNumbersError, AnswerLeakError, DerivedDataError, InternalIdLeakError,
+                           ActivityChecksError)
 
 
-def require_component_checks(activity: LessonPackageActivity) -> None:
+def require_component_checks(activity: LessonPackageActivity, teaching_cases=()) -> None:
     errors = []
-    for check in (require_declared_numbers, require_hidden_answers, require_raw_data):
+    for check in (require_declared_numbers, require_hidden_answers, require_raw_data, require_no_internal_ids):
         try:
-            check(activity)
-        except (UndeclaredNumbersError, AnswerLeakError, DerivedDataError) as exc:
+            # A restated public teaching case is declared data (Phase 0.3).
+            check(activity, teaching_cases) if check is require_declared_numbers else check(activity)
+        except (UndeclaredNumbersError, AnswerLeakError, DerivedDataError, InternalIdLeakError) as exc:
             errors.append(exc)
     if len(errors) > 1:
         raise ActivityChecksError(errors)
@@ -593,6 +734,8 @@ def _public_seed(seed: LessonPackageSeed) -> dict:
 
 
 def _diagnostics(exc: ValueError | SyntaxError) -> list[dict[str, Any]]:
+    if isinstance(exc, TutorialTeachingCaseError):
+        return [{"type": "missing_public_teaching_case", "loc": ["teaching_cases"], "message": str(exc)}]
     if isinstance(exc, TransferIndependenceError):
         return [{"type": "transfer_independence", "reason": exc.reason,
                  "public_case_ordinal": exc.public_case_ordinal,
@@ -609,11 +752,21 @@ def _diagnostics(exc: ValueError | SyntaxError) -> list[dict[str, Any]]:
             for item in failure["loc"][:8]], "message": failure["msg"]}
             for failure in exc.errors(include_input=False, include_context=False, include_url=False)[:16]]
     if isinstance(exc, UndeclaredNumbersError):
+        shown = "; ".join(f"{location} shows {number}" for location, number in exc.numbers[:12])
+        if exc.has_data:
+            return [{"type": "undeclared_numbers", "message": (
+                f"{len(exc.numbers)} number(s) in {exc.span_count} sentence(s) of the learner-visible text "
+                f"are neither a datum of this activity nor a value its fields compute: {shown}. "
+                "Declare each raw number shown as a datum in this activity's data and use it where a field "
+                "needs it, or remove the number from the text. Derived results such as rates, totals and "
+                "differences stay expressions over those data, never data. Identifiers, dates, clock times "
+                "and labels such as 'Step 2' need no declaration.")}]
         return [{"type": "undeclared_numbers", "message": (
             f"{exc.span_count} sentence(s) in the instructions, hint or explanations show numbers, "
             "but data is []. Declare every raw number shown, quoted material included, as a datum "
             "in this activity's data, or describe the fictional case without numbers. Derived "
-            "results such as rates, totals and differences stay expressions over those data, never data.")}]
+            "results such as rates, totals and differences stay expressions over those data, never data."
+            + (f" Numbers shown: {shown}." if shown else ""))}]
     if isinstance(exc, AnswerLeakError):
         rows = "; ".join(
             f"{field_id} names its correct choice(s) {', '.join(keys)}" if kind == "choices"
@@ -630,6 +783,12 @@ def _diagnostics(exc: ValueError | SyntaxError) -> list[dict[str, Any]]:
             "it as that expression over its raw operands: use the expression wherever a field or misconception "
             "used the datum, and let any text that shows the value present it as a calculation from those data. "
             "Keep the raw operands as data.")}]
+    if isinstance(exc, InternalIdLeakError):
+        rows = "; ".join(f"{location} shows {name!r}" for location, name in exc.leaks[:12])
+        return [{"type": "internal_ids", "message": (
+            f"Learner-visible text exposes internal names: {rows}. Write each quantity, case or answer "
+            "in plain words (its label, e.g. 'revenue earned' for revenue_earned), never an id, and never "
+            "call it a datum or a declared measurement. Change only those sentences.")}]
     if isinstance(exc, ActivityChecksError):
         return [item for error in exc.errors for item in _diagnostics(error)]
     # Expressions and provider drafts are private; do not echo arbitrary text.
@@ -665,10 +824,12 @@ def _validation_failure_metadata(exc: ValueError | SyntaxError, model) -> dict:
         return {"errors": primary["errors"] + checks["errors"],
                 "total_errors": primary["total_errors"] + checks["total_errors"]}
     if not isinstance(exc, ValidationError):
-        code = ("transfer_independence" if isinstance(exc, TransferIndependenceError)
+        code = ("missing_public_teaching_case" if isinstance(exc, TutorialTeachingCaseError)
+                else "transfer_independence" if isinstance(exc, TransferIndependenceError)
                 else "undeclared_numbers" if isinstance(exc, UndeclaredNumbersError)
                 else "answer_leak" if isinstance(exc, AnswerLeakError)
-                else "derived_data" if isinstance(exc, DerivedDataError) else "component_contract")
+                else "derived_data" if isinstance(exc, DerivedDataError)
+                else "internal_ids" if isinstance(exc, InternalIdLeakError) else "component_contract")
         return {"errors": [{"type": code, "loc": []}], "total_errors": 1}
     known = {"number", "choice", "multi_choice", "text"}
     def collect(schema):
@@ -716,10 +877,9 @@ def _may_retry(response: LLMResponse, *, invalid: bool) -> bool:
         return invalid and response.finish_reason in (None, "stop")
     if incomplete_stream_error(response.error):
         return True
-    return any(response.error.startswith(f"{provider} request failed ({category};")
-               for provider in ("zai", "OpenLux")
-               for category in ("JSONDecodeError", "JSONProtocolError", "TimeoutError", "APITimeoutError",
-                                "APIConnectionError", "InternalServerError", "RateLimitError"))
+    return provider_request_failed(response.error, (
+        "JSONDecodeError", "JSONProtocolError", "TimeoutError", "APITimeoutError",
+        "APIConnectionError", "InternalServerError", "RateLimitError"))
 
 
 def _last_response(client: Any, error: str, previous: Any, previous_id: str | None) -> LLMResponse:
@@ -733,16 +893,9 @@ def _last_response(client: Any, error: str, previous: Any, previous_id: str | No
 
 
 def _reasoning_reserve(client: Any) -> int:
-    """Match the configured direct transports; a reserve is not visible output."""
-    from app.core.config import settings
-
-    provider = getattr(client, "provider_name", None)
-    if provider == "zai":
-        return 0 if getattr(client, "thinking_level", None) == "off" else settings.zai_reasoning_token_reserve
-    if provider == "openlux" and str(getattr(client, "model", "")).startswith(
-            ("gpt-5", "gpt-6", "o1", "o3", "o4")):
-        return settings.openlux_reasoning_token_reserve
-    return 0
+    """The reserve the direct client sends on top of max_tokens; it is not visible output."""
+    reserve = getattr(client, "reasoning_reserve", 0)
+    return reserve if type(reserve) is int else 0
 
 
 async def generate_initial_package(
@@ -770,6 +923,9 @@ async def generate_initial_package(
     seed_correction_used = activity_correction_used = False
     ownership_mapping_reserved = False
     stopped = asyncio.Event()
+    # Content-free codes of each component's last rejection, for the internal
+    # failure detail; the learner-facing message is chosen elsewhere.
+    failure_codes: dict[str, list[str]] = {}
     parts: dict | None = None
     request_count = requested_tokens = 0
     requested_combined_tokens = max_reasoning_reserve = 0
@@ -827,6 +983,7 @@ async def generate_initial_package(
                 "stage_timeout_seconds": _STAGE_SECONDS, "stage_timeout_basis": "provider_active_union",
                 "usage_records_incomplete": usage_records_incomplete,
                 "normalized_seed_case_id_count": normalized_seed_case_ids,
+                **({"component_failure_codes": copy.deepcopy(failure_codes)} if failure_codes else {}),
                 **mapping_metadata,
                 **({"normalized_seed_scope_note_count": normalized_seed_scope_notes}
                    if normalized_seed_scope_notes else {})}), None
@@ -834,6 +991,12 @@ async def generate_initial_package(
     if existing_parts is not None:
         try:
             parts = validate_package_parts(existing_parts)
+            validate_tutorial_seed(LessonPackageSeed.model_validate(parts["seed"]), step.get("lesson_format"))
+            if step.get("lesson_format") == TUTORIAL_LESSON_FORMAT:
+                from app.services.planning.activity_draft import check_tutorial_response_pairing
+                for raw_activity in parts["activities"].values():
+                    activity = LessonPackageActivity.model_validate(raw_activity)
+                    check_tutorial_response_pairing(activity.id, activity.fields)
         except (ValueError, SyntaxError):
             return result(None, "Saved package components failed validation")
 
@@ -875,16 +1038,16 @@ async def generate_initial_package(
         for attempt in range(2):
             async with semaphore:
                 if stopped.is_set():
+                    failure_codes.setdefault(name, []).append("stopped_after_sibling_failure")
                     return None
                 remaining = remaining_active_budget()
                 if remaining <= 0 or request_count >= max_requests or requested_tokens + tokens > output_budget:
+                    failure_codes.setdefault(name, []).append("component_budget_exhausted")
                     stopped.set()
                     return None
                 timeout = min(_REQUEST_SECONDS, remaining)
-                # Only the seed may opt out of reasoning via an eval-approved override.
-                thinking = operation_thinking_level("lesson_package_seed", "low") if name == "seed" else "low"
                 client = client_factory(tier="balanced", timeout=timeout, max_tokens=tokens,
-                                        thinking_level=thinking, allow_fallback=False)
+                                        thinking_level="low", allow_fallback=False)
                 activity_callbacks = getattr(client, "enforces_activity_callbacks", False) is True
                 if activity_callbacks:
                     client.set_generation_activity_callback(request_activity)
@@ -966,7 +1129,8 @@ async def generate_initial_package(
                     parsed_component = copy.deepcopy(response.data)
                     try:
                         if model is LessonPackageSeed:
-                            accepted, normalized_count, note_count = _parse_initial_seed_response_details(response.data)
+                            candidate, normalized_count, note_count = _parse_initial_seed_response_details(response.data)
+                            accepted = validate_tutorial_seed(candidate, step.get("lesson_format"))
                             normalized_seed_case_ids += normalized_count
                             normalized_seed_scope_notes += note_count
                             response.effective_parameters = {**response.effective_parameters,
@@ -981,8 +1145,10 @@ async def generate_initial_package(
                         diagnostics = _private_correction_diagnostics(exc)
                         if model.__name__ in {"LessonActivityDraft", "TutorialActivityDraft"}:
                             diagnostics = _complete_activity_correction_diagnostics(parsed_component, diagnostics)
+                        validation = _validation_failure_metadata(exc, model)
+                        failure_codes[name] = list(dict.fromkeys(item["type"] for item in validation["errors"]))
                         response.effective_parameters = {**response.effective_parameters,
-                            "component_validation": _validation_failure_metadata(exc, model)}
+                            "component_validation": validation}
                         if (not per_component_recovery and seed_correction_used and not activity_correction_used
                                 and attempt == 0 and response.retryable is not False):
                             from app.services.planning.activity_draft import (
@@ -1002,6 +1168,7 @@ async def generate_initial_package(
                                         ownership_candidate = candidate
                 else:
                     diagnostics = _provider_correction_diagnostics(response)
+                    failure_codes[name] = [diagnostics[0].get("code") or "provider_response"]
                 retryable = _may_retry(response, invalid=accepted is None)
                 if accepted is None and not response.error:
                     response.error = "Package component failed its complete exercise contract"
@@ -1009,8 +1176,10 @@ async def generate_initial_package(
                     model=getattr(client, "model", None), result_status="component_validated" if accepted else "component_rejected",
                     metadata={"component": name, "correction": attempt > 0})
                 if accepted is not None:
+                    failure_codes.pop(name, None)
                     return accepted
                 if ownership_candidate is not None:
+                    failure_codes.pop(name, None)
                     return ownership_candidate
                 if attempt or (name in corrected_components if per_component_recovery else correction_used) or not retryable:
                     stopped.set()
@@ -1026,6 +1195,12 @@ async def generate_initial_package(
             if response.retry_after_seconds:
                 await asyncio.sleep(response.retry_after_seconds)
         return None
+
+    def failure_detail(message: str, prefix: str) -> str:
+        """Append the rejected components' codes to an internal failure message."""
+        codes = "; ".join(f"{name}: {', '.join(values)}" for name, values in failure_codes.items()
+                          if name.startswith(prefix) and values)
+        return f"{message} (codes: {codes})" if codes else message
 
     async def build():
         nonlocal planned_components, max_requests, output_budget, ownership_mapping_reserved
@@ -1043,7 +1218,7 @@ async def generate_initial_package(
                  "workload_plan": workload_plan},
                 _SEED_TOKENS, LessonPackageSeed.model_validate)
             if seed is None:
-                return result(None, "Lesson package seed could not be prepared")
+                return result(None, failure_detail("Lesson package seed could not be prepared", "seed"))
             canonical = seed.model_dump(mode="json")
             await save({"version": _PARTS_VERSION, "seed": canonical, "seed_hash": digest(canonical), "activities": {}})
         planned_components = 1 + len(seed.activity_briefs)
@@ -1062,12 +1237,16 @@ async def generate_initial_package(
                 return True
             from app.services.planning.activity_draft import (
                 ExplanationOwnershipCandidate, LessonActivityDraft, TutorialActivityDraft, parse_activity_draft,
+                with_tutorial_timing,
             )
             draft_model = TutorialActivityDraft if tutorial else LessonActivityDraft
             def parse_assigned(data):
+                from app.services.planning.activity_draft import with_default_qualitative_data, without_wire_noise
+                data = with_default_qualitative_data(without_wire_noise(data))
                 try:
                     draft_model.model_validate(data)
-                    activity = _validated_activity(parse_activity_draft(data), seed, brief)
+                    activity = _validated_activity(
+                        parse_activity_draft(with_tutorial_timing(data) if tutorial else data), seed, brief)
                 except (ValueError, SyntaxError) as exc:
                     # Let the one correction hear every defect at once: also run the
                     # component checks on a best-effort preview of the rejected draft.
@@ -1077,13 +1256,18 @@ async def generate_initial_package(
                     try:
                         preview = best_effort_activity(data)
                         if preview is not None:
-                            require_component_checks(preview)
+                            require_component_checks(preview, seed.teaching_cases)
                     except _COMPONENT_CHECK_ERRORS as checks:
                         raise ActivityDraftChecksError(exc, checks) from exc
                     except Exception:  # noqa: BLE001 - diagnostic preview only
                         logger.debug("Activity draft preview checks unavailable", exc_info=True)
                     raise exc
-                require_component_checks(activity)
+                # A named id is written as its plain name; only unnamed ids and
+                # "datum" wording still cost a correction.
+                activity = relabel_internal_ids(activity, seed.teaching_cases)
+                require_component_checks(activity, seed.teaching_cases)
+                # Teaching-case IDs are internal too ("from the quiet_lane case").
+                require_no_internal_ids(activity, seed.teaching_cases)
                 return activity
             value = await component("activity_" + brief.id, draft_model, activity_prompt,
                 {"outline": step, "context": context, "capabilities": {**CAPABILITIES, **({"max_fields_per_activity": 2} if tutorial else {})},
@@ -1112,7 +1296,8 @@ async def generate_initial_package(
                     task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
         if not all(outcomes):
-            return result(None, "Lesson package activity could not be prepared; validated components are saved")
+            return result(None, failure_detail(
+                "Lesson package activity could not be prepared; validated components are saved", "activity_"))
         if pending_ownership:
             # This is one additional, explicitly budgeted mapping decision, not
             # another general correction or an opportunity to rewrite content.
@@ -1121,7 +1306,9 @@ async def generate_initial_package(
             if (len(pending_ownership) != 1 or not seed_correction_used or activity_correction_used
                     or len(parts["activities"]) != len(seed.activity_briefs) - 1 or stopped.is_set()):
                 return result(None, "Lesson package ownership could not be established; validated components are saved")
-            from app.services.planning.activity_draft import ExplanationOwnershipVerdict, parse_activity_draft
+            from app.services.planning.activity_draft import (
+                ExplanationOwnershipVerdict, parse_activity_draft, with_tutorial_timing,
+            )
             activity_id, candidate = next(iter(pending_ownership.items()))
             brief = next(brief for brief in seed.activity_briefs if brief.id == activity_id)
             max_requests = max(max_requests, planned_components + 2)
@@ -1132,7 +1319,8 @@ async def generate_initial_package(
                  "candidate_target_field_id": candidate.target_field_id,
                  "source_sha256": candidate.source_sha256, "rejected_activity": candidate.draft},
                 _OWNERSHIP_TOKENS,
-                lambda answer: _validated_activity(parse_activity_draft(candidate.bind(answer)), seed, brief))
+                lambda answer: _validated_activity(parse_activity_draft(
+                    with_tutorial_timing(candidate.bind(answer)) if tutorial else candidate.bind(answer)), seed, brief))
             if value is None:
                 return result(None, "Lesson package ownership could not be established; validated components are saved")
             await save({**parts, "activities": {activity_id: value.model_dump(mode="json")}})

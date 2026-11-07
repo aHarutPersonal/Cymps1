@@ -92,13 +92,13 @@ def _response(
     *,
     model: str,
     error: str | None = None,
-    finish_reason: str = "STOP",
+    finish_reason: str = "stop",
 ) -> SimpleNamespace:
     return SimpleNamespace(
         error=error,
         retried=False,
         model=model,
-        provider="gemini",
+        provider="anthropic",  # Haiku is the plan route's primary
         prompt_tokens=100,
         completion_tokens=200,
         total_tokens=300,
@@ -127,7 +127,7 @@ async def test_initial_plan_generates_backbone_then_only_week_one(monkeypatch) -
     telemetry_metadata: list[dict] = []
 
     class Client:
-        model = "grok-test"
+        model = "claude-haiku-5-5"
 
         async def generate_and_validate(self, *, output_model, user_prompt, **_kwargs):
             requested_models.append(output_model)
@@ -142,8 +142,8 @@ async def test_initial_plan_generates_backbone_then_only_week_one(monkeypatch) -
                 SimpleNamespace(
                     error=None,
                     retried=False,
-                    model="grok-test",
-                    provider="yunwu",
+                    model="claude-haiku-5-5",
+                    provider="anthropic",
                     prompt_tokens=100,
                     completion_tokens=200,
                     total_tokens=300,
@@ -198,24 +198,31 @@ async def test_initial_plan_generates_backbone_then_only_week_one(monkeypatch) -
     assert "DISTILLED BLUEPRINT" in rendered_prompts[ExecutionPlanResponse]
     assert all(row["plan_job_id"] == "job-1" for row in telemetry_metadata)
     assert all(row["queue_wait_ms"] == 123 for row in telemetry_metadata)
+    # The generator owns its single recovery: each plan client is the plan
+    # route's primary alone, built for the stage's operation.
     assert factory_kwargs == [
         {
             "timeout": generator.PLAN_BACKBONE_TIMEOUT_SECONDS,
             "max_tokens": generator.PLAN_BACKBONE_MAX_TOKENS,
             "tier": "balanced",
             "thinking_level": "medium",
+            "operation": "plan_backbone_generation",
+            "allow_fallback": False,
         },
         {
             "timeout": generator.PLAN_WEEK_TIMEOUT_SECONDS,
             "max_tokens": generator.PLAN_WEEK_MAX_TOKENS,
             "tier": "balanced",
             "thinking_level": "medium",
+            "operation": "plan_week_generation",
+            "allow_fallback": False,
         },
     ]
 
 
 @pytest.mark.asyncio
-async def test_truncated_backbone_escalates_once_to_quality_tier(monkeypatch) -> None:
+@pytest.mark.parametrize("finish_reason", ["length", "MAX_TOKENS"])
+async def test_truncated_backbone_escalates_once_to_quality_tier(monkeypatch, finish_reason) -> None:
     factory_kwargs: list[dict] = []
     calls: list[dict] = []
     telemetry: list[dict] = []
@@ -228,10 +235,12 @@ async def test_truncated_backbone_escalates_once_to_quality_tier(monkeypatch) ->
         async def generate_and_validate(self, **kwargs):
             calls.append({"tier": self.tier, **kwargs})
             if self.tier == "balanced":
+                # A cut-off answer is the model's own reply: it is regenerated
+                # on the same route, never treated as an outage.
                 return None, _response(
                     model=self.model,
-                    error="Invalid JSON in response",
-                    finish_reason="MAX_TOKENS",
+                    error="anthropic request failed (ValueError; finish=length)",
+                    finish_reason=finish_reason,
                 )
             return _backbone(), _response(model=self.model)
 
@@ -262,12 +271,16 @@ async def test_truncated_backbone_escalates_once_to_quality_tier(monkeypatch) ->
             "max_tokens": generator.PLAN_BACKBONE_MAX_TOKENS,
             "tier": "balanced",
             "thinking_level": "medium",
+            "operation": "plan_backbone_generation",
+            "allow_fallback": False,
         },
         {
             "timeout": generator.PLAN_BACKBONE_RECOVERY_TIMEOUT_SECONDS,
             "max_tokens": generator.PLAN_BACKBONE_RECOVERY_MAX_TOKENS,
             "tier": "quality",
             "thinking_level": "low",
+            "operation": "plan_backbone_generation",
+            "allow_fallback": False,
         },
     ]
     assert generator.PLAN_BACKBONE_RECOVERY_MAX_TOKENS > (
@@ -348,7 +361,7 @@ async def test_invalid_quality_backbone_fails_without_a_third_generation(
             return None, _response(
                 model=self.model,
                 error=f"{self.tier} returned invalid JSON",
-                finish_reason="MAX_TOKENS" if self.tier == "balanced" else "STOP",
+                finish_reason="length" if self.tier == "balanced" else "stop",
             )
 
     def get_client(**kwargs):
@@ -382,7 +395,8 @@ async def test_invalid_quality_backbone_fails_without_a_third_generation(
 
 
 @pytest.mark.asyncio
-async def test_truncated_week_escalates_once_to_quality_tier(monkeypatch) -> None:
+@pytest.mark.parametrize("finish_reason", ["length", "MAX_TOKENS"])
+async def test_truncated_week_escalates_once_to_quality_tier(monkeypatch, finish_reason) -> None:
     factory_kwargs: list[dict] = []
     calls: list[dict] = []
     telemetry: list[dict] = []
@@ -397,8 +411,8 @@ async def test_truncated_week_escalates_once_to_quality_tier(monkeypatch) -> Non
             if self.tier == "balanced":
                 return None, _response(
                     model=self.model,
-                    error="Invalid JSON in response",
-                    finish_reason="MAX_TOKENS",
+                    error="anthropic request failed (ValueError; finish=length)",
+                    finish_reason=finish_reason,
                 )
             return _expanded_week_one(), _response(model=self.model)
 
@@ -425,12 +439,16 @@ async def test_truncated_week_escalates_once_to_quality_tier(monkeypatch) -> Non
             "max_tokens": generator.PLAN_WEEK_MAX_TOKENS,
             "tier": "balanced",
             "thinking_level": "medium",
+            "operation": "plan_week_generation",
+            "allow_fallback": False,
         },
         {
             "timeout": generator.PLAN_WEEK_RECOVERY_TIMEOUT_SECONDS,
             "max_tokens": generator.PLAN_WEEK_RECOVERY_MAX_TOKENS,
             "tier": "quality",
             "thinking_level": "low",
+            "operation": "plan_week_generation",
+            "allow_fallback": False,
         },
     ]
     assert generator.PLAN_WEEK_RECOVERY_MAX_TOKENS > generator.PLAN_WEEK_MAX_TOKENS
@@ -505,7 +523,7 @@ async def test_invalid_quality_week_fails_without_a_third_generation(
             return None, _response(
                 model=self.model,
                 error=f"{self.tier} returned invalid week JSON",
-                finish_reason="MAX_TOKENS" if self.tier == "balanced" else "STOP",
+                finish_reason="length" if self.tier == "balanced" else "stop",
             )
 
     def get_client(**kwargs):

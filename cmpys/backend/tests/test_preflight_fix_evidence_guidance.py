@@ -3,6 +3,12 @@ import asyncio
 
 import pytest
 
+from tests.phase0_fixtures import model_binder_mechanics  # noqa: F401
+
+# Phase 0.4 binds exact computed values in code; these tests exercise the model
+# binder's mechanics, so they keep the earlier server bindings (tests/phase0_fixtures.py).
+pytestmark = pytest.mark.usefixtures("model_binder_mechanics")
+
 from tests.test_package_split_preflight import Harness, isolate, package, run  # noqa: F401
 
 # Verbatim free-text "issue" from the accounting_novice_evidence smoke run (span n7).
@@ -22,8 +28,14 @@ def forbidden(text: str) -> bool:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("field", ["issues", "package_issues"])
 async def test_evidence_negative_blocks_with_coded_guidance_only(isolate, field):
-    harness = Harness({"a0": [{field: [ARTIFACT_ISSUE]}], "a1": ["good"]})
+    # The first negative takes the shared correction; the repeated one blocks.
+    harness = Harness({"a0": [{field: [ARTIFACT_ISSUE]}, {field: [ARTIFACT_ISSUE]}], "a1": ["good"]})
     (failures, response, _), snapshots = await asyncio.wait_for(run(harness), 2)
+    assert harness.counts["a0"] == 2 and snapshots[-1]["correction_used"]
+    correction = [request for owner, request in harness.requests if owner == "a0"][1]
+    assert "Evidence binder reported blocking issues for spans n1" in correction["user_prompt"]
+    sent = correction["system_prompt"] + correction["user_prompt"]
+    assert not any(token in sent for token in ("1300", "display the computed", "net cash change"))
     # Still a rejection of exactly the owning activity, repairable.
     assert failures and response.error is None and not response.data["acceptable"]
     assert response.effective_parameters["validated_repair_targets"] == ["practice.a0"]

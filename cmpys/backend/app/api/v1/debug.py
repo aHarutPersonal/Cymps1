@@ -36,16 +36,10 @@ async def get_llm_status() -> LLMStatusResponse:
     Returns the configured provider and model WITHOUT exposing
     the API key. Use this to verify your configuration.
     """
-    models = {
-        "zai": settings.zai_model,
-        "openlux": settings.openlux_model,
-        "openai": settings.openai_model,
-        "gemini": settings.gemini_model,
-        "yunwu": settings.yunwu_model,
-    }
     return LLMStatusResponse(
         provider=settings.llm_provider,
-        model=models.get(settings.llm_provider),
+        model=(f"{settings.anthropic_model}, {settings.openai_model}"
+               if settings.llm_provider == "routed" else None),
         configured=settings.llm_configured,
     )
 

@@ -961,7 +961,7 @@ async def test_generation_threads_authoritative_achievement_status() -> None:
 async def test_gateway_outage_recovers_once_and_records_both_calls(monkeypatch):
     from app.services.llm.client import LLMResponse
     primary = SimpleNamespace(model='gateway', generate_json=AsyncMock(return_value=LLMResponse(
-        data={}, provider='openlux', model='gateway', error='OpenLux request failed (TimeoutError; finish=missing)')))
+        data={}, provider='openlux', model='gateway', error='openai request failed (TimeoutError; finish=missing)')))
     fallback = SimpleNamespace(model='independent', generate_json=AsyncMock(return_value=LLMResponse(
         data={'dimensions': []}, provider='gemini', model='independent')))
     recovery = AsyncMock()
@@ -985,7 +985,7 @@ async def test_invalid_content_does_not_switch_provider(monkeypatch):
     monkeypatch.setattr('app.services.llm.recovery.settings', SimpleNamespace(
         gemini_api_key='test-only', gemini_quality_model='test'))
     client = SimpleNamespace(model='gateway', generate_json=AsyncMock(return_value=LLMResponse(
-        data={}, provider='openlux', error='OpenLux request failed (JSONDecodeError; finish=stop)')))
+        data={}, provider='openlux', error='openai request failed (JSONDecodeError; finish=stop)')))
     result = await generate_comparison_scores(client, idol_name='Mentor', user_age=28,
         user_profile_json='{}', interview_transcript_json='[]', idol_facts_json='{}', comparison_summary='Saved verdict')
     assert result is None

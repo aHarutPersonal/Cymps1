@@ -1,0 +1,84 @@
+{
+  "title": "Make Your Claim Specific",
+  "activities": [
+    {
+      "id": "guided_practice",
+      "data": [],
+      "hint": "Decide who could actually act on the garden's behalf, name one concrete thing they could try, and state what you would compare afterwards to judge it.",
+      "kind": "practice",
+      "title": "Rewrite a vague garden claim",
+      "fields": [
+        {
+          "id": "rewrite_and_check",
+          "kind": "text",
+          "unit": "",
+          "label": "Your rewritten claim, followed by a three-criterion check quoting your own phrases",
+          "choices": [],
+          "criteria": [
+            "Rewrites the claim as one sentence naming a specific actor rather than \"the garden\" or \"someone\"",
+            "States a concrete action the actor would take, not a vague improvement like \"get more volunteers\"",
+            "Includes a stated way to tell whether it worked, or honestly reports that the criterion is missing",
+            "Quotes a phrase from the rewrite as evidence for each yes or no judgment",
+            "Preserves the supplied facts without adding invented numbers or statistics"
+          ],
+          "tolerance": 0.01,
+          "expression": null,
+          "correct_choice": null,
+          "rubric_criterion": null
+        }
+      ],
+      "diagram": null,
+      "minutes_max": 2,
+      "minutes_min": 1,
+      "instructions": "Original fictional example. A volunteer posts this notice at a community garden: \"The garden should get more volunteers because the ones we have are stretched thin and beds go untended.\"\n\nThe claim is vague in the same way as the pantry example in the lesson. Rewrite it as one specific claim, then judge your own rewrite against the three public criteria:\n\n1. Named actor \u2014 who exactly must act?\n2. Specific action \u2014 what concrete thing would they do, rather than a vague improvement?\n3. Stated success measure \u2014 how would anyone tell whether it worked?\n\nWrite your rewrite first, then for each criterion quote the phrase from your own sentence that satisfies it, or state honestly that it is missing. A revision can narrow \"should\" into a trial with something to compare, which is easier to support with evidence. Keep your claim qualitative \u2014 do not invent attendance counts or statistics.",
+      "worked_solution": {
+        "steps": [
+          {
+            "field_id": "rewrite_and_check",
+            "explanation": "One valid rewrite: \"The garden's coordinators should run a Saturday morning drop-in rota for one month and compare how many beds get tended against the extra coordinator hours before deciding to continue.\" It names an actor (the garden's coordinators), a concrete action (run a Saturday morning drop-in rota for one month), and a success measure (compare beds tended against extra coordinator hours). It also narrows a permanent \"should\" into a test decision, which is easier to support with evidence. Accept equivalent wordings and reasoned alternatives: a rewrite that honestly reports a missing criterion still passes if it quotes its own phrases as evidence. A rewrite that only adds warmth or detail \u2014 \"wonderful volunteers should help more often\" \u2014 fails the specific-action criterion because it still names no concrete thing anyone would do."
+          }
+        ],
+        "version": 1
+      }
+    },
+    {
+      "id": "independent_transfer",
+      "data": [],
+      "hint": "Ask what the council is being asked to decide. The claim sentence states the position; the others give background, evidence or goodwill.",
+      "kind": "transfer",
+      "title": "Find the buried claim",
+      "fields": [
+        {
+          "id": "claim_check",
+          "kind": "text",
+          "unit": "",
+          "label": "Your claim diagnosis and revision",
+          "choices": [],
+          "criteria": [
+            "Quotes the sentence 'Our town should support the summer market.' as the claim, or a defensible alternative with a reason it carries the position",
+            "Gives a yes or no for named actor, specific action and stated success measure, each tied to a quoted phrase from the claim sentence",
+            "Revises the claim sentence where criteria fail, keeping all supplied facts and adding no invented statistics or figures",
+            "Keeps the revision a claim of the same kind rather than turning it into evidence or background"
+          ],
+          "tolerance": 0.01,
+          "expression": null,
+          "correct_choice": null,
+          "rubric_criterion": null
+        }
+      ],
+      "diagram": null,
+      "minutes_max": 2,
+      "minutes_min": 2,
+      "instructions": "Original fictional letter, written by a resident and sent to a town council.\n\n\"Dear Council, Our farmers' market deserves attention. The square fills with visitors on summer Saturdays, and the stalls sell out of bread and berries by noon. Neighbouring towns have revived their high streets with similar markets. Parking near the square is limited, and some residents worry about noise. Our town should support the summer market. It would bring energy to the square and give residents a place to shop on weekends. I hope the Council will consider these points carefully.\"\n\nA skimming reader cannot pin down what the letter actually asks for. Your task: quote the single sentence that carries the actual claim \u2014 the sentence the rest of the letter is meant to support. Then judge that sentence against the three criteria: a named actor, a specific action rather than a vague improvement, and a stated way to tell whether it worked. For each criterion give a yes or no and quote the phrase from the sentence that supports your verdict. Where a criterion fails, revise that sentence only, making the claim more specific without inventing new statistics, figures or facts.",
+      "worked_solution": {
+        "steps": [
+          {
+            "field_id": "claim_check",
+            "explanation": "The claim sentence is \"Our town should support the summer market.\" Judged against the three criteria: named actor \u2014 no, or at best vague, because \"our town\" does not name who must act; the Council, which the letter addresses, is the actual decision-maker. Specific action \u2014 no, because \"support\" could mean money, permits, signage or promotion, and the sentence says none of these. Stated success measure \u2014 no, because nothing states what would count as the market having worked. A model revision preserving the supplied facts: \"The Council should grant the summer market a Saturday permit for the square this season and compare square visitor numbers and stall sell-outs with the cost of managing the square before renewing support.\" The revision names the actor (the Council), a concrete action (issuing a Saturday permit), and a comparison that serves as a success measure, while adding no statistics \u2014 \"sell-outs by noon\" and visitor crowds are already in the letter as observations, and the revision only names what to compare. Accept revisions that name a different concrete council action, such as funding signage, as long as the actor is named, the action is checkable, and no invented figures appear. A revision that keeps \"support\" vague fails the action criterion even if the actor is fixed."
+          }
+        ],
+        "version": 1
+      }
+    }
+  ]
+}

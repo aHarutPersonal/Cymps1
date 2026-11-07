@@ -1,22 +1,15 @@
-Plan one tutorial_v1 exercise before any lesson prose: its workbook title, public teaching cases and the scopes of its two activities.
+Plan the public example and two activity scopes for one tutorial_v1 lesson.
 
-WHAT A GREAT SEED DOES
-- Picks the one concept this tutorial teaches and the smallest case showing it.
-- Plans two short phases building on each other: a guided "practice" decision, then an independent "transfer" decision on a genuinely new tiny case.
-- Specifies each phase's demand, inputs, output and criterion; choose the response format for the skill. Name its misconception and what makes transfer different.
-- Implement requested retrieval, method selection or synthesis within these phases: reconstruct or predict before checking; transfer chooses its method. Supply facts, not the assessed reasoning or an unavailable earlier answer.
-- Preserves the learner's skill, level, language, goal and the mentor's documented methods and honestly fits the supplied workload_plan.
+Preserve the outline's artifact, learner level and documented mentor method. Include requested retrieval, method selection or synthesis within guided practice and transfer; supply facts, leaving assessed reasoning to the learner.
 
-INPUTS: outline (the approved step), context (learner, mission, mentor evidence), capabilities, execution_contract (what the app runs now) and workload_plan (the accepted reading range, the supported total range and ONE practice target shared by both phases).
+A scope names the decision and what is assessed, never the expected direction or result: activity facts are written later. Never assess picking out a stated given (which length is the height); assess a computation or changed condition. Give rationale, not finished instructions or keys. Narrow oversized tasks to one representative decision.
 
-OUTPUT: one LessonPackageSeed JSON object with exactly workbook_title, teaching_cases and activity_briefs.
-- activity_briefs is an array of exactly two separate objects, each with exactly id, kind and scope and a unique id: the first has kind "practice", the last kind "transfer". Close the first object before starting the second.
-- A scope gives its needed rationale without repeating the lesson context, shared method or full instructions. Size each activity to about 1,500 characters of instructions and 1,500 of private explanations; use short excerpts, not long scenes.
-- This is a plan only: no workbook wrapper, finished activities, answer fields, hints, worked solutions or answer keys; each activity is generated separately from it and the public teaching cases.
-- Case assumptions use the case data's units (data in meters means assumptions in meters).
-- Qualitative worked examples give evidence in words, with digits only when declared as data.
-- If the outline cannot fit honestly, narrow it to one representative decision, say so in the guided scope and keep essential reasoning.
-- Supplied independent_package_defects make this the one bounded correction of an unpublished package: resolve every reported defect, keep the learning objective and do not repeat the rejected shape.
+Put criterion inputs in public instructions/data, including diagnostic reasons and admitted gaps. Grade stated requirements without inventing failures or outside evidence. Judge relevance to the actual claim: partial support need not establish the entire conclusion. Independently verify proposed corrections against facts and domain rules.
+
+INPUTS: outline, context, capabilities, execution_contract, workload_plan.
+OUTPUT: LessonPackageSeed with exactly workbook_title, teaching_cases and activity_briefs. Return exactly two briefs {id, kind, scope} with unique ids: practice then transfer. No workbook, fields, hints or solutions.
+
+Qualitative cases put the original example and worked analysis in assumptions, with data: [] and results: []. Cases whose text uses numbers declare raw quantities as data and calculations as results. A case's rules must hold for every case they cover; check one edge case. Examples show schema shape only.
 
 {{include:tutorial_contract.txt}}
 
@@ -24,5 +17,8 @@ OUTPUT: one LessonPackageSeed JSON object with exactly workbook_title, teaching_
 
 {{include:tutorial_domain_qualitative.txt}}
 
-ILLUSTRATIVE SEED — another topic, showing shape and depth only. Never reuse its content:
-{"workbook_title":"Write a call to action readers follow","teaching_cases":[],"activity_briefs":[{"id":"guided","kind":"practice","scope":"Show and explain a fictional garden notice rewrite. Ask for another closing using supplied event facts; assess action clarity and response path."},{"id":"transfer","kind":"transfer","scope":"Supply a fictional library email with a buried request. Ask for a clear ending for a skimming reader; assess request discovery and factual fidelity."}]}
+ILLUSTRATIVE QUANTITATIVE SEED:
+{"workbook_title":"Compare revenue and cost","teaching_cases":[{"id":"stall","assumptions":"Original fictional stall. All amounts use the same currency and period; profit is revenue minus cost.","data":[{"id":"revenue","label":"Revenue earned","value":120,"unit":"credits"},{"id":"cost","label":"Cost incurred","value":70,"unit":"credits"}],"results":[{"id":"profit","label":"Profit","expression":"revenue - cost","unit":"credits","decimal_places":0}]}],"activity_briefs":[{"id":"guided","kind":"practice","scope":"Supply a separate stall's revenue and cost. Assess the profit calculation and the role of each input."},{"id":"transfer","kind":"transfer","scope":"Supply a different stall with a refund condition. Assess which revenue belongs in profit and why; derive the outcome from its facts."}]}
+
+ILLUSTRATIVE SEED — qualitative:
+{"workbook_title":"Write a clear request","teaching_cases":[{"id":"notice","assumptions":"Original fictional notice: 'Garden volunteers welcome.' Revision: 'Join the garden cleanup; reply to the coordinator.' It names the action and response path.","data":[],"results":[]}],"activity_briefs":[{"id":"guided","kind":"practice","scope":"Supply a different club invitation. Ask for a clearer closing using its facts; assess action and response path."},{"id":"transfer","kind":"transfer","scope":"Supply a library email with a buried request. Ask for a closing for a skimming reader; assess request discovery and factual fidelity."}]}

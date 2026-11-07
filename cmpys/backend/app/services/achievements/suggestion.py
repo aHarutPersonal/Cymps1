@@ -54,7 +54,7 @@ async def ai_suggestion(item, idol_name: str, timeout_s: float = 2.5) -> dict:
     """
     fb = fallback_suggestion(item)
     try:
-        client = get_llm_client(fast=True)
+        client = get_llm_client(operation="achievement_suggestion", fast=True)
         prompt = (
             f"The user just completed this task while learning from {idol_name}:\n"
             f"Title: {item.title}\nWhat done looks like: {item.success_metric}\n\n"
@@ -93,7 +93,7 @@ async def cycle_summary(
     if not achievement_titles:
         return fb
     try:
-        client = get_llm_client(fast=True)
+        client = get_llm_client(operation="achievement_cycle_summary", fast=True)
         bullet = "\n".join(f"- {t}" for t in achievement_titles[:30])
         prompt = (
             f"A user spent 12 weeks learning from {idol_name} and logged:\n"

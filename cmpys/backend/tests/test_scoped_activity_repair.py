@@ -148,15 +148,15 @@ async def test_global_ambiguous_or_unattributed_public_defect_never_regenerates_
 
 
 @pytest.mark.asyncio
-async def test_failed_activity_correction_cannot_buy_a_third_request(monkeypatch):
+async def test_failed_activity_correction_gets_one_retry_and_cannot_buy_a_fourth_request(monkeypatch):
     monkeypatch.setattr("app.services.llm.telemetry.record_llm_response", AsyncMock())
     changed = replacement(); changed["id"] = "guided"
     client = SimpleNamespace(generate_json=AsyncMock(side_effect=[
         LLMResponse(data={"public_defects": ["The target question requires public revision."]}),
-        LLMResponse(data=activity_draft_fixture(changed))]))
+        LLMResponse(data=activity_draft_fixture(changed)), LLMResponse(data=activity_draft_fixture(changed))]))
     package, response, _ = await generate_package({}, {}, client_factory=lambda **kwargs: client,
         prior_package=structured_package(), repair_targets=["practice.transfer.argument"])
-    assert package is None and response.error and client.generate_json.await_count == 2
+    assert package is None and response.error and client.generate_json.await_count == 3
 
 
 @pytest.mark.asyncio
@@ -181,7 +181,9 @@ async def test_multiple_independent_activity_defects_are_bounded_and_atomic(monk
         prior_package=prior, defects=["Validated defects"],
         repair_targets=["practice.guided", "practice.transfer"])
     assert prior.model_dump(mode="json") == before
-    assert client.generate_json.await_count == (2 if failure == "wrong_identity" else 3)
+    # A wrong identity gets its one correction (the next reply, still another
+    # activity's identity) and stops the sibling chain.
+    assert client.generate_json.await_count == 3
     if failure:
         assert package is None and response.error
     else:
@@ -205,7 +207,8 @@ async def test_qualified_activity_target_echo_is_normalized_only_for_the_owned_a
     monkeypatch.setattr("app.services.llm.telemetry.record_llm_response",AsyncMock())
     changed=activity_draft_fixture(replacement());changed["id"]=returned_id
     client=SimpleNamespace(generate_json=AsyncMock(side_effect=[
-        LLMResponse(data={"public_defects":["The target question requires public revision."]}),LLMResponse(data=changed)]))
+        LLMResponse(data={"public_defects":["The target question requires public revision."]}),LLMResponse(data=changed),
+        LLMResponse(data=changed)]))
     original=structured_package();before=original.model_dump(mode="json")
     result,response,_=await generate_package({}, {}, client_factory=lambda **kwargs:client,prior_package=original,repair_targets=["practice.transfer.argument"])
     assert original.model_dump(mode="json")==before

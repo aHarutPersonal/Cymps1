@@ -97,14 +97,21 @@ minutes exactly, and lets the learner choose days and a starting cue. Do not
 invent another schedule, daily requirement or fixed duration in prose.
 
 For each routine, daily_instructions gives 70-120 actionable words connecting
-this week's taught skill to recall, an attempt in the prepared review, checking,
-correction, and a specific error note. The review reuses real exercises from
+this week's taught skill to an explicit If-Then implementation cue (when/where
+to start and what single friction step to remove before opening the app), cold
+recall of the governing rule and deciding cue in the learner's own words, an
+attempt in the prepared review, checking, correction, and a specific error note.
+The review reuses real exercises from
 already attempted lessons with inputs, saved answers, hints and answer checks.
 Do not claim a supplied dataset, example or key merely because you mention one.
 No review appears before lesson practice has been attempted. Stop and save at
 the session cap even if unfinished. Prior mistakes return across weeks. Known
 cases check retention; new applications and transfer belong in mission practice.
 Logging participation does not certify mastery. Do not promise push reminders.
+Write all task titles, descriptions, and daily_instructions with natural human
+sentence-length burstiness and concrete transitive verbs; avoid AI clichés
+("delve", "tapestry", "testament", "crucial", "moreover", "not only... but also",
+or "it's not about X, it's about Y").
 
 
 ### 4. SUBSTANCE MINIMUMS

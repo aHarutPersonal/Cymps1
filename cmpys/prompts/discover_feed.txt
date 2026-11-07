@@ -50,6 +50,7 @@ Rules:
 - Choose the insight/video mix to fit at most {count} items; there is no minimum for either type.
 - Vary categories when the requested count and topic support it; never add items to fill a quota.
 - Each item carries ONE singular takeaway — never a platitude, never a repeat of another item.
+- Write with crisp human editorial prose: active transitive verbs, concrete nouns, and natural sentence-length contrast. Never use AI signpost words ("delve", "tapestry", "testament", "underscore", "pivotal", "crucial", "unlock", "moreover", "furthermore") or negative parallelisms ("not X, but Y").
 
 Return ONLY a valid JSON object with this shape:
 {

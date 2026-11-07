@@ -135,9 +135,9 @@ def practice_instructions(item) -> str:
     return (
         f"Practise on {', '.join(DAY_NAMES[d] for d in schedule['weekdays'])}, "
         f"within the {schedule['weekly_minutes']}-minute weekly allocation. "
-        "Start by recalling a rule from a lesson you have studied before reopening it. "
+        f"Cue ({schedule['cue']}): close distractions and reconstruct a taught rule and its deciding cue in your own words before reopening the lesson. "
         "Open your review to find the exercise, its inputs and saved answer fields. "
-        "Try it before requesting a hint. Check your answer, read the feedback, and "
+        "Try it from memory before requesting a hint. Check your answer, read the feedback, and "
         "revise a mistake or explain the corrected rule in your reflection. "
         "Stop and save when the session budget ends; unfinished work is preserved. "
         "Reviews reuse studied lessons and revisit earlier mistakes across weeks. "

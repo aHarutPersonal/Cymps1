@@ -36,6 +36,21 @@ def corrected_activity():
     return value
 
 
+def merged_activity():
+    """Activity-wide repair merges the variable choice into one rubric response."""
+    value = corrected_activity()
+    value['fields'] = [value['fields'][0]]
+    value['instructions'] += ' Include the intended audience and explain why it fits.'
+    value['fields'][0]['criteria'].append('Names the audience and explains why it fits.')
+    value['worked_solution']['steps'] = value['worked_solution']['steps'][:1]
+    return value
+
+
+def scope_verdict():
+    return {'target': 'practice.transfer', 'scope': 'activity',
+            'explanation': 'The choice and written response must be merged into one assessable answer.'}
+
+
 @pytest.mark.parametrize('mutation',['omitted','irrelevant_null','wrong_kind','unknown_field','unknown_activity','duplicate','multiple_activities','unrelated_solution','public_defect'])
 def test_null_routing_requires_one_exact_known_choice_scope(mutation):
     package, payload = original_package(), deletion()
@@ -87,27 +102,35 @@ def test_replacement_rejects_scope_drift_and_invalid_grading(mutation):
 @pytest.mark.parametrize('outcome',['success','schema','transport','public_defects'])
 async def test_choice_correction_uses_only_second_call_and_bounded_component(outcome,monkeypatch):
     telemetry=AsyncMock(); monkeypatch.setattr('app.services.llm.telemetry.record_llm_response',telemetry)
-    second=LLMResponse(data=activity_draft_fixture(corrected_activity()))
+    second=LLMResponse(data=activity_draft_fixture(merged_activity()))
     if outcome == 'schema': second.data={'id':'transfer'}
-    elif outcome == 'transport': second.error='zai request failed (TimeoutError; transient)'
+    elif outcome == 'transport': second.error='anthropic request failed (TimeoutError; transient)'
     elif outcome == 'public_defects': second.data={'public_defects':['Change the whole task.']}
-    client=SimpleNamespace(generate_json=AsyncMock(side_effect=[LLMResponse(data=deletion()),second]))
+    # An invalid scoped draft gets one correction that repeats it here (repair path, round 1).
+    invalid = outcome in {'schema', 'public_defects'}
+    client=SimpleNamespace(generate_json=AsyncMock(side_effect=[LLMResponse(data=deletion()),LLMResponse(data=scope_verdict()),second,
+                                                                *([LLMResponse(data=copy.deepcopy(second.data))] if invalid else [])]))
     factory_args=[]
     def factory(**kwargs):
         factory_args.append(kwargs); return client
     package,response,_=await generate_package({}, {},client_factory=factory,prior_package=original_package(),defects=['Freely chosen audience cannot have one fixed correct answer.'],repair_targets=['practice.transfer.audience'])
-    assert client.generate_json.await_count == 2
+    assert client.generate_json.await_count == (4 if invalid else 3)
     calls=client.generate_json.await_args_list
-    assert [c.kwargs['output_model'] for c in calls] == [PrivatePackageRepair,LessonActivityDraft]
-    prompt=json.loads(calls[1].kwargs['user_prompt'])
+    assert [c.kwargs['output_model'].__name__ for c in calls] == ['PrivatePackageRepair','ScopedRepairReview','LessonActivityDraft',
+                                                                  *(['LessonActivityDraft'] if invalid else [])]
+    if invalid:
+        assert json.loads(calls[3].kwargs['user_prompt'])['correction']['validation_errors']
+    prompt=json.loads(calls[2].kwargs['user_prompt'])
     assert 'previous_package' not in prompt and prompt['previous_activity']['id']=='transfer'
-    assert prompt['text_field_ids']==['audience']
-    assert 'Preserve instructions and both timing endpoints exactly' in calls[1].kwargs['system_prompt']
-    assert 'Put explanation alongside each field in its exact order' in calls[1].kwargs['system_prompt']
-    assert 'Copy each unaffected explanation exactly' in calls[1].kwargs['system_prompt']
+    assert prompt['field_ids'] is None
+    assert prompt['validated_repair_targets'] == ['practice.transfer']
+    assert 'Never change another activity, teaching case' in calls[2].kwargs['system_prompt']
+    assert 'Put an explanation alongside' in calls[2].kwargs['system_prompt']
+    assert 'Copy unaffected explanations exactly' in calls[2].kwargs['system_prompt']
     assert factory_args[-1]['timeout']==90 and factory_args[-1]['max_tokens']==4000
-    telemetry.assert_awaited_once()
-    assert telemetry.await_args.kwargs['operation']=='lesson_package_choice_definition_repair'
+    assert [call.kwargs['operation'] for call in telemetry.await_args_list] == [
+        'lesson_package_choice_definition_repair', 'lesson_package_activity_scope_review',
+        *(['lesson_package_scoped_activity_repair'] if invalid else [])]
     assert (package is not None and not response.error) == (outcome=='success')
 
 
@@ -130,9 +153,9 @@ async def test_corrected_public_activity_cannot_bypass_package_preflight(monkeyp
             if output_model is LessonPackageSeed:
                 data = {'workbook_title':original.workbook.title,'teaching_cases':[],
                     'activity_briefs':[{'id':a.id,'kind':a.kind,'scope':a.instructions} for a in original.workbook.activities]}
-            elif output_model is LessonActivityDraft:
+            elif output_model.__name__ == 'LessonActivityDraft':
                 if 'previous_activity' in request:
-                    data = activity_draft_fixture(corrected_activity())
+                    data = activity_draft_fixture(merged_activity())
                 else:
                     data = activity_draft_fixture(next(a.model_dump(mode='json') for a in original.workbook.activities if a.id == request['activity_brief']['id']))
             elif issubclass(output_model, PackageSemanticReview):
@@ -140,6 +163,8 @@ async def test_corrected_public_activity_cannot_bypass_package_preflight(monkeyp
                     'description':'Audience field is inconsistent with the required reasoning.'}]}
             elif output_model is PrivatePackageRepair:
                 data = deletion()
+            elif output_model.__name__ == 'ScopedRepairReview':
+                data = scope_verdict()
             else:
                 raise AssertionError('No prose or final review is allowed after a failed preflight')
             return LLMResponse(data=data,finish_reason='stop')
@@ -149,4 +174,5 @@ async def test_corrected_public_activity_cannot_bypass_package_preflight(monkeyp
     assert error and not packages and not approvals
     assert counts['PackageSemanticReview'] == 2
     assert counts['PrivatePackageRepair'] == 1 and counts['LessonActivityDraft'] == 3
+    assert counts['ScopedRepairReview'] == 1
     assert not any(step.get('lesson_content') for step in payload['steps'])

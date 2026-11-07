@@ -74,8 +74,8 @@ def configured_tier(value: str, *, default: str) -> str:
 
 # Reasoning models spend part of the completion budget thinking before they emit
 # the JSON body, so a ceiling sized for the answer alone yields an empty response
-# rather than a short one -- observed as "Empty response from OPENROUTER" on the
-# review stages while the 24k-token draft stage succeeded. max_tokens is a cap and
+# rather than a short one -- observed on the review stages while the 24k-token
+# draft stage succeeded. max_tokens is a cap and
 # not a target: providers bill generated tokens, so raising the headroom costs
 # nothing for models that do not need it.
 CURRICULUM_STRUCTURED_MAX_TOKENS = 16000
@@ -83,17 +83,28 @@ CURRICULUM_STRUCTURED_MAX_TOKENS = 16000
 _RECOVERY_ROUTE: ContextVar[dict[str, Any] | None] = ContextVar("curriculum_recovery_route", default=None)
 
 
+def supported_recovery_route(route: dict[str, Any]) -> bool:
+    """An audited route moves a stage to the other direct provider's model."""
+    from app.services.llm.client import provider_configured, provider_model
+    from app.services.llm.protocol import DIRECT_PROVIDERS
+    from app.services.llm.routes import other_provider
+
+    provider = route.get("provider")
+    return (provider in DIRECT_PROVIDERS and route.get("model") == provider_model(provider)
+            and route.get("from_provider") == other_provider(provider) and provider_configured(provider))
+
+
+def recovery_route_client(route: dict[str, Any], *, timeout: float, max_tokens: int, thinking_level: str):
+    """The route's model alone; callers reject an incomplete recovery response."""
+    from app.services.llm.client import direct_client
+
+    return direct_client(route["provider"], timeout=timeout, max_tokens=max_tokens, thinking_level=thinking_level)
+
+
 @contextmanager
 def curriculum_recovery_route(route: dict[str, Any] | None):
     """Scope an audited recovery route to one task's current stage only."""
-    from app.core.config import settings
-
-    if route is not None and (
-        route.get("provider") != "gemini"
-        or route.get("model") != settings.gemini_quality_model
-        or route.get("from_provider") != "openlux"
-        or not settings.gemini_api_key
-    ):
+    if route is not None and not supported_recovery_route(route):
         raise ValueError("unsupported curriculum recovery route")
     token = _RECOVERY_ROUTE.set(route)
     try:
@@ -116,12 +127,9 @@ async def _generate(
 ) -> GeneratedArtifact:
     recovery = _RECOVERY_ROUTE.get()
     if recovery:
-        from app.services.llm.client import GeminiLLMClient
-
-        client = GeminiLLMClient(model=recovery["model"], timeout=240,
-                                 max_tokens=max_tokens, thinking_level="high", temperature=0.1)
+        client = recovery_route_client(recovery, timeout=240, max_tokens=max_tokens, thinking_level="high")
     else:
-        client = get_llm_client(tier=tier, timeout=120, max_tokens=max_tokens, temperature=0.1)
+        client = get_llm_client(operation=operation, tier=tier, timeout=120, max_tokens=max_tokens)
     async with asyncio.timeout(245):
         validated, response = await client.generate_and_validate(
             system_prompt=load_prompt("curriculum_writer_system"),
@@ -131,7 +139,7 @@ async def _generate(
         )
     if recovery:
         response.retried = True
-        response.fallback_from_provider = "openlux"
+        response.fallback_from_provider = recovery.get("from_provider")
         response.fallback_from_model = recovery.get("from_model")
         response.fallback_error = recovery.get("reason")
         if response.finish_reason not in {"STOP", "stop"} and not response.error:

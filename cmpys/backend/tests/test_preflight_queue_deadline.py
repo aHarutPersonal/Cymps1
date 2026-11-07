@@ -7,6 +7,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from tests.phase0_fixtures import model_binder_mechanics  # noqa: F401
+
+# Phase 0.4 binds exact computed values in code; these tests exercise the model
+# binder's mechanics, so they keep the earlier server bindings (tests/phase0_fixtures.py).
+pytestmark = pytest.mark.usefixtures("model_binder_mechanics")
+
 from app.services.llm.client import LLMResponse
 from app.services.planning.lesson_package import LessonPackage
 from app.services.planning.package_preflight import PackageSemanticReview, review_package
@@ -40,8 +46,8 @@ def answer(request):
 @pytest.fixture
 def local_limits(monkeypatch):
     # These are in-memory settings only. Every provider below is an offline fake.
-    monkeypatch.setattr(settings, "llm_provider", "zai")
-    monkeypatch.setattr(settings, "llm_admission_limits", {"zai:offline": 5})
+    monkeypatch.setattr(settings, "llm_provider", "routed")
+    monkeypatch.setattr(settings, "llm_admission_limits", {"anthropic:offline": 5})
     monkeypatch.setattr(settings, "llm_admission_per_user", 2)
     monkeypatch.setattr(settings, "llm_admission_foreground_reserve", 1)
     usage = AsyncMock(return_value=True)
@@ -165,6 +171,9 @@ async def test_provider_request_timeout_and_single_shared_retry_remain_bounded(m
 
     class Client:
         model = "offline-review"
+        # The shared-deadline timeout is labelled with the direct client's
+        # provider, which the semantic stage's one retry matches.
+        provider_name = "anthropic"
 
         async def generate_json(self, **request):
             counts["started"] += 1
@@ -224,6 +233,9 @@ async def test_caller_cancellation_cleans_active_request_and_records_one_unknown
 
 @pytest.mark.asyncio
 async def test_received_negative_stops_globally_queued_scope_before_usage_record_finishes(monkeypatch, local_limits):
+    # Terminal evidence negatives (as once the shared correction is spent).
+    from app.services.planning import package_preflight as preflight
+    monkeypatch.setattr(preflight, "CORRECT_EVIDENCE_NEGATIVES", False)
     monkeypatch.setattr(settings, "llm_admission_per_user", 1)
     queued_created = asyncio.Event()
     queued_finished = asyncio.Event()
@@ -306,7 +318,7 @@ async def test_received_negative_stops_globally_queued_scope_before_usage_record
         assert defect not in coded[0]
         assert failures == ["practice.guided: " + coded[0]]
         assert response.effective_parameters["shared_correction_used"] is False
-        assert snapshots[-1]["rejection"]["issues"] == [{"target": "practice.guided", "description": coded[0]}]
+        assert snapshots[-1]["rejection"]["issues"] == [{"target": "practice.guided", "description": coded[0], "severity": "blocking"}]
         assert [call.kwargs["operation"] for call in local_limits.await_args_list] == [
             "package_preflight_semantic", "package_preflight_evidence_guided"]
     finally:

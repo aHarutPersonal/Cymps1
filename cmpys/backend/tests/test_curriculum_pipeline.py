@@ -513,25 +513,26 @@ async def test_explicit_verification_recovery_keeps_source_acceptance_gates(monk
     from app.services.curriculum import research
     from app.services.llm.client import LLMResponse
 
-    monkeypatch.setattr(settings, "gemini_api_key", "synthetic-test-key")
+    monkeypatch.setattr(settings, "anthropic_api_key", "synthetic-test-key")
     manifest = _manifest()
     bundle = {"verifications": [{
         "claim_id": c.claim_id, "passed": True, "confidence": 0.95,
         "supported_source_ids": c.source_ids, "reasoning": "Supported by the supplied evidence.",
     } for c in manifest.claims]}
-    response = LLMResponse(data=bundle, model=settings.gemini_quality_model, provider="gemini", finish_reason="STOP")
-    client = SimpleNamespace(model=settings.gemini_quality_model, generate_and_validate=AsyncMock(return_value=(bundle, response)))
+    response = LLMResponse(data=bundle, model=settings.anthropic_model, provider="anthropic", finish_reason="stop")
+    client = SimpleNamespace(model=settings.anthropic_model, generate_and_validate=AsyncMock(return_value=(bundle, response)))
     constructor = Mock(return_value=client)
-    primary = Mock(side_effect=AssertionError("recovery must not replay OpenLux"))
-    monkeypatch.setattr("app.services.llm.client.GeminiLLMClient", constructor)
+    primary = Mock(side_effect=AssertionError("recovery must not replay the failed primary"))
+    monkeypatch.setattr("app.services.llm.client.direct_client", constructor)
     monkeypatch.setattr(research, "get_llm_client", primary)
     recorder = AsyncMock()
     monkeypatch.setattr(research, "record_llm_response", recorder)
-    route = {"provider": "gemini", "model": settings.gemini_quality_model, "from_provider": "openlux", "from_model": "test-primary", "reason": "sanitized provider failure"}
+    route = {"provider": "anthropic", "model": settings.anthropic_model, "from_provider": "openai", "from_model": "test-primary", "reason": "sanitized provider failure"}
     result = await research.verify_research_manifest(manifest=manifest, tier="quality", recovery_route=route)
     assert all(c.verification_score == 0.95 for c in result.claims)
+    assert constructor.call_args.args == ("anthropic",)
     assert client.generate_and_validate.call_args.kwargs["repair_on_failure"] is False
-    assert recorder.call_args.kwargs["response"].fallback_from_provider == "openlux"
+    assert recorder.call_args.kwargs["response"].fallback_from_provider == "openai"
     primary.assert_not_called()
 
     bundle["verifications"][0]["passed"] = False
@@ -551,13 +552,13 @@ async def test_generation_recovery_is_scoped_and_rejects_incomplete_output(monke
     class Artifact(BaseModel):
         value: int
 
-    monkeypatch.setattr(settings, "gemini_api_key", "synthetic-test-key")
-    route = {"provider": "gemini", "model": settings.gemini_quality_model, "from_provider": "openlux", "reason": "provider timeout"}
-    response = LLMResponse(data={"value": 1}, model=settings.gemini_quality_model, provider="gemini", finish_reason="STOP")
-    client = SimpleNamespace(model=settings.gemini_quality_model, generate_and_validate=AsyncMock(return_value=({"value": 1}, response)))
+    monkeypatch.setattr(settings, "openai_api_key", "synthetic-test-key")
+    route = {"provider": "openai", "model": settings.openai_model, "from_provider": "anthropic", "reason": "provider timeout"}
+    response = LLMResponse(data={"value": 1}, model=settings.openai_model, provider="openai", finish_reason="stop")
+    client = SimpleNamespace(model=settings.openai_model, generate_and_validate=AsyncMock(return_value=({"value": 1}, response)))
     primary = Mock(side_effect=AssertionError("primary must not run inside recovery"))
     monkeypatch.setattr(generation, "get_llm_client", primary)
-    monkeypatch.setattr("app.services.llm.client.GeminiLLMClient", Mock(return_value=client))
+    monkeypatch.setattr("app.services.llm.client.direct_client", Mock(return_value=client))
     monkeypatch.setattr(generation, "record_llm_response", AsyncMock())
     monkeypatch.setattr(generation, "load_prompt", lambda name: "test")
     monkeypatch.setattr(generation, "load_and_render", lambda *args: "test")
@@ -568,7 +569,7 @@ async def test_generation_recovery_is_scoped_and_rejects_incomplete_output(monke
         assert client.generate_and_validate.call_args.kwargs["repair_on_failure"] is False
     assert generation._RECOVERY_ROUTE.get() is None
     primary.assert_not_called()
-    response.finish_reason = "MAX_TOKENS"
+    response.finish_reason = "length"
     with pytest.raises(RuntimeError, match="incomplete response"):
         with generation.curriculum_recovery_route(route):
             await generation._generate(**kwargs)
@@ -1946,15 +1947,16 @@ async def test_pinned_technique_manifest_rejects_revoked_or_changed_versions() -
 def test_pilot_job_identity_tracks_resolved_provider_and_exact_models(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(settings, "llm_provider", "openai")
+    monkeypatch.setattr(settings, "llm_provider", "routed")
+    monkeypatch.setattr(settings, "llm_route_overrides", {})
     monkeypatch.setattr(settings, "openai_api_key", "openai-test-secret")
+    monkeypatch.setattr(settings, "anthropic_api_key", "anthropic-test-secret")
     monkeypatch.setattr(settings, "gemini_api_key", "gemini-test-secret")
     monkeypatch.setattr(settings, "curriculum_research_model_tier", "fast")
     monkeypatch.setattr(settings, "curriculum_writing_model_tier", "balanced")
     monkeypatch.setattr(settings, "curriculum_review_model_tier", "quality")
-    monkeypatch.setattr(settings, "openai_fast_model", "openai-fast-v1")
-    monkeypatch.setattr(settings, "openai_model", "openai-balanced-v1")
-    monkeypatch.setattr(settings, "openai_quality_model", "openai-quality-v1")
+    monkeypatch.setattr(settings, "openai_model", "openai-direct-v1")
+    monkeypatch.setattr(settings, "anthropic_model", "anthropic-direct-v1")
     monkeypatch.setattr(settings, "gemini_fast_model", "gemini-grounded-v1")
 
     identity_hash = "b" * 64
@@ -1966,20 +1968,13 @@ def test_pilot_job_identity_tracks_resolved_provider_and_exact_models(
         "provider": "gemini",
         "model": "gemini-grounded-v1",
     }
-    assert routes["source_research_curation"]["primary"] == {
-        "provider": "openai",
-        "model": "openai-fast-v1",
-    }
-    assert routes["writing"]["primary"] == {
-        "provider": "openai",
-        "model": "openai-balanced-v1",
-    }
-    assert routes["factual_review"]["primary"] == {
-        "provider": "openai",
-        "model": "openai-quality-v1",
-    }
+    # Curriculum is not a routed stage of its own: it follows the default route.
+    for stage in ("source_research_curation", "writing", "factual_review"):
+        assert routes[stage]["primary"] == {"provider": "openai", "model": "openai-direct-v1"}
+        assert routes[stage]["fallback"] == {"provider": "anthropic", "model": "anthropic-direct-v1"}
     serialized = str(recipe)
     assert "openai-test-secret" not in serialized
+    assert "anthropic-test-secret" not in serialized
     assert "gemini-test-secret" not in serialized
 
     baseline = _pilot_job_hash(
@@ -1989,10 +1984,10 @@ def test_pilot_job_identity_tracks_resolved_provider_and_exact_models(
         recipe=recipe,
     )
     for setting_name, replacement in (
-        ("openai_fast_model", "openai-fast-v2"),
-        ("openai_model", "openai-balanced-v2"),
-        ("openai_quality_model", "openai-quality-v2"),
+        ("openai_model", "openai-direct-v2"),
+        ("anthropic_model", "anthropic-direct-v2"),
         ("gemini_fast_model", "gemini-grounded-v2"),
+        ("llm_route_overrides", {"default": "anthropic"}),
     ):
         original = getattr(settings, setting_name)
         monkeypatch.setattr(settings, setting_name, replacement)
@@ -2006,7 +2001,7 @@ def test_pilot_job_identity_tracks_resolved_provider_and_exact_models(
         )
         monkeypatch.setattr(settings, setting_name, original)
 
-    monkeypatch.setattr(settings, "llm_provider", "gemini")
+    monkeypatch.setattr(settings, "llm_provider", "dummy")
     assert (
         _pilot_job_hash(
             identity_hash,
@@ -2015,7 +2010,7 @@ def test_pilot_job_identity_tracks_resolved_provider_and_exact_models(
         )
         != baseline
     )
-    monkeypatch.setattr(settings, "llm_provider", "openai")
+    monkeypatch.setattr(settings, "llm_provider", "routed")
     monkeypatch.setattr(settings, "openai_api_key", None)
     assert (
         _pilot_job_hash(
@@ -2207,29 +2202,23 @@ def test_changed_recipe_flags_job_before_any_paid_stage(monkeypatch) -> None:
     assert supersede_index < admission_index < reserve_index
 
 
-def test_mentor_identity_tracks_yunwu_primary_and_gemini_fallback_models(
+def test_mentor_identity_tracks_routed_primary_and_backup_models(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(settings, "llm_provider", "yunwu")
-    monkeypatch.setattr(settings, "yunwu_api_key", "yunwu-test-secret")
-    monkeypatch.setattr(settings, "gemini_api_key", "gemini-test-secret")
-    monkeypatch.setattr(settings, "yunwu_fallback_enabled", True)
+    monkeypatch.setattr(settings, "llm_provider", "routed")
+    monkeypatch.setattr(settings, "llm_route_overrides", {})
+    monkeypatch.setattr(settings, "openai_api_key", "openai-test-secret")
+    monkeypatch.setattr(settings, "anthropic_api_key", "anthropic-test-secret")
     monkeypatch.setattr(settings, "curriculum_review_model_tier", "quality")
-    monkeypatch.setattr(settings, "yunwu_quality_model", "yunwu-quality-v1")
-    monkeypatch.setattr(settings, "gemini_quality_model", "gemini-fallback-v1")
-    monkeypatch.setattr(settings, "yunwu_base_url", "https://gateway.example/v1")
+    monkeypatch.setattr(settings, "openai_model", "openai-direct-v1")
+    monkeypatch.setattr(settings, "anthropic_model", "anthropic-backup-v1")
 
     recipe = _mentor_recipe_provenance()
     route = recipe["stage_model_routes"]["mentor_claim_verification"]
-    assert route["primary"]["provider"] == "yunwu"
-    assert route["primary"]["model"] == "yunwu-quality-v1"
-    assert route["fallback"] == {
-        "provider": "gemini",
-        "model": "gemini-fallback-v1",
-    }
-    assert "gateway.example" not in str(recipe)
-    assert "yunwu-test-secret" not in str(recipe)
-    assert "gemini-test-secret" not in str(recipe)
+    assert route["primary"] == {"provider": "openai", "model": "openai-direct-v1"}
+    assert route["fallback"] == {"provider": "anthropic", "model": "anthropic-backup-v1"}
+    assert "openai-test-secret" not in str(recipe)
+    assert "anthropic-test-secret" not in str(recipe)
 
     mentor_context_hash = "d" * 64
     baseline = _mentor_job_hash(
@@ -2239,9 +2228,9 @@ def test_mentor_identity_tracks_yunwu_primary_and_gemini_fallback_models(
         recipe=recipe,
     )
     for setting_name, replacement in (
-        ("yunwu_quality_model", "yunwu-quality-v2"),
-        ("gemini_quality_model", "gemini-fallback-v2"),
-        ("yunwu_base_url", "https://other-gateway.example/v1"),
+        ("openai_model", "openai-direct-v2"),
+        ("anthropic_model", "anthropic-backup-v2"),
+        ("anthropic_api_key", None),
     ):
         original = getattr(settings, setting_name)
         monkeypatch.setattr(settings, setting_name, replacement)
@@ -2254,16 +2243,6 @@ def test_mentor_identity_tracks_yunwu_primary_and_gemini_fallback_models(
             != baseline
         )
         monkeypatch.setattr(settings, setting_name, original)
-
-    monkeypatch.setattr(settings, "yunwu_fallback_enabled", False)
-    assert (
-        _mentor_job_hash(
-            "idol-1",
-            "c" * 64,
-            mentor_context_hash=mentor_context_hash,
-        )
-        != baseline
-    )
 
 
 def test_mentor_identity_pins_sanitized_name_domain_and_active_skill_set() -> None:
@@ -2769,10 +2748,10 @@ def test_budget_queries_imply_curriculum_usage_partial_index_predicate() -> None
 
 def test_complete_recovery_usage_releases_only_fully_observed_reserve() -> None:
     from app.tasks.curriculum import _complete_recovery_usage
-    evidence = _complete_recovery_usage({'writer': {'provider': 'gemini', 'total_tokens': 2000}, 'reviewer': {'provider': 'gemini', 'total_tokens': 1000}})
+    evidence = _complete_recovery_usage({'writer': {'provider': 'anthropic', 'total_tokens': 2000}, 'reviewer': {'provider': 'openai', 'total_tokens': 1000}})
     assert evidence == (2, 3000)
-    assert _complete_recovery_usage({'provider': 'openlux', 'total_tokens': 3000}) is None
-    assert _complete_recovery_usage({'provider': 'gemini', 'total_tokens': 0}) is None
+    assert _complete_recovery_usage({'provider': 'dummy', 'total_tokens': 3000}) is None
+    assert _complete_recovery_usage({'provider': 'anthropic', 'total_tokens': 0}) is None
     for observed_events, observed_tokens, expected in [(2, 3000, '0.2'), (1, 3000, '1.0'), (2, 2900, '1.0')]:
         job = SimpleNamespace(id='settled-job', input_tokens=0, output_tokens=0, cost_usd=Decimal('0'), estimated_cost_usd=Decimal('0'), model_usage_json={}, checkpoints_json={})
         checkpoint = _reserve_job_attempt(job, checkpoints={}, stage='writing', reserve_usd=1, actual_cost_before_usd=0, event_count_before=0, total_tokens_before=0)
@@ -2814,7 +2793,7 @@ async def test_draft_recheck_keeps_generation_skipped_and_reviews_active(monkeyp
         raise AssertionError('saved draft must not be generated again')
     async def review(**kwargs):
         calls.append(kwargs['reviewer'])
-        return GeneratedArtifact(value=_reviews().reviews[0], model_name='review-test', provider='gemini', input_tokens=100, output_tokens=50, total_tokens=150)
+        return GeneratedArtifact(value=_reviews().reviews[0], model_name='review-test', provider='anthropic', input_tokens=100, output_tokens=50, total_tokens=150)
     monkeypatch.setattr(task,'generate_module_draft',forbidden)
     monkeypatch.setattr(task,'repair_module_draft',forbidden)
     monkeypatch.setattr(task,'review_module',review)

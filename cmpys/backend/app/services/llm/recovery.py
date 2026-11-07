@@ -1,62 +1,51 @@
-"""One explicitly scoped independent-provider retry after a gateway outage.
+"""One explicitly scoped backup-model retry after the primary was unavailable.
 
 Callers own the retry count and record both responses separately. Content or
 schema failures never authorize switching providers here.
 """
 
+from contextlib import contextmanager
+from contextvars import ContextVar
+
 from app.core.config import settings
-from app.services.llm.client import FallbackLLMClient, GeminiLLMClient
+from app.services.llm.client import BaseLLMClient, FallbackLLMClient, direct_client, provider_configured
+from app.services.llm.protocol import DIRECT_PROVIDERS
+from app.services.llm.routes import other_provider
 
 
-class CompleteRecoveryClient(GeminiLLMClient):
+class CompleteRecoveryClient(BaseLLMClient):
+    """The backup model for one recovery call; an unfinished reply is an error."""
+
+    def __init__(self, client: BaseLLMClient):
+        self._client = client
+
+    def __getattr__(self, name):
+        return getattr(self._client, name)
+
     async def generate_json(self, *args, **kwargs):
-        response = await super().generate_json(*args, **kwargs)
-        if not response.error and str(response.finish_reason).upper() != "STOP":
+        response = await self._client.generate_json(*args, **kwargs)
+        if not response.error and str(response.finish_reason).casefold() != "stop":
             response.error = "Independent recovery response was incomplete"
             response.data = {}
         return response
 
 
 def operational_recovery_client(response, *, timeout: float, max_tokens: int):
+    """The other direct provider when ``response`` failed because its provider was unavailable."""
     provider = getattr(response, "provider", None)
-    if provider not in {"openlux", "zai"}:
+    if provider not in DIRECT_PROVIDERS or settings.llm_provider == "dummy":
         return None
-    error = str(getattr(response, "error", None) or "")
-    if provider == "zai" and not any(error.startswith(f"zai request failed ({category};") for category in (
-        "TimeoutError", "APIConnectionError", "RemoteProtocolError", "ReadError",
-        "APIStatusError", "InternalServerError", "RateLimitError", "APITimeoutError",
-        "ValueError",
-    )):
+    if not getattr(response, "error", None) or not FallbackLLMClient.unavailable(response):
         return None
-    # OpenLux sanitizes upstream failures to exception categories. A stream
-    # ending without its terminal marker is transport failure, not bad JSON.
-    interrupted = (
-        error.startswith("OpenLux request failed (" if provider == "openlux" else "zai request failed (")
-        and "finish=missing" in error
-        and any(category in error for category in (
-            "ValueError", "APIConnectionError", "RemoteProtocolError",
-            "ReadError", "APIStatusError", "InternalServerError",
-        ))
-    )
-    if not error or not (
-        interrupted or FallbackLLMClient._is_operational_failure(error)
-    ):
+    backup = other_provider(provider)
+    if not provider_configured(backup):
         return None
-    if not settings.gemini_api_key:
-        return None
-    return CompleteRecoveryClient(
-        model=settings.gemini_quality_model,
-        timeout=timeout,
-        max_tokens=max_tokens,
-        thinking_level="low",
-    )
+    return CompleteRecoveryClient(direct_client(backup, timeout=timeout, max_tokens=max_tokens,
+                                                thinking_level="low"))
 
 
 # An operator-verified outage can be carried through one catalog call without
 # changing provider settings for concurrent requests or other learners.
-from contextlib import contextmanager
-from contextvars import ContextVar
-
 _scoped_failure = ContextVar('scoped_operational_failure', default=None)
 
 

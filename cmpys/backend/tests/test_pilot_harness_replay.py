@@ -63,7 +63,7 @@ def source(tmp_path):
     directory = tmp_path / "source"
     directory.mkdir()
     _record(directory, "r-a", user_prompt="prompt-a", data={"answer": [1, 2]})
-    _record(directory, "r-err", user_prompt="prompt-err", error="zai request failed (ValueError; finish=missing)")
+    _record(directory, "r-err", user_prompt="prompt-err", error="anthropic request failed (ValueError; finish=missing)")
     _record(directory, "r-nofile", user_prompt="prompt-nofile", response_file=False)
     _record(directory, "r-other-run", user_prompt="prompt-run2", run_id="candidate-2")
     _record(directory, "r-b1", user_prompt="prompt-b", data={"n": 1})

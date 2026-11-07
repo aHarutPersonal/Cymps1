@@ -1,5 +1,16 @@
+from typing import Literal
+
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Settings of the LLM gateways and MiniMax narration removed on 2026-11-07
+# (openlux, Z.ai, Yunwu, OpenRouter). An old .env may still list them; they are
+# ignored instead of failing the unknown-key check that catches typos.
+_RETIRED_SETTING_PREFIXES = (
+    "openlux_", "zai_", "yunwu_", "openrouter_", "lesson_llm_", "lesson_openai_",
+    "openai_fast_model", "openai_quality_model", "book_narration_api_base_url", "book_narration_tts_model",
+    "book_narration_voice_id", "book_narration_mentor_voice_id", "book_narration_subtitle_allowed_hosts",
+)
 
 
 class Settings(BaseSettings):
@@ -57,106 +68,50 @@ class Settings(BaseSettings):
     # Extraction
     extractor_mode: str = "deterministic"  # "deterministic" or "llm"
 
-    # LLM Configuration
-    llm_provider: str = "dummy"  # dummy, openai, gemini, yunwu, openlux, openrouter
-    zai_api_key: str | None = Field(default=None, repr=False, exclude=True)
-    zai_secret_id: str | None = None
-    zai_secret_region: str = "us-east-1"
-    zai_base_url: str = "https://api.z.ai/api/paas/v4"
-    zai_fast_model: str = "glm-5.3-flash"
-    zai_model: str = "glm-5.3"
-    zai_quality_model: str = "glm-5.3"
-    # GLM's max_tokens includes hidden reasoning. Reserve it explicitly.
-    zai_reasoning_token_reserve: int = Field(default=2048, ge=0, le=8192)
-    # Operation -> off/low/high/max. Empty keeps every call's coded level; add
-    # an operation only after the eval promotion rule passes for its stage.
-    zai_reasoning_overrides: dict[str, str] = {}
-    # OpenLux is configured independently: old Yunwu credentials and pricing
-    # assumptions must not be silently carried into a different account route.
-    openlux_api_key: str | None = Field(default=None, repr=False, exclude=True)
-    openlux_keychain_service: str | None = None
-    openlux_secret_id: str | None = None
-    openlux_secret_region: str = "us-east-1"
-    openlux_base_url: str = "https://api.openlux.ai/v1"
-    openlux_fast_model: str = "gpt-5.6-terra"
-    openlux_model: str = "gpt-5.6-terra"
-    openlux_quality_model: str = "gpt-5.6-sol"
-    # Reserve for hidden reasoning separately from the requested visible text.
-    openlux_reasoning_token_reserve: int = Field(default=2048, ge=0, le=8192)
-    # Conservative budget estimates, NOT claimed account billing rates.
-    # Override after reconciling this token's actual provider invoice.
-    openlux_input_usd_per_million: float = Field(default=10.0, ge=0)
-    openlux_output_usd_per_million: float = Field(default=50.0, ge=0)
-    openai_api_key: str | None = None
-    openai_model: str = "gpt-4.1-mini"  # Balanced model for user-visible generation
-    openai_fast_model: str = "gpt-4o-mini"  # Lightweight model for thinking/discovery
-    openai_quality_model: str = "gpt-4.1"  # Selective fallback for failed quality gates
+    # LLM Configuration. "routed" sends each operation to its assigned model
+    # (app/services/llm/routes.py); "dummy" returns fixtures for tests and dev.
+    llm_provider: Literal["dummy", "routed"] = "dummy"
+    # Direct providers (owner decision, 2026-11-07): Claude Haiku 5.5 and
+    # gpt-6-luna, each the other's backup. Gemini serves only Google Search
+    # grounding and audiobook narration.
+    anthropic_api_key: str | None = Field(default=None, repr=False, exclude=True)
+    anthropic_model: str = "claude-haiku-5-5"
+    # Adaptive thinking shares max_tokens; reserve it on top of the visible budget.
+    # 8192 is what the 2026-11-07 Haiku tutorial eval measured; at 2048, three of
+    # four activity drafts in a smoke run stopped at the limit mid-thought.
+    anthropic_reasoning_token_reserve: int = Field(default=8192, ge=0, le=8192)
+    openai_api_key: str | None = Field(default=None, repr=False, exclude=True)
+    openai_model: str = "gpt-6-luna"
+    # Hidden reasoning shares max_completion_tokens; reserve it the same way.
+    openai_reasoning_token_reserve: int = Field(default=2048, ge=0, le=8192)
+    # Operation or stage name -> primary provider; the other provider becomes
+    # its backup. Empty keeps the 2026-11-07 assignment, e.g.
+    # LLM_ROUTE_OVERRIDES='{"books": "anthropic"}'.
+    llm_route_overrides: dict[str, Literal["anthropic", "openai"]] = {}
 
     # Expressive in-reader narration. Recordings are content-addressed and
     # persisted; exact highlighting is exposed only when the provider supplies it.
     book_narration_enabled: bool = True
-    book_narration_provider: str = "gemini"
-    # Keep Gemini settings separate from legacy MiniMax environment overrides.
+    book_narration_provider: Literal["gemini"] = "gemini"
     book_narration_gemini_model: str = "gemini-3.8-flash-tts"
     book_narration_gemini_voice: str = "Sulafat"
     book_narration_gemini_mentor_voice: str = "Gacrux"
-    book_narration_api_base_url: str = "https://api.yunwu.ai/minimax/v1"
-    book_narration_tts_model: str = "speech-2.8-hd"
-    book_narration_voice_id: str = "English_expressive_narrator"
-    book_narration_mentor_voice_id: str = "English_Steadymentor"
     book_narration_media_dir: str = "media"
     book_narration_timeout_seconds: float = 60.0
+    # The "subtitle" limits bound the Gemini word-timing transcription call.
     book_narration_subtitle_timeout_seconds: float = 10.0
     book_narration_max_audio_bytes: int = 20_000_000
     book_narration_max_subtitle_bytes: int = 1_000_000
-    # Exact hostname observed from the provider's signed subtitle URLs. Keep
-    # this an exact allowlist rather than trusting arbitrary upstream URLs.
-    book_narration_subtitle_allowed_hosts: str = (
-        "minimax-algeng-chat-tts.oss-cn-wulanchabu.aliyuncs.com"
-    )
-
-    # Yunwu's OpenAI-compatible gateway routes the current Gemini family.
-    # Flash-Lite handles bounded work, Flash handles visible generation, and
-    # Pro is reserved for deterministic quality-gate failures.
-    yunwu_api_key: str | None = None
-    yunwu_base_url: str = "https://yunwu.ai/v1"
-    yunwu_fast_model: str = "gemini-3.5-flash-lite"
-    yunwu_model: str = "gemini-3.6-flash"
-    yunwu_quality_model: str = "gemini-3.1-pro-preview"
-    yunwu_fallback_enabled: bool = True
-    # Pricing depends on the API token's assigned Yunwu route. Six remains a
-    # conservative default for a high-quality official transfer group.
-    yunwu_group_ratio: float = 6.0
-    yunwu_quota_price_cny: float = 0.5
-    yunwu_usd_exchange_rate: float = 7.3
-
-    # OpenRouter's OpenAI-compatible gateway. One model currently serves every
-    # tier: the stealth route is a single model id, so fast/balanced/quality all
-    # resolve to it until separate routes are worth configuring.
-    openrouter_api_key: str | None = None
-    openrouter_base_url: str = "https://openrouter.ai/api/v1"
-    openrouter_fast_model: str = "stealth/ox-alpha"
-    openrouter_model: str = "stealth/ox-alpha"
-    openrouter_quality_model: str = "stealth/ox-alpha"
-    openrouter_fallback_enabled: bool = True
-    # The stealth route bills nothing today. Kept configurable so that if it ever
-    # starts charging, spend re-enters the budget guard by config rather than by
-    # someone remembering this file exists.
-    openrouter_input_usd_per_million: float = 0.0
-    openrouter_output_usd_per_million: float = 0.0
 
     # Tavily (real-time web search for material URL resolution)
     tavily_api_key: str | None = None
 
-    # Google Gemini (search grounding + LearnLM tutoring + structured extraction)
-    gemini_api_key: str | None = None
-    # Current GA models. Flash handles user-visible planning/writing while
-    # Flash-Lite handles bounded extraction, routing, and metadata work.
+    # Google Gemini: Google Search grounded lookups and narration only. The
+    # tier models serve grounded calls (fast for bounded lookups).
+    gemini_api_key: str | None = Field(default=None, repr=False, exclude=True)
     gemini_model: str = "gemini-3.6-flash"
     gemini_fast_model: str = "gemini-3.5-flash-lite"
-    gemini_quality_model: str = (
-        "gemini-3.1-pro-preview"  # Selective quality fallback, never the default
-    )
+    gemini_quality_model: str = "gemini-3.1-pro-preview"
 
     # Plan generation
     plan_generator_mode: str = "deterministic"  # "deterministic" or "llm"
@@ -175,6 +130,14 @@ class Settings(BaseSettings):
     # Exercise-package repairs per tutorial. A second repair runs only for
     # defects with validated repair targets and is followed by the full recheck.
     tutorial_package_repairs: int = Field(default=1, ge=1, le=2)
+    # Fresh whole-tutorial attempts after a failed one, within the same job
+    # deadline (plan Phase 4.1); each starts from new private checkpoints.
+    # Off by default, like a second package repair; enable with the env var.
+    tutorial_fresh_attempts: int = Field(default=0, ge=0, le=2)
+    # Two focused accuracy critics beside the full tutorial review, for
+    # tutorials with few numeric spans. Built for GLM; the 2026-11-07 model
+    # eval ran without them, so they stay off unless re-evaluated.
+    tutorial_focused_accuracy_review: bool = False
     # Numerals allowed in tutorial prose outside native fences (0 = no limit);
     # also asks seed, activity and writer prompts to keep numbers in data and steps.
     tutorial_numeric_budget: int = Field(default=0, ge=0, le=20)
@@ -263,22 +226,16 @@ class Settings(BaseSettings):
     adaptive_routing_min_success_rate: float = 0.90
     adaptive_routing_min_quality_score: float = 0.90
 
-    @model_validator(mode="after")
-    def validate_reasoning_overrides(self):
-        invalid = {op: level for op, level in self.zai_reasoning_overrides.items()
-                   if level not in {"off", "low", "high", "max"}}
-        if invalid:
-            raise ValueError(f"Unsupported zai_reasoning_overrides levels: {sorted(invalid)}")
-        return self
+    @model_validator(mode="before")
+    @classmethod
+    def ignore_retired_settings(cls, data):
+        if isinstance(data, dict):
+            return {key: value for key, value in data.items()
+                    if not str(key).casefold().startswith(_RETIRED_SETTING_PREFIXES)}
+        return data
 
     @model_validator(mode="after")
-    def load_openlux_credential(self):
-        if self.llm_provider == "zai" and not self.zai_api_key and self.zai_secret_id:
-            from app.core.credentials import read_aws_secret
-
-            self.zai_api_key = read_aws_secret(
-                self.zai_secret_id, self.zai_secret_region, "ZAI_API_KEY"
-            )
+    def load_secret_credentials(self):
         if not self.google_books_api_key and self.google_books_secret_id:
             from app.core.credentials import read_aws_secret
 
@@ -287,52 +244,13 @@ class Settings(BaseSettings):
                 self.google_books_secret_region,
                 "GOOGLE_BOOKS_API_KEY",
             )
-        needs_openlux_credential = self.llm_provider == "openlux" or (
-            self.book_narration_enabled
-            and self.book_narration_provider.casefold() == "openlux"
-        )
-        if (
-            needs_openlux_credential
-            and not self.openlux_api_key
-            and self.openlux_secret_id
-        ):
-            from app.core.credentials import read_aws_secret
-
-            self.openlux_api_key = read_aws_secret(
-                self.openlux_secret_id, self.openlux_secret_region
-            )
-        if (
-            needs_openlux_credential
-            and not self.openlux_api_key
-            and self.openlux_keychain_service
-        ):
-            from app.core.credentials import read_keychain_secret
-
-            self.openlux_api_key = read_keychain_secret(self.openlux_keychain_service)
         return self
 
     @property
     def llm_configured(self) -> bool:
-        """Check if LLM is properly configured."""
-        if self.llm_provider == "zai":
-            return bool(self.zai_api_key)
-        if self.llm_provider == "openai":
-            return bool(self.openai_api_key)
-        if self.llm_provider == "gemini":
-            return bool(self.gemini_api_key)
-        if self.llm_provider == "openlux":
-            # Optional native search credentials must not disable ordinary
-            # OpenLux generation. Search routes check their own prerequisites.
-            return bool(self.openlux_api_key)
-        if self.llm_provider == "openrouter":
-            # Grounded source discovery is a native Gemini capability that no
-            # OpenAI-compatible gateway can serve, so Gemini stays required here
-            # exactly as it does for the Yunwu gateway below.
-            return bool(self.openrouter_api_key and self.gemini_api_key)
-        if self.llm_provider == "yunwu":
-            # Several grounded and streaming product paths remain native
-            # Gemini capabilities, and Gemini is also the gateway fallback.
-            return bool(self.yunwu_api_key and self.gemini_api_key)
+        """Routed generation needs at least one direct provider credential."""
+        if self.llm_provider == "routed":
+            return bool(self.anthropic_api_key or self.openai_api_key)
         return True  # Dummy is always configured
 
 

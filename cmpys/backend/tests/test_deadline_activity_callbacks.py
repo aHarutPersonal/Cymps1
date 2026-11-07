@@ -11,13 +11,14 @@ from app.tasks.plans import PlanDetailDeadlineExceeded, _deadline_client_factory
 @pytest.fixture(autouse=True)
 def one_local_slot(monkeypatch):
     monkeypatch.setattr(settings, "llm_provider", "dummy")
-    monkeypatch.setattr(settings, "llm_admission_limits", {"dummy:offline": 1})
+    monkeypatch.setattr(settings, "llm_admission_limits", {"anthropic:offline": 1})
     monkeypatch.setattr(settings, "llm_admission_foreground_reserve", 0)
     monkeypatch.setattr(settings, "llm_admission_per_user", 1)
 
 
 class WaitingClient:
     model = "offline"
+    provider_name = "anthropic"
 
     def __init__(self):
         self.started = asyncio.Event()
@@ -96,7 +97,8 @@ async def test_timeout_balances_activity_and_expired_queue_never_starts_it():
     with pytest.raises(PlanDetailDeadlineExceeded):
         await second.generate_json()
     result = await a
-    assert "TimeoutError" in result.error
+    # Labelled with the wrapped direct client's provider, the pipeline's retry vocabulary.
+    assert result.error == "anthropic request failed (TimeoutError; shared deadline)"
     assert first_events == [True, False] and first._client.finished
     assert second_events == [] and not second.request_started
 

@@ -211,8 +211,8 @@ def test_initial_seed_prompt_explicitly_requires_complete_case_metadata():
     assert "Target 2-4 meaningful answer fields" in activity_prompt
     assert "not a hard\nlimit" in activity_prompt
     assert "plan another\nactivity for a distinct learning demand" in prompt
-    assert "For writing or interpretive goals, set teaching_cases to []" in prompt
-    assert "Never invent a numerical teaching" in prompt
+    assert "For writing or interpretive goals, supply one separate qualitative teaching case" in prompt
+    assert "Never invent counts, arithmetic or derived results" in prompt
     assert "exact expression result" in activity_prompt
     assert "absolute tolerance of 0.01 by default" in activity_prompt
     assert "set this field's tolerance explicitly" in activity_prompt
@@ -295,33 +295,32 @@ async def test_unknown_extra_seed_note_then_missing_labels_fails_with_one_shared
 
 
 @pytest.mark.asyncio
-async def test_actual_zai_wire_caps_include_reasoning_in_one_bounded_output_limit(monkeypatch, usage):
+@pytest.mark.parametrize("provider", ["anthropic", "openai"])
+async def test_actual_direct_wire_caps_include_reasoning_in_one_bounded_output_limit(monkeypatch, usage, provider):
     from app.core.config import settings
-    from tests.test_json_generation_errors import client_for
-    from tests.test_openlux import chunk, transport
+    from tests.direct_wire import Reply, client_for, serve
 
     monkeypatch.setattr(settings, "llm_admission_limits", {})
-    monkeypatch.setattr(settings, "zai_reasoning_token_reserve", 2048)
     seed, activities = components()
     values = [seed, activity_draft_fixture(activities["guided"]), activity_draft_fixture(activities["transfer"])]
-    requests = []
+    wires = []
     clients = []
 
     def factory(**options):
-        client = client_for("zai")
-        client.timeout = options["timeout"]
-        client.max_tokens = options["max_tokens"]
-        client.thinking_level = options["thinking_level"]
-        stream, request = transport(monkeypatch, client, [chunk(json.dumps(values.pop(0)), "stop")])
-        requests.append(request)
-        clients.append((client, stream))
+        client = client_for(provider, timeout=options["timeout"], max_tokens=options["max_tokens"],
+                            thinking_level=options["thinking_level"], reasoning_reserve=2048)
+        wires.append(serve(client, [Reply(json.dumps(values.pop(0)), "stop")]))
+        clients.append(client)
         return client
 
     package, response, _ = await run(factory)
     assert package is not None and response.error is None
-    assert [request["max_tokens"] for request in requests] == [4248, 6048, 6048]
-    assert all(request["reasoning_effort"] == "low" for request in requests)
-    assert all(client.timeout == 90 and stream.closed for client, stream in clients)
+    cap = "max_tokens" if provider == "anthropic" else "max_completion_tokens"
+    assert [wire.request[cap] for wire in wires] == [4248, 6048, 6048]
+    assert all((wire.request["output_config"]["effort"] if provider == "anthropic"
+                else wire.request["reasoning_effort"]) == "low" for wire in wires)
+    assert all(client.timeout == 90 for client in clients)
+    assert all(stream.closed for wire in wires for stream in wire.streams)
     assert response.effective_parameters["max_component_requests"] == 4
     assert response.effective_parameters["stage_timeout_seconds"] == 240
     assert response.effective_parameters["stage_timeout_basis"] == "provider_active_union"
@@ -655,8 +654,8 @@ async def test_unwrapped_request_timeout_gets_one_bounded_retry_and_unknown_usag
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", [
-    LLMResponse(data={}, error="zai request failed (GenerationUnavailable; redacted)", retryable=False),
-    LLMResponse(data={}, error="zai request failed (RateLimitError; redacted)", retryable=True, retry_after_seconds=30),
+    LLMResponse(data={}, error="anthropic request failed (GenerationUnavailable; redacted)", retryable=False),
+    LLMResponse(data={}, error="anthropic request failed (RateLimitError; redacted)", retryable=True, retry_after_seconds=30),
 ])
 async def test_permanent_or_long_backoff_failure_does_not_retry(failure, usage):
     factory = Factory({"seed": [failure]})
@@ -787,7 +786,7 @@ async def test_three_healthy_lessons_share_two_slots_without_spending_stage_budg
     from app.tasks.plans import _deadline_client_factory
 
     monkeypatch.setattr(settings, "llm_provider", "dummy")
-    monkeypatch.setattr(settings, "llm_admission_limits", {"dummy:test": 3})
+    monkeypatch.setattr(settings, "llm_admission_limits", {"anthropic:test": 3})
     monkeypatch.setattr(settings, "llm_admission_per_user", 2)
     monkeypatch.setattr(settings, "llm_admission_foreground_reserve", 1)
     monkeypatch.setattr(builder, "_STAGE_SECONDS", 2.4)

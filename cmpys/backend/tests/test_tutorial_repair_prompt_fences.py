@@ -9,6 +9,7 @@ import inspect
 
 import pytest
 
+from app.services.planning.lesson_writer import TUTORIAL_SUPPLIED_FACTS_RULE
 from app.services.planning.tutorial_blocks import BLOCK_KINDS
 from app.tasks import plans
 from app.tasks.plans import _plan_detail_sections_repair_prompt
@@ -34,6 +35,7 @@ def _prompt(*, lesson_format=None, step_format=None) -> str:
 def test_tutorial_repair_keeps_every_native_block(kwargs) -> None:
     prompt = _prompt(**kwargs)
     assert "or a markdown fence" not in prompt
+    assert TUTORIAL_SUPPLIED_FACTS_RULE in prompt
     for kind in BLOCK_KINDS:
         assert f"```{kind}" in prompt, kind
     assert "never wrap the JSON answer itself in a markdown fence" in prompt

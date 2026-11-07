@@ -139,6 +139,93 @@ def _evidence(spans: dict, owners: dict) -> list[dict]:
     return checks
 
 
+# These fixed values describe the *only* synthetic content the canned reviews
+# can assess. Keep them independent of the mutable fixture producers.
+_EXPECTED_TEACHING_CASE = {
+    "id": "example", "assumptions": "A fictional quantity is doubled with matching units.",
+    "data": [{"id": "base", "label": "Base quantity", "value": 10, "unit": "m"}],
+    "results": [{"id": "double", "label": "Doubled quantity", "expression": "base * 2",
+                 "unit": "m", "decimal_places": 1}],
+}
+_EXPECTED_VISUAL = """```comparison
+Unbounded claim
+- Scope is missing
+- Evidence is missing
+vs
+Bounded claim
+- Scope is explicit
+- Evidence is supplied
+```"""
+_EXPECTED_STEPS = """```steps
+title: Bound one claim
+State the claim | | Name what you assert and for whom it holds.
+Add the evidence | | Point to the supplied fact that supports it.
+Limit the scope | | Say where the claim stops being true.
+```"""
+_EXPECTED_CHECK = """```check
+Q: Which claim is bounded?
+- [ ] Remote work is always better.
+- [x] Remote work helped this team ship faster last quarter.
+Why: It names its scope and the evidence behind it.
+```"""
+_EXPECTED_SECTIONS = {
+    "why_this_matters": ("explanation " * 30).strip(),
+    "core_framework": "explanation " * 155 + "\n" + _EXPECTED_VISUAL,
+    "worked_example": "The doubled result is 20.0. " + "explanation " * 140 + "\n\n" + _EXPECTED_STEPS,
+    "failure_modes": ("explanation " * 30).strip(),
+    "check_your_understanding": "explanation " * 25 + "\n\n" + _EXPECTED_CHECK,
+    "references": ("explanation " * 20).strip(),
+}
+_EXPECTED_CHECKS = [{
+    "check_id": "check1", "question": "Which claim is bounded?",
+    "why": "It names its scope and the evidence behind it.", "select_all": False,
+    "options": [
+        {"option_id": "check1.option1", "text": "Remote work is always better.", "selected": False},
+        {"option_id": "check1.option2", "text": "Remote work helped this team ship faster last quarter.", "selected": True},
+    ],
+}]
+# Independent fixed answer truth, never copied from the review input's selected flag.
+_OPTION_TRUTH = {"check1.option1": False, "check1.option2": True}
+
+
+def _expected_preflight_package(*, repaired: bool) -> dict:
+    activities = []
+    for activity_id, title, kind, amount in (("guided", "Guided argument", "practice", 12),
+                                             ("transfer", "Independent argument", "transfer", 13)):
+        explanation = f"Doubling the input gives {amount * 2} m because the case asks for twice the supplied quantity."
+        if repaired and activity_id == "transfer":
+            explanation = "The new input is independent, so doubling it gives 26 m."
+        activities.append({
+            "id": activity_id, "title": title, "kind": kind,
+            "instructions": "Write a claim about the supplied scenario, give a reason, test an objection and revise the claim.",
+            "data": [{"id": "amount", "label": "Input quantity", "value": amount, "unit": "m"}],
+            "fields": [{"id": "double", "label": "Doubled quantity", "kind": "number", "unit": "m",
+                        "expression": "amount * 2", "rubric_criterion": "Doubles the supplied quantity"}],
+            "hint": "Check whether the objection targets the reason supporting your claim.",
+            "worked_solution": f"Doubled quantity\n\n({amount} * 2) = {amount * 2}\n\nm\n\n{explanation}",
+            "minutes_min": 1, "minutes_max": 2,
+        })
+    return {"teaching_cases": [copy.deepcopy(_EXPECTED_TEACHING_CASE)],
+            "workbook": {"title": "Apply and revise an argument", "activities": activities}}
+
+
+def _validate_preflight_fixture(data: dict, *, repaired: bool) -> None:
+    assert data["choice_audit_inventory"] == {}
+    assert data["text_audit_inventory"] == {}
+    assert data["teaching_case_audit_inventory"] == ["teaching.example"]
+    assert data["package"] == _expected_preflight_package(repaired=repaired)
+    assert data["numerical_evidence"] == [
+        {"target": "teaching_cases[example].results[double]", "value": 20},
+        {"target": "workbook.activities[guided].fields[double]", "value": 24},
+        {"target": "workbook.activities[transfer].fields[double]", "value": 26},
+    ]
+
+
+def _validate_public_fixture(sections: dict, checks: list) -> None:
+    assert sections == _EXPECTED_SECTIONS
+    assert checks == _EXPECTED_CHECKS
+
+
 class Recorder:
     def __init__(self, scenario: str, scale: float, fixtures: dict):
         self.scenario, self.scale, self.fixtures = scenario, scale, fixtures
@@ -189,11 +276,19 @@ class Recorder:
             value = f["draft"](f["activities"][data["activity_brief"]["id"]])
         elif stage == "preflight_semantic":
             self.semantic_calls += 1
+            _validate_preflight_fixture(data, repaired=self.scenario == "preflight_reject" and self.semantic_calls > 1)
             if self.scenario == "preflight_reject" and self.semantic_calls == 1:
                 value = {"acceptable": False, "issues": [{"target": REJECTED_FIELD, "description":
                     "The transfer explanation must state why doubling applies to the new input."}]}
             else:
-                value = {"acceptable": True, "issues": []}
+                value = {"acceptable": True, "issues": [], "teaching_case_audits": [{
+                    "target": "teaching.example",
+                    "core_inference": "The supplied base quantity is doubled.",
+                    "quantities_and_units": "Base and doubled result are both measured in metres.",
+                    "decision_rule": "Multiply the given base quantity by two.",
+                    "semantically_valid": True,
+                    "reason": "The result follows from the given arithmetic and units.",
+                }]}
         elif stage == "preflight_evidence":
             value = {"calculations": _evidence(data["numeric_spans"], data["numeric_span_owners"])}
         elif stage == "lesson_writer":
@@ -201,7 +296,20 @@ class Recorder:
         elif stage == "final_review":
             context = data.get("context") or {}
             checks = _evidence(data.get("numeric_spans") or {}, context.get("numeric_span_owners") or {})
-            value = f["review"](practice_minutes=3, contains_calculations=bool(checks), calculations=checks)
+            from app.services.planning.lesson_review import public_check_inventory, public_section_inventory
+            lesson = data["lesson"]
+            section_inventory = public_section_inventory(lesson)
+            check_inventory = public_check_inventory(lesson)
+            _validate_public_fixture(section_inventory, check_inventory)
+            value = f["review"](practice_minutes=3, contains_calculations=bool(checks), calculations=checks,
+                public_sections=[{"section_id": section, "source_quote": text[:100],
+                    "domain_valid": True, "consistent_with_core": True,
+                    "reason": "The canned example presents its doubled quantity consistently."}
+                    for section, text in section_inventory.items()],
+                public_check_options=[{"option_id": option["option_id"],
+                    "defensible": _OPTION_TRUTH[option["option_id"]],
+                    "reason": "The canned option matches this fixed synthetic case."}
+                    for check in check_inventory for option in check["options"]])
         elif stage == "package_repair":
             activity_id, field_id = REJECTED_FIELD.split(".")[1:]
             value_in = f["activities"][activity_id]["data"][0]["value"]

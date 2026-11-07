@@ -46,7 +46,7 @@ async def review_book_fidelity(module: dict, *, source: str, source_id: str | No
     from app.services.llm.client import get_llm_client
     from app.services.llm.telemetry import record_llm_response
     client = (client_factory or get_llm_client)(tier='balanced', timeout=90, max_tokens=9000,
-                                               thinking_level='low', allow_fallback=False)
+                                               thinking_level='low', operation='book_fidelity_review')
     response = await client.generate_json(
         system_prompt=(
             'Independently review this educational guide against the supplied verified book source. '
@@ -125,7 +125,7 @@ async def repair_book_fidelity(module: dict, *, source: str, review: dict, clien
     from app.services.llm.client import get_llm_client
     from app.services.llm.telemetry import record_llm_response
     client = (client_factory or get_llm_client)(tier='balanced', timeout=90, max_tokens=5000,
-                                               thinking_level='low', allow_fallback=False)
+                                               thinking_level='low', operation='book_fidelity_repair')
     response = await client.generate_json(
         system_prompt=(
             'Correct only the identified paragraphs of this educational book guide. '

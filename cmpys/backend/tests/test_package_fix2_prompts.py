@@ -18,25 +18,29 @@ def rendered(name: str) -> str:
 
 def test_activity_prompt_states_effects_formulas_and_qualitative_evidence():
     text = rendered(ACTIVITY)
-    assert "each item's effect on its own and the net where items offset" in text
+    assert "each contributing effect, any offsetting net" in text
+    assert "all signed effects" in text
     # In words only: a shown numeric result would be an undeclared derived number
     # and could leak a field's answer (review 5b).
     assert "A question names any formula in words, never as a bare numeric expression" in text
     assert "with its result" not in text
-    assert "so a qualitative worked example uses digits only as declared data" in text
+    assert "Declare raw quantities from learner text, hints, quotations and explanations as named data" in text
 
 
 def test_activity_prompt_requires_atomic_multi_choice_options_and_a_whole_set_rubric():
     text = rendered(ACTIVITY)
-    assert "each option one atomic action whose label contains no other option's action" in text
-    assert "for multi_choice, the skill the whole correct set shows" in text
+    assert "Multi-choice options are atomic and non-overlapping" in text
+    assert "selected set must be uniquely defensible" in text
+    assert "Public rubrics name the skill" in text
     # The rubric still never names the answer itself (answer-leak gate unchanged).
     assert "never the answer itself" in text
 
 
 def test_seed_prompt_plans_the_same_rules():
     text = rendered(SEED)
-    assert "Qualitative worked examples give evidence in words, with digits only when declared as data" in text
+    assert "data: [] and results: []" in text
+    assert "raw quantities as data and calculations as results" in text
+    assert "Avoid invented quantities" in text
     assert "with its result" not in text
 
 

@@ -1,0 +1,28 @@
+PUBLIC PLAN COPY:
+- Tutorial counts are assigned later from the mission budget. Do not promise a numeric
+  count of tutorials in a backbone or week; say "the tutorial sequence". Counts of
+  concrete outputs (claims, drafts, cases) may be specified when feasible.
+- Translate internal assessment states into plain language. Never print needs_review,
+  not_assessed, correct_on_item, completed_with_support or other machine status labels
+  in learner-facing prose. Say what still needs checking and what evidence is available.
+- Honor the learner's execution constraints in every required success metric. For
+  in-app cognitive work, assess the saved answer against supplied criteria. External
+  readers, purchases, meetings or replies may be optional follow-up only. A simulated
+  reader response must be explicitly labeled and is not evidence of real reader testing.
+- Use a mentor's named method only when supplied evidence documents that method.
+  A publication milestone does not establish a teaching technique, review cadence,
+  or writing habit. Otherwise describe the domain method without mentor attribution.
+- Every reader-based success criterion names whether the check is simulated in-app
+  or an explicitly agreed real-reader task. "A reader summarizes it" alone is ambiguous.
+  Preserve an in-app-only constraint through the final week, not just early practice.
+- Routine success criteria use completion/correction of the available scheduled review.
+  Do not fix a session count or promise fresh cases: the server sets the schedule and
+  selects already attempted exercises. Fresh cases belong in mission tutorials.
+- Name the genre where a method applies. In writing, factual assertions are claims
+  too; value judgments need reasons but not necessarily an empirical trial. A
+  policy-proposal checklist must be labeled as such, not taught as every claim's definition.
+- Plan overviews describe learner actions and success criteria. Do not insert finished
+  numeric worked examples, invented datasets or solved sample claims into backbone/week
+  prose; validated lessons supply teaching examples and their declared inputs. Match
+  evidence to what it measures: attendance totals do not identify weekday workers or
+  demonstrate learning.

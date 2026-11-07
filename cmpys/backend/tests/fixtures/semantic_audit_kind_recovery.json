@@ -1,0 +1,586 @@
+{
+  "misplaced_incomplete": {
+    "package": {
+      "teaching_cases": [
+        {
+          "id": "bus_lane_example",
+          "assumptions": "Original fictional example. Three sentences about a town bus lane: (1) \"The new bus lane on Market Street\" — a topic, a noun phrase naming a subject; there is nothing anyone could reject. (2) \"The Market Street bus lane has slowed overall traffic on that street.\" — a claim: it asserts something a reader could deny with evidence (\"No, average travel times are unchanged\"). (3) \"The Market Street bus lane has slowed traffic because private cars now share a single lane.\" — a claim plus a stated reason, joined by \"because\"; both the assertion and its supporting link could be challenged. Deciding cue: a claim takes an arguable position someone could reasonably reject, while a topic only names what is being discussed.",
+          "data": [],
+          "results": []
+        }
+      ],
+      "workbook": {
+        "title": "Spot the claim",
+        "activities": [
+          {
+            "id": "classify_practice",
+            "title": "Classify garden sentences",
+            "kind": "practice",
+            "instructions": "Original fictional example. A town newsletter prints three short items about a proposal to turn a vacant lot into a community garden:\n\nItem A: \"The community garden proposal for the vacant lot on Elm Avenue.\"\nItem B: \"The Elm Avenue garden would improve the neighborhood.\"\nItem C: \"The Elm Avenue garden would improve the neighborhood because residents would meet their neighbors while tending shared plots.\"\n\nClassify each item. The deciding cue: a claim takes an arguable position someone could reasonably reject, while a topic only names what is being discussed, and a claim-plus-reason also states why the position holds.",
+            "fields": [
+              {
+                "id": "classifications",
+                "label": "Match each lettered item to its type",
+                "kind": "choice",
+                "choices": [
+                  {
+                    "id": "a",
+                    "label": "Item A topic, Item B claim, Item C claim-plus-reason"
+                  },
+                  {
+                    "id": "b",
+                    "label": "Item A claim, Item B topic, Item C claim-plus-reason"
+                  },
+                  {
+                    "id": "c",
+                    "label": "Item A topic, Item B claim-plus-reason, Item C claim"
+                  },
+                  {
+                    "id": "d",
+                    "label": "Item A claim-plus-reason, Item B claim, Item C topic"
+                  }
+                ],
+                "correct_choice": "a",
+                "rubric_criterion": "Applies the rejectability cue and the reason marker to all three items"
+              },
+              {
+                "id": "claim_rejection",
+                "label": "For the item you labeled a claim, what would a reader have to reject to disagree? One or two sentences.",
+                "kind": "text",
+                "criteria": [
+                  "Identifies the specific assertive content that could be denied, such as the garden improving the neighborhood",
+                  "Does not treat the naming of the garden or the lot as the point of disagreement",
+                  "Accepts a reasoned argument that a borderline sentence is a claim because it asserts a change is worthwhile"
+                ],
+                "rubric_criterion": "Explains the arguable position a reader would deny",
+                "hint": "Name the position the sentence takes, not the subject it mentions."
+              }
+            ],
+            "hint": "For each item, ask whether a reader could say \"I disagree, and here is my evidence\" about it, and whether a reason is attached.",
+            "worked_solution": "Match each lettered item to its type\n\nItem A topic, Item B claim, Item C claim-plus-reason\n\nItem A is a noun phrase naming the proposal; there is nothing to reject, so it is a topic. Item B asserts the garden would improve the neighborhood — a reader could deny it with evidence, such as arguing the lot serves better as parking — so it is a claim. Item C adds an explicit reason after \"because\": meeting neighbors while tending shared plots is offered as the mechanism of improvement, so it is a claim-plus-reason, and both the assertion and the supporting link can be challenged.\n\nFor the item you labeled a claim, what would a reader have to reject to disagree? One or two sentences.\n\nA model answer: \"To disagree, a reader would have to reject the idea that the garden would improve the neighborhood — for example, by arguing the lot already serves residents well as it is. They are not disputing that the garden exists as a proposal; they are disputing whether its effect would be good.\" The key move is separating what the sentence names from what it asserts. Accept a learner who argues a borderline item counts as a claim because it asserts a change is worthwhile, as long as they name the assertive content being denied.",
+            "minutes_min": 2,
+            "minutes_max": 2
+          },
+          {
+            "id": "classify_transfer",
+            "title": "Find the claim with its reason",
+            "kind": "transfer",
+            "instructions": "Original fictional letter. A resident writes to the town council about a proposal for a weekend farmers market in Riverside Park:\n\n\"The proposed weekend farmers market in Riverside Park. A market would bring lively crowds to a quiet corner of the park. Vendors should be allowed to sell fresh produce there every Saturday, because the surrounding streets have no shop that sells fresh vegetables. Some stallholders have already asked about a spot.\"\n\nYour task: quote one sentence from the letter that is a claim-plus-reason, or state that none qualifies. Then, in the same response, explain in one or two sentences how the reason is meant to support the asserted position. Use only the supplied paragraph; do not invent new wording or facts.",
+            "fields": [
+              {
+                "id": "claim_reason",
+                "label": "Your quoted sentence and explanation of how its reason supports it",
+                "kind": "text",
+                "criteria": [
+                  "Quotes or clearly identifies one actual sentence from the supplied letter rather than inventing new wording",
+                  "The identified sentence contains both an arguable assertion and an explicit supporting reason, or the response correctly argues none does with reference to what is missing",
+                  "The explanation connects the reason to the position as support someone could challenge",
+                  "Accepts a reasoned alternative if the learner argues another sentence also qualifies, provided both parts are present"
+                ]
+              }
+            ],
+            "hint": "Look for a sentence with two parts: an assertion someone could deny, and an explicit reason offered for it.",
+            "worked_solution": "Your quoted sentence and explanation of how its reason supports it\n\nThe intended sentence is: \"Vendors should be allowed to sell fresh produce there every Saturday, because the surrounding streets have no shop that sells fresh vegetables.\" Its assertion — that vendors should be allowed to sell there — takes a position a reader could reject, for example by arguing the park is unsuitable or that a market would crowd out other users. The reason after \"because\" is meant to support that position: if no nearby shop sells fresh vegetables, the market fills a real gap, so allowing vendors serves a need. That link is itself challengeable — a reader could deny that the area lacks such a shop, or agree it does but still oppose Saturday trading — which is what makes the sentence a claim-plus-reason rather than a bare topic or claim. The opening sentence is only a topic phrase naming the proposal; the crowd sentence asserts something but gives no explicit reason; the stallholder sentence reports a fact without taking an arguable position. A no-qualifying-sentence answer is defensible only if justified against these actual sentences, and here the \"because\" sentence clearly fits. Accept an argued alternative only if it names both an assertion someone could deny and an explicit reason within the letter's actual wording.",
+            "minutes_min": 1,
+            "minutes_max": 2
+          }
+        ]
+      }
+    },
+    "verdict": {
+      "acceptable": true,
+      "issues": [],
+      "choice_audits": [
+        {
+          "target": "practice.classify_practice.classifications",
+          "depends_on_learner_response": false,
+          "dependency_reason": "The classification question uses fixed supplied items with a single fully determined correct mapping, independent of any learner-written response.",
+          "options": [
+            {
+              "option_id": "a",
+              "defensible": true,
+              "reason": "Correctly applies topic, claim, and because-marker cues to items A, B, C."
+            },
+            {
+              "option_id": "b",
+              "defensible": false,
+              "reason": "Mislabels noun-phrase Item A as a claim; nothing arguable to reject."
+            },
+            {
+              "option_id": "c",
+              "defensible": false,
+              "reason": "Item B has no because-clause, so it is not claim-plus-reason."
+            },
+            {
+              "option_id": "d",
+              "defensible": false,
+              "reason": "Item A names a subject only and Item C is not a topic."
+            }
+          ]
+        },
+        {
+          "target": "practice.classify_practice.claim_rejection",
+          "dependency_reason": "Depends on the learner's classification: any item reasonably labeled a claim must be discussed, so grading follows their choice.",
+          "options": []
+        }
+      ],
+      "text_audits": [
+        {
+          "target": "practice.classify_practice.claim_rejection",
+          "alternative_response": "Item B is the claim: to disagree, a reader would have to reject that the garden would improve the neighborhood, for instance by arguing it would bring noise and congestion.",
+          "criteria": [
+            {
+              "criterion_index": 0,
+              "required_by_task": true,
+              "accepts_alternative": true,
+              "reason": "Task asks what a reader must reject; naming the asserted effect is required."
+            },
+            {
+              "criterion_index": 1,
+              "required_by_task": true,
+              "accepts_alternative": true,
+              "reason": "Correctly excludes the mere naming of the proposal or lot."
+            },
+            {
+              "criterion_index": 2,
+              "required_by_task": false,
+              "accepts_alternative": true,
+              "reason": "Permissive grading rule; does not penalize responses omitting borderline discussion."
+            }
+          ],
+          "model_answer_valid": true,
+          "model_answer_reason": "Model answer names the assertive content and distinguishes it from the topic; valid against supplied items.",
+          "requires_activity_repair": false
+        },
+        {
+          "target": "practice.classify_transfer.claim_reason",
+          "alternative_response": "\"Vendors should be allowed to sell fresh produce there every Saturday, because the surrounding streets have no shop that sells fresh vegetables.\" The reason supports the position by showing an unmet local need the market would fill.",
+          "criteria": [
+            {
+              "criterion_index": 0,
+              "required_by_task": true,
+              "accepts_alternative": true,
+              "reason": "Task requires an actual quoted sentence; the alternative quotes one exactly."
+            },
+            {
+              "criterion_index": 1,
+              "required_by_task": true,
+              "accepts_alternative": true,
+              "reason": "Quoted sentence has deniable assertion and explicit because-reason."
+            },
+            {
+              "criterion_index": 2,
+              "required_by_task": true,
+              "accepts_alternative": true,
+              "reason": "Alternative links unmet need to the permission position as challengeable support."
+            },
+            {
+              "criterion_index": 3,
+              "required_by_task": false,
+              "accepts_alternative": true,
+              "reason": "Permissive rule for argued alternatives; does not exclude the primary answer."
+            }
+          ],
+          "model_answer_valid": true,
+          "model_answer_reason": "Correct sentence identified with accurate assertion/reason analysis; other sentences correctly excluded.",
+          "requires_activity_repair": false
+        }
+      ]
+    }
+  },
+  "misplaced_complete": {
+    "package": {
+      "teaching_cases": [
+        {
+          "id": "bus_lane_example",
+          "assumptions": "Original fictional example. Three sentences about a town bus lane: (1) \"The new bus lane on Market Street\" — a topic, a noun phrase naming a subject; there is nothing anyone could reject. (2) \"The Market Street bus lane has slowed overall traffic on that street.\" — a claim: it asserts something a reader could deny with evidence (\"No, average travel times are unchanged\"). (3) \"The Market Street bus lane has slowed traffic because private cars now share a single lane.\" — a claim plus a stated reason, joined by \"because\"; both the assertion and its supporting link could be challenged. Deciding cue: a claim takes an arguable position someone could reasonably reject, while a topic only names what is being discussed.",
+          "data": [],
+          "results": []
+        }
+      ],
+      "workbook": {
+        "title": "Spot the claim",
+        "activities": [
+          {
+            "id": "classify_practice",
+            "title": "Classify garden sentences",
+            "kind": "practice",
+            "instructions": "Original fictional example. A town newsletter prints three short items about a proposal to turn a vacant lot into a community garden:\n\nItem A: \"The community garden proposal for the vacant lot on Elm Avenue.\"\nItem B: \"The Elm Avenue garden would improve the neighborhood.\"\nItem C: \"The Elm Avenue garden would improve the neighborhood because residents would meet their neighbors while tending shared plots.\"\n\nClassify each item. The deciding cue: a claim takes an arguable position someone could reasonably reject, while a topic only names what is being discussed, and a claim-plus-reason also states why the position holds.",
+            "fields": [
+              {
+                "id": "classifications",
+                "label": "Match each lettered item to its type",
+                "kind": "choice",
+                "choices": [
+                  {
+                    "id": "a",
+                    "label": "Item A topic, Item B claim, Item C claim-plus-reason"
+                  },
+                  {
+                    "id": "b",
+                    "label": "Item A claim, Item B topic, Item C claim-plus-reason"
+                  },
+                  {
+                    "id": "c",
+                    "label": "Item A topic, Item B claim-plus-reason, Item C claim"
+                  },
+                  {
+                    "id": "d",
+                    "label": "Item A claim-plus-reason, Item B claim, Item C topic"
+                  }
+                ],
+                "correct_choice": "a",
+                "rubric_criterion": "Applies the rejectability cue and the reason marker to all three items"
+              },
+              {
+                "id": "claim_rejection",
+                "label": "For the item you labeled a claim, what would a reader have to reject to disagree? One or two sentences.",
+                "kind": "text",
+                "criteria": [
+                  "Identifies the specific assertive content that could be denied, such as the garden improving the neighborhood",
+                  "Does not treat the naming of the garden or the lot as the point of disagreement",
+                  "Accepts a reasoned argument that a borderline sentence is a claim because it asserts a change is worthwhile"
+                ],
+                "rubric_criterion": "Explains the arguable position a reader would deny",
+                "hint": "Name the position the sentence takes, not the subject it mentions."
+              }
+            ],
+            "hint": "For each item, ask whether a reader could say \"I disagree, and here is my evidence\" about it, and whether a reason is attached.",
+            "worked_solution": "Match each lettered item to its type\n\nItem A topic, Item B claim, Item C claim-plus-reason\n\nItem A is a noun phrase naming the proposal; there is nothing to reject, so it is a topic. Item B asserts the garden would improve the neighborhood — a reader could deny it with evidence, such as arguing the lot serves better as parking — so it is a claim. Item C adds an explicit reason after \"because\": meeting neighbors while tending shared plots is offered as the mechanism of improvement, so it is a claim-plus-reason, and both the assertion and the supporting link can be challenged.\n\nFor the item you labeled a claim, what would a reader have to reject to disagree? One or two sentences.\n\nA model answer: \"To disagree, a reader would have to reject the idea that the garden would improve the neighborhood — for example, by arguing the lot already serves residents well as it is. They are not disputing that the garden exists as a proposal; they are disputing whether its effect would be good.\" The key move is separating what the sentence names from what it asserts. Accept a learner who argues a borderline item counts as a claim because it asserts a change is worthwhile, as long as they name the assertive content being denied.",
+            "minutes_min": 2,
+            "minutes_max": 2
+          },
+          {
+            "id": "classify_transfer",
+            "title": "Find the claim with its reason",
+            "kind": "transfer",
+            "instructions": "Original fictional letter. A resident writes to the town council about a proposal for a weekend farmers market in Riverside Park:\n\n\"The proposed weekend farmers market in Riverside Park. A market would bring lively crowds to a quiet corner of the park. Vendors should be allowed to sell fresh produce there every Saturday, because the surrounding streets have no shop that sells fresh vegetables. Some stallholders have already asked about a spot.\"\n\nYour task: quote one sentence from the letter that is a claim-plus-reason, or state that none qualifies. Then, in the same response, explain in one or two sentences how the reason is meant to support the asserted position. Use only the supplied paragraph; do not invent new wording or facts.",
+            "fields": [
+              {
+                "id": "claim_reason",
+                "label": "Your quoted sentence and explanation of how its reason supports it",
+                "kind": "text",
+                "criteria": [
+                  "Quotes or clearly identifies one actual sentence from the supplied letter rather than inventing new wording",
+                  "The identified sentence contains both an arguable assertion and an explicit supporting reason, or the response correctly argues none does with reference to what is missing",
+                  "The explanation connects the reason to the position as support someone could challenge",
+                  "Accepts a reasoned alternative if the learner argues another sentence also qualifies, provided both parts are present"
+                ]
+              }
+            ],
+            "hint": "Look for a sentence with two parts: an assertion someone could deny, and an explicit reason offered for it.",
+            "worked_solution": "Your quoted sentence and explanation of how its reason supports it\n\nThe intended sentence is: \"Vendors should be allowed to sell fresh produce there every Saturday, because the surrounding streets have no shop that sells fresh vegetables.\" Its assertion — that vendors should be allowed to sell there — takes a position a reader could reject, for example by arguing the park is unsuitable or that a market would crowd out other users. The reason after \"because\" is meant to support that position: if no nearby shop sells fresh vegetables, the market fills a real gap, so allowing vendors serves a need. That link is itself challengeable — a reader could deny that the area lacks such a shop, or agree it does but still oppose Saturday trading — which is what makes the sentence a claim-plus-reason rather than a bare topic or claim. The opening sentence is only a topic phrase naming the proposal; the crowd sentence asserts something but gives no explicit reason; the stallholder sentence reports a fact without taking an arguable position. A no-qualifying-sentence answer is defensible only if justified against these actual sentences, and here the \"because\" sentence clearly fits. Accept an argued alternative only if it names both an assertion someone could deny and an explicit reason within the letter's actual wording.",
+            "minutes_min": 1,
+            "minutes_max": 2
+          }
+        ]
+      }
+    },
+    "verdict": {
+      "acceptable": true,
+      "issues": [],
+      "choice_audits": [
+        {
+          "target": "practice.classify_practice.classifications",
+          "depends_on_learner_response": false,
+          "dependency_reason": "The classification question supplies all three fixed sentences, so the correct mapping is fully determined by the supplied case, not by any learner-created text.",
+          "options": [
+            {
+              "option_id": "a",
+              "defensible": true,
+              "reason": "Item A is a noun phrase topic, B an arguable claim, C adds a because-reason."
+            },
+            {
+              "option_id": "b",
+              "defensible": false,
+              "reason": "Item A is a noun phrase with nothing to reject, not a claim."
+            },
+            {
+              "option_id": "c",
+              "defensible": false,
+              "reason": "Item B states no reason; only Item C carries an explicit because-reason."
+            },
+            {
+              "option_id": "d",
+              "defensible": false,
+              "reason": "Item A contains no assertion or reason; Item C is not merely a topic."
+            }
+          ]
+        },
+        {
+          "target": "practice.classify_practice.claim_rejection",
+          "depends_on_learner_response": false,
+          "dependency_reason": "The fixed choice key is determined by the supplied sentences alone; the linked text field's learner response does not alter this mapping.",
+          "options": [
+            {
+              "option_id": "a",
+              "defensible": true,
+              "reason": "Correctly applies rejectability cue and reason marker to all items."
+            },
+            {
+              "option_id": "b",
+              "defensible": false,
+              "reason": "Mislabels a bare topic phrase as an arguable claim."
+            },
+            {
+              "option_id": "c",
+              "defensible": false,
+              "reason": "Swaps claim and claim-plus-reason labels for B and C."
+            },
+            {
+              "option_id": "d",
+              "defensible": false,
+              "reason": "Mislabels both A and C against their actual structure."
+            }
+          ]
+        }
+      ],
+      "text_audits": [
+        {
+          "target": "practice.classify_practice.claim_rejection",
+          "alternative_response": "To disagree, a reader would have to reject that the garden would make the neighborhood better off, perhaps by claiming the lot attracts rats and noise instead. The dispute is over the garden's effect, not its existence as a proposal.",
+          "criteria": [
+            {
+              "criterion_index": 0,
+              "required_by_task": true,
+              "accepts_alternative": true,
+              "reason": "Names the assertive content — the garden improving the neighborhood — as disputable."
+            },
+            {
+              "criterion_index": 1,
+              "required_by_task": true,
+              "accepts_alternative": true,
+              "reason": "Distinguishes the asserted effect from the mere naming of the garden."
+            },
+            {
+              "criterion_index": 2,
+              "required_by_task": true,
+              "accepts_alternative": true,
+              "reason": "Openness criterion; it accepts reasoned borderline-claim arguments without requiring them."
+            }
+          ],
+          "model_answer_valid": true,
+          "model_answer_reason": "Model answer names the denyable assertion, separates it from naming, and rubric explicitly permits justified alternatives.",
+          "requires_activity_repair": false
+        },
+        {
+          "target": "practice.classify_transfer.claim_reason",
+          "alternative_response": "The sentence \"Vendors should be allowed to sell fresh produce there every Saturday, because the surrounding streets have no shop that sells fresh vegetables\" is a claim-plus-reason. If no nearby shop sells vegetables, residents lack access, so permitting vendors meets that need — though one could deny the area truly lacks such a shop.",
+          "criteria": [
+            {
+              "criterion_index": 0,
+              "required_by_task": true,
+              "accepts_alternative": true,
+              "reason": "Alternative quotes an actual sentence verbatim from the supplied letter."
+            },
+            {
+              "criterion_index": 1,
+              "required_by_task": true,
+              "accepts_alternative": true,
+              "reason": "Sentence contains both denyable assertion and explicit because-reason; alternative exhibits both."
+            },
+            {
+              "criterion_index": 2,
+              "required_by_task": true,
+              "accepts_alternative": true,
+              "reason": "Explanation links the gap-in-access reason to the permission position as challengeable support."
+            },
+            {
+              "criterion_index": 3,
+              "required_by_task": true,
+              "accepts_alternative": true,
+              "reason": "Rubric openness; permits argued alternatives with both parts, does not require them."
+            }
+          ],
+          "model_answer_valid": true,
+          "model_answer_reason": "Identifies the correct sentence, explains the challengeable support link, uses only supplied wording, and accepts justified alternatives.",
+          "requires_activity_repair": false
+        }
+      ]
+    }
+  },
+  "permissive": {
+    "package": {
+      "teaching_cases": [
+        {
+          "id": "bus_lane_example",
+          "assumptions": "Original fictional example. Three sentences about a town bus lane: (1) \"The new bus lane on Market Street\" — a topic, a noun phrase naming a subject; there is nothing anyone could reject. (2) \"The Market Street bus lane has slowed overall traffic on that street.\" — a claim: it asserts something a reader could deny with evidence (\"No, average travel times are unchanged\"). (3) \"The Market Street bus lane has slowed traffic because private cars now share a single lane.\" — a claim plus a stated reason, joined by \"because\"; both the assertion and its supporting link could be challenged. Deciding cue: a claim takes an arguable position someone could reasonably reject, while a topic only names what is being discussed.",
+          "data": [],
+          "results": []
+        }
+      ],
+      "workbook": {
+        "title": "Spot the claim",
+        "activities": [
+          {
+            "id": "classify_practice",
+            "title": "Classify garden sentences",
+            "kind": "practice",
+            "instructions": "Original fictional example. A town newsletter prints three short items about a proposal to turn a vacant lot into a community garden:\n\nItem A: \"The community garden proposal for the vacant lot on Elm Avenue.\"\nItem B: \"The Elm Avenue garden would improve the neighborhood.\"\nItem C: \"The Elm Avenue garden would improve the neighborhood because residents would meet their neighbors while tending shared plots.\"\n\nClassify each item. The deciding cue: a claim takes an arguable position someone could reasonably reject, while a topic only names what is being discussed, and a claim-plus-reason also states why the position holds.",
+            "fields": [
+              {
+                "id": "classifications",
+                "label": "Match each lettered item to its type",
+                "kind": "choice",
+                "choices": [
+                  {
+                    "id": "a",
+                    "label": "Item A topic, Item B claim, Item C claim-plus-reason"
+                  },
+                  {
+                    "id": "b",
+                    "label": "Item A claim, Item B topic, Item C claim-plus-reason"
+                  },
+                  {
+                    "id": "c",
+                    "label": "Item A topic, Item B claim-plus-reason, Item C claim"
+                  },
+                  {
+                    "id": "d",
+                    "label": "Item A claim-plus-reason, Item B claim, Item C topic"
+                  }
+                ],
+                "correct_choice": "a",
+                "rubric_criterion": "Applies the rejectability cue and the reason marker to all three items"
+              },
+              {
+                "id": "claim_rejection",
+                "label": "For the item you labeled a claim, what would a reader have to reject to disagree? One or two sentences.",
+                "kind": "text",
+                "criteria": [
+                  "Identifies the specific assertive content that could be denied, such as the garden improving the neighborhood, whether by citing pests and noise, better uses for the lot, or any other evidence-based ground for denial",
+                  "Does not treat the naming of the garden or the lot as the point of disagreement",
+                  "Accepts a reasoned argument that a borderline sentence is a claim because it asserts a change is worthwhile"
+                ],
+                "rubric_criterion": "Explains the arguable position a reader would deny",
+                "hint": "Name the position the sentence takes, not the subject it mentions."
+              }
+            ],
+            "hint": "For each item, ask whether a reader could say \"I disagree, and here is my evidence\" about it, and whether a reason is attached.",
+            "worked_solution": "Match each lettered item to its type\n\nItem A topic, Item B claim, Item C claim-plus-reason\n\nItem A is a noun phrase naming the proposal; there is nothing to reject, so it is a topic. Item B asserts the garden would improve the neighborhood — a reader could deny it with evidence, such as arguing the lot serves better as parking — so it is a claim. Item C adds an explicit reason after \"because\": meeting neighbors while tending shared plots is offered as the mechanism of improvement, so it is a claim-plus-reason, and both the assertion and the supporting link can be challenged.\n\nFor the item you labeled a claim, what would a reader have to reject to disagree? One or two sentences.\n\nA model answer: \"To disagree, a reader would have to reject the idea that the garden would improve the neighborhood — for instance, by arguing it would attract pests and noise, or that the lot serves residents better as it is. They are not disputing that the proposal exists or what it is called; they are disputing whether its effect would be good.\" The key move is separating what the sentence names from what it asserts. Accept any defensible ground of denial (pests, noise, alternative uses of the lot, or another evidence-based objection) as long as the learner names the assertive content being denied. Also accept a learner who argues a borderline item counts as a claim because it asserts a change is worthwhile.",
+            "minutes_min": 2,
+            "minutes_max": 2
+          },
+          {
+            "id": "classify_transfer",
+            "title": "Find the claim with its reason",
+            "kind": "transfer",
+            "instructions": "Original fictional letter. A resident writes to the town council about a proposal for a weekend farmers market in Riverside Park:\n\n\"The proposed weekend farmers market in Riverside Park. A market would bring lively crowds to a quiet corner of the park. Vendors should be allowed to sell fresh produce there every Saturday, because the surrounding streets have no shop that sells fresh vegetables. Some stallholders have already asked about a spot.\"\n\nYour task: quote one sentence from the letter that is a claim-plus-reason, or state that none qualifies. Then, in the same response, explain in one or two sentences how the reason is meant to support the asserted position. Use only the supplied paragraph; do not invent new wording or facts.",
+            "fields": [
+              {
+                "id": "claim_reason",
+                "label": "Your quoted sentence and explanation of how its reason supports it",
+                "kind": "text",
+                "criteria": [
+                  "Quotes or clearly identifies one actual sentence from the supplied letter rather than inventing new wording",
+                  "The identified sentence contains both an arguable assertion and an explicit supporting reason, or the response correctly argues none does with reference to what is missing",
+                  "Explains how the reason supports the position, for example as evidence of unmet need that the market would fill, without requiring the learner to restate any particular formulation",
+                  "Accepts a reasoned alternative if the learner argues another sentence also qualifies, provided both parts are present"
+                ]
+              }
+            ],
+            "hint": "Look for a sentence with two parts: an assertion someone could deny, and an explicit reason offered for it.",
+            "worked_solution": "Your quoted sentence and explanation of how its reason supports it\n\nThe intended sentence is: \"Vendors should be allowed to sell fresh produce there every Saturday, because the surrounding streets have no shop that sells fresh vegetables.\" Its assertion — that vendors should be allowed to sell there — takes a position a reader could reject, for example by arguing the park is unsuitable or that a market would crowd out other users. The reason after \"because\" supports that position by showing unmet need: with no nearby shop selling fresh vegetables, residents lack access, so Saturday selling in the park would fill that gap. That link is itself challengeable — a reader could deny that the area lacks such a shop, or agree it does but still oppose Saturday trading — which is what makes the sentence a claim-plus-reason rather than a bare topic or claim. The opening sentence is only a topic phrase naming the proposal; the crowd sentence asserts something but gives no explicit reason; the stallholder sentence reports a fact without taking an arguable position. Accept any correct identification of the \"because\" sentence with any sound explanation of the support link, such as framing it as unmet need; also accept an argued alternative only if it names both an assertion someone could deny and an explicit reason within the letter's actual wording.",
+            "minutes_min": 1,
+            "minutes_max": 2
+          }
+        ]
+      }
+    },
+    "verdict": {
+      "acceptable": true,
+      "issues": [],
+      "choice_audits": [
+        {
+          "target": "practice.classify_practice.classifications",
+          "depends_on_learner_response": false,
+          "dependency_reason": "The classification task uses fixed supplied sentences; the correct mapping is fully determined by the public items.",
+          "options": [
+            {
+              "option_id": "a",
+              "defensible": true,
+              "reason": "Item A is a noun phrase, B asserts, C adds a because-reason; mapping fits."
+            },
+            {
+              "option_id": "b",
+              "defensible": false,
+              "reason": "Item A is a topic phrase, not an arguable claim."
+            },
+            {
+              "option_id": "c",
+              "defensible": false,
+              "reason": "Item C, not B, carries the explicit because-reason."
+            },
+            {
+              "option_id": "d",
+              "defensible": false,
+              "reason": "Item A contains no assertion or reason; item C is not a topic."
+            }
+          ]
+        }
+      ],
+      "text_audits": [
+        {
+          "target": "practice.classify_practice.claim_rejection",
+          "alternative_response": "A reader would have to reject that the garden would make the neighborhood better — for example, by claiming the soil on the vacant lot is contaminated, so nothing useful can grow there and the site would become an eyesore.",
+          "criteria": [
+            {
+              "criterion_index": 0,
+              "required_by_task": true,
+              "accepts_alternative": true,
+              "reason": "Names the assertive content with a concrete evidence-based ground of denial."
+            },
+            {
+              "criterion_index": 1,
+              "required_by_task": true,
+              "accepts_alternative": true,
+              "reason": "Alternative disputes the improvement claim, not the garden's naming."
+            },
+            {
+              "criterion_index": 2,
+              "required_by_task": false,
+              "accepts_alternative": true,
+              "reason": "Tolerance criterion; the alternative does not invoke a borderline case but remains valid."
+            }
+          ],
+          "model_answer_valid": true,
+          "model_answer_reason": "Model answer names the denied assertion and separates it from naming; fits task and criteria.",
+          "requires_activity_repair": false
+        },
+        {
+          "target": "practice.classify_transfer.claim_reason",
+          "alternative_response": "\"Vendors should be allowed to sell fresh produce there every Saturday, because the surrounding streets have no shop that sells fresh vegetables.\" The reason supports the position by establishing an unmet local demand: since no nearby shop offers fresh vegetables, Saturday stalls in the park would give residents a place to buy them.",
+          "criteria": [
+            {
+              "criterion_index": 0,
+              "required_by_task": true,
+              "accepts_alternative": true,
+              "reason": "Quotes an actual sentence from the supplied letter."
+            },
+            {
+              "criterion_index": 1,
+              "required_by_task": true,
+              "accepts_alternative": true,
+              "reason": "Sentence contains both arguable assertion and explicit because-reason."
+            },
+            {
+              "criterion_index": 2,
+              "required_by_task": true,
+              "accepts_alternative": true,
+              "reason": "Explains the support as unmet demand without requiring fixed wording."
+            },
+            {
+              "criterion_index": 3,
+              "required_by_task": false,
+              "accepts_alternative": true,
+              "reason": "Tolerance criterion for argued alternatives; no repair needed here."
+            }
+          ],
+          "model_answer_valid": true,
+          "model_answer_reason": "Correctly identifies the because-sentence and explains the challengeable support link; uses only supplied wording.",
+          "requires_activity_repair": false
+        }
+      ]
+    }
+  }
+}

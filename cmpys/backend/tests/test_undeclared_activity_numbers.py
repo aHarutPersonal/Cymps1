@@ -38,3 +38,38 @@ def test_correction_names_the_missing_data_without_echoing_source_text():
     # A corrected draft once declared rates beside their inputs; the evidence
     # check could not bind them, so derived results must stay expressions.
     assert "Derived results" in diagnostic["message"] and "never data" in diagnostic["message"]
+
+
+# 2026-11-06 replay: 55 of 136 failing drafts showed only correct one-step numbers
+# ("900 earned, 600 paid, so 300 still owed"); the evidence gate still proves them.
+def test_a_number_one_exact_step_from_two_declared_values_is_declared():
+    # open_hours 30, booked_hours 27: 30 − 27 = 3 and 30 + 27 = 57.
+    require_declared_numbers(_activity("tutorial_exemplar_quantitative.txt", " The other 3 hours stayed free."))
+    require_declared_numbers(_activity("tutorial_exemplar_quantitative.txt", " Together that is 57 hours of entries."))
+
+
+@pytest.mark.parametrize("sentence", [
+    " That left 4 hours free.",                  # no relation to the data
+    " Twice the free time is 6 hours.",          # two steps: (30 − 27) × 2
+    " Doubling the open time gives 60 hours.",   # a datum never pairs with itself
+])
+def test_unrelated_two_step_or_rounded_numbers_stay_undeclared(sentence):
+    with pytest.raises(UndeclaredNumbersError):
+        require_declared_numbers(_activity("tutorial_exemplar_quantitative.txt", sentence))
+
+
+def test_an_accepted_one_step_number_still_needs_its_calculation_at_the_gate():
+    from app.services.planning.lesson_review import grounded_failures
+    from tests.test_derivation_steps_in_words import review
+
+    case = {"id": "ledger", "data": [
+        {"id": "revenue_earned", "label": "Revenue earned", "value": 9000.0, "unit": "credits"},
+        {"id": "cash_received", "label": "Cash received", "value": 7600.0, "unit": "credits"}],
+        "results": [{"id": "uncollected", "expression": "revenue_earned - cash_received", "unit": "credits"}]}
+    lesson = {"lesson_content": "Revenue earned is 9000 credits, of which 1400 is still owed, so cash received "
+                                "is 7600 credits."}
+    facts = [{"claim_id": "n1", "case_id": "teaching.ledger", "datum_ids": ["revenue_earned", "cash_received"]}]
+    proof = [{"claim_ids": ["n1"], "expression": "revenue_earned - cash_received", "claimed_result": 1400}]
+    assert grounded_failures(review(proof, facts, case_id="teaching.ledger"), lesson, {"teaching_cases": [case]}) == []
+    assert grounded_failures(review([], facts, case_id="teaching.ledger"), lesson, {"teaching_cases": [case]}) == [
+        "n1: numeric span contains additional unverified values: 1400"]

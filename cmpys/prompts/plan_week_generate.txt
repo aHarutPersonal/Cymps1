@@ -2,24 +2,6 @@ You are expanding one approved week from a twelve-week learning backbone into
 an execution-ready plan. Preserve the supplied task identities and time budget;
 add the depth needed to act without another planning conversation.
 
-USER GOAL: {user_goal}
-WEEKLY CAPACITY: {weekly_capacity_label} = {weekly_minutes} minutes = {hours_per_week} hours
-CAPACITY RULE: {capacity_rule}
-USER CONTEXT:
-{user_context}
-
-MENTOR: {idol_name}
-MENTOR DOMAIN: {idol_domain}
-
-ROADMAP THESIS:
-{roadmap_thesis}
-
-APPROVED WEEK BACKBONE:
-{backbone_week_json}
-
-DIAGNOSTIC AND BLUEPRINT CONTEXT:
-{session_context}
-
 EXECUTION CONTRACT:
 - Return exactly the approved week_number and no other week.
 - Return exactly the same number of tasks, in the same order and with the same
@@ -43,12 +25,20 @@ EXECUTION CONTRACT:
   saved answers, hints, answer checks, worked solutions and correction attempts.
   Review selection carries across weeks and uses prior errors and elapsed days.
   It cannot conjure a new dataset, supplied example or answer key from this prose.
-- daily_instructions uses 70-120 words: recall the relevant taught rule before
-  checking references; open the provided review; attempt; check; correct; record
-  the misconception. Stop and save at the session limit, even when unfinished.
+- daily_instructions uses 70-120 words: start with a concrete If-Then implementation
+  intention and friction-removal step ("When your scheduled practice block begins,
+  close unrelated tabs and reconstruct the taught rule and its deciding cue in your
+  own words before checking references"), then open the provided review, attempt from
+  memory, check, correct, and record the specific misconception in the reflection.
+  Stop and save at the session limit, even when unfinished.
   If no review is ready, finish lesson practice first and return when due.
   Never promise novel transfer testing from a repeated case or call a completion
   tick mastery. Mission practice supplies new applications and independent cases.
+- Write all descriptions and instructions with human editorial rhythm: mix crisp
+  4–7 word declarative sentences with longer analytical sentences, use active
+  transitive verbs, and ban AI signpost words ("delve", "tapestry", "testament",
+  "underscore", "pivotal", "crucial", "moreover", "furthermore") and negative
+  parallelisms ("not X, but Y").
 - success_metric must remain binary, measurable, and consistent with the
   backbone. Never write "task completed".
 - Do not invent quotations, chapter numbers, mentor facts, URLs, or resources.
@@ -65,6 +55,18 @@ EXECUTION CONTRACT:
   The schedule and private answer checks are supplied by the runtime, not by this text.
 - The sum of estimated_hours must remain exactly {hours_per_week}; preserve the
   approved weekly workload rather than shrinking it during expansion.
+
+RECENT LEARNING EVIDENCE:
+Use the supplied learner placement and recent_practice before older narrative comparisons.
+Adjust scaffolding, worked examples, and case complexity to the checked, named skill.
+A supported transfer calls for another independent case; an unhinted transfer can justify
+more complexity in that skill, not a blanket promotion. Uncertain review needs clarification;
+a draft is not a failed assessment. If the approved task's prerequisites are not established,
+include a brief diagnostic and targeted prerequisite work within its intent, and name the
+unresolved prerequisite in that task's description. Do not claim it has already been mastered.
+Preserve approved task identities and time budgets; do not rewrite completed work.
+
+{{include:plan_public_copy_contract.txt}}
 
 Return strict JSON only:
 {
@@ -86,12 +88,20 @@ Return strict JSON only:
   ]
 }
 
-RECENT LEARNING EVIDENCE:
-Use the supplied learner placement and recent_practice before older narrative comparisons.
-Adjust scaffolding, worked examples, and case complexity to the checked, named skill.
-A supported transfer calls for another independent case; an unhinted transfer can justify
-more complexity in that skill, not a blanket promotion. Uncertain review needs clarification;
-a draft is not a failed assessment. If the approved task's prerequisites are not established,
-include a brief diagnostic and targeted prerequisite work within its intent, and name the
-unresolved prerequisite in that task's description. Do not claim it has already been mastered.
-Preserve approved task identities and time budgets; do not rewrite completed work.
+USER GOAL: {user_goal}
+WEEKLY CAPACITY: {weekly_capacity_label} = {weekly_minutes} minutes = {hours_per_week} hours
+CAPACITY RULE: {capacity_rule}
+USER CONTEXT:
+{user_context}
+
+MENTOR: {idol_name}
+MENTOR DOMAIN: {idol_domain}
+
+ROADMAP THESIS:
+{roadmap_thesis}
+
+APPROVED WEEK BACKBONE:
+{backbone_week_json}
+
+DIAGNOSTIC AND BLUEPRINT CONTEXT:
+{session_context}

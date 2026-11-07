@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from pydantic import Field
 from sqlalchemy import select
 
+from app.core.config import settings
 from app.core.db import async_session_maker
 from app.models.content_resource import ContentResource
 from app.models.plan import PlanItem
@@ -21,6 +22,7 @@ from app.services.learning_sources import (
     search_evidence,
     verify_video_source,
     referenced_video_urls,
+    youtube_id,
 )
 from app.services.llm.admission import background_generation
 from app.services.planning.artifact_identity import (
@@ -31,7 +33,7 @@ from app.services.planning.artifact_identity import (
 from app.services.planning.lesson_package import current_package_approval, digest
 from app.services.practice.contracts import StrictModel
 
-VERSION = 6
+VERSION = 7
 
 
 def support_input(item, step_id: str | None, book_title: str | None) -> dict:
@@ -73,6 +75,9 @@ def support_input(item, step_id: str | None, book_title: str | None) -> dict:
     # Never pass planner-generated book bodies or ideas across the source boundary.
     value = {
         "version": VERSION,
+        # Capability, never the credential: enabling discovery invalidates an
+        # empty result produced while search was unavailable.
+        "source_search_available": bool(settings.tavily_api_key),
         "key": key,
         "step_id": step_id,
         "book_title": book_title,
@@ -145,6 +150,8 @@ def valid_video_review(review: VideoReview, evidence: str) -> bool:
 
 async def video_candidates(value: dict):
     """Keep the skill domain in the query and try a fallback after rejections."""
+    if not settings.tavily_api_key:
+        return
     identities = value.get("video_identities") or []
     topic = (
         " ".join(str(part) for part in identities[0].values() if part)
@@ -177,9 +184,18 @@ async def video_candidates(value: dict):
         offered = 0
         for source in sources:
             for url in referenced_video_urls(source):
-                if url in seen or offered == 2:
+                # A rejected description may be followed by a publisher lesson
+                # for the same video. Deduplicate evidence attempts, not video
+                # identities; every new attempt uses the existing per-query cap.
+                source_url = str(source.get("url") or "")
+                candidate = (
+                    youtube_id(url),
+                    youtube_id(source_url) or source_url,
+                    digest(_normal(str(source.get("text") or ""))),
+                )
+                if candidate in seen or offered == 2:
                     continue
-                seen.add(url)
+                seen.add(candidate)
                 offered += 1
                 yield url, source
 
@@ -335,21 +351,30 @@ async def resolved_companion(book: dict) -> dict:
 
 
 async def build_support(value: dict) -> dict:
-    books = await asyncio.gather(
-        *(resolved_companion(b) for b in value["books"])
-    )
-    result = {"books": value["books"], "idea": None, "videos": []}
-    if any(book.get("status") == "checking" for book in books):
-        result["books_pending"] = True
-    if value["lesson"]:
-        idea, videos = await asyncio.gather(
-            match_book_idea(value, books),
-            find_support_video(value),
-            return_exceptions=True,
-        )
-        result["idea"] = idea if isinstance(idea, dict) else None
-        result["videos"] = videos if isinstance(videos, list) else []
-    return result
+    # Video discovery depends on the tutorial, not on book preparation. Idea
+    # matching still waits for the same completed companion results.
+    book_tasks = [asyncio.create_task(resolved_companion(book)) for book in value["books"]]
+    tasks = list(book_tasks)
+    video_task = asyncio.create_task(find_support_video(value)) if value["lesson"] else None
+    if video_task is not None:
+        tasks.append(video_task)
+    try:
+        books = await asyncio.gather(*book_tasks)
+        result = {"books": value["books"], "idea": None, "videos": []}
+        if any(book.get("status") == "checking" for book in books):
+            result["books_pending"] = True
+        if video_task is not None:
+            idea_task = asyncio.create_task(match_book_idea(value, books))
+            tasks.append(idea_task)
+            idea, videos = await asyncio.gather(idea_task, video_task, return_exceptions=True)
+            result["idea"] = idea if isinstance(idea, dict) else None
+            result["videos"] = videos if isinstance(videos, list) else []
+        return result
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def public_support(db, entry: dict) -> dict:

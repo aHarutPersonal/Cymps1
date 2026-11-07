@@ -3,9 +3,7 @@
 import asyncio
 import json
 
-from app.core.config import settings
 from app.services.llm import get_llm_client
-from app.services.llm.routing import operation_thinking_level
 from app.services.llm.telemetry import record_llm_response
 from app.services.llm.tracing import traced_operation
 from app.services.practice.contracts import Activity, GeneratedWorkbook, TextReview
@@ -56,20 +54,12 @@ async def _structured_request(prompt: str, payload: dict, schema, operation: str
         if client is None:
             raise ValueError("Practice recovery evidence is no longer available")
     else:
-        # Live workbook attempts on GLM Flash repeatedly timed out at 45s.
-        # Use the proven balanced route for this reasoning/answer-key task,
-        # with compact output and enough time to finish a complete workbook.
-        # Six-field text reviews also need reasoning time: the former 15s
-        # limit cancelled valid streaming reviews. Leave time for telemetry
-        # and persistence within the unchanged 55s review / 60s lease.
-        primary_timeout = (
-            60 if operation == "lesson_practice_generate" else 45
-        ) if settings.llm_provider == "zai" else 15
+        # The primary gets 15s; this module owns the one backup-model recovery,
+        # bounded by the enclosing review/workbook budget.
+        primary_timeout = 15
         client = get_llm_client(
-            tier="balanced",
+            tier="balanced", operation=operation,
             timeout=primary_timeout, max_tokens=PRACTICE_OUTPUT_TOKENS, allow_fallback=False,
-            thinking_level=operation_thinking_level(
-                operation, "low" if settings.llm_provider == "zai" else None)
         )
     recovery_timeout = 30
     model = None

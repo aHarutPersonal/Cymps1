@@ -180,7 +180,7 @@ async def test_patch_can_add_blocking_source_issue_without_rewriting_initial_ver
     {"literal_facts": [{"claim_id": "n1", "case_id": "practice.guided", "datum_ids": ["revenue"]}]},
     {},  # Coverage is still mandatory after merge.
     LLMResponse(data={}, finish_reason="length"),
-    LLMResponse(data={}, error="zai request failed (TimeoutError; private text)", retryable=True),
+    LLMResponse(data={}, error="anthropic request failed (TimeoutError; private text)", retryable=True),
 ])
 async def test_invalid_or_unavailable_patch_stops_after_second_call(reply, telemetry):
     package = package_with_spans("Receipts exceed revenue by 20.")

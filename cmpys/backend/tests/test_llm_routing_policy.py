@@ -99,19 +99,13 @@ def test_bad_early_canary_is_stopped(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_choose_tier_queries_fast_model_history(monkeypatch):
+async def test_routed_providers_have_no_cheaper_fast_model_to_canary(monkeypatch):
     _enable(monkeypatch)
-    monkeypatch.setattr(settings, "llm_provider", "gemini")
-    monkeypatch.setattr(settings, "gemini_fast_model", "fast-test")
-
-    class Result:
-        def one(self):
-            return (20, 19, 20, 0.93, 500.0, 1200.0)
+    monkeypatch.setattr(settings, "llm_provider", "routed")
 
     class DB:
         async def execute(self, statement):
-            self.statement = statement
-            return Result()
+            raise AssertionError("no fast-model history to query")
 
     decision = await choose_llm_tier(
         operation="book_module_generation",
@@ -119,6 +113,7 @@ async def test_choose_tier_queries_fast_model_history(monkeypatch):
         db=DB(),
     )
 
-    assert decision.tier == "fast"
-    assert decision.stats.samples == 20
-    assert decision.stats.average_quality == 0.93
+    # One model serves every tier of a direct provider; only effort differs.
+    assert decision.tier == "balanced"
+    assert decision.reason == "tier_not_eligible"
+    assert decision.fast_model is None

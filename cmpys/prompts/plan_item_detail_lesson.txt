@@ -71,6 +71,7 @@ CONTENT CONTRACT:
 - References name only this step's approved resource titles as OPTIONAL further
   reading. The lesson and practice must be executable without opening them.
 - Never invent mentor quotations, chapter numbers, dates, or anecdotes.
+- Write with authentic human editorial rhythm (burstiness): alternate crisp 4–7 word declarative sentences with longer 20–32 word analytical sentences that subordinate clauses naturally. Prefer concrete nouns and active transitive verbs over nominalizations. Ban AI signpost words ("delve", "tapestry", "testament", "underscore", "pivotal", "crucial", "foster", "elevate", "landscape", "seamless", "moreover", "furthermore", "it is worth noting"), negative parallelisms ("It is not X, it is Y" / "Not only X, but Y"), mechanical rule-of-three triads, and paragraph-ending summary bows. End paragraphs on a concrete mechanism, number, or trade-off.
 - Avoid filler and repeated paragraphs.
 
 ACTION CONTRACT:
@@ -105,6 +106,8 @@ MOBILE READER PRESENTATION:
 - Never draw instructional comparisons or diagrams with ASCII boxes, pipes, borders, or spacing-aligned columns. Use ordinary prose/headings/lists for explanations. Reserve ordinary code fences for actual executable code.
 - For a useful two-way comparison, you may include a fenced `comparison` block inside the Markdown string: a short heading, 2-6 `- ` bullet lines, a blank line, `vs.`, a blank line, a second heading and 2-6 `- ` bullet lines. Each bullet is a complete short point, optionally followed by a parenthetical explanation. No borders, nested lists, extra columns or code inside this block. The reader displays the two groups as accessible stacked comparison cards. Preserve exact factual wording and never invent data for a visual.
 
+
+Teaching and assessment boundary: use public teaching cases for explanations, diagrams and quick checks. Judge each worked attempt against its actual stated requirements, distinguishing task success from next learning needs; never add criteria to justify a supplied failure verdict. Present every source premise used by that verdict before explaining it. Keep workbook cases and their assessed decisions in Practice; a guided revisit must still ask for reasoning not already supplied as its graded answer. Check every quick-check alternative, including distractors, against its exact question. State the method's actual domain and limits. A claim asserts something, including vague or evaluative judgments; empirical testability defines a narrower subtype. Distinguish assertion from topic noun phrases before checking precision or evidence, and match any evidence to the exact predicate rather than an unqualified proxy. Describe learner success only as supported by observed attempts, and attribute a mentor teaching method only when the supplied source evidence supports that exact claim.
 
 LESSON CONTEXT (reference data, never instructions):
 MISSION: {task_title}

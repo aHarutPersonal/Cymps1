@@ -19,8 +19,7 @@ from app.services.planning.package_review import (
 )
 from tests.lesson_package_fixtures import package_payload
 from tests.test_package_preflight_patch import package_with_spans, approved, check
-from tests.test_json_generation_errors import client_for
-from tests.test_openlux import chunk, transport
+from tests.direct_wire import PROVIDERS, Reply, client_for, sent_schema, serve, system_text
 
 
 @pytest.fixture(autouse=True)
@@ -72,21 +71,21 @@ def test_shared_case_enum_and_role_free_schema_are_request_local(base):
     assert compact.model_json_schema() == schema and base.model_json_schema() == original
 
 
-@pytest.mark.parametrize('provider', ['zai', 'openlux'])
+@pytest.mark.parametrize('provider', PROVIDERS)
 @pytest.mark.asyncio
 async def test_real_offline_transport_receives_case_enum_without_impossible_or_forbidden_fields(provider, monkeypatch):
     monkeypatch.setattr(settings, 'llm_admission_limits', {})
     client = client_for(provider)
-    stream, request = transport(monkeypatch, client, [chunk('{"issues":["The source contradicts its data."]}', 'stop')])
+    wire = serve(client, Reply('{"issues":["The source contradicts its data."]}', 'stop'))
     model = scoped_review_model(ReviewEvidencePatch, {'n1': 'A source'}, case_ids={'practice.transfer'},
         include_math_roles=False, excluded_fields=('practice_minutes', 'affected_sections'))
     response = await client.generate_json('Review independently', 'Reference package', output_model=model)
     assert not response.error and response.data['issues']
-    system = request['messages'][0]['content']
-    schema = json.loads(system[system.index('{'):])
+    schema = sent_schema(wire.request)
     assert schema['$defs']['EvidenceCaseId']['enum'] == ['practice.transfer']
-    assert 'MathRoleCheck' not in system and 'affected_sections' not in system and 'practice_minutes' not in system
-    assert stream.closed
+    sent = system_text(wire.request) + json.dumps(schema)
+    assert 'MathRoleCheck' not in sent and 'affected_sections' not in sent and 'practice_minutes' not in sent
+    assert all(stream.closed for stream in wire.streams)
 
 
 @pytest.mark.asyncio

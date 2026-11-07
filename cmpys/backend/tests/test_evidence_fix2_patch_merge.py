@@ -13,6 +13,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from tests.phase0_fixtures import model_binder_mechanics  # noqa: F401
+
+# Phase 0.4 binds exact computed values in code; these tests exercise the model
+# binder's mechanics, so they keep the earlier server bindings (tests/phase0_fixtures.py).
+pytestmark = pytest.mark.usefixtures("model_binder_mechanics")
+
 from app.services.llm.client import LLMResponse
 from app.services.planning.lesson_review import (
     LessonReview, grounded_failures, numeric_spans, review_lesson,
@@ -198,3 +204,17 @@ async def test_lesson_span_bound_to_teaching_case_keeps_package_issues():
     patch = {"package_issues": ["package: wrong case formula."], "literal_facts": [FACT_N16]}
     failures, response, _ = await run(first, patch, lesson)
     assert response.data["package_issues"] == patch["package_issues"]
+
+
+@pytest.mark.asyncio
+async def test_evidence_correction_still_follows_a_transport_retry():
+    # Pilot 2026-11-05: a first attempt spent on a retry left an unproven 216 with no correction.
+    lesson = {"lesson_content": N16.replace("24 × 9 gives", "24 × 9 gives 216, i.e.")}
+    client = SimpleNamespace(generate_json=AsyncMock(side_effect=[
+        LLMResponse(data={}, error="anthropic request failed (TimeoutError; transient)"),
+        LLMResponse(data=verdict(literal_facts=[FACT_N16])),
+        LLMResponse(data={"literal_facts": [FACT_N16], "calculations": [ABSENT_216]})]))
+    failures, response, _ = await review_lesson(lesson, client_factory=lambda **kw: client,
+                                                context={"lesson_package": copy.deepcopy(PACKAGE)})
+    assert client.generate_json.await_count == 3
+    assert failures == [] and response.error is None

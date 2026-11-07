@@ -6,17 +6,17 @@ Provides two capabilities:
    Used for resource/link queries: the model searches Google in real-time and
    cites real URLs in its response. Single call, full response.
 
-2. `stream_learnlm()` — Gemini 2.5 Flash for Socratic tutoring.
-   Used for study/learning questions: the model asks guiding questions and
-   checks understanding rather than just giving answers. The caller provides
-   the full rendered system prompt (guided_learning_system.txt).
+2. `stream_learnlm()`, `interview_stream()`, `comparison_stream()` and
+   `blueprint_stream()` — interactive text streams. They interpret evidence the
+   caller already retrieved, so they run on the operation's routed model
+   (``app/services/llm/routes.py``), not on Gemini.
 
-Both return async generators that yield text chunks for SSE streaming.
+The streams return async generators that yield text chunks for SSE streaming.
 """
 
 import asyncio
-import inspect
 import logging
+from contextlib import aclosing
 import time
 from typing import AsyncGenerator
 
@@ -227,164 +227,29 @@ async def _stream_generate(
     system_prompt: str,
     contents: str,
     label: str,
-    grounded: bool = True,
-    temperature: float = 0.7,
     max_output_tokens: int | None = None,
-    tier: str = "balanced",
-    thinking_level: ThinkingLevel | None = "low",
+    thinking_level: str = "low",
     operation: str = "interactive_stream",
 ) -> AsyncGenerator[str, None]:
+    """Stream an interactive reply from the operation's routed model.
+
+    These streams interpret evidence the caller supplied, so they never search.
+    The primary's natural token chunks are yielded as they arrive. Onboarding
+    and tutoring keep a short primary deadline so the backup still answers
+    promptly when the primary is unavailable before any text.
     """
-    True token streaming via generate_content_stream (the pattern proven by
-    interview_stream: streaming works WITH the google_search tool). This cuts
-    user-perceived time-to-first-byte from full-generation time to first-token
-    time, and yields natural token chunks instead of artificial 8-char slices
-    (~10x fewer SSE events downstream).
-    """
-    provider_timeout_ms = GEMINI_REQUEST_TIMEOUT_MS
-    if settings.llm_provider in {"openlux", "zai"} and not grounded:
-        from app.services.llm.client import get_llm_client
-        from app.services.llm.openlux import OpenLuxStreamError
-        from app.services.llm.routing import operation_thinking_level
+    from app.services.llm.client import stream_routed_text
 
-        thinking_level = operation_thinking_level(operation, thinking_level)
-        # Recover interactive tutoring/onboarding only before any text arrives;
-        # switching mid-answer would splice two different replies.
-        recover_interview = settings.llm_provider == "openlux" and operation in {"interview_stream", "guided_learning_stream"} and bool(settings.gemini_api_key)
-        client = get_llm_client(
-            tier="fast" if settings.llm_provider == "zai" and operation in {"interview_stream", "guided_learning_stream"} else tier, timeout=20 if recover_interview else GEMINI_REQUEST_TIMEOUT_MS / 1000,
-            max_tokens=max_output_tokens, thinking_level=thinking_level,
-            temperature=temperature, allow_fallback=False,
-        )
-        received_text = False
-        try:
-            async for text in client.stream_text(system_prompt, contents, operation=operation):
-                received_text = received_text or bool(text)
-                yield text
-            return
-        except OpenLuxStreamError as exc:
-            if not recover_interview or received_text or not exc.retryable:
-                raise
-            provider_timeout_ms = 35_000
-            logger.warning(
-                "[LLM] Interactive OpenLux route temporarily unavailable before text; "
-                "recovering once with direct Gemini (35s deadline)"
-            )
-    client = _gemini_client()
-    model = _model_for_tier(tier)
-    resolved_level, resolved_budget = resolve_thinking_config(
-        model=model,
-        tier=tier,
-        thinking_level=thinking_level,
-        thinking_budget=None,
-    )
-    tools = [types.Tool(google_search=types.GoogleSearch())] if grounded else None
-    started = time.perf_counter()
-    first_text_at: float | None = None
-    response_chars = 0
-    finish_reason = "unknown"
-    usage = None
-    queries: set[str] = set()
-    grounded_source_count = 0
-
-    try:
-        stream = client.aio.models.generate_content_stream(
-            model=model,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                tools=tools,
-                max_output_tokens=max_output_tokens,
-                http_options=types.HttpOptions(
-                    timeout=provider_timeout_ms,
-                ),
-                **generation_config_kwargs(
-                    model=model,
-                    temperature=temperature,
-                    thinking_level=resolved_level,
-                    thinking_budget=resolved_budget,
-                ),
-            ),
-        )
-        # The async SDK may return the iterator directly or a coroutine that
-        # resolves to it, depending on version — support both.
-        if inspect.iscoroutine(stream):
-            stream = await stream
-        async for chunk in stream:
-            usage = getattr(chunk, "usage_metadata", None) or usage
-            for candidate in getattr(chunk, "candidates", None) or []:
-                reason = getattr(candidate, "finish_reason", None)
-                if reason is not None:
-                    finish_reason = (
-                        getattr(reason, "name", None)
-                        or str(reason).rsplit(".", maxsplit=1)[-1]
-                    )
-                metadata = getattr(candidate, "grounding_metadata", None)
-                grounded_source_count += len(
-                    getattr(metadata, "grounding_chunks", None) or []
-                )
-                for query in getattr(metadata, "web_search_queries", None) or []:
-                    if str(query).strip():
-                        queries.add(str(query).strip())
-            text = getattr(chunk, "text", None)
-            if text:
-                if first_text_at is None:
-                    first_text_at = time.perf_counter()
-                response_chars += len(text)
-                yield text
-
-        if finish_reason not in {"unknown", "STOP", "FINISH_REASON_UNSPECIFIED"}:
-            raise RuntimeError(
-                f"{label} response ended incompletely ({finish_reason})"
-            )
-
-        duration_ms = (time.perf_counter() - started) * 1000
-        first_text_ms = (
-            (first_text_at - started) * 1000
-            if first_text_at is not None
-            else 0
-        )
-        logger.info(
-            "[GEMINI] %s stream completed: %.0fms, first_text=%.0fms, "
-            "chars=%s, finish_reason=%s",
-            label,
-            duration_ms,
-            first_text_ms,
-            response_chars,
-            finish_reason,
-        )
-        # The final real SDK chunk carries usage metadata. Avoid opening a
-        # telemetry DB session for mocks/providers that did not supply it.
-        if usage is not None:
-            from app.services.llm.telemetry import UsageRecord, record_usage_records
-
-            await record_usage_records(
-                [
-                    UsageRecord(
-                        operation=operation,
-                        model=model,
-                        provider="gemini",
-                        prompt_tokens=getattr(usage, "prompt_token_count", None),
-                        completion_tokens=getattr(usage, "candidates_token_count", None),
-                        total_tokens=getattr(usage, "total_token_count", None),
-                        duration_ms=duration_ms,
-                        grounded=grounded,
-                        search_queries=len(queries),
-                        success=response_chars > 0,
-                        result_status="streamed" if response_chars else "empty",
-                        metadata={
-                            "first_text_ms": round(first_text_ms, 1),
-                            "response_chars": response_chars,
-                            "finish_reason": finish_reason,
-                            "grounded_source_count": grounded_source_count,
-                            "thinking_level": resolved_level,
-                        },
-                    )
-                ]
-            )
-    except Exception as e:
-        logger.error(f"[GEMINI] {label} stream error: {e}")
-        raise
+    short = operation in {"interview_stream", "guided_learning_stream"}
+    logger.info("[LLM] %s stream (operation=%s)", label, operation)
+    # Closing this stream closes the provider stream at once, not at garbage collection.
+    async with aclosing(stream_routed_text(
+        system_prompt, contents, operation=operation, max_tokens=max_output_tokens,
+        thinking_level=thinking_level, primary_timeout=20 if short else GEMINI_REQUEST_TIMEOUT_MS / 1000,
+        backup_timeout=35 if short else GEMINI_REQUEST_TIMEOUT_MS / 1000,
+    )) as pieces:
+        async for text in pieces:
+            yield text
 
 
 async def stream_learnlm(
@@ -392,7 +257,7 @@ async def stream_learnlm(
     user_message: str,
 ) -> AsyncGenerator[str, None]:
     """
-    Stream a Gemini 2.5 Flash response for Socratic educational tutoring.
+    Stream a routed response for Socratic educational tutoring.
 
     The caller passes the fully rendered system prompt — normally
     guided_learning_system.txt with the idol's persona pack (voice style,
@@ -400,19 +265,16 @@ async def stream_learnlm(
     already substituted in. Keeping the rendering at the call site means
     the tutoring voice stays in the prompt file, not in code.
     """
-    logger.info("[GEMINI] Starting LearnLM tutor stream")
-    async for text in _stream_generate(
+    async with aclosing(_stream_generate(
         system_prompt=system_prompt,
         contents=user_message,
         label="LearnLM",
-        grounded=False,
-        temperature=0.8,
         max_output_tokens=900,
-        tier="balanced",
         thinking_level="low",
         operation="guided_learning_stream",
-    ):
-        yield text
+    )) as pieces:
+        async for text in pieces:
+            yield text
 
 
 # =============================================================================
@@ -425,9 +287,9 @@ async def interview_stream(
     user_message: str,
 ) -> AsyncGenerator[str, None]:
     """
-    Stream a Gemini response for the interview phase.
+    Stream a routed response for the interview phase.
 
-    Uses ``system_instruction`` for deep persona immersion and the verified
+    Uses the system prompt for deep persona immersion and the verified
     fact sheet embedded by the caller. The system_prompt should be the rendered
     interview_system.xml content. The user_message is the rendered
     interview_question.txt.
@@ -437,19 +299,16 @@ async def interview_stream(
     # The caller supplies a separately verified idol fact sheet in the rendered
     # per-turn prompt. Searching again here adds several seconds to every turn
     # and can produce facts that conflict with that shared source of truth.
-    logger.info("[GEMINI] Starting interview stream (persona + verified fact sheet)")
-    async for text in _stream_generate(
+    async with aclosing(_stream_generate(
         system_prompt=system_prompt,
         contents=user_message,
         label="Interview",
-        grounded=False,
-        temperature=0.8,
         max_output_tokens=500,
-        tier="balanced",
         thinking_level="low",
         operation="interview_stream",
-    ):
-        yield text
+    )) as pieces:
+        async for text in pieces:
+            yield text
 
 
 async def comparison_stream(
@@ -462,18 +321,16 @@ async def comparison_stream(
     The comparison prompt explicitly forbids adding new historical claims.
     Missing facts remain unknown rather than triggering another search here.
     """
-    logger.info("Starting comparison stream (cached evidence, no live search)")
-    async for text in _stream_generate(
+    async with aclosing(_stream_generate(
         system_prompt=system_prompt,
         contents=user_message,
         label="Comparison",
-        grounded=False,
         max_output_tokens=1_400,
-        tier="balanced",
         thinking_level="low",
         operation="comparison_stream",
-    ):
-        yield text
+    )) as pieces:
+        async for text in pieces:
+            yield text
 
 
 async def blueprint_stream(
@@ -481,22 +338,20 @@ async def blueprint_stream(
     user_message: str,
 ) -> AsyncGenerator[str, None]:
     """
-    Stream a Gemini response for the Q1–Q4 quarterly blueprint.
+    Stream a routed response for the Q1–Q4 quarterly blueprint.
 
     Uses the cached idol facts, interview, and comparison supplied by the
     caller. Resource lookup happens later in the plan-detail pipeline, so this
     phase does not pay for live search. The system_prompt maintains the idol
     persona. The user_message is the rendered blueprint_generate.txt.
     """
-    logger.info("[GEMINI] Starting blueprint stream (cached evidence, no live search)")
-    async for text in _stream_generate(
+    async with aclosing(_stream_generate(
         system_prompt=system_prompt,
         contents=user_message,
         label="Blueprint",
-        grounded=False,
         max_output_tokens=BLUEPRINT_MAX_OUTPUT_TOKENS,
-        tier="balanced",
         thinking_level="low",
         operation="blueprint_stream",
-    ):
-        yield text
+    )) as pieces:
+        async for text in pieces:
+            yield text

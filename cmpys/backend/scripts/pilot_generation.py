@@ -248,6 +248,27 @@ def guard_client(client, *, budget, stage, output_dir, token_rates, reasoning_re
     return client
 
 
+def route_direct_clients(original, factory):
+    """Send any direct ``get_llm_client`` call in this process to the pilot factory.
+
+    The tutorial pipeline takes its clients from ``client_factory``; this is a
+    guard so a path that bypasses it still uses the guarded pilot client
+    instead of an unbudgeted provider client. Returns the patched references.
+    """
+    import sys
+
+    def routed(**options):
+        print(json.dumps({"warning": "direct get_llm_client call routed to the pilot factory"}), flush=True)
+        return factory(**{key: value for key, value in options.items() if key != "fast"})
+
+    patched = []
+    for name, module in list(sys.modules.items()):
+        if (name == "app" or name.startswith("app.")) and getattr(module, "get_llm_client", None) is original:
+            module.get_llm_client = routed
+            patched.append(name)
+    return patched
+
+
 async def run(args):
     from app.core.config import settings
     from app.services.llm.client import get_llm_client
@@ -258,8 +279,14 @@ async def run(args):
     from app.services.planning.lesson_review import review_lesson
     from app.tasks.plans import _assemble_parallel_lesson_response, _writing_thinking_level
 
-    if settings.llm_provider not in {"openlux", "zai"} or not settings.llm_configured:
-        raise RuntimeError("Pilot requires a configured, bounded streaming provider")
+    openai_model = getattr(args, "openai_model", "")
+    if args.claude_model and openai_model:
+        raise ValueError("Choose one of --claude-model and --openai-model")
+    pilot_model = args.claude_model or openai_model
+    if pilot_model and not (args.outline or args.tutorial):
+        raise ValueError("--claude-model/--openai-model apply to --outline and --tutorial only")
+    if not pilot_model and (settings.llm_provider != "routed" or not settings.llm_configured):
+        raise RuntimeError("Pilot requires LLM_PROVIDER=routed with a configured provider key")
     # Process-local only: synthetic reports stay local and never enter learner DBs.
     settings.llm_usage_telemetry_enabled = False
     settings.llm_admission_limits = {}
@@ -306,11 +333,39 @@ async def run(args):
     recorded = RecordedResponses(replay_from) if replay_from is not None else None
 
     def factory(**options):
-        client = get_llm_client(**{**options, "allow_fallback": False})
+        if args.claude_model:
+            from scripts.pilot_claude_client import ClaudePilotClient, claude_token_rates
+            # Tutorial requests get the production 2,048-token reasoning reserve on
+            # top of max_tokens; the outline pilot is unchanged.
+            reserve = args.claude_reasoning_reserve if args.tutorial else 0
+            claude = ClaudePilotClient(model=args.claude_model, max_tokens=options.get("max_tokens"),
+                                       effort=options.get("thinking_level") or "low",
+                                       timeout=options.get("timeout", 150), reasoning_reserve=reserve,
+                                       json_mode=args.claude_json_mode or ("auto" if args.tutorial else "native"))
+            guard_client(claude, budget=budget, stage=stage, output_dir=args.output,
+                token_rates=lambda bound: claude_token_rates(args.claude_model, bound),
+                reasoning_reserve=max(2048, reserve),
+                estimate_cost=claude.estimate_cost, recorded=recorded)
+            return claude
+        if openai_model:
+            from scripts.pilot_openai_client import OpenAIPilotClient, openai_token_rates
+            # Outline and tutorial both send the reserve on top of max_tokens, as
+            # the app's OpenAI client does for every request.
+            reserve = args.openai_reasoning_reserve
+            gpt = OpenAIPilotClient(model=openai_model, max_tokens=options.get("max_tokens"),
+                                    effort=options.get("thinking_level") or "low",
+                                    timeout=options.get("timeout", 150), reasoning_reserve=reserve,
+                                    json_mode=args.openai_json_mode or ("auto" if args.tutorial else "native"))
+            guard_client(gpt, budget=budget, stage=stage, output_dir=args.output,
+                token_rates=lambda bound: openai_token_rates(openai_model, bound),
+                reasoning_reserve=reserve, estimate_cost=gpt.estimate_cost, recorded=recorded)
+            return gpt
+        # The production tutorial route: its primary model, no per-call backup.
+        client = get_llm_client(**{**options, "allow_fallback": False, "operation": "plan_item_detail_generation"})
         guard_client(client, budget=budget, stage=stage, output_dir=args.output,
-            token_rates=lambda bound: price_card_for_model(client.model, settings.llm_provider).token_rates(bound),
-            reasoning_reserve=getattr(settings, settings.llm_provider + "_reasoning_token_reserve"),
-            estimate_cost=lambda response: estimate_cost_usd(model=client.model, provider=settings.llm_provider,
+            token_rates=lambda bound: price_card_for_model(client.model).token_rates(bound),
+            reasoning_reserve=getattr(client, "reasoning_reserve", 2048),
+            estimate_cost=lambda response: estimate_cost_usd(model=client.model, provider=client.provider_name,
                 prompt_tokens=response.prompt_tokens, completion_tokens=response.completion_tokens,
                 total_tokens=response.total_tokens),
             recorded=recorded)
@@ -334,6 +389,9 @@ async def run(args):
         await _run_outline_cases(args, cases, factory, budget, stage, load_and_render)
         return
     if args.tutorial:
+        if pilot_model:
+            print(json.dumps({"direct_get_llm_client_routed": route_direct_clients(get_llm_client, factory)}),
+                  flush=True)
         if args.scenarios:
             wanted = args.scenarios.split(",")
             selected = [c for c in cases if c["id"] in wanted] if wanted != ["all"] else cases
@@ -488,16 +546,36 @@ def tutorial_outline(case: dict) -> dict:
         "mental_model": "Apply the mechanism to a new case and explain the reasoning."}).model_dump(mode="json")
 
 
+def _run_identity(args) -> dict:
+    """Which provider/model served a run (the balanced tier the tutorial pipeline uses)."""
+    if args.claude_model:
+        return {"provider": "anthropic", "model": args.claude_model}
+    if getattr(args, "openai_model", ""):
+        return {"provider": "openai", "model": args.openai_model}
+    from app.services.llm.client import provider_model
+    from app.services.llm.routes import route_for
+
+    provider = route_for("plan_item_detail_generation")[0]
+    return {"provider": provider, "model": provider_model(provider)}
+
+
 async def _run_tutorial_cases(args, selected, factory, budget, stage, load_and_render):
     """Full tutorial_v1 pipeline per scenario and repeat, as evaluate_generation rows."""
     from app.services.planning.lesson_package import validation_identity
     from app.tasks.plans import _generate_plan_item_details_parallel
 
+    minutes_cycle = [int(value) for value in str(getattr(args, "mission_minutes", "6")).split(",")]
     for case in selected:
         context = {"goal": case["goal"], "learner_context": {"level": case["learner_level"],
             "locale": case["locale"], "untrusted_note": case["untrusted_note"]}, "mentor_evidence": {}}
+        if getattr(args, "critical_skill", False) and case.get("critical_check"):
+            # The skill the scenario grades; production carries it in the plan step.
+            context["critical_skill"] = case["critical_check"]
         for repeat in range(1, args.repeats + 1):
             run_id = f"{args.arm}-{repeat}"
+            # Repeats cycle the allotted tutorial length; the +0.5 survives the
+            # pipeline's floor(mission_hours * 60) without float rounding loss.
+            mission_hours = (minutes_cycle[(repeat - 1) % len(minutes_cycle)] + 0.5) / 60
             artifact_path = args.output / f"{case['id']}-{run_id}.json"
             if artifact_path.exists():
                 continue
@@ -506,33 +584,47 @@ async def _run_tutorial_cases(args, selected, factory, budget, stage, load_and_r
                 # Repeat N replays the recorded run N (default "candidate-N") of --replay-from.
                 stage["replay_run_id"] = args.replay_run_id.format(n=repeat)
             spent_before, started = budget.spent, time.perf_counter()
-            validations, packages = {}, {}
+            validations, packages, repairs = {}, {}, []
             error, lesson, calls = None, None, []
-            try:
-                async with asyncio.timeout(480):
-                    lesson, calls, error = await _generate_plan_item_details_parallel(
-                        system_prompt=load_and_render("planner_system.txt", {}), task_title=case["goal"],
-                        mission_hours=0.1, user_goal=case["goal"],
-                        learning_preferences="Short tutorials with a worked example and in-app practice",
-                        idol_name="No verified mentor", idol_domain=case["domain"], idol_evidence={},
-                        session_context=json.dumps(context), active_tier="balanced",
-                        routing_reason="local_budgeted_tutorial_pilot", client_factory=factory,
-                        existing_checkpoint={"_generation": {"outline": tutorial_outline(case)}},
-                        prepared_packages=packages, validation_records=validations)
-            except TimeoutError:
-                error = "Tutorial pilot deadline reached"
-            except RuntimeError as exc:
-                if "pilot" not in str(exc).lower() and "cap" not in str(exc).lower():
-                    raise
-                error = str(exc)  # Budget stop: record the partial run, then stop spending.
-            row = {"scenario_id": case["id"], "run_id": run_id, "arm": args.arm,
+            tutorial_attempts, job_runs = {}, 0
+            # Like the job: a returned _tutorial_retry re-runs with the next fresh
+            # attempt and a new 480 s deadline (bounded by the attempt index).
+            while True:
+                job_runs += 1
+                run_calls = []
+                try:
+                    async with asyncio.timeout(480):
+                        lesson, run_calls, error = await _generate_plan_item_details_parallel(
+                            system_prompt=load_and_render("planner_system.txt", {}), task_title=case["goal"],
+                            mission_hours=mission_hours, user_goal=case["goal"],
+                            learning_preferences="Short tutorials with a worked example and in-app practice",
+                            idol_name="No verified mentor", idol_domain=case["domain"], idol_evidence={},
+                            session_context=json.dumps(context), active_tier="balanced",
+                            routing_reason="local_budgeted_tutorial_pilot", client_factory=factory,
+                            existing_checkpoint={"_generation": {"outline": tutorial_outline(case)}},
+                            prepared_packages=packages, validation_records=validations, repair_attempts=repairs,
+                            tutorial_attempts=dict(tutorial_attempts))
+                except TimeoutError:
+                    error = "Tutorial pilot deadline reached"
+                except RuntimeError as exc:
+                    if "pilot" not in str(exc).lower() and "cap" not in str(exc).lower():
+                        raise
+                    error = str(exc)  # Budget stop: record the partial run, then stop spending.
+                calls.extend(run_calls)
+                retry = lesson.pop("_tutorial_retry", None) if isinstance(lesson, dict) else None
+                if not (error and retry and tutorial_attempts.get(retry["step_id"], 0) < retry["next_attempt"]):
+                    break
+                tutorial_attempts[retry["step_id"]] = retry["next_attempt"]
+            row = {"scenario_id": case["id"], "run_id": run_id, "arm": args.arm, **_run_identity(args),
                    "accepted": bool(validations) and not error, "adjudicated": False,
                    "quality_score": None, "usable_ms": (time.perf_counter() - started) * 1000,
                    "cost_usd": budget.spent - spent_before,
                    "repair_count": sum(any(k in str(c[0]) for k in ("repair", "correct", "recheck", "_2")) for c in calls),
-                   "calls": len(calls), "failures": [error] if error else [],
+                   "calls": len(calls), "job_runs": job_runs, "failures": [error] if error else [],
                    "validation_identity": validation_identity(),
                    "attempts": [{"stage": c[0], "error": c[1].error, "duration_ms": c[1].duration_ms} for c in calls],
+                   # One entry per repair (kind, source, targets, outcome), rebuilds included.
+                   "repairs": [{k: v for k, v in entry.items() if k != "step_id"} for entry in repairs],
                    "packages": {k: v.model_dump(mode="json") for k, v in packages.items()}, "lesson": lesson}
             artifact_path.write_text(json.dumps(row, indent=2, ensure_ascii=False))
             with (args.output / "runs.jsonl").open("a") as handle:
@@ -581,7 +673,6 @@ def summarize_outline_runs(rows: list[dict], *, cap_ms: float = 45_000) -> dict:
 
 async def _run_outline_cases(args, cases, factory, budget, stage, load_and_render):
     """The production outline request at each reasoning level, paired in time."""
-    from app.core.config import settings
     from app.services.llm.pricing import estimate_cost_usd
     from app.services.llm.schemas import (MAX_PLAN_DETAIL_MATERIALS, MAX_PLAN_DETAIL_RESOURCES_PER_LESSON,
                                           MIN_PLAN_DETAIL_MATERIALS, PlanTutorialOutlineOutput)
@@ -607,8 +698,10 @@ async def _run_outline_cases(args, cases, factory, budget, stage, load_and_rende
         _validate_plan_detail_outline_response(response, minimum_lessons=minimum, maximum_lessons=maximum,
                                                tutorial=True)
         cost = None
-        if response.prompt_tokens is not None and response.total_tokens is not None:
-            cost = estimate_cost_usd(model=client.model, provider=settings.llm_provider,
+        if hasattr(client, "estimate_cost"):
+            cost = client.estimate_cost(response)
+        elif response.prompt_tokens is not None and response.total_tokens is not None:
+            cost = estimate_cost_usd(model=client.model, provider=getattr(client, "provider_name", None),
                 prompt_tokens=response.prompt_tokens, completion_tokens=response.completion_tokens,
                 total_tokens=response.total_tokens)
         steps = [] if response.error else response.data.get("steps", [])
@@ -641,8 +734,10 @@ async def _run_outline_cases(args, cases, factory, budget, stage, load_and_rende
             "session_context": session_context, "minimum_lessons": minimum, "maximum_lessons": maximum,
             "minimum_materials": MIN_PLAN_DETAIL_MATERIALS, "maximum_materials": MAX_PLAN_DETAIL_MATERIALS,
             "maximum_resources_per_lesson": MAX_PLAN_DETAIL_RESOURCES_PER_LESSON}, strict=True)
+        if args.outline_extra_rule:
+            prompt += "\n\nAdditional rule:\n" + args.outline_extra_rule
         for repeat in range(1, args.repeats + 1):
-            arms = [arm for arm in OUTLINE_ARMS if (scenario_id, arm, repeat) not in done]
+            arms = [arm for arm in args.outline_arms.split(",") if (scenario_id, arm, repeat) not in done]
             if not arms:
                 continue
             stage.update(scenario_id=scenario_id, stage="outline", tier="balanced", run_id=f"r{repeat}")
@@ -663,6 +758,24 @@ async def _run_outline_cases(args, cases, factory, budget, stage, load_and_rende
                       budget.spent + sum(budget.pending.values()), "cap_usd": budget.cap}), flush=True)
 
 
+def _disable_number_binding():
+    """Experiment only (2026-11-06): skip the number-binding checks.
+
+    Every shown number normally must be bound to case data or a proof
+    (``grounded_failures``, ``require_declared_numbers``). Wrong arithmetic in a
+    shown equation (``source_arithmetic_failures``) is still rejected. Never a
+    production setting: it measures how many tutorials fail on binding alone.
+    """
+    from app.services.planning import lesson_review, package_builder, package_preflight, package_review
+
+    def no_binding_errors(*args, **kwargs):
+        return []
+
+    for module in (lesson_review, package_preflight, package_review):
+        module.grounded_failures = no_binding_errors
+    package_builder.require_declared_numbers = lambda *args, **kwargs: None
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--max-usd", type=float, required=True)
@@ -675,6 +788,11 @@ if __name__ == "__main__":
     parser.add_argument("--resume-package-response", type=Path)
     parser.add_argument("--tutorial", action="store_true", help="Run the full tutorial_v1 pipeline")
     parser.add_argument("--repeats", type=int, default=1)
+    parser.add_argument("--mission-minutes", default="6",
+                        help="--tutorial: allotted tutorial minutes, cycled over repeats (e.g. 6,7,8; default 6, "
+                             "the only length earlier pilots exercised)")
+    parser.add_argument("--critical-skill", action="store_true",
+                        help="--tutorial: pass the scenario's critical_check to generation as critical_skill")
     parser.add_argument("--scenarios", default="", help="Comma-separated scenario ids, or 'all' (tutorial mode)")
     parser.add_argument("--arm", default="candidate", choices=["baseline", "candidate", "fixes"])
     parser.add_argument("--replay-from", type=Path,
@@ -684,4 +802,31 @@ if __name__ == "__main__":
                         help="Recorded run replayed by repeat {n} (default candidate-{n})")
     parser.add_argument("--outline", action="store_true",
                         help="Compare the tutorial outline request at medium vs low reasoning")
-    asyncio.run(run(parser.parse_args()))
+    parser.add_argument("--outline-arms", default=",".join(OUTLINE_ARMS),
+                        help="Comma-separated reasoning levels for --outline, e.g. low,off")
+    parser.add_argument("--claude-reasoning-reserve", type=int, default=2048,
+                        help="Extra output tokens for Claude's thinking on tutorial requests")
+    parser.add_argument("--claude-model", default="",
+                        help="Run --outline or --tutorial on this Claude model "
+                             "(claude-haiku-5-5, claude-sonnet-5-5 or claude-opus-5-5); key from ANTHROPIC_API_KEY")
+    parser.add_argument("--claude-json-mode", default="", choices=["", "auto", "native", "prompt"],
+                        help="Claude JSON contract: native structured outputs, the production prompt schema, "
+                             "or auto (native when the schema fits, else prompt). Default: native for "
+                             "--outline, auto for --tutorial")
+    parser.add_argument("--openai-model", default="",
+                        help="Run --outline or --tutorial on this OpenAI model directly (gpt-5.6-luna, "
+                             "gpt-5.6-terra or gpt-5.6-sol); key from OPENAI_API_KEY. Excludes --claude-model")
+    parser.add_argument("--openai-reasoning-reserve", type=int, default=2048,
+                        help="Extra completion tokens for GPT reasoning on every request")
+    parser.add_argument("--openai-json-mode", default="", choices=["", "auto", "native", "prompt"],
+                        help="OpenAI JSON contract: native strict structured outputs, the production prompt "
+                             "schema, or auto (native when the schema converts, else prompt). Default: native "
+                             "for --outline, auto for --tutorial")
+    parser.add_argument("--outline-extra-rule", default="",
+                        help="Text appended to the outline prompt as an additional rule (prompt variants)")
+    parser.add_argument("--no-number-binding", action="store_true",
+                        help="Experiment only: skip the number-binding checks; wrong arithmetic still fails.")
+    arguments = parser.parse_args()
+    if arguments.no_number_binding:
+        _disable_number_binding()
+    asyncio.run(run(arguments))

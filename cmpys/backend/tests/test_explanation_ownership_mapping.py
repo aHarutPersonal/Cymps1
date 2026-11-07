@@ -25,7 +25,7 @@ def misplaced(activity):
 
 
 def protocol_error():
-    return LLMResponse(data={}, error="zai request failed (JSONProtocolError; details redacted)",
+    return LLMResponse(data={}, error="anthropic request failed (JSONProtocolError; details redacted)",
         finish_reason="stop", prompt_tokens=10, completion_tokens=20, total_tokens=30)
 
 
@@ -35,9 +35,10 @@ def approve(payload):
 
 
 class Factory:
-    def __init__(self, responses, *, provider="zai"):
+    def __init__(self, responses, *, provider="anthropic", reserve=2048):
         self.responses = {key: list(values) for key, values in responses.items()}
         self.provider = provider
+        self.reserve = reserve
         self.requests, self.options = [], []
         self.counts = Counter()
         self.active = self.max_active = 0
@@ -47,8 +48,10 @@ class Factory:
         self.options.append(options)
 
         class Client:
-            model = "glm-5.3"
+            model = "claude-haiku-5-5"
             provider_name = factory.provider
+            # What a direct client sends on top of max_tokens (anthropic_direct/openai_direct).
+            reasoning_reserve = factory.reserve
             request_started = True
             last_attempt = None
 
@@ -90,12 +93,12 @@ def usage(monkeypatch):
     return recorder
 
 
-def scenario(*, count=2, verdict=approve):
+def scenario(*, count=2, verdict=approve, reserve=2048):
     seed, activities = components(count)
     drafts = {key: activity_draft_fixture(value) for key, value in activities.items()}
     drafts["transfer"] = misplaced(activities["transfer"])
     factory = Factory({"seed": [protocol_error(), seed],
-        **{key: [draft] for key, draft in drafts.items()}, "ownership": [verdict]})
+        **{key: [draft] for key, draft in drafts.items()}, "ownership": [verdict]}, reserve=reserve)
     return seed, activities, drafts, factory
 
 
@@ -103,8 +106,11 @@ def scenario(*, count=2, verdict=approve):
 @pytest.mark.parametrize("count,reserve", [(2, 0), (2, 1024), (2, 2048), (2, 8192), (6, 2048)])
 async def test_only_mapping_moves_exact_string_and_reports_honest_request_and_wire_envelopes(count, reserve, monkeypatch, usage):
     from app.core.config import settings
-    monkeypatch.setattr(settings, "zai_reasoning_token_reserve", reserve)
-    seed, activities, drafts, factory = scenario(count=count)
+    # The wire envelope is the reserve each client actually sends, not a
+    # provider setting the builder would have to guess.
+    monkeypatch.setattr(settings, "anthropic_reasoning_token_reserve", 777)
+    monkeypatch.setattr(settings, "openai_reasoning_token_reserve", 777)
+    seed, activities, drafts, factory = scenario(count=count, reserve=reserve)
     drafts["transfer"]["explanation"] += "\n  Պահպանիր այս բացատրությունը։  "
     factory.responses["transfer"] = [copy.deepcopy(drafts["transfer"])]
     original = copy.deepcopy(drafts)
@@ -336,7 +342,7 @@ async def test_saved_seed_does_not_restore_a_seed_retry_privilege(usage):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("finish,error", [("length", None), ("stop", "zai request failed (JSONProtocolError; redacted)")])
+@pytest.mark.parametrize("finish,error", [("length", None), ("stop", "anthropic request failed (JSONProtocolError; redacted)")])
 async def test_partial_or_protocol_rejected_draft_never_becomes_a_mapping_candidate(finish, error, usage):
     _, _, drafts, factory = scenario()
     factory.responses["transfer"] = [LLMResponse(data=copy.deepcopy(drafts["transfer"]),

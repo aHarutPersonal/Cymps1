@@ -161,8 +161,8 @@ async def test_incomplete_or_protocol_failed_seed_never_enters_normalization(fai
     valid = builder.parse_initial_seed_response(source)[0].model_dump(mode="json")
     failed = LLMResponse(data=source, finish_reason="length" if failure == "length" else "stop",
         error=(None if failure == "length" else
-               "zai request failed (JSONProtocolError; duplicate keys)" if failure == "duplicate_json" else
-               "zai request failed (TimeoutError; unavailable)"))
+               "anthropic request failed (JSONProtocolError; duplicate keys)" if failure == "duplicate_json" else
+               "anthropic request failed (TimeoutError; unavailable)"))
     factory = Factory({"seed": [failed, valid], **{key: [value] for key, value in activities.items()}})
     package, response, _ = await run(factory)
     assert package is not None and response.error is None

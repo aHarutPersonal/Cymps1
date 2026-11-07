@@ -1,76 +1,96 @@
+import asyncio
 import json
 import re
 
+import httpx
+import openai
 import pytest
 from fastapi.responses import StreamingResponse
 from types import SimpleNamespace
 
 from app.api.v1 import sessions as sessions_api
+from app.core.config import settings
 from app.models.chat import ChatThread
 from app.models.idol import Idol
 from app.models.intake import IntakeSession, SessionPhase
 from app.models.user import User
 from app.schemas.session import InterviewMessageRequest
 from app.services import gemini
+from app.services.llm import client as llm_client
+from app.services.llm.client import FallbackLLMClient
+from app.services.llm.protocol import ProviderStreamError
+from tests.direct_wire import Reply, client_for, serve
+
+
+@pytest.fixture
+def routed_streams(monkeypatch):
+    """Both direct models configured; every client a stream builds is served offline.
+
+    ``replies[provider]`` lists that provider's replies; a provider without one
+    must never be asked. ``built`` records each client in the order the stream
+    built it, with the wire that captured its requests.
+    """
+    FallbackLLMClient.reset_circuits_for_tests()
+    monkeypatch.setattr(settings, "llm_provider", "routed")
+    monkeypatch.setattr(settings, "anthropic_api_key", "fake-anthropic-key")
+    monkeypatch.setattr(settings, "openai_api_key", "fake-openai-key")
+    monkeypatch.setattr(settings, "anthropic_model", "claude-haiku-5-5")
+    monkeypatch.setattr(settings, "openai_model", "gpt-6-luna")
+    monkeypatch.setattr(settings, "llm_route_overrides", {})
+    monkeypatch.setattr(settings, "llm_usage_telemetry_enabled", False)
+    monkeypatch.setattr(settings, "llm_admission_limits", {})
+
+    def no_gemini():
+        raise AssertionError("interactive streams never call Gemini")
+
+    monkeypatch.setattr(gemini, "_gemini_client", no_gemini)
+    replies, built = {}, []
+
+    def build(provider, *, timeout, max_tokens, thinking_level):
+        assert provider in replies, f"{provider} must not be asked"
+        client = client_for(provider, timeout=timeout, max_tokens=max_tokens, thinking_level=thinking_level)
+        built.append(SimpleNamespace(provider=provider, client=client, wire=serve(client, replies[provider])))
+        return client
+
+    monkeypatch.setattr(llm_client, "direct_client", build)
+    yield SimpleNamespace(replies=replies, built=built)
+    FallbackLLMClient.reset_circuits_for_tests()
+
+
+def _openai_timeout():
+    return openai.APITimeoutError(request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions"))
 
 
 @pytest.mark.asyncio
-async def test_interview_stream_uses_provider_streaming(monkeypatch):
-    class ResponseChunk:
-        def __init__(self, text: str):
-            self.text = text
+async def test_interview_stream_uses_provider_streaming(routed_streams):
+    still_open = asyncio.Event()
+    routed_streams.replies["openai"] = [Reply(pieces=["Hel", "lo"], ready=still_open)]
 
-    class FakeModels:
-        async def generate_content(self, **kwargs):
-            raise AssertionError("interview_stream should not wait for full content")
+    stream = gemini.interview_stream(system_prompt="system", user_message="question")
+    try:
+        # Each chunk reaches the caller as it arrives, while the provider
+        # stream is still open: the reply is never buffered to completion.
+        assert [await anext(stream), await anext(stream)] == ["Hel", "lo"]
+        (call,) = routed_streams.built
+        assert not still_open.is_set() and not call.wire.streams[0].closed
+    finally:
+        await stream.aclose()
 
-        def generate_content_stream(self, **kwargs):
-            async def stream():
-                yield ResponseChunk("Hel")
-                yield ResponseChunk("lo")
-
-            return stream()
-
-    class FakeClient:
-        class Aio:
-            models = FakeModels()
-
-        aio = Aio()
-
-    monkeypatch.setattr(gemini, "_gemini_client", lambda: FakeClient())
-
-    chunks = [
-        chunk
-        async for chunk in gemini.interview_stream(
-            system_prompt="system",
-            user_message="question",
-        )
+    assert call.provider == "openai"  # luna serves the interview
+    assert call.wire.request["stream"] is True
+    assert call.wire.request["messages"] == [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "question"},
     ]
 
-    assert chunks == ["Hel", "lo"]
-
 
 @pytest.mark.asyncio
-async def test_interview_stream_awaits_coroutine_provider_stream(monkeypatch):
-    class ResponseChunk:
-        def __init__(self, text: str):
-            self.text = text
-
-    class FakeModels:
-        async def generate_content_stream(self, **kwargs):
-            async def stream():
-                yield ResponseChunk("Async")
-                yield ResponseChunk(" stream")
-
-            return stream()
-
-    class FakeClient:
-        class Aio:
-            models = FakeModels()
-
-        aio = Aio()
-
-    monkeypatch.setattr(gemini, "_gemini_client", lambda: FakeClient())
+@pytest.mark.parametrize("provider", ["openai", "anthropic"])
+async def test_interview_stream_awaits_coroutine_provider_stream(routed_streams, monkeypatch, provider):
+    # luna's SDK opens a stream with an awaited coroutine; Haiku's with an
+    # async context manager. Either model can serve the interview.
+    monkeypatch.setattr(settings, "llm_route_overrides", {"interview": provider})
+    routed_streams.replies[provider] = [Reply(pieces=["Async", " stream"])]
 
     chunks = [
         chunk
@@ -81,51 +101,60 @@ async def test_interview_stream_awaits_coroutine_provider_stream(monkeypatch):
     ]
 
     assert chunks == ["Async", " stream"]
+    (call,) = routed_streams.built
+    assert call.provider == provider and call.wire.streams[0].closed
 
 
 @pytest.mark.asyncio
-async def test_agentic_streams_have_a_bounded_provider_timeout(monkeypatch):
-    captured = {}
-
-    class FakeModels:
-        def generate_content_stream(self, **kwargs):
-            captured["config"] = kwargs["config"]
-
-            async def stream():
-                yield SimpleNamespace(text="ok")
-
-            return stream()
-
-    client = SimpleNamespace(aio=SimpleNamespace(models=FakeModels()))
-    monkeypatch.setattr(gemini, "_gemini_client", lambda: client)
-
-    chunks = [
-        chunk
-        async for chunk in gemini.interview_stream(
-            system_prompt="system",
-            user_message="question",
-        )
-    ]
-
+@pytest.mark.parametrize("stream, primary_timeout, backup_timeout", [
+    (gemini.interview_stream, 20, 35),
+    (gemini.stream_learnlm, 20, 35),
+    (gemini.comparison_stream, 60, 60),
+    (gemini.blueprint_stream, 60, 60),
+])
+async def test_agentic_streams_have_a_bounded_provider_timeout(
+    routed_streams, stream, primary_timeout, backup_timeout,
+):
+    routed_streams.replies["openai"] = [Reply("ok")]
+    chunks = [chunk async for chunk in stream(system_prompt="system", user_message="question")]
     assert chunks == ["ok"]
-    assert captured["config"].http_options.timeout == 60_000
+    assert [(call.provider, call.client.timeout) for call in routed_streams.built] == [
+        ("openai", primary_timeout)]
+
+    # When the primary cannot answer, the backup gets its own bounded deadline.
+    routed_streams.built.clear()
+    routed_streams.replies["openai"] = [Reply(finish=None, error=_openai_timeout())]
+    routed_streams.replies["anthropic"] = [Reply("ok")]
+    chunks = [chunk async for chunk in stream(system_prompt="system", user_message="question")]
+    assert chunks == ["ok"]
+    assert [(call.provider, call.client.timeout) for call in routed_streams.built] == [
+        ("openai", primary_timeout), ("anthropic", backup_timeout)]
 
 
 @pytest.mark.asyncio
-async def test_guided_stream_has_a_short_response_budget(monkeypatch):
-    captured = {}
+async def test_a_stalled_primary_stream_is_cut_off_at_its_deadline(routed_streams, monkeypatch):
+    # A socket that never sends text must not hold the SSE request: the
+    # deadline ends it and the backup answers. Deadlines scaled down to 0.2 s.
+    monkeypatch.setattr(gemini, "GEMINI_REQUEST_TIMEOUT_MS", 200)
+    routed_streams.replies["openai"] = [Reply(finish=None, usage=None, ready=asyncio.Event())]
+    routed_streams.replies["anthropic"] = [Reply("Compared.")]
 
-    class FakeModels:
-        def generate_content_stream(self, **kwargs):
-            captured["config"] = kwargs["config"]
+    chunks = await asyncio.wait_for(
+        _collect(gemini.comparison_stream(system_prompt="system", user_message="question")), timeout=5)
 
-            async def stream():
-                yield SimpleNamespace(text="A focused answer.")
+    assert chunks == ["Compared."]
+    assert [(call.provider, call.client.timeout) for call in routed_streams.built] == [
+        ("openai", 0.2), ("anthropic", 0.2)]
+    assert routed_streams.built[0].wire.streams[0].closed
 
-            return stream()
 
-    client = SimpleNamespace(aio=SimpleNamespace(models=FakeModels()))
-    monkeypatch.setattr(gemini, "_gemini_client", lambda: client)
+async def _collect(stream):
+    return [chunk async for chunk in stream]
+
+
+@pytest.mark.asyncio
+async def test_guided_stream_has_a_short_response_budget(routed_streams):
+    routed_streams.replies["openai"] = [Reply("A focused answer.")]
 
     chunks = [
         chunk
@@ -136,29 +165,19 @@ async def test_guided_stream_has_a_short_response_budget(monkeypatch):
     ]
 
     assert chunks == ["A focused answer."]
-    assert captured["config"].max_output_tokens == 900
+    (call,) = routed_streams.built
+    assert call.client.max_tokens == 900
+    # Hidden reasoning is reserved on top of the visible 900-token answer.
+    assert call.wire.request["max_completion_tokens"] == 900 + call.client.reasoning_reserve
 
 
 @pytest.mark.asyncio
-async def test_stream_rejects_an_explicit_non_stop_finish_reason(monkeypatch):
-    class FakeModels:
-        def generate_content_stream(self, **_kwargs):
-            async def stream():
-                yield SimpleNamespace(
-                    text="A truncated answer",
-                    candidates=[
-                        SimpleNamespace(
-                            finish_reason=SimpleNamespace(name="MAX_TOKENS")
-                        )
-                    ],
-                )
+@pytest.mark.parametrize("provider, finish", [("openai", "length"), ("anthropic", "max_tokens")])
+async def test_stream_rejects_an_explicit_non_stop_finish_reason(routed_streams, monkeypatch, provider, finish):
+    monkeypatch.setattr(settings, "llm_route_overrides", {"mentor_chat": provider})
+    routed_streams.replies[provider] = [Reply("A truncated answer", finish="length")]
 
-            return stream()
-
-    client = SimpleNamespace(aio=SimpleNamespace(models=FakeModels()))
-    monkeypatch.setattr(gemini, "_gemini_client", lambda: client)
-
-    with pytest.raises(RuntimeError, match="ended incompletely"):
+    with pytest.raises(ProviderStreamError, match=f"finish={finish}"):
         _ = [
             chunk
             async for chunk in gemini.stream_learnlm(
@@ -166,17 +185,24 @@ async def test_stream_rejects_an_explicit_non_stop_finish_reason(monkeypatch):
                 user_message="question",
             )
         ]
+    # A truncated answer is the model's own reply, not an outage: no backup.
+    assert [call.provider for call in routed_streams.built] == [provider]
 
 
 @pytest.mark.asyncio
 async def test_agentic_streams_use_expected_grounding_policy(monkeypatch):
     calls = []
 
-    async def fake_stream_generate(**kwargs):
-        calls.append(kwargs)
+    async def fake_stream_routed_text(system_prompt, user_prompt, **kwargs):
+        calls.append({"system_prompt": system_prompt, "user_prompt": user_prompt, **kwargs})
         yield "ok"
 
-    monkeypatch.setattr(gemini, "_stream_generate", fake_stream_generate)
+    def no_gemini(*_args, **_kwargs):
+        raise AssertionError("interactive streams interpret supplied facts; they never search")
+
+    monkeypatch.setattr(llm_client, "stream_routed_text", fake_stream_routed_text)
+    monkeypatch.setattr(gemini, "_gemini_client", no_gemini)
+    monkeypatch.setattr(gemini, "generate_with_grounding", no_gemini)
 
     assert [
         chunk
@@ -200,8 +226,10 @@ async def test_agentic_streams_use_expected_grounding_policy(monkeypatch):
         )
     ] == ["ok"]
 
-    assert [call["grounded"] for call in calls] == [False, False, False]
-    assert calls[2]["max_output_tokens"] == gemini.BLUEPRINT_MAX_OUTPUT_TOKENS
+    assert [call["operation"] for call in calls] == [
+        "interview_stream", "comparison_stream", "blueprint_stream"]
+    assert [call["user_prompt"] for call in calls] == ["interview", "comparison", "blueprint"]
+    assert calls[2]["max_tokens"] == gemini.BLUEPRINT_MAX_OUTPUT_TOKENS
 
 
 def test_interview_prompts_include_chat_history_exactly_once():
@@ -319,39 +347,26 @@ async def test_sync_interview_turn_count_uses_persisted_assistant_messages():
     assert session.interview_turn_count == 1
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('partial', [False, True])
-async def test_tutor_recovers_outage_only_before_first_text(monkeypatch, partial):
-    from app.services.llm.openlux import OpenLuxStreamError
-    monkeypatch.setattr(gemini.settings, 'llm_provider', 'openlux')
-    monkeypatch.setattr(gemini.settings, 'gemini_api_key', 'test-only')
-    captured = []
-    class Gateway:
-        async def stream_text(self, *args, **kwargs):
-            if partial:
-                yield 'partial'
-            raise OpenLuxStreamError(TimeoutError())
-    def gateway(**kwargs):
-        assert kwargs['timeout'] == 20
-        return Gateway()
-    monkeypatch.setattr('app.services.llm.client.get_llm_client', gateway)
-    class Models:
-        def generate_content_stream(self, **kwargs):
-            captured.append(kwargs)
-            async def chunks():
-                yield SimpleNamespace(text='recovered')
-            return chunks()
-    monkeypatch.setattr(gemini, '_gemini_client', lambda: SimpleNamespace(
-        aio=SimpleNamespace(models=Models())))
-    stream = gemini.stream_learnlm(system_prompt='tutor', user_message='question')
+@pytest.mark.parametrize("partial", [False, True])
+async def test_tutor_recovers_outage_only_before_first_text(routed_streams, partial):
+    # luna (the mentor's primary) times out; Haiku takes over only if no text
+    # reached the learner yet, so two models' replies are never spliced.
+    routed_streams.replies["openai"] = [
+        Reply(pieces=["partial"] if partial else [], finish=None, error=_openai_timeout())]
+    routed_streams.replies["anthropic"] = [Reply("recovered")]
+    stream = gemini.stream_learnlm(system_prompt="tutor", user_message="question")
     if partial:
-        with pytest.raises(OpenLuxStreamError):
-            async for _ in stream:
-                pass
-        assert not captured
+        received = []
+        with pytest.raises(ProviderStreamError):
+            async for chunk in stream:
+                received.append(chunk)
+        assert received == ["partial"]
+        assert [(call.provider, call.client.timeout) for call in routed_streams.built] == [("openai", 20)]
     else:
-        assert [chunk async for chunk in stream] == ['recovered']
-        assert len(captured) == 1
-        assert captured[0]['config'].http_options.timeout == 35000
+        assert [chunk async for chunk in stream] == ["recovered"]
+        assert [(call.provider, call.client.timeout) for call in routed_streams.built] == [
+            ("openai", 20), ("anthropic", 35)]
+        assert routed_streams.built[1].wire.request["system"]  # the backup got the same tutor prompt
 
 
 def test_interview_system_prompt_has_no_history_slot():
